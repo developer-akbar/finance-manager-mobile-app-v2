@@ -1,0 +1,70 @@
+.stats-screen { min-height: 100%; }
+
+.period-tabs {
+  display: flex; gap: 6px; padding: 0 16px 4px;
+  background: var(--card); border-radius: var(--r-lg);
+  margin: 0 16px; padding: 4px; border: 1px solid var(--border);
+}
+.period-tab {
+  flex: 1; padding: 9px 4px; border-radius: 12px; border: none; background: none;
+  font-size: 13px; font-weight: 600; color: var(--text3);
+  cursor: pointer; font-family: var(--font); transition: all 0.18s;
+}
+.period-tab.active { background: var(--green); color: #050d1a; }
+
+.stats-summary { display: flex; gap: 10px; padding: 16px 16px 0; overflow-x: auto; scrollbar-width: none; }
+.stats-summary::-webkit-scrollbar { display: none; }
+.stats-sum-card {
+  flex: 1; min-width: 100px; border-radius: var(--r-lg);
+  padding: 14px; border: 1px solid;
+}
+.stats-sum-card.income  { background: var(--green-dim);  border-color: rgba(0,229,160,0.2); }
+.stats-sum-card.expense { background: var(--red-dim);    border-color: rgba(255,77,106,0.2); }
+.stats-sum-card.savings { background: var(--blue-dim);   border-color: rgba(77,159,255,0.2); }
+.stats-sum-card.deficit { background: var(--gold-dim);   border-color: rgba(255,209,102,0.2); }
+.stats-sum-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; opacity: 0.7; }
+.stats-sum-card.income  .stats-sum-label { color: var(--green); }
+.stats-sum-card.expense .stats-sum-label { color: var(--red); }
+.stats-sum-card.savings .stats-sum-label { color: var(--blue); }
+.stats-sum-card.deficit .stats-sum-label { color: var(--gold); }
+.stats-sum-val { font-size: 20px; font-weight: 800; font-family: var(--mono); margin-top: 6px; }
+.stats-sum-card.income  .stats-sum-val { color: var(--green); }
+.stats-sum-card.expense .stats-sum-val { color: var(--red); }
+.stats-sum-card.savings .stats-sum-val { color: var(--blue); }
+.stats-sum-card.deficit .stats-sum-val { color: var(--gold); }
+
+.stats-chart-card { margin: 0 16px; padding: 16px 8px 12px; }
+.stats-chart-legend {
+  display: flex; justify-content: center; gap: 20px;
+  font-size: 11px; font-weight: 600; color: var(--text3); margin-top: 8px;
+}
+.stats-chart-legend span { display: flex; align-items: center; gap: 5px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.legend-dot.inc { background: var(--green); }
+.legend-dot.exp { background: var(--red); }
+
+.stat-type-tabs { display: flex; background: var(--bg4); border-radius: 20px; padding: 2px; }
+.stat-type-tab { padding: 5px 14px; border-radius: 18px; border: none; background: none; font-size: 12px; font-weight: 700; color: var(--text3); cursor: pointer; font-family: var(--font); transition: all 0.18s; }
+.stat-type-tab.active.exp { background: var(--red);   color: white; }
+.stat-type-tab.active.inc { background: var(--green); color: #050d1a; }
+
+.stats-donut-card { margin: 0 16px; padding: 16px; }
+.stats-donut-wrap { display: flex; align-items: center; gap: 16px; }
+.stats-donut-legend { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.donut-legend-row { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 2px 0; }
+.donut-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.donut-name { flex: 1; font-size: 12px; color: var(--text2); font-weight: 500; }
+.donut-pct { font-size: 12px; font-weight: 700; color: var(--text); font-family: var(--mono); }
+
+.stats-cat-list { margin: 12px 16px 0; overflow: hidden; }
+.stats-cat-row { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.stats-cat-row:last-child { border-bottom: none; }
+.stats-cat-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.stats-cat-info { flex: 1; min-width: 0; }
+.stats-cat-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.stats-cat-amt { font-size: 15px; font-weight: 700; font-family: var(--mono); flex-shrink: 0; }
+
+.stats-sub-row { display: flex; align-items: center; gap: 10px; padding: 9px 16px 9px 72px; border-bottom: 1px solid var(--border); background: var(--bg3); }
+.stats-sub-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.stats-sub-name { flex: 1; font-size: 13px; color: var(--text3); }
+.stats-sub-amt { font-size: 13px; font-family: var(--mono); font-weight: 600; color: var(--text2); }

@@ -1,0 +1,30 @@
+{
+  "name": "finman",
+  "version": "2.0.0",
+  "private": true,
+  "description": "FinMan — Personal Finance Manager",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && npx cap sync && npx cap run android"
+  },
+  "dependencies": {
+    "@capacitor-community/sqlite": "^5.7.4",
+    "@capacitor/app": "^5.0.8",
+    "@capacitor/core": "^5.7.8",
+    "jeep-sqlite": "^2.7.7",
+    "lucide-react": "^0.383.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7",
+    "uuid": "^9.0.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^5.7.8",
+    "@capacitor/cli": "^5.7.8",
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.4"
+  }
+}
