@@ -1,0 +1,77 @@
+.txn-screen { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+
+/* Row 1 header */
+.txn-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:calc(var(--safe-top)+10px) var(--page-px) 8px;
+  background:var(--bg-base); border-bottom:1px solid var(--border); flex-shrink:0;
+}
+.txn-view-tabs { display:flex; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); padding:2px; }
+.txn-view-tab { padding:6px 16px; border-radius:calc(var(--r-md) - 2px); border:none; background:none; font-size:0.76rem; font-weight:700; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); }
+.txn-view-tab.active { background:var(--green); color:#0a0f1e; }
+.txn-search-btn { width:34px; height:34px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.txn-search-btn svg { width:15px; height:15px; stroke:var(--text-secondary); }
+
+/* Row 2 month nav */
+.txn-month-row {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:5px var(--page-px);
+  background:var(--bg-base); border-bottom:1px solid var(--border-light); flex-shrink:0;
+}
+.month-title-btn { flex:1; display:flex; flex-direction:column; align-items:center; background:none; border:none; cursor:pointer; padding:2px; border-radius:var(--r-sm); }
+.month-name { font-size:0.9rem; font-weight:800; color:var(--text-primary); line-height:1; }
+.month-yr   { font-size:0.6rem; color:var(--text-muted); font-weight:600; }
+
+/* Transaction list */
+.txn-list { flex:1; overflow-y:auto; }
+
+/* Monthly rows */
+.month-row { display:flex; align-items:center; gap:8px; padding:11px var(--page-px); border-bottom:1px solid var(--border-light); background:var(--bg-card); cursor:pointer; }
+.month-row:active { background:var(--bg-hover); }
+.month-row-empty { opacity:0.4; cursor:default; }
+.month-row-name { flex:1; font-size:0.85rem; font-weight:700; }
+.month-row-none { flex:1; font-size:0.78rem; color:var(--text-muted); }
+.month-row-vals { display:flex; flex-direction:column; gap:1px; align-items:flex-end; min-width:72px; }
+.month-row-inc { font-size:0.68rem; font-weight:700; color:var(--income);  font-family:var(--font-mono); }
+.month-row-exp { font-size:0.68rem; font-weight:700; color:var(--expense); font-family:var(--font-mono); }
+.month-row-net { font-size:0.78rem; font-weight:800; font-family:var(--font-mono); min-width:60px; text-align:right; }
+.month-row-net.pos { color:var(--income); }
+.month-row-net.neg { color:var(--expense); }
+
+/* Calendar picker */
+.cal-picker-hdr { display:flex; align-items:center; justify-content:space-between; padding:12px var(--page-px) 8px; }
+.cal-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:7px; padding:4px var(--page-px) 10px; }
+.cal-month-btn { padding:12px 4px; border-radius:var(--r-md); border:1px solid var(--border); background:var(--bg-card2); font-size:0.78rem; font-weight:600; color:var(--text-secondary); cursor:pointer; font-family:var(--font); transition:var(--transition); }
+.cal-month-btn.selected { background:var(--green); color:#0a0f1e; border-color:transparent; }
+
+/* Search view */
+.search-view { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.search-bar-row { display:flex; align-items:center; gap:8px; padding:calc(var(--safe-top)+10px) var(--page-px) 8px; background:var(--bg-base); border-bottom:1px solid var(--border); flex-shrink:0; }
+.search-input-wrap { flex:1; display:flex; align-items:center; gap:7px; background:var(--bg-card); border:1.5px solid var(--border); border-radius:var(--r-md); padding:8px 10px; position:relative; }
+.search-input { flex:1; background:none; border:none; outline:none; font-size:0.84rem; font-family:var(--font); color:var(--text-primary); }
+.search-input::placeholder { color:var(--text-muted); }
+.search-clear { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:13px; }
+.filter-btn { width:36px; height:36px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; position:relative; }
+.filter-btn svg { stroke:var(--text-secondary); }
+.filter-active-dot { position:absolute; top:6px; right:6px; width:6px; height:6px; background:var(--green); border-radius:50%; }
+.search-totals-bar { display:flex; background:var(--bg-surface); border-bottom:1px solid var(--border); flex-shrink:0; }
+.search-total-item { flex:1; padding:7px 4px; text-align:center; border-right:1px solid var(--border); }
+.search-total-item:last-child { border-right:none; }
+.search-total-l { font-size:0.54rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; }
+.search-total-v { font-size:0.72rem; font-weight:800; font-family:var(--font-mono); margin-top:2px; }
+.search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:7px var(--page-px); background:var(--blue-bg); border-bottom:1px solid var(--border); font-size:0.78rem; font-weight:700; color:var(--blue); flex-shrink:0; }
+.search-list { flex:1; overflow-y:auto; }
+
+/* Period navigation bar */
+.period-nav-bar { display:flex; align-items:center; justify-content:center; gap:0; padding:6px 0; background:var(--bg-card); border-bottom:1px solid var(--border); flex-shrink:0; }
+.period-nav-btn { background:none; border:none; color:var(--text-primary); font-size:1.4rem; cursor:pointer; padding:6px 20px; opacity:0.9; flex-shrink:0; }
+.period-nav-label { font-size:0.86rem; font-weight:700; color:var(--text-primary); width:180px; text-align:center; flex-shrink:0; }
+
+/* Improved search selection bar */
+.search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:8px var(--page-px); background:rgba(0,229,160,0.1); border-bottom:1px solid rgba(0,229,160,0.3); font-size:0.78rem; flex-shrink:0; gap:8px; }
+.sel-total-inc { color:var(--income); font-weight:700; }
+.sel-total-exp { color:var(--expense); font-weight:700; }
+.sel-total-xfr { color:var(--transfer); font-weight:700; }
+.sel-total-net { font-weight:700; padding-left:8px; border-left:1px solid var(--border); }
+
+.period-nav-inner { display:flex; align-items:center; gap:0; justify-content:center; width:100%; }

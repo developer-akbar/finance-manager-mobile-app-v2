@@ -1,0 +1,23 @@
+.cat-screen { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.cat-pie-wrap { padding:4px var(--page-px) 8px; border-bottom:1px solid var(--border-light); }
+
+.cat-type-tabs { display:flex; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); overflow:hidden; padding:2px; gap:3px; }
+.cat-type-tab  { flex:1; padding:7px 4px; border:none; background:none; font-size:0.78rem; font-weight:700; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); border-radius:calc(var(--r-md)-3px); display:flex; flex-direction:column; align-items:center; }
+.cat-type-tab.exp-tab.active { background:var(--expense-bg); color:var(--expense); }
+.cat-type-tab.inc-tab.active { background:var(--income-bg);  color:var(--income); }
+
+.cat-list-row { display:flex; align-items:center; gap:10px; padding:10px var(--page-px); border-bottom:1px solid var(--border-light); background:var(--bg-card); cursor:pointer; transition:background 0.12s; }
+.cat-list-row:active { background:var(--bg-hover); }
+.cat-pct-badge { min-width:38px; padding:2px 6px; border-radius:var(--r-sm); text-align:center; font-size:0.65rem; font-weight:800; flex-shrink:0; }
+.cat-list-name { flex:1; font-size:0.82rem; font-weight:700; color:var(--text-primary); }
+.cat-list-amt  { font-size:0.82rem; font-family:var(--font-mono); font-weight:700; }
+
+.cat-detail-screen { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.cat-detail-body   { flex:1; overflow-y:auto; }
+
+.cat-sub-list-header { display:flex; justify-content:space-between; align-items:center; padding:5px var(--page-px) 3px; background:var(--bg-surface); border-bottom:1px solid var(--border-light); font-size:0.6rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.7px; }
+.cat-sub-list-row { display:flex; align-items:center; padding:9px var(--page-px); border-bottom:1px solid var(--border-light); background:var(--bg-card); cursor:pointer; transition:background 0.12s; }
+.cat-sub-list-row:active { background:var(--bg-hover); }
+.cat-sub-list-row.sub-active { background:var(--green-dim); }
+.cat-sub-list-name { flex:1; font-size:0.8rem; font-weight:600; color:var(--text-primary); }
+.cat-sub-list-amt  { font-size:0.8rem; font-family:var(--font-mono); font-weight:700; color:var(--expense); }

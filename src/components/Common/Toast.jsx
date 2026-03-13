@@ -1,14 +1,15 @@
-import React from 'react';
-import { useApp } from '../../contexts/AppContext.jsx';
-
+import React, { useState, useCallback } from 'react';
+let _add = null;
+export const toast = { success:(m)=>_add?.(m,'success'), error:(m)=>_add?.(m,'error'), info:(m)=>_add?.(m,'info') };
 export default function Toast() {
-  const { state } = useApp();
-  if (!state.toasts.length) return null;
+  const [toasts, setToasts] = useState([]);
+  _add = useCallback((msg,type='info') => {
+    const id=Date.now(); setToasts(t=>[...t,{id,msg,type}]);
+    setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),3000);
+  },[]);
   return (
     <div className="toast-container">
-      {state.toasts.map(t => (
-        <div key={t.id} className={`toast toast-${t.kind||'success'}`}>{t.message}</div>
-      ))}
+      {toasts.map(t=><div key={t.id} className={`toast ${t.type}`}>{t.msg}</div>)}
     </div>
   );
 }

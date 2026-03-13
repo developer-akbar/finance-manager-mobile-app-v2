@@ -1,132 +1,254 @@
-import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
+/**
+ * db.js — IndexedDB (web) | SQLite (Android)
+ * v2.1.2 — stable merge IDs, date fixes for bulk import, settings keyPath
+ */
 import { Capacitor } from '@capacitor/core';
 
+const IDB_NAME    = 'finman_v2';
+const IDB_VERSION = 6; // bump forces onupgradeneeded
+
+// Each store and its primary key field
+const STORE_DEFS = [
+  { name:'transactions',    key:'id'  },
+  { name:'accounts',        key:'id'  },
+  { name:'account_groups',  key:'id'  },
+  { name:'account_mapping', key:'id'  },
+  { name:'categories',      key:'id'  },
+  { name:'subcategories',   key:'id'  },
+  { name:'budgets',         key:'id'  },
+  { name:'settings',        key:'key' }, // settings uses 'key' not 'id'
+];
+
+const storeKey = (store) => STORE_DEFS.find(s => s.name === store)?.key ?? 'id';
+
+let _idb = null;
+const openIDB = () => new Promise((res, rej) => {
+  if (_idb) { res(_idb); return; }
+  const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+  req.onupgradeneeded = e => {
+    const db = e.target.result;
+    STORE_DEFS.forEach(({ name, key }) => {
+      if (db.objectStoreNames.contains(name)) {
+        try {
+          const store = e.target.transaction.objectStore(name);
+          // If keyPath is wrong, delete and recreate (loses data — intentional for schema fix)
+          if (store.keyPath !== key) {
+            db.deleteObjectStore(name);
+            db.createObjectStore(name, { keyPath: key });
+          }
+        } catch { /* store already recreated */ }
+      } else {
+        db.createObjectStore(name, { keyPath: key });
+      }
+    });
+  };
+  req.onsuccess = e => { _idb = e.target.result; res(_idb); };
+  req.onerror   = e => rej(e.target.error);
+});
+
+// Low-level IDB helpers
+const idbAll    = (db, store)       => new Promise((res, rej) => { const r=db.transaction(store,'readonly').objectStore(store).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); });
+const idbGet    = (db, store, id)   => new Promise((res, rej) => { const r=db.transaction(store,'readonly').objectStore(store).get(id);  r.onsuccess=()=>res(r.result);    r.onerror=()=>rej(r.error); });
+const idbPut    = (db, store, obj)  => new Promise((res, rej) => { const r=db.transaction(store,'readwrite').objectStore(store).put(obj); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); });
+const idbDelete = (db, store, id)   => new Promise((res, rej) => { const r=db.transaction(store,'readwrite').objectStore(store).delete(id); r.onsuccess=()=>res(); r.onerror=()=>rej(r.error); });
+const idbClear  = (db, store)       => new Promise((res, rej) => { const r=db.transaction(store,'readwrite').objectStore(store).clear(); r.onsuccess=()=>res(); r.onerror=()=>rej(r.error); });
+
+// Batch put — open ONE transaction for all items (fast bulk insert)
+const idbPutBatch = (db, store, items) => new Promise((res, rej) => {
+  if (!items.length) { res(0); return; }
+  const tx = db.transaction(store, 'readwrite');
+  const st = tx.objectStore(store);
+  let added = 0;
+  tx.oncomplete = () => res(added);
+  tx.onerror    = () => rej(tx.error);
+  items.forEach(obj => {
+    const r = st.put(obj);
+    r.onsuccess = () => added++;
+  });
+});
+
+// Simple WHERE parser for our SQL subset
+const parseWhere = (clause, vals) => {
+  let vi = 0;
+  return clause.split(/\s+AND\s+/i).map(p => {
+    const lm = p.trim().match(/^(\w+)\s+LIKE\s+\?/i);
+    const em = p.trim().match(/^(\w+)\s*=\s*\?/);
+    const om = p.trim().match(/^\((.+)\)/);  // OR groups like (a=? OR b=? OR c=?)
+    if (lm) return { col:lm[1], op:'LIKE', val:vals[vi++] };
+    if (em) return { col:em[1], op:'=',    val:vals[vi++] };
+    if (om) {
+      // parse OR sub-conditions
+      const subs = om[1].split(/\s+OR\s+/i).map(sp => {
+        const sm = sp.trim().match(/^(\w+)\s*=\s*\?/);
+        const sl = sp.trim().match(/^(\w+)\s+LIKE\s+\?/i);
+        if (sm) return { col:sm[1], op:'=',    val:vals[vi++] };
+        if (sl) return { col:sl[1], op:'LIKE', val:vals[vi++] };
+        return null;
+      }).filter(Boolean);
+      return { op:'OR', subs };
+    }
+    return null;
+  }).filter(Boolean);
+};
+
+const matchCond = (row, c) => {
+  if (c.op === 'OR')   return c.subs.some(s => matchCond(row, s));
+  const rv = String(row[c.col] ?? '');
+  if (c.op === '=')    return rv === String(c.val ?? '');
+  if (c.op === 'LIKE') return new RegExp('^' + String(c.val ?? '').replace(/%/g,'.*').replace(/_/g,'.') + '$','i').test(rv);
+  return true;
+};
+const matchConds = (row, conds) => conds.every(c => matchCond(row, c));
+
+const parseAndRun = async (db, sql, vals = []) => {
+  const s = sql.trim().replace(/\s+/g,' '), u = s.toUpperCase();
+  if (/^(PRAGMA|CREATE TABLE|CREATE INDEX|ALTER TABLE)/.test(u)) return { values:[], changes:{changes:0} };
+
+  // ── SELECT ──
+  if (u.startsWith('SELECT')) {
+    const fm = s.match(/FROM\s+(\w+)/i); if (!fm) return { values:[] };
+    let rows = await idbAll(db, fm[1]);
+    const wm = s.match(/WHERE\s+(.+?)(?:\s+ORDER|\s+LIMIT|$)/i);
+    if (wm) {
+      const c = parseWhere(wm[1], vals);
+      rows = rows.filter(r => matchConds(r, c));
+    }
+    const om = s.match(/ORDER BY\s+([\w,\s]+?)(?:\s+LIMIT|$)/i);
+    if (om) {
+      const parts = om[1].trim().split(',').map(p => { const [col,dir]=p.trim().split(/\s+/); return {col,desc:(dir||'').toUpperCase()==='DESC'}; });
+      rows.sort((a,b) => { for(const {col,desc} of parts){const av=a[col]??'',bv=b[col]??'';const cmp=av<bv?-1:av>bv?1:0;if(cmp)return desc?-cmp:cmp;} return 0; });
+    }
+    const lm = s.match(/LIMIT\s+(\d+)/i); if (lm) rows = rows.slice(0, +lm[1]);
+    return { values: rows };
+  }
+
+  // ── INSERT ──
+  if (u.startsWith('INSERT')) {
+    const orIgnore  = /INSERT OR IGNORE/i.test(s);
+    const orReplace = /INSERT OR REPLACE/i.test(s);
+    const tm = s.match(/INTO\s+(\w+)/i);          if (!tm) return { changes:{changes:0} };
+    const cm = s.match(/\(([^)]+)\)\s+VALUES/i);  if (!cm) return { changes:{changes:0} };
+    const cols = cm[1].split(',').map(c => c.trim());
+    const obj  = {};
+    cols.forEach((col, i) => { obj[col] = vals[i] ?? null; });
+    const pk = storeKey(tm[1]);
+
+    if (orIgnore) {
+      // Check if record with this PK already exists
+      let exists = false;
+      try { exists = (await idbGet(db, tm[1], obj[pk])) !== undefined; } catch {}
+      if (exists) return { changes:{changes:0} };
+    }
+    if (orReplace) {
+      try { await idbDelete(db, tm[1], obj[pk]); } catch {}
+    }
+    await idbPut(db, tm[1], obj);
+    return { changes:{changes:1} };
+  }
+
+  // ── UPDATE ──
+  if (u.startsWith('UPDATE')) {
+    const tm = s.match(/UPDATE\s+(\w+)\s+SET/i);       if (!tm) return { changes:{changes:0} };
+    const sm = s.match(/SET\s+(.+?)\s+WHERE/i);
+    const wm = s.match(/WHERE\s+(.+)$/i);
+    if (!sm || !wm) return { changes:{changes:0} };
+    const setCols = sm[1].split(',').map(p => p.trim().split(/\s*=\s*\?/)[0].trim());
+    const setVals = vals.slice(0, setCols.length);
+    const conds   = parseWhere(wm[1], vals.slice(setCols.length));
+    const pk = storeKey(tm[1]);
+    let changed = 0;
+    for (const row of await idbAll(db, tm[1])) {
+      if (matchConds(row, conds)) {
+        const upd = { ...row };
+        setCols.forEach((col,i) => { upd[col] = setVals[i] ?? null; });
+        await idbPut(db, tm[1], upd); changed++;
+      }
+    }
+    return { changes:{changes:changed} };
+  }
+
+  // ── DELETE ──
+  if (u.startsWith('DELETE')) {
+    const tm = s.match(/FROM\s+(\w+)/i); if (!tm) return { changes:{changes:0} };
+    const wm = s.match(/WHERE\s+(.+)$/i);
+    if (!wm) { await idbClear(db, tm[1]); return { changes:{changes:1} }; }
+    const pk = storeKey(tm[1]);
+    const conds = parseWhere(wm[1], vals); let changed = 0;
+    for (const row of await idbAll(db, tm[1])) {
+      if (matchConds(row, conds)) { await idbDelete(db, tm[1], row[pk]); changed++; }
+    }
+    return { changes:{changes:changed} };
+  }
+
+  return { values:[], changes:{changes:0} };
+};
+
+// Exposed web DB object
+const makeWebDB = (idb) => ({
+  query:       (sql, vals=[]) => parseAndRun(idb, sql, vals),
+  run:         (sql, vals=[]) => parseAndRun(idb, sql, vals),
+  execute:     (sql)          => parseAndRun(idb, sql, []),
+  open:        async () => {},
+  // Fast bulk insert — bypasses the slow one-by-one INSERT OR IGNORE in parseAndRun
+  bulkInsertIgnore: async (store, items) => {
+    if (!items.length) return { added:0, skipped:0 };
+    const pk    = storeKey(store);
+    const exist = new Set((await idbAll(idb, store)).map(r => r[pk]));
+    const news  = items.filter(r => r[pk] && !exist.has(r[pk]));
+    await idbPutBatch(idb, store, news);
+    return { added: news.length, skipped: items.length - news.length };
+  },
+});
+
+// ── SQLite (Android) ──────────────────────────────────────────────────────────
+const DB_NAME = 'finman_v2';
+const openSQLite = async () => {
+  const { CapacitorSQLite, SQLiteConnection } = await import('@capacitor-community/sqlite');
+  const sqlite = new SQLiteConnection(CapacitorSQLite);
+
+  let db;
+  try {
+    const isConn = (await sqlite.isConnection(DB_NAME, false)).result;
+    db = isConn
+      ? await sqlite.retrieveConnection(DB_NAME, false)
+      : await sqlite.createConnection(DB_NAME, false, 'no-encryption', 1, false);
+  } catch {
+    db = await sqlite.createConnection(DB_NAME, false, 'no-encryption', 1, false);
+  }
+
+  await db.open();
+
+  // PRAGMA journal_mode=WAL returns a result row → must use query() not execute()
+  // execute() on Android maps to execSQL() which rejects any SELECT-returning statement
+  try { await db.query('PRAGMA journal_mode=WAL;'); } catch (e) { console.warn('WAL pragma skipped:', e?.message); }
+
+  db.bulkInsertIgnore = null; // SQLite falls back to row-by-row insert path
+  return db;
+};
+
+const applySchema = async (db) => {
+  await db.execute(`CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY,date TEXT NOT NULL,time TEXT DEFAULT '',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',note TEXT DEFAULT '',description TEXT DEFAULT '',inr REAL DEFAULT 0,amount TEXT DEFAULT '0',currency TEXT DEFAULT 'INR',type TEXT DEFAULT 'Expense',created_at TEXT,updated_at TEXT);`);
+  try { await db.execute(`ALTER TABLE transactions ADD COLUMN description TEXT DEFAULT '';`); } catch {}
+  try { await db.execute(`ALTER TABLE transactions ADD COLUMN time TEXT DEFAULT '';`); } catch {}
+  await db.execute(`CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,group_name TEXT DEFAULT '',sort_order INTEGER DEFAULT 0,created_at TEXT);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS account_groups (id TEXT PRIMARY KEY,name TEXT NOT NULL,sort_order INTEGER DEFAULT 0);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS account_mapping (id TEXT PRIMARY KEY,source_name TEXT,account_name TEXT);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY,name TEXT NOT NULL,type TEXT DEFAULT 'Expense',sort_order INTEGER DEFAULT 0);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS subcategories (id TEXT PRIMARY KEY,name TEXT NOT NULL,category_id TEXT NOT NULL,sort_order INTEGER DEFAULT 0);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS budgets (id TEXT PRIMARY KEY,category TEXT NOT NULL,amount REAL NOT NULL,period TEXT DEFAULT 'Monthly',created_at TEXT);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT);`);
+};
+
 let _db = null;
-const sqlite = new SQLiteConnection(CapacitorSQLite);
-
-const SCHEMA = `
-PRAGMA journal_mode=WAL;
-
-CREATE TABLE IF NOT EXISTS transactions (
-  id          TEXT PRIMARY KEY,
-  date        TEXT NOT NULL,
-  account     TEXT NOT NULL DEFAULT '',
-  from_account TEXT DEFAULT '',
-  to_account  TEXT DEFAULT '',
-  category    TEXT DEFAULT '',
-  subcategory TEXT DEFAULT '',
-  note        TEXT DEFAULT '',
-  description TEXT DEFAULT '',
-  amount      REAL NOT NULL DEFAULT 0,
-  inr         REAL NOT NULL DEFAULT 0,
-  currency    TEXT DEFAULT 'INR',
-  type        TEXT NOT NULL DEFAULT 'Expense',
-  created_at  TEXT DEFAULT (datetime('now')),
-  updated_at  TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS accounts (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL UNIQUE,
-  group_name TEXT DEFAULT '',
-  icon       TEXT DEFAULT '💳',
-  color      TEXT DEFAULT '#4d9fff',
-  sort_order INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS account_groups (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL UNIQUE,
-  sort_order INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS categories (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL UNIQUE,
-  type       TEXT NOT NULL DEFAULT 'Expense',
-  icon       TEXT DEFAULT '📦',
-  color      TEXT DEFAULT '#4d9fff',
-  sort_order INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS subcategories (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL,
-  category_id TEXT NOT NULL,
-  icon        TEXT DEFAULT '',
-  sort_order  INTEGER DEFAULT 0,
-  FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS budgets (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  category   TEXT NOT NULL,
-  amount     REAL NOT NULL DEFAULT 0,
-  period     TEXT NOT NULL DEFAULT 'monthly',
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS recurring (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL,
-  amount      REAL NOT NULL DEFAULT 0,
-  account     TEXT DEFAULT '',
-  category    TEXT DEFAULT '',
-  subcategory TEXT DEFAULT '',
-  type        TEXT DEFAULT 'Expense',
-  frequency   TEXT DEFAULT 'monthly',
-  next_date   TEXT DEFAULT '',
-  note        TEXT DEFAULT '',
-  active      INTEGER DEFAULT 1,
-  created_at  TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS settings (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL DEFAULT ''
-);
-
-CREATE INDEX IF NOT EXISTS idx_txn_date    ON transactions(date);
-CREATE INDEX IF NOT EXISTS idx_txn_account ON transactions(account);
-CREATE INDEX IF NOT EXISTS idx_txn_type    ON transactions(type);
-CREATE INDEX IF NOT EXISTS idx_txn_cat     ON transactions(category);
-`;
-
-export async function initDB() {
+export const initDB = async () => {
   if (_db) return _db;
-  const platform = Capacitor.getPlatform();
-
-  if (platform === 'web') {
-    const { defineCustomElements } = await import('jeep-sqlite/loader');
-    defineCustomElements(window);
-    await customElements.whenDefined('jeep-sqlite');
-    const jeepEl = document.createElement('jeep-sqlite');
-    document.body.appendChild(jeepEl);
-    await customElements.whenDefined('jeep-sqlite');
-    await sqlite.initWebStore();
+  if (Capacitor.getPlatform() === 'web') {
+    const idb = await openIDB();
+    _db = makeWebDB(idb);
+  } else {
+    _db = await openSQLite();
   }
-
-  const ret = await sqlite.checkConnectionsConsistency();
-  const isConn = (await sqlite.isConnection('finman_db', false)).result;
-
-  _db = isConn
-    ? await sqlite.retrieveConnection('finman_db', false)
-    : await sqlite.createConnection('finman_db', false, 'no-encryption', 1, false);
-
-  await _db.open();
-
-  // Run schema statements individually (jeep-sqlite limitation)
-  const stmts = SCHEMA.split(';').map(s => s.trim()).filter(s => s.length > 0);
-  for (const stmt of stmts) {
-    await _db.execute(stmt + ';');
-  }
-
+  await applySchema(_db);
   return _db;
-}
-
-export function getDB() {
-  if (!_db) throw new Error('DB not initialised — call initDB() first');
-  return _db;
-}
+};
+export const getDB = () => { if (!_db) throw new Error('DB not initialised'); return _db; };

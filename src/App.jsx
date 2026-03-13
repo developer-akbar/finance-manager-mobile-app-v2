@@ -1,56 +1,133 @@
-import React, { useState, useEffect } from 'react';
-import { initDB } from './database/db.js';
-import { AppProvider } from './contexts/AppContext.jsx';
-import Shell from './components/Layout/Shell.jsx';
-import PinLock from './components/Settings/PinLock.jsx';
-import Toast from './components/Common/Toast.jsx';
+import React, { useEffect, useState } from 'react';
+import { AppProvider, useApp } from './contexts/AppContext.jsx';
+import Layout from './components/Layout/Layout.jsx';
+import Dashboard from './components/Dashboard/Dashboard.jsx';
+import Transactions from './components/Transactions/Transactions.jsx';
+import Accounts from './components/Accounts/Accounts.jsx';
+import Categories from './components/Categories/Categories.jsx';
+import Analytics from './components/Analytics/Analytics.jsx';
+import Settings from './components/Settings/Settings.jsx';
+import PinLock from './components/Common/PinLock.jsx';
+import AddTransaction from './components/Transactions/AddTransaction.jsx';
+import { initDB } from './database/index.js';
+import './styles/globals.css';
 
-// Module-level: survives React re-renders within the session
-let _sessionUnlocked = false;
+/**
+ * Safe-area injection — runs synchronously before React paints.
+ * Sets data-cap-android attribute so the CSS fallback kicks in immediately,
+ * then tries to measure a more precise value.
+ */
+function applyAndroidSafeArea() {
+  try {
+    if (!window.Capacitor) return;
+    if (window.Capacitor.getPlatform?.() !== 'android') return;
+
+    // Apply CSS class immediately — gives 36px top / 56px bottom fallback via CSS
+    document.documentElement.setAttribute('data-cap-android', '');
+
+    // After paint, probe env() values for precise measurement
+    requestAnimationFrame(() => {
+      try {
+        const probe = document.createElement('div');
+        probe.style.cssText = 'position:fixed;top:env(safe-area-inset-top,0px);left:0;right:0;height:1px;pointer-events:none;opacity:0;';
+        document.body.appendChild(probe);
+        const topPx = probe.getBoundingClientRect().top;
+        document.body.removeChild(probe);
+
+        // Probe for bottom inset
+        const probe2 = document.createElement('div');
+        probe2.style.cssText = 'position:fixed;bottom:env(safe-area-inset-bottom,0px);left:0;right:0;height:1px;pointer-events:none;opacity:0;';
+        document.body.appendChild(probe2);
+        const bottomFromEdge = window.innerHeight - probe2.getBoundingClientRect().bottom;
+        document.body.removeChild(probe2);
+
+        if (topPx > 4 && topPx < 80)
+          document.documentElement.style.setProperty('--safe-top', topPx + 'px');
+        if (bottomFromEdge > 4 && bottomFromEdge < 120)
+          document.documentElement.style.setProperty('--safe-bottom', bottomFromEdge + 'px');
+      } catch { /* keep CSS fallbacks */ }
+    });
+  } catch { /* silent */ }
+}
+applyAndroidSafeArea();
+
+// ── Back button logic ─────────────────────────────────────────────────────────
+// Rule: very simple two-level model.
+// Level 1  = top-level tab (dashboard / transactions / accounts / categories / settings)
+// Level 2+ = child screens opened WITHIN a tab (e.g. Account Detail inside Accounts)
+//
+// Back button:
+//   • If Add-modal open   → close modal
+//   • If a child-screen is signalled via backInterceptRef → let the tab handle it
+//   • If on any tab (not dashboard) → go to dashboard
+//   • If on dashboard → minimizeApp (close)
+//
+// Child screens (AccountDetail, CategoryDetail, Settings sub-screens, etc.) each
+// receive an `onBack` prop.  They do NOT call navigate(); instead they manage their
+// own local state (drill / screen).  The back button calls the ref callback when set.
 
 function AppInner() {
+  const { state, navigate } = useApp();
+  const { currentView } = state;
+  const [showAdd, setShowAdd] = useState(false);
+
+  // Child screens register a "handle back" callback here
+  // e.g. AccountDetail sets it when open, clears when it unmounts
+  const backInterceptRef = React.useRef(null);
+
+  useEffect(() => {
+    const setup = async () => {
+      try {
+        if (!window.Capacitor || window.Capacitor.getPlatform?.() !== 'android') return;
+        const { App } = await import('@capacitor/app');
+        await App.removeAllListeners();
+        App.addListener('backButton', () => {
+          // 1. Close the Add/Edit modal
+          if (showAdd) { setShowAdd(false); return; }
+          // 2. Let the active child-screen handle it (e.g. account drill-down)
+          if (backInterceptRef.current) { backInterceptRef.current(); return; }
+          // 3. Any top-level tab → go home
+          if (currentView !== 'dashboard') { navigate('dashboard'); return; }
+          // 4. Already home → close app
+          App.minimizeApp();
+        });
+      } catch { /* web */ }
+    };
+    setup();
+    return () => {
+      import('@capacitor/app').then(({ App }) => App.removeAllListeners()).catch(() => {});
+    };
+  }, [currentView, showAdd, navigate]);
+
+  const screen = (() => {
+    switch (currentView) {
+      case 'transactions': return <Transactions onAddTransaction={() => setShowAdd(true)} backInterceptRef={backInterceptRef}/>;
+      case 'accounts':     return <Accounts backInterceptRef={backInterceptRef}/>;
+      case 'categories':   return <Categories backInterceptRef={backInterceptRef}/>;
+      case 'analytics':    return <Analytics/>;
+      case 'settings':     return <Settings backInterceptRef={backInterceptRef}/>;
+      default:             return <Dashboard/>;
+    }
+  })();
+
   return (
-    <>
-      <Shell />
-      <Toast />
-    </>
+    <PinLock>
+      <Layout>
+        {screen}
+      </Layout>
+      {showAdd && <AddTransaction onClose={() => setShowAdd(false)}/>}
+    </PinLock>
   );
 }
 
 export default function App() {
-  const [dbReady, setDbReady] = useState(false);
-  const [dbError, setDbError] = useState(null);
-
-  useEffect(() => {
-    initDB()
-      .then(() => setDbReady(true))
-      .catch(e => setDbError(e.message || 'Database failed'));
-  }, []);
-
-  if (dbError) return (
-    <div style={{ display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
-      height:'100dvh',padding:32,gap:12,background:'#0a0f1e',color:'#ff4d6a',textAlign:'center' }}>
-      <div style={{ fontSize:40 }}>⚠️</div>
-      <div style={{ fontSize:20,fontWeight:700,fontFamily:'Sora,sans-serif' }}>Database Error</div>
-      <div style={{ fontSize:14,color:'#8899bb',fontFamily:'Sora,sans-serif' }}>{dbError}</div>
-      <div style={{ fontSize:12,color:'#4a5a7a',fontFamily:'Sora,sans-serif' }}>Please restart the app</div>
+  const [ready, setReady] = React.useState(false);
+  useEffect(() => { initDB().then(() => setReady(true)).catch(console.error); }, []);
+  if (!ready) return (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100dvh',background:'#0a0f1e',flexDirection:'column',gap:16}}>
+      <div style={{width:40,height:40,border:'3px solid #00e5a0',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
-
-  if (!dbReady) return (
-    <div className="loading-screen">
-      <div className="loading-logo">F</div>
-      <div className="loading-title">FinMan</div>
-      <div className="loading-sub">Loading your finances…</div>
-      <div className="loading-bar"></div>
-    </div>
-  );
-
-  return (
-    <AppProvider>
-      <PinLock sessionUnlockedRef={{ current: _sessionUnlocked, set: v => _sessionUnlocked = v }}>
-        <AppInner />
-      </PinLock>
-    </AppProvider>
-  );
+  return <AppProvider><AppInner/></AppProvider>;
 }

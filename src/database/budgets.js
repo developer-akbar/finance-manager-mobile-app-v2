@@ -1,23 +1,6 @@
 import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
 
-export async function getBudgets() {
-  const db = getDB();
-  const r = await db.query('SELECT * FROM budgets ORDER BY name ASC');
-  return r.values || [];
-}
-
-export async function saveBudget(b) {
-  const db = getDB();
-  const id = b.id||uuid();
-  await db.run(
-    'INSERT OR REPLACE INTO budgets (id,name,category,amount,period) VALUES (?,?,?,?,?)',
-    [id, b.name||b.category, b.category, parseFloat(b.amount||0), b.period||'monthly']
-  );
-  return { ...b, id };
-}
-
-export async function deleteBudget(id) {
-  const db = getDB();
-  await db.run('DELETE FROM budgets WHERE id=?', [id]);
-}
+export const getBudgets   = async () => { const r=await getDB().query('SELECT * FROM budgets ORDER BY category'); return r.values||[]; };
+export const setBudget    = async (category,amount,period='monthly') => { const db=getDB(); const ex=await db.query('SELECT id FROM budgets WHERE category=?',[category]); if(ex.values?.length>0){await db.run('UPDATE budgets SET amount=?,period=? WHERE category=?',[amount,period,category]);}else{await db.run('INSERT INTO budgets (id,category,amount,period,created_at) VALUES (?,?,?,?,?)',[uuid(),category,amount,period,new Date().toISOString()]);} };
+export const deleteBudget = async (category) => { await getDB().run('DELETE FROM budgets WHERE category=?',[category]); };
