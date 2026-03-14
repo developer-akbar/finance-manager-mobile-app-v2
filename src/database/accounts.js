@@ -16,8 +16,19 @@ export const replaceAccounts = async (list) => {
   const db = getDB();
   await db.run('DELETE FROM accounts');
   const now = new Date().toISOString();
-  for (let i = 0; i < list.length; i++) {
-    const a    = typeof list[i] === 'string' ? { name: list[i] } : list[i];
+
+  const seen = new Set();
+  const uniqueList = (list || []).filter(item => {
+    const a = typeof item === 'string' ? { name: item } : item;
+    const name = (a.name || '').trim();
+    if (!name) return false;
+    const duplicate = seen.has(name);
+    seen.add(name);
+    return !duplicate;
+  });
+
+  for (let i = 0; i < uniqueList.length; i++) {
+    const a    = typeof uniqueList[i] === 'string' ? { name: uniqueList[i] } : uniqueList[i];
     const name = a.name || '';
     const grp  = a.group || a.group_name || '';
     await db.run(
@@ -36,8 +47,9 @@ export const getAccountGroups = async () => {
 export const replaceAccountGroups = async (list) => {
   const db = getDB();
   await db.run('DELETE FROM account_groups');
-  for (let i = 0; i < list.length; i++) {
-    const name = typeof list[i] === 'string' ? list[i] : (list[i]?.name || '');
+  const uniqueList = [...new Set((list || []).map(item => (typeof item === 'string' ? item : (item?.name || '')).trim()).filter(Boolean))];
+  for (let i = 0; i < uniqueList.length; i++) {
+    const name = uniqueList[i];
     if (!name) continue;
     await db.run(
       'INSERT INTO account_groups (id,name,sort_order) VALUES (?,?,?)',

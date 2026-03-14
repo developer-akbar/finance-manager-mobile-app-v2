@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, txnType, txnAmount, calcTotals, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
+import useSwipe from '../../hooks/useSwipe.js';
 import './Categories.css';
 
 const PIE_COLORS = ['#ff4d6a','#ffd166','#a78bfa','#4d9fff','#00e5a0','#fb8500','#06d6a0','#ff9f1c','#e040fb','#00b4d8','#f72585','#7209b7','#3a86ff','#8338ec','#ffbe0b'];
@@ -66,6 +67,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   const [customTo,  setTo]       = useState('');
   const [selSub,    setSelSub]   = useState(null);
   const [addDate,   setAddDate]  = useState(null);
+  const [addCat,    setAddCat]   = useState(null);
 
   const catTxns = useMemo(() => allTxns.filter(t => t.Category === catName), [allTxns, catName]);
 
@@ -96,11 +98,23 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   const next = () => {
     if(period==='Month'){if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);}
     if(period==='Year') setViewYear(y=>y+1);
-    if(period==='FY')   setViewFY(y=>Math.min(y+1,currentFY()));
+    if(period==='FY')   setViewFY(y=>y+1);
   };
+  const swipe = useSwipe(next, prev);
   const periodLabel = period==='Month'?`${MS_F[viewMonth]} ${viewYear}`:period==='Year'?String(viewYear):period==='FY'?fyLabel(viewFY):period==='Custom'&&customFrom&&customTo?`${customFrom} – ${customTo}`:'All Time';
 
-  const groups = useMemo(() => {
+  const trendData = useMemo(() => {
+    const now = new Date();
+    return Array.from({length:6}, (_,i) => {
+      const d = new Date(now.getFullYear(), now.getMonth()-5+i, 1);
+      const src = selSub ? catTxns.filter(t=>t.Subcategory===selSub) : catTxns;
+      const amt = src.filter(t=>{const td=parseDate(t.Date);return td.getFullYear()===d.getFullYear()&&td.getMonth()===d.getMonth();})
+                      .reduce((s,t)=>s+txnAmount(t),0);
+      return { name: MS_S[d.getMonth()], amt };
+    });
+  }, [catTxns, selSub]);
+
+  const groupedTxns = useMemo(() => {
     const map = {};
     for (const t of [...filtTxns].sort((a,b)=>parseDate(b.Date)-parseDate(a.Date))) { if(!map[t.Date])map[t.Date]=[]; map[t.Date].push(t); }
     return Object.entries(map);
@@ -118,7 +132,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
         <div className="entity-badge" style={{background:'var(--expense-bg)',color:'var(--expense)'}}>{formatINRCompact(totalAmt)}</div>
       </div>
 
-      <div className="cat-detail-body">
+      <div className="cat-detail-body" {...swipe}>
         <PeriodControls period={period} setPeriod={setPeriod}
           viewYear={viewYear} viewMonth={viewMonth} viewFY={viewFY}
           onPrev={prev} onNext={next}
@@ -131,6 +145,26 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
           <div className="bal-strip-item"><div className="bal-strip-l">Expense</div><div className="bal-strip-v" style={{color:'var(--expense)'}}>{formatINR(totals.expense)}</div></div>
           <div className="bal-strip-div"/>
           <div className="bal-strip-item"><div className="bal-strip-l">Txns</div><div className="bal-strip-v">{filtTxns.length}</div></div>
+        </div>
+
+        {/* 6-month trend chart */}
+        <div style={{padding:'8px var(--page-px) 4px',flexShrink:0}}>
+          <div style={{fontSize:'0.62rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.7px',marginBottom:6}}>
+            6-Month Trend{selSub ? ` — ${selSub}` : ''}
+          </div>
+          <div style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:'var(--r-lg)',padding:'10px 6px 4px'}}>
+            <ResponsiveContainer width="100%" height={110}>
+              <LineChart data={trendData} margin={{top:4,right:4,bottom:0,left:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false}/>
+                <XAxis dataKey="name" tick={{fontSize:9,fill:'var(--text-muted)'}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:9,fill:'var(--text-muted)'}} axisLine={false} tickLine={false} tickFormatter={v=>formatINRCompact(v)} width={38}/>
+                <Tooltip formatter={v=>[formatINR(v),'Amount']} contentStyle={{background:'var(--bg-card2)',border:'1px solid var(--border)',borderRadius:8,fontSize:11}}/>
+                <Line type="monotone" dataKey="amt" stroke="var(--expense)" strokeWidth={2.5}
+                  dot={{fill:'var(--expense)',r:4,strokeWidth:0}}
+                  activeDot={{r:6,fill:'var(--expense)',stroke:'rgba(255,77,106,0.3)',strokeWidth:4}}/>
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         </div>
 
         {/* Subcategories as list with totals */}
@@ -156,11 +190,11 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
         {/* Date-grouped transactions */}
         {filtTxns.length===0
           ? <div className="empty-state"><div className="empty-icon">📭</div><div className="empty-title">No transactions</div><div className="empty-desc">{periodLabel}</div></div>
-          : groups.map(([dk,txns])=>{
+          : groupedTxns.map(([dk,txns])=>{
               const gt=calcTotals(txns), d=parseDate(txns[0].Date);
               return (
                 <div key={dk}>
-                  <div className="dg-header" onClick={()=>setAddDate(txns[0].Date)}>
+                  <div className="dg-header" onClick={()=>{ setAddDate(txns[0].Date); setAddCat(catName); }}>
                     <div className="dg-left">
                       <div className="dg-day">{d.getDate()}</div>
                       <div className="dg-meta">
@@ -181,7 +215,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
         <div style={{height:24}}/>
       </div>
 
-      {addDate&&<AddTransaction prefillDate={addDate} onClose={()=>setAddDate(null)}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillCategory={addCat} onClose={()=>{ setAddDate(null); setAddCat(null); }}/>}
     </div>
   );
 }
@@ -242,8 +276,9 @@ export default function Categories({ backInterceptRef } = {}) {
   const next = () => {
     if(period==='Month'){if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);}
     if(period==='Year') setViewYear(y=>y+1);
-    if(period==='FY')   setViewFY(y=>Math.min(y+1,currentFY()));
+    if(period==='FY')   setViewFY(y=>y+1);
   };
+  const catSwipe = useSwipe(next, prev);
   const periodLabel = period==='Month'?`${MS_F[viewMonth]} ${viewYear}`:period==='Year'?String(viewYear):period==='FY'?fyLabel(viewFY):period==='Custom'&&customFrom&&customTo?`${customFrom} – ${customTo}`:'All Time';
 
   if (drill) return (
@@ -253,7 +288,7 @@ export default function Categories({ backInterceptRef } = {}) {
   );
 
   return (
-    <div className="cat-screen">
+    <div className="cat-screen" {...catSwipe}>
       <div className="page-hdr">
         <div style={{flex:1}}>
           <div className="page-hdr-title">Categories</div>

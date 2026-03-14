@@ -1,28 +1,26 @@
-#!/bin/bash
-# Run this after: npx cap add android && npx cap sync android
-# Usage: bash copy-icons.sh
+#!/usr/bin/env bash
+# FinMan — copy all icon variants into Android res folders
+# Run AFTER: npm run build && npx cap sync android
+# Then in Android Studio: Build → Clean Project → Rebuild → Run
 
-echo "Copying FinMan icons to Android res folders..."
+set -e
+ANDROID="android/app/src/main/res"
 
-SIZES=("mdpi" "hdpi" "xhdpi" "xxhdpi" "xxxhdpi")
+if [ ! -d "$ANDROID" ]; then
+  echo "Android folder not found. Run: npx cap add android && npx cap sync android"
+  exit 1
+fi
 
-for SIZE in "${SIZES[@]}"; do
-  SRC="public/icon-${SIZE}.png"
-  DST_DIR="android/app/src/main/res/mipmap-${SIZE}"
-  
-  if [ ! -d "$DST_DIR" ]; then
-    echo "  Creating $DST_DIR"
-    mkdir -p "$DST_DIR"
-  fi
-  
-  if [ -f "$SRC" ]; then
-    cp "$SRC" "$DST_DIR/ic_launcher.png"
-    cp "$SRC" "$DST_DIR/ic_launcher_round.png"
-    echo "  ✓ $SIZE"
-  else
-    echo "  ✗ Missing $SRC"
-  fi
+echo "Copying launcher icons..."
+for DPI in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+  cp public/icon-${DPI}.png "$ANDROID/mipmap-${DPI}/ic_launcher.png"
+  cp public/icon-${DPI}.png "$ANDROID/mipmap-${DPI}/ic_launcher_round.png"
 done
 
-echo ""
-echo "Done! Now in Android Studio: Build → Clean Project → Rebuild"
+echo "Copying adaptive icon foreground (fixes Expo/default icon on Android 8+)..."
+for DPI in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+  cp public/icon-foreground-${DPI}.png "$ANDROID/mipmap-${DPI}/ic_launcher_foreground.png"
+done
+
+echo "All icons copied."
+echo "Next: Android Studio -> Build -> Clean Project -> Rebuild -> Run"

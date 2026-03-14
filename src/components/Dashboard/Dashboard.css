@@ -3,7 +3,19 @@
 .dash-hello   { font-size:1.15rem; font-weight:800; color:var(--text-primary); }
 
 /* ── Net worth card ── */
-.dash-nw-card { margin:6px var(--page-px) 12px; background:linear-gradient(135deg,#0d1a30,#0f2040); border:1px solid rgba(0,229,160,0.2); border-radius:var(--r-xl); padding:16px; }
+.dash-nw-card {
+  margin:6px var(--page-px) 12px;
+  border-radius:var(--r-xl);
+  padding:16px;
+}
+[data-theme="dark"] .dash-nw-card {
+  background:linear-gradient(135deg,#0d1a30,#0f2040);
+  border:1px solid rgba(0,229,160,0.2);
+}
+[data-theme="light"] .dash-nw-card {
+  background: linear-gradient(135deg, #e8f2ff, #f5fdfa);
+  border: 1px solid var(--border);
+}
 .dash-nw-top-row { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px; }
 .dash-nw-label { font-size:0.58rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:1.2px; }
 .dash-nw-month { font-size:0.72rem; font-weight:600; color:var(--green); margin-top:2px; }

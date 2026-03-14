@@ -4,6 +4,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
+import useSwipe from '../../hooks/useSwipe.js';
 import './Accounts.css';
 
 const MS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -70,6 +71,7 @@ function AccountDetail({ acctName, allTxns, onBack }) {
   const [customFrom,setFrom]    = useState('');
   const [customTo,  setTo]      = useState('');
   const [addDate,   setAddDate] = useState(null);
+  const [showAdd,   setShowAdd] = useState(false);
 
   const acctTxns = useMemo(() =>
     allTxns.filter(t => {
@@ -137,7 +139,8 @@ function AccountDetail({ acctName, allTxns, onBack }) {
   }, [acctTxns, acctName]);
 
   const prev = () => { if(period==='Month'){if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1);}if(period==='Year')setViewYear(y=>y-1);if(period==='FY')setViewFY(y=>y-1); };
-  const next = () => { if(period==='Month'){if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);}if(period==='Year')setViewYear(y=>y+1);if(period==='FY')setViewFY(y=>Math.min(y+1,currentFY())); };
+  const next = () => { if(period==='Month'){if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);}if(period==='Year')setViewYear(y=>y+1);if(period==='FY')setViewFY(y=>y+1); };
+  const swipe = useSwipe(next, prev);
   const periodLabel = period==='Month'?`${MS_F[viewMonth]} ${viewYear}`:period==='Year'?String(viewYear):period==='FY'?fyLabel(viewFY):period==='Custom'&&customFrom&&customTo?`${customFrom} – ${customTo}`:'All Time';
 
   const groups = useMemo(() => {
@@ -161,9 +164,12 @@ function AccountDetail({ acctName, allTxns, onBack }) {
         <div className="entity-badge" style={{background:closingBal>=0?'var(--income-bg)':'var(--expense-bg)',color:closingBal>=0?'var(--income)':'var(--expense)'}}>
           {closingBal>=0?'+':''}{formatINRCompact(Math.abs(closingBal))}
         </div>
+        <button className="add-fab-sm" onClick={()=>setShowAdd(true)} title="Add transaction">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
       </div>
 
-      <div className="acct-detail-body">
+      <div className="acct-detail-body" {...swipe}>
         <div style={{padding:'8px var(--page-px) 4px'}}>
           <div className="period-tabs">
             {PERIODS.map(p=><button key={p} className={`period-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</button>)}
@@ -285,16 +291,30 @@ function AccountDetail({ acctName, allTxns, onBack }) {
         }
         <div style={{height:80}}/>
       </div>
-      {addDate&&<AddTransaction prefillDate={addDate} onClose={()=>setAddDate(null)}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)}/>}
+      {showAdd&&<AddTransaction prefillAccount={acctName} onClose={()=>setShowAdd(false)}/>}
     </div>
   );
 }
 
 // ── Main Accounts screen ──────────────────────────────────────────────────────
 export default function Accounts({ backInterceptRef } = {}) {
-  const { state } = useApp();
+  const { state, navigate } = useApp();
   const { accounts, accountGroups, transactions } = state;
   const [drill, setDrill] = useState(null);
+  const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+
+  const toggleGroup = (groupName) => {
+    setCollapsedGroups(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(groupName)) {
+        newSet.delete(groupName);
+      } else {
+        newSet.add(groupName);
+      }
+      return newSet;
+    });
+  };
 
   // Register Android back intercept when drill-down is open
   useEffect(() => {
@@ -314,22 +334,32 @@ export default function Accounts({ backInterceptRef } = {}) {
   const assets      = useMemo(() => Object.values(acctBalances).filter(v=>v>0).reduce((s,v)=>s+v,0), [acctBalances]);
   const liabilities = useMemo(() => Object.values(acctBalances).filter(v=>v<0).reduce((s,v)=>s+Math.abs(v),0), [acctBalances]);
 
+  const uniqueAccountGroups = useMemo(() => [...new Set(accountGroups)], [accountGroups]);
+  const uniqueAccounts = useMemo(() => {
+    const seen = new Set();
+    return accounts.filter(acc => {
+        const duplicate = seen.has(acc.name);
+        seen.add(acc.name);
+        return !duplicate;
+    });
+  }, [accounts]);
+
   const grouped = useMemo(() => {
     const groups    = {};
     const ungrouped = [];
     const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(String(s).trim());
-    const normalizedAccts = (accounts||[])
+    const normalizedAccts = (uniqueAccounts||[])
       .map(a=>typeof a==='string'?{name:a,group:'',icon:'💳'}:a)
       .filter(a => a.name && !looksNumeric(a.name)); // skip numeric-named accounts
     for (const a of normalizedAccts) {
       const grp = a.group || '';
-      if (grp && (accountGroups||[]).includes(grp)) {
+      if (grp && (uniqueAccountGroups||[]).includes(grp)) {
         if (!groups[grp]) groups[grp] = [];
         groups[grp].push(a);
       } else ungrouped.push(a);
     }
     return { groups, ungrouped };
-  }, [accounts, accountGroups]);
+  }, [uniqueAccounts, uniqueAccountGroups]);
 
   if (drill) return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)}/>;
 
@@ -364,30 +394,31 @@ export default function Accounts({ backInterceptRef } = {}) {
       </div>
 
       <div className="accounts-list">
-        {(accountGroups||[]).map(grp => {
+        {(uniqueAccountGroups||[]).map(grp => {
           const accts    = grouped.groups[grp] || [];
           if (!accts.length) return null;
           const grpTotal = accts.reduce((s,a)=>s+(acctBalances[a.name||a]??0),0);
+          const isCollapsed = collapsedGroups.has(grp);
           return (
             <div key={grp}>
-              <div className="acct-group-header">
+              <div className="acct-group-header" onClick={() => toggleGroup(grp)}>
                 <div className="acct-group-label">📁 {grp}</div>
                 <span className={`acct-group-bal ${grpTotal>=0?'pos':'neg'}`}>{grpTotal<0?'−':''}{formatINR(Math.abs(grpTotal))}</span>
-                <span className="acct-group-arrow-spacer"/>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{width:12,height:12,transition:'transform 0.2s',transform:isCollapsed?'rotate(-90deg)':'rotate(0deg)'}}><path d="M6 9l6 6 6-6"/></svg>
               </div>
-              {accts.map(renderAcctRow)}
+              {!isCollapsed && accts.map(renderAcctRow)}
             </div>
           );
         })}
         {grouped.ungrouped.length > 0 && (
           <div>
-            {(accountGroups||[]).length > 0 && (
+            {(uniqueAccountGroups||[]).length > 0 && (
               <div className="acct-group-header" style={{opacity:0.55}}><span>📋 Ungrouped</span></div>
             )}
             {grouped.ungrouped.map(renderAcctRow)}
           </div>
         )}
-        {accounts.length === 0 && (
+        {uniqueAccounts.length === 0 && (
           <div className="empty-state"><div className="empty-icon">💳</div><div className="empty-title">No accounts yet</div><div className="empty-desc">Add accounts in Settings</div></div>
         )}
         <div style={{height:80}}/>
