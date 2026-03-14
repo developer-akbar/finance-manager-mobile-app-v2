@@ -108,6 +108,16 @@ function AccountsManager({ onBack }) {
   const dragIdx    = useRef(null);
   const grpDragIdx = useRef(null);
 
+  const uniqueGroups = useMemo(() => [...new Set(groups)], [groups]);
+  const uniqueAccounts = useMemo(() => {
+    const seen = new Set();
+    return accounts.filter(acc => {
+        const duplicate = seen.has(acc.name);
+        seen.add(acc.name);
+        return !duplicate;
+    });
+  }, [accounts]);
+
   const showToast = (msg) => { setToast(msg); setTimeout(()=>setToast(''),2200); };
 
   const save = async (accts = accounts, grps = groups) => {
@@ -220,9 +230,9 @@ function AccountsManager({ onBack }) {
           <input className="form-input" style={{flex:1}} placeholder="New group name" value={newGrp} onChange={e=>setNewGrp(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addGroup()}/>
           <button className="btn btn-primary btn-sm" onClick={addGroup}>Add</button>
         </div>
-        {groups.length > 0 && (
+        {uniqueGroups.length > 0 && (
           <div className="mgr-list">
-            {groups.map((g,gi)=>(
+            {uniqueGroups.map((g,gi)=>(
               <div key={g}>
                 <div className="mgr-list-row"
                   draggable
@@ -252,7 +262,7 @@ function AccountsManager({ onBack }) {
         )}
 
         {/* Accounts section with List/Kanban tabs */}
-        <div className="mgr-section-label">All Accounts ({accounts.length})</div>
+        <div className="mgr-section-label">All Accounts ({uniqueAccounts.length})</div>
         <div style={{display:'flex',gap:8,padding:'0 var(--page-px) 8px'}}>
           <input className="form-input" style={{flex:1}} placeholder="Account name" value={newAcct} onChange={e=>setNewAcct(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addAccount()}/>
           <button className="btn btn-primary btn-sm" onClick={addAccount}>Add</button>
@@ -266,8 +276,8 @@ function AccountsManager({ onBack }) {
 
         {tabMode==='kanban' ? (
           <Kanban
-            columns={groups}
-            items={accounts}
+            columns={uniqueGroups}
+            items={uniqueAccounts}
             getItemGroup={a=>a.group||''}
             getItemLabel={a=>a.name}
             onMove={handleKanbanMove}
@@ -276,8 +286,8 @@ function AccountsManager({ onBack }) {
           />
         ) : (
           <div className="mgr-list">
-            {accounts.length === 0 && <div className="mgr-empty">No accounts yet</div>}
-            {accounts.map((a,i) => (
+            {uniqueAccounts.length === 0 && <div className="mgr-empty">No accounts yet</div>}
+            {uniqueAccounts.map((a,i) => (
               <div key={a.name}
                 draggable
                 onDragStart={()=>onDragStart(i)}
@@ -305,7 +315,7 @@ function AccountsManager({ onBack }) {
                       <label className="form-label">Group</label>
                       <select className="form-input" value={editGrp} onChange={e=>setEditGrp(e.target.value)}>
                         <option value="">No group</option>
-                        {groups.map(g=><option key={g}>{g}</option>)}
+                        {uniqueGroups.map(g=><option key={g}>{g}</option>)}
                       </select>
                     </div>
                     <div style={{display:'flex',gap:8}}>

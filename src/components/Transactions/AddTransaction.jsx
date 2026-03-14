@@ -66,9 +66,18 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
 
   const isTransfer = form.type === 'Transfer-Out';
 
+  const uniqueAccounts = useMemo(() => {
+    const seen = new Set();
+    return (accounts || []).filter(acc => {
+        const duplicate = seen.has(acc.name);
+        seen.add(acc.name);
+        return !duplicate;
+    });
+  }, [accounts]);
+
   const accountList = useMemo(() =>
-    (Array.isArray(accounts) ? accounts : []).map(a => a?.name || a).filter(Boolean).sort(),
-    [accounts]);
+    (Array.isArray(uniqueAccounts) ? uniqueAccounts : []).map(a => a?.name || a).filter(Boolean).sort(),
+    [uniqueAccounts]);
 
   const availCats = useMemo(() => {
     const wantType = form.type === 'Income' ? 'Income' : 'Expense';

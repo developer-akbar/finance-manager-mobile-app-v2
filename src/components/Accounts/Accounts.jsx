@@ -321,22 +321,32 @@ export default function Accounts({ backInterceptRef } = {}) {
   const assets      = useMemo(() => Object.values(acctBalances).filter(v=>v>0).reduce((s,v)=>s+v,0), [acctBalances]);
   const liabilities = useMemo(() => Object.values(acctBalances).filter(v=>v<0).reduce((s,v)=>s+Math.abs(v),0), [acctBalances]);
 
+  const uniqueAccountGroups = useMemo(() => [...new Set(accountGroups)], [accountGroups]);
+  const uniqueAccounts = useMemo(() => {
+    const seen = new Set();
+    return accounts.filter(acc => {
+        const duplicate = seen.has(acc.name);
+        seen.add(acc.name);
+        return !duplicate;
+    });
+  }, [accounts]);
+
   const grouped = useMemo(() => {
     const groups    = {};
     const ungrouped = [];
     const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(String(s).trim());
-    const normalizedAccts = (accounts||[])
+    const normalizedAccts = (uniqueAccounts||[])
       .map(a=>typeof a==='string'?{name:a,group:'',icon:'💳'}:a)
       .filter(a => a.name && !looksNumeric(a.name)); // skip numeric-named accounts
     for (const a of normalizedAccts) {
       const grp = a.group || '';
-      if (grp && (accountGroups||[]).includes(grp)) {
+      if (grp && (uniqueAccountGroups||[]).includes(grp)) {
         if (!groups[grp]) groups[grp] = [];
         groups[grp].push(a);
       } else ungrouped.push(a);
     }
     return { groups, ungrouped };
-  }, [accounts, accountGroups]);
+  }, [uniqueAccounts, uniqueAccountGroups]);
 
   if (drill) return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)}/>;
 
@@ -371,7 +381,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       </div>
 
       <div className="accounts-list">
-        {(accountGroups||[]).map(grp => {
+        {(uniqueAccountGroups||[]).map(grp => {
           const accts    = grouped.groups[grp] || [];
           if (!accts.length) return null;
           const grpTotal = accts.reduce((s,a)=>s+(acctBalances[a.name||a]??0),0);
@@ -388,13 +398,13 @@ export default function Accounts({ backInterceptRef } = {}) {
         })}
         {grouped.ungrouped.length > 0 && (
           <div>
-            {(accountGroups||[]).length > 0 && (
+            {(uniqueAccountGroups||[]).length > 0 && (
               <div className="acct-group-header" style={{opacity:0.55}}><span>📋 Ungrouped</span></div>
             )}
             {grouped.ungrouped.map(renderAcctRow)}
           </div>
         )}
-        {accounts.length === 0 && (
+        {uniqueAccounts.length === 0 && (
           <div className="empty-state"><div className="empty-icon">💳</div><div className="empty-title">No accounts yet</div><div className="empty-desc">Add accounts in Settings</div></div>
         )}
         <div style={{height:80}}/>
