@@ -48,6 +48,10 @@ function MonthlyView({ transactions, onMonthClick }) {
   const [year, setYear] = useState(new Date().getFullYear());
   const now = new Date();
 
+  const prevYear = () => setYear(y => y - 1);
+  const nextYear = () => setYear(y => y + 1);
+  const swipe = useSwipe(nextYear, prevYear);
+
   const data = useMemo(() =>
     MONTHS_S.map((s, mi) => {
       const txns = transactions.filter(t => { const d=parseDate(t.Date); return d.getFullYear()===year&&d.getMonth()===mi; });
@@ -58,11 +62,11 @@ function MonthlyView({ transactions, onMonthClick }) {
   const totals = data.reduce((a,m) => ({ income:a.income+m.income, expense:a.expense+m.expense }), {income:0,expense:0});
 
   return (
-    <div style={{overflow:'auto',flex:1}}>
+    <div style={{overflow:'auto',flex:1}} {...swipe}>
       <div className="txn-month-row">
-        <button className="pp-arrow" onClick={()=>setYear(y=>y-1)}>‹</button>
+        <button className="pp-arrow" onClick={prevYear}>‹</button>
         <div className="pp-label">{year}</div>
-        <button className="pp-arrow" onClick={()=>setYear(y=>y+1)}>›</button>
+        <button className="pp-arrow" onClick={nextYear}>›</button>
       </div>
       <div className="bal-strip">
         <div className="bal-strip-item"><div className="bal-strip-l">Income</div><div className="bal-strip-v" style={{color:'var(--income)'}}>{formatINR(totals.income)}</div></div>
