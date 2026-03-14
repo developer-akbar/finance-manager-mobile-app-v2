@@ -140,7 +140,7 @@ npx cap sync android
 Or use live reload (phone and PC must be on same Wi-Fi):
 
 ```bash
-npx cap run android --livereload --external
+npx cap run android --live-reload
 ```
 
 ---
@@ -252,3 +252,10 @@ ios/
 ```
 
 > Do not commit `android/` — it is generated and large. Commit only `src/`, config files, and `package.json`.
+
+---
+
+## 📋 Change Logs
+
+Version-by-version changelogs are in the [`/change-logs`](./change-logs/) folder.
+

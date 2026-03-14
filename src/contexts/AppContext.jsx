@@ -9,6 +9,8 @@ import {
   getCategories, replaceCategories,
   getBudgets, setBudget, deleteBudget,
 } from '../database/index.js';
+import { DEFAULT_ACCOUNT_GROUPS, DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES } from '../database/defaults.js';
+import { v4 as uuid } from 'uuid';
 
 const Ctx = createContext(null);
 export const useApp = () => { const c = useContext(Ctx); if (!c) throw new Error('useApp outside AppProvider'); return c; };
@@ -69,6 +71,30 @@ export function AppProvider({ children }) {
         getTransactions(), getAccounts(), getCategories(),
         getAccountGroups(), getBudgets(), getAllSettings(),
       ]);
+
+      // Seed defaults on very first launch (empty accounts AND categories)
+      if (accts.length === 0 && catsArr.length === 0) {
+        await replaceAccountGroups(DEFAULT_ACCOUNT_GROUPS);
+        await replaceAccounts(DEFAULT_ACCOUNTS.map((a,i) => ({ id: uuid(), ...a, sortOrder: i })));
+        await replaceCategories(DEFAULT_CATEGORIES.map((c,i) => ({
+          id: uuid(), name: c.name, type: c.type, sortOrder: i,
+          subcategories: c.subcategories.map((s,si) => ({ id: uuid(), name: s, sortOrder: si })),
+        })));
+        // Reload after seeding
+        const [seedAccts, seedCats, seedGroups] = await Promise.all([getAccounts(), getCategories(), getAccountGroups()]);
+        const theme    = settings.theme    || 'dark';
+        const fontSize = parseFloat(settings.fontSize || '1.0');
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.style.setProperty('--fs-scale', String(fontSize));
+        dispatch({ type: 'INIT', payload: {
+          transactions: txns,
+          accounts: normalizeAccounts(seedAccts),
+          categories: catsArrToObj(seedCats),
+          accountGroups: seedGroups || [],
+          budgets, settings, theme, fontSize,
+        }});
+        return;
+      }
       const theme    = settings.theme    || 'dark';
       const fontSize = parseFloat(settings.fontSize || '1.0');
       document.documentElement.setAttribute('data-theme', theme);

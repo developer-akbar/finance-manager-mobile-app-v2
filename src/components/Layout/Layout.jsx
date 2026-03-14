@@ -16,8 +16,18 @@ const NAV = [
   { id:'settings',     label:'Settings',   Icon:SetIco  },
 ];
 
-export default function Layout({ children }) {
+export default function Layout({ children, onNavTap }) {
   const { state, navigate } = useApp();
+
+  const handleNavClick = (id) => {
+    if (state.currentView === id) {
+      // Already on this tab — signal a reset to the child
+      onNavTap?.(id);
+    } else {
+      navigate(id);
+    }
+  };
+
   return (
     <div className="app-shell">
       <div className="layout-body">
@@ -25,7 +35,7 @@ export default function Layout({ children }) {
       </div>
       <nav className="bottom-nav">
         {NAV.map(({ id, label, Icon }) => (
-          <button key={id} className={`nav-btn ${state.currentView === id ? 'active' : ''}`} onClick={() => navigate(id)}>
+          <button key={id} className={`nav-btn ${state.currentView === id ? 'active' : ''}`} onClick={() => handleNavClick(id)}>
             <Icon/><span>{label}</span>
           </button>
         ))}

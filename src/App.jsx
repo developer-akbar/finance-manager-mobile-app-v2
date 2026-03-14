@@ -70,9 +70,11 @@ function AppInner() {
   const { state, navigate } = useApp();
   const { currentView } = state;
   const [showAdd, setShowAdd] = useState(false);
+  // Increment a key for each tab when it's re-tapped — child uses key= to force remount (reset)
+  const [resetKeys, setResetKeys] = useState({ transactions:0, accounts:0, categories:0, settings:0, dashboard:0 });
+  const handleNavTap = (id) => setResetKeys(k => ({ ...k, [id]: (k[id]||0)+1 }));
 
   // Child screens register a "handle back" callback here
-  // e.g. AccountDetail sets it when open, clears when it unmounts
   const backInterceptRef = React.useRef(null);
 
   useEffect(() => {
@@ -101,18 +103,18 @@ function AppInner() {
 
   const screen = (() => {
     switch (currentView) {
-      case 'transactions': return <Transactions onAddTransaction={() => setShowAdd(true)} backInterceptRef={backInterceptRef}/>;
-      case 'accounts':     return <Accounts backInterceptRef={backInterceptRef}/>;
-      case 'categories':   return <Categories backInterceptRef={backInterceptRef}/>;
+      case 'transactions': return <Transactions key={resetKeys.transactions} onAddTransaction={() => setShowAdd(true)} backInterceptRef={backInterceptRef}/>;
+      case 'accounts':     return <Accounts     key={resetKeys.accounts}     backInterceptRef={backInterceptRef}/>;
+      case 'categories':   return <Categories   key={resetKeys.categories}   backInterceptRef={backInterceptRef}/>;
       case 'analytics':    return <Analytics/>;
-      case 'settings':     return <Settings backInterceptRef={backInterceptRef}/>;
-      default:             return <Dashboard/>;
+      case 'settings':     return <Settings     key={resetKeys.settings}     backInterceptRef={backInterceptRef}/>;
+      default:             return <Dashboard    key={resetKeys.dashboard}/>;
     }
   })();
 
   return (
     <PinLock>
-      <Layout>
+      <Layout onNavTap={handleNavTap}>
         {screen}
       </Layout>
       {showAdd && <AddTransaction onClose={() => setShowAdd(false)}/>}

@@ -3,6 +3,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, calcTotals, groupByDate, txnType, txnAmount } from '../../utils/format.js';
 import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
+import useSwipe from '../../hooks/useSwipe.js';
 import './Transactions.css';
 
 const MONTHS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -47,6 +48,10 @@ function MonthlyView({ transactions, onMonthClick }) {
   const [year, setYear] = useState(new Date().getFullYear());
   const now = new Date();
 
+  const prevYear = () => setYear(y => y - 1);
+  const nextYear = () => setYear(y => y + 1);
+  const swipe = useSwipe(nextYear, prevYear);
+
   const data = useMemo(() =>
     MONTHS_S.map((s, mi) => {
       const txns = transactions.filter(t => { const d=parseDate(t.Date); return d.getFullYear()===year&&d.getMonth()===mi; });
@@ -57,11 +62,11 @@ function MonthlyView({ transactions, onMonthClick }) {
   const totals = data.reduce((a,m) => ({ income:a.income+m.income, expense:a.expense+m.expense }), {income:0,expense:0});
 
   return (
-    <div style={{overflow:'auto',flex:1}}>
+    <div style={{overflow:'auto',flex:1}} {...swipe}>
       <div className="txn-month-row">
-        <button className="pp-arrow" onClick={()=>setYear(y=>y-1)}>‹</button>
+        <button className="pp-arrow" onClick={prevYear}>‹</button>
         <div className="pp-label">{year}</div>
-        <button className="pp-arrow" onClick={()=>setYear(y=>Math.min(y+1,now.getFullYear()))}>›</button>
+        <button className="pp-arrow" onClick={nextYear}>›</button>
       </div>
       <div className="bal-strip">
         <div className="bal-strip-item"><div className="bal-strip-l">Income</div><div className="bal-strip-v" style={{color:'var(--income)'}}>{formatINR(totals.income)}</div></div>
@@ -110,6 +115,10 @@ function SearchView({ transactions, accounts, categories, onClose }) {
 
   // Reset offset when period changes
   const handlePeriodChange = (p) => { setSelPeriod(p); setPeriodOffset(0); };
+  const swipe = useSwipe(
+    () => canNav && setPeriodOffset(o => o - 1),
+    () => canNav && setPeriodOffset(o => o + 1)
+  );
 
   // Compute period range with offset for prev/next navigation
   const periodRange = useMemo(() => {
@@ -234,7 +243,7 @@ function SearchView({ transactions, accounts, categories, onClose }) {
   const canNav  = selPeriod !== 'All' && selPeriod !== 'Custom';
 
   return (
-    <div className="search-view">
+    <div className="search-view" {...swipe}>
       {/* Search bar */}
       <div className="search-bar-row">
         <button className="back-btn" onClick={onClose}>
@@ -328,7 +337,7 @@ function SearchView({ transactions, accounts, categories, onClose }) {
       {showFilter && (
         <>
           <div className="overlay" onClick={() => setShowFilter(false)}/>
-          <div className="bottom-sheet" style={{maxHeight:'78dvh',display:'flex',flexDirection:'column',padding:'0 0 calc(var(--safe-bottom)+12px)'}}>
+          <div className="bottom-sheet" style={{maxHeight:'92dvh',display:'flex',flexDirection:'column',padding:'0 0 calc(var(--safe-bottom)+12px)'}}>
             <div className="sheet-handle" style={{marginTop:14}}/>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'0 var(--page-px) 10px',borderBottom:'1px solid var(--border)'}}>
               <div style={{fontWeight:800,fontSize:'0.9rem'}}>Filters</div>
@@ -360,19 +369,41 @@ function SearchView({ transactions, accounts, categories, onClose }) {
                   </div>
                 </div>
               )}
-              {allCatNames.length > 0 && (
-                <div className="filter-section">
-                  <div className="filter-section-label">Categories</div>
-                  <div className="filter-checkbox-list">
-                    {allCatNames.map(c => (
-                      <div key={c} className="filter-check-row" onClick={() => toggleCat(c)}>
-                        <div className={`filter-check-box ${selCats.has(c) ? 'checked' : ''}`}>{selCats.has(c) && '✓'}</div>
-                        <div className="filter-check-label">{c}</div>
-                      </div>
-                    ))}
+              {allCatNames.length > 0 && (() => {
+                const expenseCats = allCatNames.filter(c => (categories?.[c]?.type || 'Expense') === 'Expense');
+                const incomeCats  = allCatNames.filter(c => (categories?.[c]?.type || 'Expense') === 'Income');
+                return (
+                  <div className="filter-section">
+                    <div className="filter-section-label">Categories</div>
+                    {expenseCats.length > 0 && (
+                      <>
+                        <div style={{fontSize:'0.6rem',fontWeight:700,color:'var(--expense)',textTransform:'uppercase',letterSpacing:'0.5px',padding:'6px 0 4px'}}>Expense</div>
+                        <div className="filter-checkbox-list">
+                          {expenseCats.map(c => (
+                            <div key={c} className="filter-check-row" onClick={() => toggleCat(c)}>
+                              <div className={`filter-check-box ${selCats.has(c) ? 'checked' : ''}`}>{selCats.has(c) && '✓'}</div>
+                              <div className="filter-check-label">{c}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    {incomeCats.length > 0 && (
+                      <>
+                        <div style={{fontSize:'0.6rem',fontWeight:700,color:'var(--income)',textTransform:'uppercase',letterSpacing:'0.5px',padding:'6px 0 4px'}}>Income</div>
+                        <div className="filter-checkbox-list">
+                          {incomeCats.map(c => (
+                            <div key={c} className="filter-check-row" onClick={() => toggleCat(c)}>
+                              <div className={`filter-check-box ${selCats.has(c) ? 'checked' : ''}`}>{selCats.has(c) && '✓'}</div>
+                              <div className="filter-check-label">{c}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
             <div style={{padding:'10px var(--page-px) 0'}}>
               <button className="btn btn-primary btn-full" onClick={() => setShowFilter(false)}>Apply</button>
@@ -399,6 +430,9 @@ export default function Transactions({ onAddTransaction }) {
 
   const prevMonth = () => { if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1); };
   const nextMonth = () => { if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1); };
+  const swipe = useSwipe(nextMonth, prevMonth);
+  // Only attach swipe handlers in daily mode — monthly view needs free scroll
+  const swipeProps = viewMode === 'daily' ? swipe : {};
 
   const monthTxns   = useMemo(() => transactions.filter(t=>{const d=parseDate(t.Date);return d.getFullYear()===viewYear&&d.getMonth()===viewMonth;}), [transactions,viewYear,viewMonth]);
   const monthTotals = useMemo(() => calcTotals(monthTxns), [monthTxns]);
@@ -408,7 +442,7 @@ export default function Transactions({ onAddTransaction }) {
   );
 
   return (
-    <div className="txn-screen">
+    <div className="txn-screen" {...swipeProps}>
       {/* Row 1: [Daily | Monthly] on left, 🔍 on right */}
       <div className="txn-header">
         <div className="txn-view-tabs">
