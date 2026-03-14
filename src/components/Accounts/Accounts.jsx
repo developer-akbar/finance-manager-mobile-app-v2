@@ -4,6 +4,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
+import useSwipe from '../../hooks/useSwipe.js';
 import './Accounts.css';
 
 const MS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -70,6 +71,7 @@ function AccountDetail({ acctName, allTxns, onBack }) {
   const [customFrom,setFrom]    = useState('');
   const [customTo,  setTo]      = useState('');
   const [addDate,   setAddDate] = useState(null);
+  const [showAdd,   setShowAdd] = useState(false);
 
   const acctTxns = useMemo(() =>
     allTxns.filter(t => {
@@ -137,7 +139,8 @@ function AccountDetail({ acctName, allTxns, onBack }) {
   }, [acctTxns, acctName]);
 
   const prev = () => { if(period==='Month'){if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1);}if(period==='Year')setViewYear(y=>y-1);if(period==='FY')setViewFY(y=>y-1); };
-  const next = () => { if(period==='Month'){if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);}if(period==='Year')setViewYear(y=>y+1);if(period==='FY')setViewFY(y=>Math.min(y+1,currentFY())); };
+  const next = () => { if(period==='Month'){if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);}if(period==='Year')setViewYear(y=>y+1);if(period==='FY')setViewFY(y=>y+1); };
+  const swipe = useSwipe(next, prev);
   const periodLabel = period==='Month'?`${MS_F[viewMonth]} ${viewYear}`:period==='Year'?String(viewYear):period==='FY'?fyLabel(viewFY):period==='Custom'&&customFrom&&customTo?`${customFrom} – ${customTo}`:'All Time';
 
   const groups = useMemo(() => {
@@ -161,9 +164,12 @@ function AccountDetail({ acctName, allTxns, onBack }) {
         <div className="entity-badge" style={{background:closingBal>=0?'var(--income-bg)':'var(--expense-bg)',color:closingBal>=0?'var(--income)':'var(--expense)'}}>
           {closingBal>=0?'+':''}{formatINRCompact(Math.abs(closingBal))}
         </div>
+        <button className="add-fab-sm" onClick={()=>setShowAdd(true)} title="Add transaction">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
       </div>
 
-      <div className="acct-detail-body">
+      <div className="acct-detail-body" {...swipe}>
         <div style={{padding:'8px var(--page-px) 4px'}}>
           <div className="period-tabs">
             {PERIODS.map(p=><button key={p} className={`period-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</button>)}
@@ -285,7 +291,8 @@ function AccountDetail({ acctName, allTxns, onBack }) {
         }
         <div style={{height:80}}/>
       </div>
-      {addDate&&<AddTransaction prefillDate={addDate} onClose={()=>setAddDate(null)}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)}/>}
+      {showAdd&&<AddTransaction prefillAccount={acctName} onClose={()=>setShowAdd(false)}/>}
     </div>
   );
 }

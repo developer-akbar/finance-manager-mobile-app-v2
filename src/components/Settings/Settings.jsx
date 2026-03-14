@@ -4,30 +4,59 @@ import { formatINR, parseDate } from '../../utils/format.js';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
-// Kanban drag-drop
+// Kanban drag-drop with intra-column reordering
 // ─────────────────────────────────────────────
-function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, unassignedLabel = 'Ungrouped' }) {
-  const [dragging, setDragging] = useState(null); // {item, fromCol}
-  const [overCol,  setOverCol]  = useState(null);
+function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, onReorder, unassignedLabel = 'Ungrouped' }) {
+  const [dragging,   setDragging]   = useState(null);
+  const [overCol,    setOverCol]    = useState(null);
+  const [overItem,   setOverItem]   = useState(null);
+  const [localItems, setLocalItems] = useState(items);
+
+  React.useEffect(() => { if (!dragging) setLocalItems(items); }, [items, dragging]);
 
   const grouped = useMemo(() => {
     const map = {};
     for (const col of [...columns, '__unassigned']) map[col] = [];
-    for (const item of items) {
+    for (const item of localItems) {
       const grp = getItemGroup(item);
       const col = columns.includes(grp) ? grp : '__unassigned';
       map[col].push(item);
     }
     return map;
-  }, [columns, items, getItemGroup]);
+  }, [columns, localItems, getItemGroup]);
 
   const allCols = [...columns, '__unassigned'];
 
   const handleDrop = (toCol) => {
     if (!dragging) return;
-    const realCol = toCol === '__unassigned' ? '' : toCol;
-    onMove(dragging.item, realCol);
-    setDragging(null); setOverCol(null);
+    const realTo   = toCol === '__unassigned' ? '' : toCol;
+    const realFrom = dragging.fromCol === '__unassigned' ? '' : dragging.fromCol;
+
+    if (realFrom !== realTo) {
+      // Move to different group
+      const upd = localItems.map(it =>
+        getItemLabel(it) === getItemLabel(dragging.item) ? { ...it, group: realTo } : it
+      );
+      setLocalItems(upd);
+      onMove(dragging.item, realTo);
+    } else if (overItem && getItemLabel(overItem) !== getItemLabel(dragging.item)) {
+      // Reorder within same column
+      const colItems = [...(grouped[toCol] || [])];
+      const fi = colItems.findIndex(it => getItemLabel(it) === getItemLabel(dragging.item));
+      const ti = colItems.findIndex(it => getItemLabel(it) === getItemLabel(overItem));
+      if (fi !== -1 && ti !== -1) {
+        const [moved] = colItems.splice(fi, 1);
+        colItems.splice(ti, 0, moved);
+        const others = localItems.filter(it => {
+          const g = getItemGroup(it);
+          return (columns.includes(g) ? g : '__unassigned') !== toCol;
+        });
+        const newList = [...others, ...colItems];
+        setLocalItems(newList);
+        onReorder?.(newList);
+      }
+    }
+    setDragging(null); setOverCol(null); setOverItem(null);
   };
 
   return (
@@ -43,10 +72,11 @@ function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, unassigned
           <div className="kanban-col-items">
             {(grouped[col]||[]).map(item=>(
               <div key={getItemLabel(item)}
-                className={`kanban-card ${dragging?.item===item?'dragging':''}`}
+                className={`kanban-card ${dragging?.item===item?'dragging':''} ${overItem===item&&dragging?.fromCol===col?'kanban-over-item':''}`}
                 draggable
                 onDragStart={()=>setDragging({item,fromCol:col})}
-                onDragEnd={()=>{setDragging(null);setOverCol(null);}}
+                onDragEnd={()=>{setDragging(null);setOverCol(null);setOverItem(null);}}
+                onDragOver={e=>{e.preventDefault();e.stopPropagation();setOverItem(item);}}
               >
                 <span style={{fontSize:'0.7rem',marginRight:2,opacity:0.5}}>⠿</span>
                 {getItemLabel(item)}
@@ -58,7 +88,6 @@ function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, unassigned
     </div>
   );
 }
-
 // ─────────────────────────────────────────────
 // Accounts Manager
 // ─────────────────────────────────────────────
@@ -168,6 +197,11 @@ function AccountsManager({ onBack }) {
     setAccounts(upd); save(upd);
   };
 
+  // Kanban: reorder accounts within same column
+  const handleKanbanReorder = (newList) => {
+    setAccounts(newList); save(newList);
+  };
+
   return (
     <div className="sub-screen">
       <div className="page-hdr">
@@ -237,6 +271,7 @@ function AccountsManager({ onBack }) {
             getItemGroup={a=>a.group||''}
             getItemLabel={a=>a.name}
             onMove={handleKanbanMove}
+            onReorder={handleKanbanReorder}
             unassignedLabel="Ungrouped"
           />
         ) : (
@@ -1051,7 +1086,7 @@ export default function Settings({ backInterceptRef } = {}) {
       <div className="settings-card">
         <div className="settings-row">
           <div className="settings-row-icon" style={{background:'rgba(0,229,160,0.12)'}}>💰</div>
-          <div className="settings-row-content"><div className="settings-row-title">FinMan</div><div className="settings-row-sub">v2.2.1.0 — Built for you</div></div>
+          <div className="settings-row-content"><div className="settings-row-title">FinMan</div><div className="settings-row-sub">v2.2.1.1 — Built for you by Akbar 💚</div></div>
         </div>
       </div>
 

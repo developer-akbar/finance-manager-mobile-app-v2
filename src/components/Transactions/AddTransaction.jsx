@@ -13,7 +13,7 @@ const todayVal = () => {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 };
 
-export default function AddTransaction({ onClose, editTransaction = null, prefillDate = null }) {
+export default function AddTransaction({ onClose, editTransaction = null, prefillDate = null, prefillAccount = null, prefillCategory = null }) {
   const { state, addTransaction, updateTransaction } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
@@ -46,7 +46,8 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
       type:'Expense', amount:'',
       date: prefillDate ? (toInputDate(prefillDate) || todayVal()) : todayVal(),
       time: nowTimeStr(),   // always current time for new transactions
-      account:'', fromAccount:'', toAccount:'', category:'', subcategory:'', note:'', description:'',
+      account: prefillAccount || '',
+      fromAccount:'', toAccount:'', category: prefillCategory || '', subcategory:'', note:'', description:'',
     };
   });
 

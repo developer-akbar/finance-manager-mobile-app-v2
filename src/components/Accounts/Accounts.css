@@ -32,3 +32,5 @@
 .acct-ob-v.pos { color:var(--income); }
 .acct-ob-v.neg { color:var(--expense); }
 .acct-ob-div { width:1px; background:var(--border); flex-shrink:0; margin:8px 0; }
+.add-fab-sm { width:32px; height:32px; border-radius:50%; background:var(--green); border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-left:8px; color:#000; transition:var(--transition); }
+.add-fab-sm:active { transform:scale(0.9); }

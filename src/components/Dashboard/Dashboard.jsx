@@ -128,9 +128,12 @@ export default function Dashboard() {
     const highestMonth = `${MONTHS_FULL[parseInt(maxM) - 1]} ${maxY}`;
     const highestAmt   = byMonth[maxKey];
 
-    // Saving rate this month
-    const savingRate = totals.income > 0
-      ? Math.round(((totals.income - totals.expense) / totals.income) * 100)
+    // Saving rate this month — based on TOTAL income across all time, not just this month
+    // (month income can be tiny/zero if transactions aren't tagged income correctly)
+    const totalIncome  = transactions.filter(t=>txnType(t)==='income').reduce((s,t)=>s+txnAmount(t),0);
+    const totalExpense = transactions.filter(t=>txnType(t)==='expense').reduce((s,t)=>s+txnAmount(t),0);
+    const savingRate = totalIncome > 0
+      ? Math.round(((totalIncome - totalExpense) / totalIncome) * 100)
       : null;
 
     return { avgMonthly, avgYearly, yearRows, highestMonth, highestAmt, savingRate };
@@ -187,9 +190,15 @@ export default function Dashboard() {
         {analytics?.savingRate !== null && analytics?.savingRate !== undefined && (
           <div className="dash-saving-rate">
             <div className="dash-sr-bar">
-              <div className="dash-sr-fill" style={{ width: `${Math.max(0, analytics.savingRate)}%`, background: analytics.savingRate >= 20 ? 'var(--income)' : analytics.savingRate >= 0 ? 'var(--gold)' : 'var(--expense)' }}/>
+              <div className="dash-sr-fill" style={{
+                width: `${Math.min(100, Math.max(0, analytics.savingRate))}%`,
+                background: analytics.savingRate >= 20 ? 'var(--income)' : analytics.savingRate >= 0 ? '#f0a500' : 'var(--expense)'
+              }}/>
             </div>
-            <span className="dash-sr-label">Saving rate: {analytics.savingRate}% this month</span>
+            <span className="dash-sr-label">
+              Overall saving rate: {analytics.savingRate >= 0 ? '' : '−'}{Math.abs(analytics.savingRate)}%
+              {analytics.savingRate < 0 ? ' (spending exceeds income)' : ''}
+            </span>
           </div>
         )}
       </div>
