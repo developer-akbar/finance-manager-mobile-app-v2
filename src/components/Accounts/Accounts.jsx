@@ -299,9 +299,22 @@ function AccountDetail({ acctName, allTxns, onBack }) {
 
 // ── Main Accounts screen ──────────────────────────────────────────────────────
 export default function Accounts({ backInterceptRef } = {}) {
-  const { state } = useApp();
+  const { state, navigate } = useApp();
   const { accounts, accountGroups, transactions } = state;
   const [drill, setDrill] = useState(null);
+  const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+
+  const toggleGroup = (groupName) => {
+    setCollapsedGroups(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(groupName)) {
+        newSet.delete(groupName);
+      } else {
+        newSet.add(groupName);
+      }
+      return newSet;
+    });
+  };
 
   // Register Android back intercept when drill-down is open
   useEffect(() => {
@@ -385,14 +398,15 @@ export default function Accounts({ backInterceptRef } = {}) {
           const accts    = grouped.groups[grp] || [];
           if (!accts.length) return null;
           const grpTotal = accts.reduce((s,a)=>s+(acctBalances[a.name||a]??0),0);
+          const isCollapsed = collapsedGroups.has(grp);
           return (
             <div key={grp}>
-              <div className="acct-group-header">
+              <div className="acct-group-header" onClick={() => toggleGroup(grp)}>
                 <div className="acct-group-label">📁 {grp}</div>
                 <span className={`acct-group-bal ${grpTotal>=0?'pos':'neg'}`}>{grpTotal<0?'−':''}{formatINR(Math.abs(grpTotal))}</span>
-                <span className="acct-group-arrow-spacer"/>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{width:12,height:12,transition:'transform 0.2s',transform:isCollapsed?'rotate(-90deg)':'rotate(0deg)'}}><path d="M6 9l6 6 6-6"/></svg>
               </div>
-              {accts.map(renderAcctRow)}
+              {!isCollapsed && accts.map(renderAcctRow)}
             </div>
           );
         })}
