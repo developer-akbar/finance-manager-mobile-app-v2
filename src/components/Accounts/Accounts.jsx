@@ -75,6 +75,17 @@ function AccountDetail({ acctName, allTxns, onBack }) {
   const [selected,  setSelected] = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
 
+  // When viewing an account, treat transfer rows as income/expense for that account.
+  const accountTxnType = (t) => {
+    const base = txnType(t);
+    if (base !== 'transfer') return base;
+    const acct = t.Account || t.FromAccount || '';
+    const dest = t.ToAccount || '';
+    if (acct === acctName) return 'expense';
+    if (dest === acctName) return 'income';
+    return 'transfer';
+  };
+
   const acctTxns = useMemo(() =>
     allTxns.filter(t => {
       const acct = t.Account || t.FromAccount || '';
@@ -150,13 +161,13 @@ function AccountDetail({ acctName, allTxns, onBack }) {
   const selTotals = useMemo(() => {
     let inc = 0, exp = 0, xfr = 0;
     for (const t of periodTxns.filter(r => selected.has(r._id))) {
-      const tp = txnType(t), amt = txnAmount(t);
+      const tp = accountTxnType(t), amt = txnAmount(t);
       if (tp === 'income') inc += amt;
       else if (tp === 'expense') exp += amt;
       else xfr += amt;
     }
     return { inc, exp, xfr };
-  }, [periodTxns, selected]);
+  }, [periodTxns, selected, acctName]);
 
   const groups = useMemo(() => {
     const map={};
@@ -300,7 +311,14 @@ function AccountDetail({ acctName, allTxns, onBack }) {
                 </div>
               )}
               {groups.map(([dk,txns])=>{
-                const gt=calcTotals(txns), d=parseDate(txns[0].Date);
+                const gt = txns.reduce((acc, t) => {
+                  const amt = txnAmount(t);
+                  const tp  = accountTxnType(t);
+                  if (tp === 'income') acc.income += amt;
+                  else if (tp === 'expense') acc.expense += amt;
+                  return acc;
+                }, { income: 0, expense: 0 });
+                const d=parseDate(txns[0].Date);
                 return(
                   <div key={dk} className="date-group-container">
                     <div className="dg-header" onClick={multiMode ? null : ()=>setAddDate(txns[0].Date)}>
@@ -318,6 +336,7 @@ function AccountDetail({ acctName, allTxns, onBack }) {
                     </div>
                     <div className="dg-items">{txns.map(t=><TransactionItem key={t._id} transaction={t}
                       selected={selected.has(t._id)}
+                      overrideType={accountTxnType(t)}
                       onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
                       onTap={multiMode ? toggleSel : null}
                     />)}</div>

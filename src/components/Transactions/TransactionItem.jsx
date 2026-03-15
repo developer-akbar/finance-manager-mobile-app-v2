@@ -5,19 +5,21 @@ import AddTransaction from './AddTransaction.jsx';
 import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
-export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false }) {
+export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType }) {
   const [showDetail, setShowDetail] = useState(false);
   const pressTimer = React.useRef(null);
 
-  const type   = txnType(t);
-  const amount = txnAmount(t);
-  const cls    = type === 'income' ? 'income' : type === 'expense' ? 'expense' : 'transfer';
-  const sign   = type === 'income' ? '+' : type === 'expense' ? '−' : '';
-  const label  = type === 'transfer'
+  const baseType = txnType(t);
+  const type     = overrideType || baseType;
+  const amount   = txnAmount(t);
+  const cls      = type === 'income' ? 'income' : type === 'expense' ? 'expense' : 'transfer';
+  const sign     = type === 'income' ? '+' : type === 'expense' ? '−' : '';
+  const isTransfer = baseType === 'transfer';
+  const label    = isTransfer
     ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`
     : (t.Note || t.Category || '—');
-  const subLabel = type !== 'transfer' ? (t.Category || '') : '';
-  const hasAccount = type !== 'transfer' && t.Account;
+  const subLabel = !isTransfer ? (t.Category || '') : '';
+  const hasAccount = !isTransfer && t.Account;
 
   const handlePressStart = () => {
     if (onLongPress) pressTimer.current = setTimeout(() => onLongPress(t), 500);
