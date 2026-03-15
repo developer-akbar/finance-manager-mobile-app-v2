@@ -133,12 +133,15 @@ export const calcTotals = (transactions) => {
   return { income, expense, transfer, balance: income - expense };
 };
 
-export const groupByDate = (txns) => {
+export const groupByDate = (txns, sort = true) => {
   const g = {};
   for (const t of txns) {
     const k = toDDMMYYYY(t.Date);
     if (!g[k]) g[k] = [];
     g[k].push(t);
+  }
+  if (!sort) {
+    return g;
   }
   return Object.entries(g).sort(([a],[b]) => parseDate(b) - parseDate(a));
 };

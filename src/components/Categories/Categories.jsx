@@ -193,7 +193,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
           : groupedTxns.map(([dk,txns])=>{
               const gt=calcTotals(txns), d=parseDate(txns[0].Date);
               return (
-                <div key={dk}>
+                <div key={dk} className="date-group-container">
                   <div className="dg-header" onClick={()=>{ setAddDate(txns[0].Date); setAddCat(catName); }}>
                     <div className="dg-left">
                       <div className="dg-day">{d.getDate()}</div>
