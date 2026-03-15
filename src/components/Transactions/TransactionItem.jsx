@@ -5,9 +5,12 @@ import AddTransaction from './AddTransaction.jsx';
 import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
-export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType }) {
+export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef }) {
   const [showDetail, setShowDetail] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const pressTimer = React.useRef(null);
+  const handlerRef = React.useRef(null);
+  const prevHandlerRef = React.useRef(null);
 
   const baseType = txnType(t);
   const type     = overrideType || baseType;
@@ -20,6 +23,27 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
     : (t.Note || t.Category || '—');
   const subLabel = !isTransfer ? (t.Category || '') : '';
   const hasAccount = !isTransfer && t.Account;
+
+  const closeDetail = () => {
+    setShowEdit(false);
+    setShowDetail(false);
+  };
+
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (showDetail || showEdit) {
+      const handler = () => closeDetail();
+      handlerRef.current = handler;
+      prevHandlerRef.current = backInterceptRef.current;
+      backInterceptRef.current = handler;
+      return () => {
+        if (backInterceptRef.current === handler) backInterceptRef.current = prevHandlerRef.current;
+        handlerRef.current = null;
+        prevHandlerRef.current = null;
+      };
+    }
+    return undefined;
+  }, [showDetail, showEdit, backInterceptRef]);
 
   const handlePressStart = () => {
     if (onLongPress) pressTimer.current = setTimeout(() => onLongPress(t), 500);

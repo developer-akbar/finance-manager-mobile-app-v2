@@ -62,7 +62,7 @@ function buildBalanceMap(transactions) {
 }
 
 // ── Account Detail ────────────────────────────────────────────────────────────
-function AccountDetail({ acctName, allTxns, onBack }) {
+function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
   const now = new Date();
   const [period,    setPeriod]  = useState('Month');
   const [viewYear,  setViewYear] = useState(now.getFullYear());
@@ -74,6 +74,22 @@ function AccountDetail({ acctName, allTxns, onBack }) {
   const [showAdd,   setShowAdd] = useState(false);
   const [selected,  setSelected] = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
+  const addBackPrevRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    const isOpen = Boolean(addDate) || showAdd;
+    if (isOpen) {
+      const handler = () => { setAddDate(null); setShowAdd(false); };
+      addBackPrevRef.current = backInterceptRef.current;
+      backInterceptRef.current = handler;
+      return () => {
+        if (backInterceptRef.current === handler) backInterceptRef.current = addBackPrevRef.current;
+        addBackPrevRef.current = null;
+      };
+    }
+    return undefined;
+  }, [addDate, showAdd, backInterceptRef]);
 
   // When viewing an account, treat transfer rows as income/expense for that account.
   const accountTxnType = (t) => {
@@ -337,6 +353,7 @@ function AccountDetail({ acctName, allTxns, onBack }) {
                     <div className="dg-items">{txns.map(t=><TransactionItem key={t._id} transaction={t}
                       selected={selected.has(t._id)}
                       overrideType={accountTxnType(t)}
+                      backInterceptRef={backInterceptRef}
                       onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
                       onTap={multiMode ? toggleSel : null}
                     />)}</div>
@@ -417,7 +434,7 @@ export default function Accounts({ backInterceptRef } = {}) {
     return { groups, ungrouped };
   }, [uniqueAccounts, uniqueAccountGroups]);
 
-  if (drill) return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)}/>;
+  if (drill) return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)} backInterceptRef={backInterceptRef}/>;
 
   const renderAcctRow = (a) => {
     const name = a.name || a;

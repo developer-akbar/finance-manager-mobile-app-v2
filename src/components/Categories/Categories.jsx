@@ -57,7 +57,7 @@ function PeriodControls({ period, setPeriod, viewYear, viewMonth, viewFY, onPrev
 }
 
 // ── Category Detail screen ────────────────────────────────────────────────────
-function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allTxns, onBack }) {
+function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allTxns, onBack, backInterceptRef }) {
   const now = new Date();
   const [period,    setPeriod]   = useState(initPeriod  || 'Month');
   const [viewYear,  setViewYear] = useState(initYear    || now.getFullYear());
@@ -69,8 +69,22 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   const [addDate,   setAddDate]  = useState(null);
   const [addCat,    setAddCat]   = useState(null);
   const [selected,  setSelected] = useState(new Set());
-  const [multiMode, setMultiMode] = useState(false);
+  const [multiMode, setMultiMode] = useState(false);  const addBackPrevRef = React.useRef(null);
 
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    const isOpen = Boolean(addDate) || Boolean(addCat);
+    if (isOpen) {
+      const handler = () => { setAddDate(null); setAddCat(null); };
+      addBackPrevRef.current = backInterceptRef.current;
+      backInterceptRef.current = handler;
+      return () => {
+        if (backInterceptRef.current === handler) backInterceptRef.current = addBackPrevRef.current;
+        addBackPrevRef.current = null;
+      };
+    }
+    return undefined;
+  }, [addDate, addCat, backInterceptRef]);
   const catTxns = useMemo(() => allTxns.filter(t => t.Category === catName), [allTxns, catName]);
 
   const applyPeriod = (txns) => {
@@ -241,6 +255,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
                     </div>
                     <div className="dg-items">{txns.map(t=><TransactionItem key={t._id} transaction={t}
                       selected={selected.has(t._id)}
+                      backInterceptRef={backInterceptRef}
                       onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
                       onTap={multiMode ? toggleSel : null}
                     />)}</div>
@@ -321,7 +336,7 @@ export default function Categories({ backInterceptRef } = {}) {
   if (drill) return (
     <CategoryDetail catName={drill} allTxns={transactions}
       initPeriod={period} initYear={viewYear} initMonth={viewMonth} initFY={viewFY}
-      onBack={()=>setDrill(null)}/>
+      onBack={()=>setDrill(null)} backInterceptRef={backInterceptRef} />
   );
 
   return (
