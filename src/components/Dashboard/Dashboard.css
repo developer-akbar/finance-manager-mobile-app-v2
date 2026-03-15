@@ -21,11 +21,11 @@
 .dash-nw-month { font-size:0.72rem; font-weight:600; color:var(--green); margin-top:2px; }
 .dash-eye-btn { background:none; border:none; color:var(--text-muted); cursor:pointer; padding:2px; width:22px; height:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .dash-eye-btn svg { width:18px; height:18px; }
-.dash-nw-value { font-size:2.2rem; font-weight:800; font-family:var(--font-mono); color:var(--text-primary); margin:6px 0 10px; letter-spacing:-1px; }
+.dash-nw-value { font-size:2.2rem; font-weight:800; font-family:var(--font); color:var(--text-primary); margin:6px 0 10px; letter-spacing:-1px; }
 .dash-nw-row   { display:flex; gap:0; }
 .dash-nw-item  { flex:1; }
 .dash-nw-item-l { font-size:0.58rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; }
-.dash-nw-item-v { font-size:0.88rem; font-weight:800; font-family:var(--font-mono); margin-top:3px; }
+.dash-nw-item-v { font-size:0.88rem; font-weight:800; font-family:var(--font); margin-top:3px; }
 .dash-nw-item-v.income  { color:var(--income); }
 .dash-nw-item-v.expense { color:var(--expense); }
 
@@ -60,7 +60,7 @@
 .dash-stat-card { flex:1; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-lg); padding:12px 8px; text-align:center; min-width:0; }
 .dash-stat-icon  { font-size:1.3rem; margin-bottom:4px; }
 .dash-stat-label { font-size:0.58rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; margin-bottom:4px; }
-.dash-stat-value { font-size:0.88rem; font-weight:800; font-family:var(--font-mono); color:var(--text-primary); }
+.dash-stat-value { font-size:0.88rem; font-weight:800; font-family:var(--font); color:var(--text-primary); }
 .dash-stat-value.expense { color:var(--expense); }
 
 /* ── Yearly table ── */
@@ -71,8 +71,8 @@
 .dash-year-row { display:flex; padding:10px 14px; border-bottom:1px solid var(--border-light); align-items:center; }
 .dash-year-row:last-child { border-bottom:none; }
 .dash-year-yr    { flex:1; font-size:0.82rem; font-weight:800; color:var(--text-primary); }
-.dash-year-total { flex:1; text-align:right; font-size:0.82rem; font-family:var(--font-mono); font-weight:700; color:var(--expense); }
-.dash-year-avg   { flex:1; text-align:right; font-size:0.78rem; font-family:var(--font-mono); color:var(--text-muted); }
+.dash-year-total { flex:1; text-align:right; font-size:0.82rem; font-family:var(--font); font-weight:700; color:var(--expense); }
+.dash-year-avg   { flex:1; text-align:right; font-size:0.78rem; font-family:var(--font); color:var(--text-muted); }
 
 /* ── Top spending ── */
 .top-cat-row  { display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border-light); }
@@ -80,4 +80,4 @@
 .top-cat-rank { font-size:0.7rem; font-weight:800; color:var(--text-muted); width:20px; flex-shrink:0; }
 .top-cat-mid  { flex:1; min-width:0; }
 .top-cat-name { font-size:0.82rem; font-weight:700; color:var(--text-primary); }
-.top-cat-amt  { font-size:0.82rem; font-family:var(--font-mono); font-weight:700; color:var(--expense); flex-shrink:0; }
+.top-cat-amt  { font-size:0.82rem; font-family:var(--font); font-weight:700; color:var(--expense); flex-shrink:0; }

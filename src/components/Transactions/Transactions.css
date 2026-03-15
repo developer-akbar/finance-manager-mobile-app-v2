@@ -38,9 +38,9 @@
 .month-row-name { flex:1; font-size:0.85rem; font-weight:700; }
 .month-row-none { flex:1; font-size:0.78rem; color:var(--text-muted); }
 .month-row-vals { display:flex; flex-direction:column; gap:1px; align-items:flex-end; min-width:72px; }
-.month-row-inc { font-size:0.68rem; font-weight:700; color:var(--income);  font-family:var(--font-mono); }
-.month-row-exp { font-size:0.68rem; font-weight:700; color:var(--expense); font-family:var(--font-mono); }
-.month-row-net { font-size:0.78rem; font-weight:800; font-family:var(--font-mono); min-width:60px; text-align:right; }
+.month-row-inc { font-size:0.68rem; font-weight:700; color:var(--income);  font-family:var(--font); }
+.month-row-exp { font-size:0.68rem; font-weight:700; color:var(--expense); font-family:var(--font); }
+.month-row-net { font-size:0.78rem; font-weight:800; font-family:var(--font); min-width:60px; text-align:right; }
 .month-row-net.pos { color:var(--income); }
 .month-row-net.neg { color:var(--expense); }
 
@@ -64,7 +64,7 @@
 .search-total-item { flex:1; padding:7px 4px; text-align:center; border-right:1px solid var(--border); }
 .search-total-item:last-child { border-right:none; }
 .search-total-l { font-size:0.54rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; }
-.search-total-v { font-size:0.72rem; font-weight:800; font-family:var(--font-mono); margin-top:2px; }
+.search-total-v { font-size:0.72rem; font-weight:800; font-family:var(--font); margin-top:2px; }
 .search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:7px var(--page-px); background:var(--blue-bg); border-bottom:1px solid var(--border); font-size:0.78rem; font-weight:700; color:var(--blue); flex-shrink:0; position:sticky; top:0; z-index:10; }
 .search-list { flex:1; overflow-y:auto; }
 

@@ -15,8 +15,8 @@
 .an-sum-card.expense { background:var(--expense-bg); border-color:rgba(255,77,106,0.2); }
 .an-sum-card.savings { background:var(--blue-bg);    border-color:rgba(77,159,255,0.2); }
 .an-sum-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; opacity:0.7; }
-.an-sum-val   { font-size:17px; font-weight:800; font-family:var(--font-mono); }
-.an-sum-avg   { font-size:10px; opacity:0.65; font-family:var(--font-mono); }
+.an-sum-val   { font-size:17px; font-weight:800; font-family:var(--font); }
+.an-sum-avg   { font-size:10px; opacity:0.65; font-family:var(--font); }
 .an-sum-card.income  .an-sum-label, .an-sum-card.income  .an-sum-val, .an-sum-card.income  .an-sum-avg { color:var(--income); }
 .an-sum-card.expense .an-sum-label, .an-sum-card.expense .an-sum-val, .an-sum-card.expense .an-sum-avg { color:var(--expense); }
 .an-sum-card.savings .an-sum-label, .an-sum-card.savings .an-sum-val, .an-sum-card.savings .an-sum-avg { color:var(--blue); }
@@ -33,7 +33,7 @@
 .cat-legend-row{ display:flex; align-items:center; gap:7px; }
 .cat-legend-dot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .cat-legend-name{ flex:1; font-size:11px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.cat-legend-pct { font-size:11px; font-weight:700; font-family:var(--font-mono); }
+.cat-legend-pct { font-size:11px; font-weight:700; font-family:var(--font); }
 
 .cat-bar-list { display:flex; flex-direction:column; gap:10px; border-top:1px solid var(--border); padding-top:12px; }
 .cat-bar-row  { display:flex; align-items:flex-start; gap:10px; }
@@ -41,10 +41,10 @@
 .cat-bar-info { flex:1; }
 .cat-bar-name-row{ display:flex; justify-content:space-between; align-items:center; }
 .cat-bar-name { font-size:13px; font-weight:600; color:var(--text-primary); }
-.cat-bar-amt  { font-size:13px; font-weight:700; font-family:var(--font-mono); }
-.cat-bar-avg  { font-size:11px; color:var(--text-muted); margin-top:1px; font-family:var(--font-mono); }
+.cat-bar-amt  { font-size:13px; font-weight:700; font-family:var(--font); }
+.cat-bar-avg  { font-size:11px; color:var(--text-muted); margin-top:1px; font-family:var(--font); }
 
 .an-acct-row { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--border); }
 .an-acct-row:last-child { border-bottom:none; }
 .an-acct-name { font-size:13px; font-weight:600; }
-.an-acct-vals { display:flex; gap:10px; font-size:12px; font-family:var(--font-mono); font-weight:600; }
+.an-acct-vals { display:flex; gap:10px; font-size:12px; font-family:var(--font); font-weight:600; }

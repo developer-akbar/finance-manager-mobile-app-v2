@@ -357,11 +357,11 @@ export default function Categories({ backInterceptRef } = {}) {
             <div className="cat-type-tabs">
               <button className={`cat-type-tab exp-tab ${catType==='Expense'?'active':''}`} onClick={()=>setCatType('Expense')}>
                 <div style={{fontSize:'0.72rem',fontWeight:700}}>Expense</div>
-                <div style={{fontSize:'0.74rem',fontFamily:'var(--font-mono)',fontWeight:800,color:catType==='Expense'?'var(--expense)':'var(--text-muted)',marginTop:2}}>{formatINR(expTotal)}</div>
+                <div style={{fontSize:'0.74rem',fontFamily:'var(--font)',fontWeight:800,color:catType==='Expense'?'var(--expense)':'var(--text-muted)',marginTop:2}}>{formatINR(expTotal)}</div>
               </button>
               <button className={`cat-type-tab inc-tab ${catType==='Income'?'active':''}`} onClick={()=>setCatType('Income')}>
                 <div style={{fontSize:'0.72rem',fontWeight:700}}>Income</div>
-                <div style={{fontSize:'0.74rem',fontFamily:'var(--font-mono)',fontWeight:800,color:catType==='Income'?'var(--income)':'var(--text-muted)',marginTop:2}}>{formatINR(incTotal)}</div>
+                <div style={{fontSize:'0.74rem',fontFamily:'var(--font)',fontWeight:800,color:catType==='Income'?'var(--income)':'var(--text-muted)',marginTop:2}}>{formatINR(incTotal)}</div>
               </button>
             </div>
           </div>

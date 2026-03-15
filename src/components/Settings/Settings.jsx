@@ -980,10 +980,122 @@ function BudgetsManager({ onBack }) {
 }
 
 // ─────────────────────────────────────────────
+// Appearance Manager
+// ─────────────────────────────────────────────
+function AppearanceManager({ onBack }) {
+  const { state, updateSettings, setTheme, setFontSize, setFontFamily } = useApp();
+  const { theme, fontSize } = state;
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState('');
+
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2200); };
+
+  const save = async (updates) => {
+    setSaving(true);
+    try {
+      await updateSettings(updates);
+      showToast('Saved ✓');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fontOptions = [
+    { name: 'Sora', family: "'Sora', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+    { name: 'Inter', family: "'Inter', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+    { name: 'Roboto', family: "'Roboto', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+    { name: 'Open Sans', family: "'Open Sans', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+    { name: 'Lato', family: "'Lato', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+  ];
+
+  const currentFont = state.fontFamily || 'Sora';
+  const fsLabel = fontSize < 0.9 ? 'Small' : fontSize > 1.1 ? 'Large' : 'Medium';
+
+  return (
+    <div className="sub-screen">
+      <div className="page-hdr">
+        <button className="back-btn" onClick={onBack}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <div className="page-hdr-title">Appearance</div>
+        {saving && <span style={{fontSize:'0.7rem',color:'var(--text-muted)',marginLeft:8}}>Saving…</span>}
+        {toast && <span style={{fontSize:'0.7rem',color:'var(--green)',marginLeft:8}}>{toast}</span>}
+      </div>
+
+      <div className="sub-body">
+        {/* Theme */}
+        <div className="mgr-section-label">Theme</div>
+        <div className="settings-card" style={{margin:'0 var(--page-px) 16px'}}>
+          <div className="settings-row" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+            <div className="settings-row-icon" style={{background: theme === 'dark' ? 'var(--bg-card2)' : '#fff3cd'}}>
+              {theme === 'dark' ? '🌙' : '☀️'}
+            </div>
+            <div className="settings-row-content">
+              <div className="settings-row-title">Theme</div>
+              <div className="settings-row-sub">{theme === 'dark' ? 'Dark' : 'Light'} — tap to switch</div>
+            </div>
+            <div style={{padding:'4px 10px',borderRadius:'var(--r-full)',background: theme === 'dark' ? 'var(--bg-card2)' : 'var(--bg-card)',border:'1px solid var(--border)',fontSize:'0.72rem',fontWeight:700,color:'var(--text-secondary)'}}>
+              {theme === 'dark' ? 'Dark' : 'Light'}
+            </div>
+          </div>
+        </div>
+
+        {/* Font Size */}
+        <div className="mgr-section-label">Font Size</div>
+        <div className="settings-card" style={{margin:'0 var(--page-px) 16px'}}>
+          <div style={{padding:'12px var(--page-px)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+              <div style={{fontSize:'0.85rem',fontWeight:700,color:'var(--text-primary)'}}>Font Size</div>
+              <div style={{fontSize:'0.75rem',color:'var(--text-muted)'}}>{fsLabel} ({Math.round(fontSize*100)}%)</div>
+            </div>
+            <div className="font-scale-row" style={{padding:0}}>
+              <span className="font-scale-label" style={{fontSize:'0.65rem'}}>A</span>
+              <input type="range" className="fs-slider" min="0.75" max="1.25" step="0.05"
+                value={fontSize}
+                onChange={e => setFontSize(parseFloat(e.target.value))}
+                onMouseUp={e => setFontSize(parseFloat(e.target.value))}/>
+              <span className="font-scale-label" style={{fontSize:'1rem'}}>A</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Font Family */}
+        <div className="mgr-section-label">Font Family</div>
+        <div className="settings-card" style={{margin:'0 var(--page-px) 16px'}}>
+          {fontOptions.map((font) => (
+            <div key={font.name} className="settings-row" onClick={() => setFontFamily(font.name)}>
+              <div className="settings-row-icon" style={{background:'rgba(167,139,250,0.15)'}}>
+                {currentFont === font.name ? '✓' : 'Aa'}
+              </div>
+              <div className="settings-row-content">
+                <div className="settings-row-title">{font.name}</div>
+                <div className="settings-row-sub" style={{
+                  fontFamily: font.family,
+                  fontSize: '0.85rem',
+                  color: 'var(--text-secondary)',
+                  marginTop: 4
+                }}>
+                  {font.preview}
+                </div>
+              </div>
+              {currentFont === font.name && (
+                <div style={{color:'var(--green)',fontSize:'1.2rem'}}>✓</div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="h-8"/>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // Main Settings screen
 // ─────────────────────────────────────────────
 export default function Settings({ backInterceptRef } = {}) {
-  const { state, setTheme, setFontSize } = useApp();
+  const { state } = useApp();
   const [screen, setScreen] = useState(null);
 
   // Register Android back intercept for sub-screens
@@ -1003,14 +1115,11 @@ export default function Settings({ backInterceptRef } = {}) {
   if (screen==='categories') return <CategoriesManager onBack={()=>setScreen(null)}/>;
   if (screen==='budgets')    return <BudgetsManager    onBack={()=>setScreen(null)}/>;
   if (screen==='profile')    return <ProfileManager    onBack={()=>setScreen(null)}/>;
+  if (screen==='appearance') return <AppearanceManager onBack={()=>setScreen(null)}/>;
 
   const txnCount  = state.transactions.length;
   const acctCount = (state.accounts||[]).length;
   const catCount  = Object.keys(state.categories||{}).length;
-
-  const isDark   = state.theme !== 'light';
-  const fontSize = state.fontSize || 1.0;
-  const fsLabel  = fontSize <= 0.85 ? 'Small' : fontSize >= 1.12 ? 'Large' : 'Default';
 
   return (
     <div className="settings-root">
@@ -1021,33 +1130,10 @@ export default function Settings({ backInterceptRef } = {}) {
       {/* Appearance */}
       <div className="settings-group-label">Appearance</div>
       <div className="settings-card">
-        {/* Theme */}
-        <div className="settings-row" onClick={()=>setTheme(isDark?'light':'dark')}>
-          <div className="settings-row-icon" style={{background:isDark?'var(--bg-card2)':'#fff3cd'}}>
-            {isDark ? '🌙' : '☀️'}
-          </div>
-          <div className="settings-row-content">
-            <div className="settings-row-title">Theme</div>
-            <div className="settings-row-sub">{isDark ? 'Dark' : 'Light'} — tap to switch</div>
-          </div>
-          <div style={{padding:'4px 10px',borderRadius:'var(--r-full)',background:isDark?'var(--bg-card2)':'var(--bg-card)',border:'1px solid var(--border)',fontSize:'0.72rem',fontWeight:700,color:'var(--text-secondary)'}}>
-            {isDark?'Dark':'Light'}
-          </div>
-        </div>
-        {/* Font size */}
-        <div style={{padding:'12px var(--page-px)',borderTop:'1px solid var(--border-light)'}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-            <div style={{fontSize:'0.85rem',fontWeight:700,color:'var(--text-primary)'}}>Font Size</div>
-            <div style={{fontSize:'0.75rem',color:'var(--text-muted)'}}>{fsLabel} ({Math.round(fontSize*100)}%)</div>
-          </div>
-          <div className="font-scale-row" style={{padding:0}}>
-            <span className="font-scale-label" style={{fontSize:'0.65rem'}}>A</span>
-            <input type="range" className="fs-slider" min="0.75" max="1.25" step="0.05"
-              value={fontSize}
-              onChange={e=>setFontSize(parseFloat(e.target.value))}
-              onMouseUp={e=>setFontSize(parseFloat(e.target.value))}/>
-            <span className="font-scale-label" style={{fontSize:'1rem'}}>A</span>
-          </div>
+        <div className="settings-row" onClick={()=>setScreen('appearance')}>
+          <div className="settings-row-icon" style={{background:'rgba(255,193,7,0.15)'}}>🎨</div>
+          <div className="settings-row-content"><div className="settings-row-title">Appearance</div><div className="settings-row-sub">Theme, font size, and font family</div></div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6"/></svg>
         </div>
       </div>
 
