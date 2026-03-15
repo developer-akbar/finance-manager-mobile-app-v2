@@ -3,7 +3,7 @@
 /* Detail sheet */
 .dp-sheet { max-height:85dvh; padding-bottom:0; position:relative; overflow:hidden; display:flex; flex-direction:column; }
 .dp-hero  { text-align:center; padding:8px var(--page-px) 12px; border-bottom:1px solid var(--border); flex-shrink:0; }
-.dp-amount { font-size:2.2rem; font-weight:800; font-family:var(--font-mono); letter-spacing:-1px; margin-bottom:6px; }
+.dp-amount { font-size:2.2rem; font-weight:800; font-family:var(--font); letter-spacing:-1px; margin-bottom:6px; }
 .dp-amount.income   { color:var(--income); }
 .dp-amount.expense  { color:var(--expense); }
 .dp-amount.transfer { color:var(--transfer); }
