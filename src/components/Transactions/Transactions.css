@@ -65,7 +65,7 @@
 .search-total-item:last-child { border-right:none; }
 .search-total-l { font-size:0.54rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; }
 .search-total-v { font-size:0.72rem; font-weight:800; font-family:var(--font-mono); margin-top:2px; }
-.search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:7px var(--page-px); background:var(--blue-bg); border-bottom:1px solid var(--border); font-size:0.78rem; font-weight:700; color:var(--blue); flex-shrink:0; }
+.search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:7px var(--page-px); background:var(--blue-bg); border-bottom:1px solid var(--border); font-size:0.78rem; font-weight:700; color:var(--blue); flex-shrink:0; position:sticky; top:0; z-index:10; }
 .search-list { flex:1; overflow-y:auto; }
 
 /* Period navigation bar */
@@ -74,7 +74,7 @@
 .period-nav-label { font-size:0.86rem; font-weight:700; color:var(--text-primary); width:180px; text-align:center; flex-shrink:0; }
 
 /* Improved search selection bar */
-.search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:8px var(--page-px); background:rgba(0,229,160,0.1); border-bottom:1px solid rgba(0,229,160,0.3); font-size:0.78rem; flex-shrink:0; gap:8px; }
+.search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:8px var(--page-px); background:var(--bg-card); border-bottom:1px solid rgba(0,229,160,0.3); font-size:0.78rem; flex-shrink:0; gap:8px; position:sticky; top:0; z-index:10; }
 .sel-total-inc { color:var(--income); font-weight:700; }
 .sel-total-exp { color:var(--expense); font-weight:700; }
 .sel-total-xfr { color:var(--transfer); font-weight:700; }

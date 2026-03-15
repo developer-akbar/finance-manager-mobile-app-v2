@@ -329,7 +329,7 @@ select.form-input {
 .search-total-item:last-child { border-right:none; }
 .search-total-l { font-size:0.55rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; }
 .search-total-v { font-size:0.72rem; font-weight:800; font-family:var(--font-mono); margin-top:2px; }
-.search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:7px var(--page-px); background:rgba(0,229,160,0.07); border-bottom:1px solid var(--border); font-size:0.78rem; font-weight:700; gap:8px; flex-shrink:0; }
+.search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:7px var(--page-px); background:var(--bg-card); border-bottom:1px solid var(--border); font-size:0.78rem; font-weight:700; gap:8px; flex-shrink:0; position:sticky; top:0; z-index:10; }
 .period-nav-bar { display:flex; align-items:center; justify-content:space-between; padding:6px var(--page-px); background:var(--bg-card); border-bottom:1px solid var(--border); flex-shrink:0; }
 .period-nav-btn { background:none; border:none; color:var(--text-secondary); font-size:1.3rem; cursor:pointer; padding:2px 10px; line-height:1; }
 .period-nav-label { font-size:0.82rem; font-weight:700; color:var(--accent); flex:1; text-align:center; }
