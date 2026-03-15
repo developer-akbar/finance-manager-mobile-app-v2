@@ -10,7 +10,7 @@ const MONTHS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','N
 const MONTHS_F = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 // ── Date-grouped list ─────────────────────────────────────────────────────────
-function DateGroupedList({ txns, onDateTap, selected, multiMode, onLongPress, onTap }) {
+function DateGroupedList({ txns, onDateTap, selected, multiMode, onLongPress, onTap, backInterceptRef }) {
   const closestRef = useRef(null);
 
   const groups = useMemo(() => {
@@ -72,6 +72,7 @@ function DateGroupedList({ txns, onDateTap, selected, multiMode, onLongPress, on
           <div className="dg-items">
             {list.map(t => <TransactionItem key={t._id} transaction={t}
               selected={selected.has(t._id)}
+              backInterceptRef={backInterceptRef}
               onLongPress={onLongPress}
               onTap={onTap}
             />)}
@@ -134,7 +135,7 @@ function MonthlyView({ transactions, onMonthClick }) {
 }
 
 // ── Search view ───────────────────────────────────────────────────────────────
-function SearchView({ transactions, accounts, categories, onClose }) {
+function SearchView({ transactions, accounts, categories, onClose, backInterceptRef }) {
   const [query,     setQuery]     = useState('');
   const [debouncedQ,setDebouncedQ]= useState('');
   const debTimer = useRef(null);
@@ -367,6 +368,7 @@ function SearchView({ transactions, accounts, categories, onClose }) {
           <TransactionItem key={t._id} transaction={t}
             selected={selected.has(t._id)}
             showDate={true}
+            backInterceptRef={backInterceptRef}
             onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
             onTap={multiMode ? () => toggleSel(t) : undefined}/>
         ))}
@@ -456,7 +458,7 @@ function SearchView({ transactions, accounts, categories, onClose }) {
 }
 
 // ── Main Transactions screen ──────────────────────────────────────────────────
-export default function Transactions({ onAddTransaction }) {
+export default function Transactions({ onAddTransaction, backInterceptRef }) {
   const { state } = useApp();
   const { transactions, accounts, categories } = state;
   const now = new Date();
@@ -493,7 +495,7 @@ export default function Transactions({ onAddTransaction }) {
   }, [monthTxns, selected]);
 
   if (viewMode==='search') return (
-    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')}/>
+    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')} backInterceptRef={backInterceptRef} />
   );
 
   return (
@@ -556,7 +558,7 @@ export default function Transactions({ onAddTransaction }) {
           <div className="txn-list">
             {monthTxns.length===0
               ? <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">No transactions</div><div className="empty-desc">{MONTHS_F[viewMonth]} {viewYear}</div></div>
-              : <DateGroupedList txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} />
+              : <DateGroupedList txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} backInterceptRef={backInterceptRef} />
             }
           </div>
         </>
