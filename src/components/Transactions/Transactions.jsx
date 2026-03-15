@@ -11,15 +11,51 @@ const MONTHS_F = ['January','February','March','April','May','June','July','Augu
 
 // ── Date-grouped list ─────────────────────────────────────────────────────────
 function DateGroupedList({ txns, onDateTap }) {
-  const groups = useMemo(() =>
-    groupByDate([...txns].sort((a,b) => parseDate(b.Date)-parseDate(a.Date))),
-    [txns]);
+  const closestRef = useRef(null);
+
+  const groups = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Group transactions by date
+    const groupedByDate = groupByDate(txns, false); // Pass false to disable sorting in groupByDate
+
+    // Sort the date groups by descending date
+    const sortedGroups = Object.entries(groupedByDate).sort(([dateA], [dateB]) => {
+      const d1 = parseDate(dateA);
+      const d2 = parseDate(dateB);
+      return d2 - d1;
+    });
+
+    // Find the closest date to today
+    let closestDk = null;
+    let minDiff = Infinity;
+    for (const [dk] of sortedGroups) {
+      const d = parseDate(dk);
+      d.setHours(0, 0, 0, 0);
+      const diff = Math.abs(d - today);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestDk = dk;
+      }
+    }
+
+    return { sortedGroups, closestDk };
+  }, [txns]);
+
+  useEffect(() => {
+    if (closestRef.current) {
+      closestRef.current.scrollIntoView({ behavior: 'auto', block: 'start' });
+    }
+  }, [groups.closestDk]);
+
   return <>
-    {groups.map(([dk, list]) => {
+    {groups.sortedGroups.map(([dk, list]) => {
       const gt = calcTotals(list);
       const d  = parseDate(list[0].Date);
+      const isClosest = dk === groups.closestDk;
       return (
-        <div key={dk}>
+        <div key={dk} ref={isClosest ? closestRef : null} className="date-group-container">
           <div className="dg-header" onClick={() => onDateTap && onDateTap(list[0].Date)}>
             <div className="dg-left">
               <div className="dg-day">{d.getDate()}</div>
