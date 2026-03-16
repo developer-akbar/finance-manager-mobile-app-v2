@@ -70,6 +70,7 @@ function AppInner() {
   const { state, navigate } = useApp();
   const { currentView } = state;
   const [showAdd, setShowAdd] = useState(false);
+  const [addKey, setAddKey] = useState(0);
   // Increment a key for each tab when it's re-tapped — child uses key= to force remount (reset)
   const [resetKeys, setResetKeys] = useState({ transactions:0, accounts:0, categories:0, settings:0, dashboard:0 });
   const handleNavTap = (id) => setResetKeys(k => ({ ...k, [id]: (k[id]||0)+1 }));
@@ -103,7 +104,7 @@ function AppInner() {
 
   const screen = (() => {
     switch (currentView) {
-      case 'transactions': return <Transactions key={resetKeys.transactions} onAddTransaction={() => setShowAdd(true)} backInterceptRef={backInterceptRef}/>;
+      case 'transactions': return <Transactions key={resetKeys.transactions} onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef}/>;
       case 'accounts':     return <Accounts     key={resetKeys.accounts}     backInterceptRef={backInterceptRef}/>;
       case 'categories':   return <Categories   key={resetKeys.categories}   backInterceptRef={backInterceptRef}/>;
       case 'analytics':    return <Analytics/>;
@@ -117,7 +118,7 @@ function AppInner() {
       <Layout onNavTap={handleNavTap}>
         {screen}
       </Layout>
-      {showAdd && <AddTransaction onClose={() => setShowAdd(false)} backInterceptRef={backInterceptRef}/>}
+      {showAdd && <AddTransaction key={addKey} onClose={() => setShowAdd(false)} onSaveAndContinue={() => setAddKey(k => k + 1)} backInterceptRef={backInterceptRef}/>}
     </PinLock>
   );
 }

@@ -74,6 +74,8 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
   const [showAdd,   setShowAdd] = useState(false);
   const [selected,  setSelected] = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
+  const [copyTxn,   setCopyTxn] = useState(null);
+  const [addKey, setAddKey] = useState(0);
   const addBackPrevRef = React.useRef(null);
   const multiModePrevHandler = React.useRef(null);
   const multiModeHandler = React.useRef(null);
@@ -108,6 +110,16 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
       }
     }
   }, [multiMode]);
+
+  const handleCopy = (txn) => {
+    // Create a copy with current date/time but keep all other data
+    setCopyTxn({
+      ...txn,
+      Date: new Date().toISOString().split('T')[0], // Current date
+      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
+      _id: undefined, // Remove ID so it gets a new one
+    });
+  };
 
   // When viewing an account, treat transfer rows as income/expense for that account.
   const accountTxnType = (t) => {
@@ -224,7 +236,7 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
         <div className="entity-badge" style={{background:closingBal>=0?'var(--income-bg)':'var(--expense-bg)',color:closingBal>=0?'var(--income)':'var(--expense)'}}>
           {closingBal>=0?'+':''}{formatINRCompact(Math.abs(closingBal))}
         </div>
-        <button className="add-fab-sm" onClick={()=>setShowAdd(true)} title="Add transaction">
+        <button className="add-fab-sm" onClick={() => { setShowAdd(true); setAddKey(k => k + 1); }} title="Add transaction">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M12 5v14M5 12h14"/></svg>
         </button>
       </div>
@@ -374,6 +386,7 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
                       backInterceptRef={backInterceptRef}
                       onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
                       onTap={multiMode ? toggleSel : null}
+                      onCopy={handleCopy}
                     />)}</div>
                   </div>
                 );
@@ -382,8 +395,9 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
         }
         <div style={{height:80}}/>
       </div>
-      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)} backInterceptRef={backInterceptRef}/>}
-      {showAdd&&<AddTransaction prefillAccount={acctName} onClose={()=>setShowAdd(false)} backInterceptRef={backInterceptRef}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
+      {showAdd&&<AddTransaction key={addKey} prefillAccount={acctName} onClose={()=>setShowAdd(false)} onSaveAndContinue={() => setAddKey(k => k + 1)} backInterceptRef={backInterceptRef}/>}
+      {copyTxn&&<AddTransaction copyTransaction={copyTxn} onClose={()=>setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})} backInterceptRef={backInterceptRef}/>}
     </div>
   );
 }
@@ -452,7 +466,7 @@ export default function Accounts({ backInterceptRef } = {}) {
     return { groups, ungrouped };
   }, [uniqueAccounts, uniqueAccountGroups]);
 
-  if (drill) return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)} backInterceptRef={backInterceptRef}/>;
+  if (drill) return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)} backInterceptRef={backInterceptRef} />;
 
   const renderAcctRow = (a) => {
     const name = a.name || a;
