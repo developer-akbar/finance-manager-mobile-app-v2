@@ -11,6 +11,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const pressTimer = React.useRef(null);
   const handlerRef = React.useRef(null);
   const prevHandlerRef = React.useRef(null);
+  const startPos = React.useRef(null);
 
   const baseType = txnType(t);
   const type     = overrideType || baseType;
@@ -45,10 +46,45 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
     return undefined;
   }, [showDetail, showEdit, backInterceptRef]);
 
-  const handlePressStart = () => {
-    if (onLongPress) pressTimer.current = setTimeout(() => onLongPress(t), 500);
+  const handlePressStart = (e) => {
+    if (onLongPress) {
+      pressTimer.current = setTimeout(() => onLongPress(t), 500);
+      // Track initial position for movement detection
+      if (e.touches && e.touches[0]) {
+        startPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      } else {
+        startPos.current = { x: e.clientX, y: e.clientY };
+      }
+    }
   };
-  const handlePressEnd = () => { if (pressTimer.current) clearTimeout(pressTimer.current); };
+  const handlePressEnd = () => { 
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    startPos.current = null;
+  };
+  const handlePressMove = (e) => {
+    if (!pressTimer.current || !startPos.current) return;
+    
+    // Calculate movement distance
+    let currentX, currentY;
+    if (e.touches && e.touches[0]) {
+      currentX = e.touches[0].clientX;
+      currentY = e.touches[0].clientY;
+    } else {
+      currentX = e.clientX;
+      currentY = e.clientY;
+    }
+    
+    const deltaX = Math.abs(currentX - startPos.current.x);
+    const deltaY = Math.abs(currentY - startPos.current.y);
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    
+    // Cancel timer if moved more than 10 pixels (tolerance for slight finger movement)
+    if (distance > 10) {
+      clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+      startPos.current = null;
+    }
+  };
 
   const handleTap = () => {
     if (onTap) { onTap(t); return; }
@@ -60,8 +96,8 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
       <div
         className={`txn-item ${selected ? 'selected-item' : ''}`}
         onClick={handleTap}
-        onMouseDown={handlePressStart} onMouseUp={handlePressEnd}
-        onTouchStart={handlePressStart} onTouchEnd={handlePressEnd}
+        onMouseDown={handlePressStart} onMouseUp={handlePressEnd} onMouseMove={handlePressMove}
+        onTouchStart={handlePressStart} onTouchEnd={handlePressEnd} onTouchMove={handlePressMove}
       >
         {/* Colored dot */}
         <div className={`txn-dot txn-dot-${cls}`}/>
@@ -97,7 +133,7 @@ function DetailSheet({ t, onClose }) {
   const sign   = type === 'income' ? '+' : type === 'expense' ? '−' : '';
   const isXfer = type === 'transfer';
 
-  if (showEdit) return <AddTransaction editTransaction={t} onClose={onClose}/>;
+  if (showEdit) return <AddTransaction editTransaction={t} onClose={onClose} backInterceptRef={backInterceptRef}/>;
 
   return (
     <>

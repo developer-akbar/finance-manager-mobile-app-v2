@@ -13,7 +13,7 @@ const todayVal = () => {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 };
 
-export default function AddTransaction({ onClose, editTransaction = null, prefillDate = null, prefillAccount = null, prefillCategory = null }) {
+export default function AddTransaction({ onClose, editTransaction = null, prefillDate = null, prefillAccount = null, prefillCategory = null, backInterceptRef = null }) {
   const { state, addTransaction, updateTransaction } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
@@ -23,6 +23,27 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
     const sorted = [...transactions].sort((a,b) => { try { return new Date(b.created_at||0)-new Date(a.created_at||0); } catch { return 0; } });
     return sorted[0]?.Time || nowTimeStr();
   }, [transactions]);
+
+  const lastTimeForDate = useMemo(() => {
+    if (!prefillDate || !transactions.length) return null;
+    // Find transactions for the prefill date
+    const dateTxns = transactions.filter(t => t.Date === prefillDate);
+    if (!dateTxns.length) return null;
+    // Get the most recent transaction for that date (by time or creation time)
+    const sorted = dateTxns.sort((a, b) => {
+      // First try to sort by time if available
+      if (a.Time && b.Time) {
+        return a.Time.localeCompare(b.Time);
+      }
+      // Fall back to creation time
+      try {
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      } catch {
+        return 0;
+      }
+    });
+    return sorted[sorted.length - 1]?.Time || null;
+  }, [prefillDate, transactions]);
 
   const [form, setForm] = useState(() => {
     if (isEdit) {
@@ -45,7 +66,7 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
     return {
       type:'Expense', amount:'',
       date: prefillDate ? (toInputDate(prefillDate) || todayVal()) : todayVal(),
-      time: nowTimeStr(),   // always current time for new transactions
+      time: prefillDate && lastTimeForDate ? lastTimeForDate : nowTimeStr(),
       account: prefillAccount || '',
       fromAccount:'', toAccount:'', category: prefillCategory || '', subcategory:'', note:'', description:'',
     };
@@ -54,6 +75,17 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
   const [errors,   setErrors]   = useState({});
   const [saving,   setSaving]   = useState(false);
   const [noteSugs, setNoteSugs] = useState([]);
+
+  // Handle back button interception
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    backInterceptRef.current = onClose;
+    return () => {
+      if (backInterceptRef.current === onClose) {
+        backInterceptRef.current = null;
+      }
+    };
+  }, [backInterceptRef, onClose]);
 
   const set = (k, v) => {
     setForm(p => {

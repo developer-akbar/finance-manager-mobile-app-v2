@@ -70,6 +70,8 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   const [addCat,    setAddCat]   = useState(null);
   const [selected,  setSelected] = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);  const addBackPrevRef = React.useRef(null);
+  const multiModePrevHandler = React.useRef(null);
+  const multiModeHandler = React.useRef(null);
 
   React.useEffect(() => {
     if (!backInterceptRef) return;
@@ -85,6 +87,23 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
     }
     return undefined;
   }, [addDate, addCat, backInterceptRef]);
+
+  // Handle back button interception for multi-mode
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (multiMode) {
+      multiModePrevHandler.current = backInterceptRef.current;
+      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
+      backInterceptRef.current = multiModeHandler.current;
+    } else {
+      if (backInterceptRef.current === multiModeHandler.current) {
+        backInterceptRef.current = multiModePrevHandler.current;
+        multiModePrevHandler.current = null;
+        multiModeHandler.current = null;
+      }
+    }
+  }, [multiMode]); // Removed backInterceptRef from deps
+
   const catTxns = useMemo(() => allTxns.filter(t => t.Category === catName), [allTxns, catName]);
 
   const applyPeriod = (txns) => {
@@ -267,7 +286,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
         <div style={{height:24}}/>
       </div>
 
-      {addDate&&<AddTransaction prefillDate={addDate} prefillCategory={addCat} onClose={()=>{ setAddDate(null); setAddCat(null); }}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillCategory={addCat} onClose={()=>{ setAddDate(null); setAddCat(null); }} backInterceptRef={backInterceptRef}/>}
     </div>
   );
 }
