@@ -5,7 +5,7 @@ import AddTransaction from './AddTransaction.jsx';
 import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
-export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef }) {
+export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy }) {
   const [showDetail, setShowDetail] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const pressTimer = React.useRef(null);
@@ -116,13 +116,13 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
         <div className={`txn-amt-col ${cls}`}>{sign}{formatINR(amount)}</div>
       </div>
 
-      {showDetail && <DetailSheet t={t} onClose={() => setShowDetail(false)}/>}
+      {showDetail && <DetailSheet t={t} onClose={() => setShowDetail(false)} onCopy={onCopy} backInterceptRef={backInterceptRef}/>}
     </>
   );
 }
 
 // ── Detail + Edit sheet ──────────────────────────────────────────────────────
-function DetailSheet({ t, onClose }) {
+function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
   const { deleteTransaction } = useApp();
   const [showEdit,   setShowEdit]   = useState(false);
   const [showDelete, setShowDelete] = useState(false);
@@ -164,10 +164,10 @@ function DetailSheet({ t, onClose }) {
           {t.Description && <DPRow label="Description" value={t.Description}/>}
         </div>
         {/* Actions */}
-        <div className="dp-actions">
-          <button className="btn btn-ghost"     onClick={onClose}>Close</button>
-          <button className="btn btn-secondary" onClick={() => setShowEdit(true)}>✏️ Edit</button>
-          <button className="btn btn-danger"    onClick={() => setShowDelete(true)}>🗑 Delete</button>
+        <div className="dp-actions" style={{ display: 'flex', gap: '10px' }}>
+          {onCopy && <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => { onCopy(t); onClose(); }}>📋 Copy</button>}
+          <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowEdit(true)}>✏️ Edit</button>
+          <button className="btn btn-danger" style={{ flex: 1 }} onClick={() => setShowDelete(true)}>🗑 Delete</button>
         </div>
         {/* Delete confirm */}
         {showDelete && (

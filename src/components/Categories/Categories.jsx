@@ -69,7 +69,8 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   const [addDate,   setAddDate]  = useState(null);
   const [addCat,    setAddCat]   = useState(null);
   const [selected,  setSelected] = useState(new Set());
-  const [multiMode, setMultiMode] = useState(false);  const addBackPrevRef = React.useRef(null);
+  const [multiMode, setMultiMode] = useState(false);
+  const [copyTxn,   setCopyTxn]   = useState(null);  const addBackPrevRef = React.useRef(null);
   const multiModePrevHandler = React.useRef(null);
   const multiModeHandler = React.useRef(null);
 
@@ -103,6 +104,16 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
       }
     }
   }, [multiMode]); // Removed backInterceptRef from deps
+
+  const handleCopy = (txn) => {
+    // Create a copy with current date/time but keep all other data
+    setCopyTxn({
+      ...txn,
+      Date: new Date().toISOString().split('T')[0], // Current date
+      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
+      _id: undefined, // Remove ID so it gets a new one
+    });
+  };
 
   const catTxns = useMemo(() => allTxns.filter(t => t.Category === catName), [allTxns, catName]);
 
@@ -277,6 +288,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
                       backInterceptRef={backInterceptRef}
                       onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
                       onTap={multiMode ? toggleSel : null}
+                      onCopy={handleCopy}
                     />)}</div>
                   </div>
                 );
@@ -286,7 +298,8 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
         <div style={{height:24}}/>
       </div>
 
-      {addDate&&<AddTransaction prefillDate={addDate} prefillCategory={addCat} onClose={()=>{ setAddDate(null); setAddCat(null); }} backInterceptRef={backInterceptRef}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillCategory={addCat} onClose={()=>{ setAddDate(null); setAddCat(null); }} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
+      {copyTxn&&<AddTransaction copyTransaction={copyTxn} onClose={()=>setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})} backInterceptRef={backInterceptRef}/>}
     </div>
   );
 }

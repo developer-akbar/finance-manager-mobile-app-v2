@@ -13,10 +13,11 @@ const todayVal = () => {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 };
 
-export default function AddTransaction({ onClose, editTransaction = null, prefillDate = null, prefillAccount = null, prefillCategory = null, backInterceptRef = null }) {
+export default function AddTransaction({ onClose, onSaveAndContinue = null, editTransaction = null, copyTransaction = null, prefillDate = null, prefillAccount = null, prefillCategory = null, backInterceptRef = null }) {
   const { state, addTransaction, updateTransaction } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
+  const isCopy = !!copyTransaction;
 
   const lastTime = useMemo(() => {
     if (!transactions.length) return nowTimeStr();
@@ -27,13 +28,21 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
   const lastTimeForDate = useMemo(() => {
     if (!prefillDate || !transactions.length) return null;
     // Find transactions for the prefill date
-    const dateTxns = transactions.filter(t => t.Date === prefillDate);
+    let dateTxns = transactions.filter(t => t.Date === prefillDate);
+    // If prefillAccount is available, filter by that too
+    if (prefillAccount) {
+      dateTxns = dateTxns.filter(t => (t.Account || t.FromAccount) === prefillAccount || t.ToAccount === prefillAccount);
+    }
+    // If prefillCategory is available, filter by that too
+    if (prefillCategory) {
+      dateTxns = dateTxns.filter(t => t.Category === prefillCategory);
+    }
     if (!dateTxns.length) return null;
     // Get the most recent transaction for that date (by time or creation time)
     const sorted = dateTxns.sort((a, b) => {
       // First try to sort by time if available
       if (a.Time && b.Time) {
-        return a.Time.localeCompare(b.Time);
+        return b.Time.localeCompare(a.Time);
       }
       // Fall back to creation time
       try {
@@ -42,8 +51,8 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
         return 0;
       }
     });
-    return sorted[sorted.length - 1]?.Time || null;
-  }, [prefillDate, transactions]);
+    return sorted[0]?.Time || null;
+  }, [prefillDate, prefillAccount, prefillCategory, transactions]);
 
   const [form, setForm] = useState(() => {
     if (isEdit) {
@@ -54,6 +63,23 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
         amount:      String(t.INR || t.Amount || ''),
         date:        toInputDate(t.Date) || todayVal(),
         time:        t.Time || lastTime,
+        account:     rawType.startsWith('Transfer') ? '' : (t.Account || ''),
+        fromAccount: rawType.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
+        toAccount:   rawType.startsWith('Transfer') ? (t.ToAccount || '') : '',
+        category:    t.Category || '',
+        subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '',
+        note:        t.Note        || '',
+        description: t.Description || '',
+      };
+    }
+    if (isCopy) {
+      const t = copyTransaction;
+      const rawType = t['Income/Expense'] || 'Expense';
+      return {
+        type:        rawType,
+        amount:      String(t.INR || t.Amount || ''),
+        date:        todayVal(), // Current date for copy
+        time:        nowTimeStr(), // Current time for copy
         account:     rawType.startsWith('Transfer') ? '' : (t.Account || ''),
         fromAccount: rawType.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
         toAccount:   rawType.startsWith('Transfer') ? (t.ToAccount || '') : '',
@@ -147,7 +173,7 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
     return Object.keys(e).length === 0;
   };
 
-  const handleSave = async () => {
+  const handleSave = async (shouldContinue = false) => {
     if (!validate() || saving) return;
     setSaving(true);
     try {
@@ -168,7 +194,12 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
       };
       if (isEdit) await updateTransaction(editTransaction._id, data);
       else        await addTransaction(data);
-      onClose();
+      
+      if (shouldContinue && onSaveAndContinue) {
+        onSaveAndContinue();
+      } else {
+        onClose();
+      }
     } finally { setSaving(false); }
   };
 
@@ -285,9 +316,16 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
             <textarea className="form-input" rows={3} value={form.description} onChange={e=>set('description',e.target.value)}/>
           </div>
 
-          <button className="btn btn-primary btn-full btn-lg" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : isEdit ? 'Update' : 'Save'}
-          </button>
+          <div className="form-actions" style={{ display: 'flex', gap: '10px' }}>
+            <button className="btn btn-primary btn-lg" style={{ flex: 2 }} onClick={() => handleSave(false)} disabled={saving}>
+              {saving ? 'Saving…' : isEdit ? 'Update' : (isCopy ? 'Copy' : 'Save')}
+            </button>
+            {!isEdit && onSaveAndContinue && (
+              <button className="btn btn-secondary btn-lg" style={{ flex: 1 }} onClick={() => handleSave(true)} disabled={saving}>
+                {saving ? 'Saving…' : 'Continue'}
+              </button>
+            )}
+          </div>
           <div style={{height:16}}/>
         </div>
       </div>
