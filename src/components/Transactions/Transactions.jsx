@@ -150,9 +150,27 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   const [selected,  setSelected]  = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
   const now = new Date();
+  const multiModePrevHandler = React.useRef(null);
+  const multiModeHandler = React.useRef(null);
 
   const allAcctNames = useMemo(() => (accounts||[]).map(a=>a?.name||a).filter(Boolean).sort(), [accounts]);
   const allCatNames  = useMemo(() => Object.keys(categories||{}).sort(), [categories]);
+
+  // Handle back button interception for multi-mode
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (multiMode) {
+      multiModePrevHandler.current = backInterceptRef.current;
+      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
+      backInterceptRef.current = multiModeHandler.current;
+    } else {
+      if (backInterceptRef.current === multiModeHandler.current) {
+        backInterceptRef.current = multiModePrevHandler.current;
+        multiModePrevHandler.current = null;
+        multiModeHandler.current = null;
+      }
+    }
+  }, [multiMode]); // Removed backInterceptRef from deps
 
   // Reset offset when period changes
   const handlePeriodChange = (p) => { setSelPeriod(p); setPeriodOffset(0); };
@@ -472,6 +490,25 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
   const [selected,  setSelected]  = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
 
+  const multiModePrevHandler = React.useRef(null);
+  const multiModeHandler = React.useRef(null);
+
+  // Handle back button interception for multi-mode
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (multiMode) {
+      multiModePrevHandler.current = backInterceptRef.current;
+      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
+      backInterceptRef.current = multiModeHandler.current;
+    } else {
+      if (backInterceptRef.current === multiModeHandler.current) {
+        backInterceptRef.current = multiModePrevHandler.current;
+        multiModePrevHandler.current = null;
+        multiModeHandler.current = null;
+      }
+    }
+  }, [multiMode]); // Removed backInterceptRef from deps
+
   const prevMonth = () => { if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1); };
   const nextMonth = () => { if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1); };
   const swipe = useSwipe(nextMonth, prevMonth);
@@ -588,7 +625,7 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
         </>
       )}
 
-      {addDate&&<AddTransaction prefillDate={addDate} onClose={()=>setAddDate(null)}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} onClose={()=>setAddDate(null)} backInterceptRef={backInterceptRef}/>}
 
       {/* Floating FAB — bottom left */}
       <button className="trans-fab" onClick={onAddTransaction}>

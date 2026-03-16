@@ -75,6 +75,8 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
   const [selected,  setSelected] = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
   const addBackPrevRef = React.useRef(null);
+  const multiModePrevHandler = React.useRef(null);
+  const multiModeHandler = React.useRef(null);
 
   React.useEffect(() => {
     if (!backInterceptRef) return;
@@ -90,6 +92,22 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
     }
     return undefined;
   }, [addDate, showAdd, backInterceptRef]);
+
+  // Handle back button interception for multi-mode
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (multiMode) {
+      multiModePrevHandler.current = backInterceptRef.current;
+      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
+      backInterceptRef.current = multiModeHandler.current;
+    } else {
+      if (backInterceptRef.current === multiModeHandler.current) {
+        backInterceptRef.current = multiModePrevHandler.current;
+        multiModePrevHandler.current = null;
+        multiModeHandler.current = null;
+      }
+    }
+  }, [multiMode]);
 
   // When viewing an account, treat transfer rows as income/expense for that account.
   const accountTxnType = (t) => {
@@ -364,8 +382,8 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
         }
         <div style={{height:80}}/>
       </div>
-      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)}/>}
-      {showAdd&&<AddTransaction prefillAccount={acctName} onClose={()=>setShowAdd(false)}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)} backInterceptRef={backInterceptRef}/>}
+      {showAdd&&<AddTransaction prefillAccount={acctName} onClose={()=>setShowAdd(false)} backInterceptRef={backInterceptRef}/>}
     </div>
   );
 }

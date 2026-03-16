@@ -117,7 +117,7 @@ function AppInner() {
       <Layout onNavTap={handleNavTap}>
         {screen}
       </Layout>
-      {showAdd && <AddTransaction onClose={() => setShowAdd(false)}/>}
+      {showAdd && <AddTransaction onClose={() => setShowAdd(false)} backInterceptRef={backInterceptRef}/>}
     </PinLock>
   );
 }
