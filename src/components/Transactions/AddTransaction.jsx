@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { inputToStorage, toInputDate, nowTimeStr } from '../../utils/format.js';
 
@@ -101,6 +101,16 @@ export default function AddTransaction({ onClose, onSaveAndContinue = null, edit
   const [errors,   setErrors]   = useState({});
   const [saving,   setSaving]   = useState(false);
   const [noteSugs, setNoteSugs] = useState([]);
+
+  // textInputRef — sets all IME attributes at DOM node creation time
+  const textInputRef = (el) => {
+    if (!el) return;
+    el.setAttribute('autocomplete', 'on');
+    el.setAttribute('autocorrect', 'on');
+    el.setAttribute('spellcheck', 'true');
+    el.setAttribute('autocapitalize', 'sentences');
+    el.setAttribute('inputmode', 'text');
+  };
 
   // Handle back button interception
   React.useEffect(() => {
@@ -243,7 +253,16 @@ export default function AddTransaction({ onClose, onSaveAndContinue = null, edit
           <span className="amount-prefix">₹</span>
           <input
             className={`form-input-amount ${errors.amount ? 'err' : ''}`}
-            type="number" inputMode="decimal"
+            type="tel"
+            inputMode="decimal"
+            pattern="[0-9]*([.,][0-9]+)?"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck="false"
+            onKeyDown={e => {
+              const allowed = ['Backspace','Delete','ArrowLeft','ArrowRight','Tab','Enter','.',','];
+              if (!allowed.includes(e.key) && !/^[0-9]$/.test(e.key)) e.preventDefault();
+            }}
             value={form.amount}
             onChange={e => set('amount', e.target.value)}
             autoFocus={!isEdit}/>
@@ -315,7 +334,8 @@ export default function AddTransaction({ onClose, onSaveAndContinue = null, edit
 
           <div className="form-group" style={{position:'relative'}}>
             <label className="form-label">Note</label>
-            <input className="form-input" type="text" value={form.note}
+            <input ref={textInputRef} className="form-input" type="text" value={form.note}
+              autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
               onChange={e=>handleNoteChange(e.target.value)}
               onBlur={()=>setTimeout(()=>setNoteSugs([]),180)}/>
             {noteSugs.length > 0 && (
@@ -327,7 +347,9 @@ export default function AddTransaction({ onClose, onSaveAndContinue = null, edit
 
           <div className="form-group">
             <label className="form-label">Description</label>
-            <textarea className="form-input" rows={3} value={form.description} onChange={e=>set('description',e.target.value)}/>
+            <textarea ref={textInputRef} className="form-input" rows={3} value={form.description}
+              autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
+              onChange={e=>set('description',e.target.value)}/>
           </div>
 
           <div className="form-actions" style={{ display: 'flex', gap: '10px' }}>
