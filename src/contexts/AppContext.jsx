@@ -39,7 +39,7 @@ const normalizeAccounts = (raw) =>
 const INIT = {
   transactions: [], accounts: [], categories: {},
   accountGroups: [], budgets: [], settings: {},
-  theme: 'dark', fontSize: 1.0,
+  theme: 'dark', fontSize: 1.0, fontFamily: 'Sora',
   loading: true, error: null, importProgress: null,
   currentView: 'dashboard',
 };
@@ -54,6 +54,7 @@ function reducer(s, a) {
     case 'SET_IMPORT':   return { ...s, importProgress: a.payload };
     case 'SET_THEME':    return { ...s, theme: a.payload };
     case 'SET_FONTSIZE': return { ...s, fontSize: a.payload };
+    case 'SET_FONTFAMILY': return { ...s, fontFamily: a.payload };
     case 'UPD_SETTINGS': return { ...s, settings: { ...s.settings, ...a.payload } };
     case 'NAVIGATE': return { ...s, currentView: a.payload };
     default: return s;
@@ -82,35 +83,47 @@ export function AppProvider({ children }) {
         })));
         // Reload after seeding
         const [seedAccts, seedCats, seedGroups] = await Promise.all([getAccounts(), getCategories(), getAccountGroups()]);
-        const theme    = settings.theme    || 'dark';
-        const fontSize = parseFloat(settings.fontSize || '1.0');
+        const theme     = settings.theme     || 'dark';
+        const fontSize  = parseFloat(settings.fontSize  || '1.0');
+        const fontFamily = settings.fontFamily || 'Sora';
         document.documentElement.setAttribute('data-theme', theme);
         document.documentElement.style.setProperty('--fs-scale', String(fontSize));
+        document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
+          fontFamily === 'Inter' ? "'Inter', sans-serif" :
+          fontFamily === 'Roboto' ? "'Roboto', sans-serif" :
+          fontFamily === 'Open Sans' ? "'Open Sans', sans-serif" :
+          fontFamily === 'Lato' ? "'Lato', sans-serif" : "'Sora', sans-serif");
         dispatch({ type: 'INIT', payload: {
           transactions: txns,
           accounts: normalizeAccounts(seedAccts),
           categories: catsArrToObj(seedCats),
           accountGroups: seedGroups || [],
-          budgets, settings, theme, fontSize,
+          budgets, settings, theme, fontSize, fontFamily,
         }});
         return;
       }
-      const theme    = settings.theme    || 'dark';
-      const fontSize = parseFloat(settings.fontSize || '1.0');
+      const theme     = settings.theme     || 'dark';
+      const fontSize  = parseFloat(settings.fontSize  || '1.0');
+      const fontFamily = settings.fontFamily || 'Sora';
       document.documentElement.setAttribute('data-theme', theme);
       document.documentElement.style.setProperty('--fs-scale', String(fontSize));
+      document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
+        fontFamily === 'Inter' ? "'Inter', sans-serif" :
+        fontFamily === 'Roboto' ? "'Roboto', sans-serif" :
+        fontFamily === 'Open Sans' ? "'Open Sans', sans-serif" :
+        fontFamily === 'Lato' ? "'Lato', sans-serif" : "'Sora', sans-serif");
       dispatch({
         type: 'INIT', payload: {
           transactions:  txns,
           accounts:      normalizeAccounts(accts),
           categories:    catsArrToObj(catsArr),
           accountGroups: aGroups || [],
-          budgets, settings, theme, fontSize,
+          budgets, settings, theme, fontSize, fontFamily,
         },
       });
     } catch (e) {
       console.error('AppContext load error:', e);
-      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0 } });
+      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora' } });
     }
   }, []);
 
@@ -277,6 +290,20 @@ export function AppProvider({ children }) {
     try { await setSetting('fontSize', String(scale)); } catch (e) { console.error('setFontSize:', e); }
   };
 
+  const setFontFamily = async (family) => {
+    const fontMap = {
+      'Sora': "'Sora', sans-serif",
+      'Inter': "'Inter', sans-serif",
+      'Roboto': "'Roboto', sans-serif",
+      'Open Sans': "'Open Sans', sans-serif",
+      'Lato': "'Lato', sans-serif",
+    };
+    const cssFamily = fontMap[family] || "'Sora', sans-serif";
+    document.documentElement.style.setProperty('--font', cssFamily);
+    dispatch({ type:'SET_FONTFAMILY', payload: family });
+    try { await setSetting('fontFamily', family); } catch (e) { console.error('setFontFamily:', e); }
+  };
+
   const saveBudget   = async (cat, amount, period) => { await setBudget(cat, amount, period); dispatch({ type:'SET_BUDGETS', payload: await getBudgets() }); };
   const removeBudget = async (cat) => { await deleteBudget(cat); dispatch({ type:'SET_BUDGETS', payload: await getBudgets() }); };
 
@@ -286,7 +313,7 @@ export function AppProvider({ children }) {
       addTransaction, updateTransaction, deleteTransaction,
       renameAccount, renameCategory, cleanupAccounts,
       importData, cancelImport, clearAllData, analyseImport,
-      updateSettings, setTheme, setFontSize,
+      updateSettings, setTheme, setFontSize, setFontFamily,
       saveBudget, removeBudget,
     }}>
       {children}

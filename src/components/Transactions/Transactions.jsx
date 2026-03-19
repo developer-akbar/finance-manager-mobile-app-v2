@@ -10,7 +10,7 @@ const MONTHS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','N
 const MONTHS_F = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 // ── Date-grouped list ─────────────────────────────────────────────────────────
-function DateGroupedList({ txns, onDateTap }) {
+function DateGroupedList({ txns, onDateTap, selected, multiMode, onLongPress, onTap, backInterceptRef, onCopy }) {
   const closestRef = useRef(null);
 
   const groups = useMemo(() => {
@@ -70,7 +70,13 @@ function DateGroupedList({ txns, onDateTap }) {
             </div>
           </div>
           <div className="dg-items">
-            {list.map(t => <TransactionItem key={t._id} transaction={t}/>)}
+            {list.map(t => <TransactionItem key={t._id} transaction={t}
+              selected={selected.has(t._id)}
+              backInterceptRef={backInterceptRef}
+              onLongPress={onLongPress}
+              onTap={onTap}
+              onCopy={onCopy}
+            />)}
           </div>
         </div>
       );
@@ -130,7 +136,15 @@ function MonthlyView({ transactions, onMonthClick }) {
 }
 
 // ── Search view ───────────────────────────────────────────────────────────────
-function SearchView({ transactions, accounts, categories, onClose }) {
+function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy }) {
+  const textInputRef = (el) => {
+    if (!el) return;
+    el.setAttribute('autocomplete', 'on');
+    el.setAttribute('autocorrect', 'on');
+    el.setAttribute('spellcheck', 'true');
+    el.setAttribute('autocapitalize', 'sentences');
+    el.setAttribute('inputmode', 'text');
+  };
   const [query,     setQuery]     = useState('');
   const [debouncedQ,setDebouncedQ]= useState('');
   const debTimer = useRef(null);
@@ -145,9 +159,27 @@ function SearchView({ transactions, accounts, categories, onClose }) {
   const [selected,  setSelected]  = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
   const now = new Date();
+  const multiModePrevHandler = React.useRef(null);
+  const multiModeHandler = React.useRef(null);
 
   const allAcctNames = useMemo(() => (accounts||[]).map(a=>a?.name||a).filter(Boolean).sort(), [accounts]);
   const allCatNames  = useMemo(() => Object.keys(categories||{}).sort(), [categories]);
+
+  // Handle back button interception for multi-mode
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (multiMode) {
+      multiModePrevHandler.current = backInterceptRef.current;
+      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
+      backInterceptRef.current = multiModeHandler.current;
+    } else {
+      if (backInterceptRef.current === multiModeHandler.current) {
+        backInterceptRef.current = multiModePrevHandler.current;
+        multiModePrevHandler.current = null;
+        multiModeHandler.current = null;
+      }
+    }
+  }, [multiMode]); // Removed backInterceptRef from deps
 
   // Reset offset when period changes
   const handlePeriodChange = (p) => { setSelPeriod(p); setPeriodOffset(0); };
@@ -287,7 +319,7 @@ function SearchView({ transactions, accounts, categories, onClose }) {
         </button>
         <div className="search-input-wrap">
           <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" style={{width:14,height:14,flexShrink:0}}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input autoFocus type="text" className="search-input" value={query}
+          <input ref={textInputRef} autoFocus type="text" className="search-input" value={query}
             onChange={e => handleNoteInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.target.blur(); triggerSearch(); } }}
             onBlur={() => setTimeout(() => setNoteSugs([]), 180)}
@@ -363,8 +395,10 @@ function SearchView({ transactions, accounts, categories, onClose }) {
           <TransactionItem key={t._id} transaction={t}
             selected={selected.has(t._id)}
             showDate={true}
+            backInterceptRef={backInterceptRef}
             onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
-            onTap={multiMode ? () => toggleSel(t) : undefined}/>
+            onTap={multiMode ? () => toggleSel(t) : undefined}
+            onCopy={onCopy}/>
         ))}
         <div style={{height: 80}}/>
       </div>
@@ -452,7 +486,7 @@ function SearchView({ transactions, accounts, categories, onClose }) {
 }
 
 // ── Main Transactions screen ──────────────────────────────────────────────────
-export default function Transactions({ onAddTransaction }) {
+export default function Transactions({ onAddTransaction, backInterceptRef }) {
   const { state } = useApp();
   const { transactions, accounts, categories } = state;
   const now = new Date();
@@ -463,18 +497,63 @@ export default function Transactions({ onAddTransaction }) {
   const [showCal,   setShowCal]   = useState(false);
   const [pickerY,   setPickerY]   = useState(now.getFullYear());
   const [addDate,   setAddDate]   = useState(null);
+  const [selected,  setSelected]  = useState(new Set());
+  const [multiMode, setMultiMode] = useState(false);
+  const [copyTxn,   setCopyTxn]   = useState(null);
+
+  const multiModePrevHandler = React.useRef(null);
+  const multiModeHandler = React.useRef(null);
+
+  // Handle back button interception for multi-mode
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (multiMode) {
+      multiModePrevHandler.current = backInterceptRef.current;
+      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
+      backInterceptRef.current = multiModeHandler.current;
+    } else {
+      if (backInterceptRef.current === multiModeHandler.current) {
+        backInterceptRef.current = multiModePrevHandler.current;
+        multiModePrevHandler.current = null;
+        multiModeHandler.current = null;
+      }
+    }
+  }, [multiMode]); // Removed backInterceptRef from deps
 
   const prevMonth = () => { if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1); };
   const nextMonth = () => { if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1); };
   const swipe = useSwipe(nextMonth, prevMonth);
-  // Only attach swipe handlers in daily mode — monthly view needs free scroll
-  const swipeProps = viewMode === 'daily' ? swipe : {};
+  // Only attach swipe handlers in daily mode and not in multiMode
+  const swipeProps = viewMode === 'daily' && !multiMode ? swipe : {};
 
   const monthTxns   = useMemo(() => transactions.filter(t=>{const d=parseDate(t.Date);return d.getFullYear()===viewYear&&d.getMonth()===viewMonth;}), [transactions,viewYear,viewMonth]);
   const monthTotals = useMemo(() => calcTotals(monthTxns), [monthTxns]);
 
+  const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
+
+  const handleCopy = (txn) => {
+    // Create a copy with current date/time but keep all other data
+    setCopyTxn({
+      ...txn,
+      Date: new Date().toISOString().split('T')[0], // Current date
+      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
+      _id: undefined, // Remove ID so it gets a new one
+    });
+  };
+
+  const selTotals = useMemo(() => {
+    let inc = 0, exp = 0, xfr = 0;
+    for (const t of monthTxns.filter(r => selected.has(r._id))) {
+      const tp = txnType(t), amt = txnAmount(t);
+      if (tp === 'income') inc += amt;
+      else if (tp === 'expense') exp += amt;
+      else xfr += amt;
+    }
+    return { inc, exp, xfr };
+  }, [monthTxns, selected]);
+
   if (viewMode==='search') return (
-    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')}/>
+    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
   );
 
   return (
@@ -517,12 +596,30 @@ export default function Transactions({ onAddTransaction }) {
       {viewMode==='monthly' ? (
         <MonthlyView transactions={transactions} onMonthClick={(y,mi)=>{setViewYear(y);setViewMonth(mi);setViewMode('daily');}}/>
       ) : (
-        <div className="txn-list">
-          {monthTxns.length===0
-            ? <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">No transactions</div><div className="empty-desc">{MONTHS_F[viewMonth]} {viewYear}</div></div>
-            : <DateGroupedList txns={monthTxns} onDateTap={date=>setAddDate(date)}/>
-          }
-        </div>
+        <>
+          {multiMode && selected.size > 0 && (
+            <div className="search-sel-bar">
+              <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
+                <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
+                {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
+                {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
+                {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
+                {(selTotals.inc > 0 || selTotals.exp > 0) && (
+                  <span className="sel-total-net" style={{color: selTotals.inc - selTotals.exp >= 0 ? 'var(--income)' : 'var(--expense)'}}>
+                    = {selTotals.inc - selTotals.exp >= 0 ? '+' : '−'}{formatINR(Math.abs(selTotals.inc - selTotals.exp))}
+                  </span>
+                )}
+              </div>
+              <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',flexShrink:0,fontSize:'0.82rem'}} onClick={() => { setMultiMode(false); setSelected(new Set()); }}>Done</button>
+            </div>
+          )}
+          <div className="txn-list">
+            {monthTxns.length===0
+              ? <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">No transactions</div><div className="empty-desc">{MONTHS_F[viewMonth]} {viewYear}</div></div>
+              : <DateGroupedList txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
+            }
+          </div>
+        </>
       )}
 
       {/* Month picker sheet */}
@@ -549,7 +646,13 @@ export default function Transactions({ onAddTransaction }) {
         </>
       )}
 
-      {addDate&&<AddTransaction prefillDate={addDate} onClose={()=>setAddDate(null)}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} onClose={()=>setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
+      {copyTxn&&<AddTransaction 
+        copyTransaction={copyTxn}
+        onClose={()=>setCopyTxn(null)} 
+        onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})}
+        backInterceptRef={backInterceptRef}
+      />}
 
       {/* Floating FAB — bottom left */}
       <button className="trans-fab" onClick={onAddTransaction}>
