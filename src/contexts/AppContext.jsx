@@ -32,8 +32,9 @@ const catsObjToArr = (obj) =>
 
 const normalizeAccounts = (raw) =>
   (raw || []).map(a => typeof a === 'string'
-    ? { name: a, group: '', icon: '💳' }
-    : { name: a.name || '', group: a.group || a.group_name || '', icon: '💳' });
+    ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0 }
+    : { name: a.name || '', group: a.group || a.group_name || '', icon: '💳',
+        acctType: a.acctType || '', settlementDate: a.settlementDate ? Number(a.settlementDate) : 0, paymentDueDays: a.paymentDueDays ? Number(a.paymentDueDays) : 0 });
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
 const INIT = {
@@ -209,11 +210,11 @@ export function AppProvider({ children }) {
     const newAcctNames = [...acctSet].filter(n => n);
     if (mode === 'override') {
       // Rebuild from scratch — no pollution from previous bad imports
-      await replaceAccounts(newAcctNames.map(name => ({ name, group:'', icon:'💳' })));
+      await replaceAccounts(newAcctNames.map(name => ({ name, group:'', icon:'💳', acctType:'', settlementDate:0, paymentDueDays:0 })));
     } else {
       const existAccts = normalizeAccounts(await getAccounts());
       const existNames = new Set(existAccts.map(a => a.name));
-      const brandNew   = newAcctNames.filter(n => !existNames.has(n)).map(name => ({ name, group:'', icon:'💳' }));
+      const brandNew   = newAcctNames.filter(n => !existNames.has(n)).map(name => ({ name, group:'', icon:'💳', acctType:'', settlementDate:0, paymentDueDays:0 }));
       await replaceAccounts([...existAccts, ...brandNew]);
     }
 

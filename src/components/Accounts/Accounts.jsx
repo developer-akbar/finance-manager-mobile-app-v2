@@ -8,8 +8,115 @@ import useSwipe from '../../hooks/useSwipe.js';
 import './Accounts.css';
 
 const MS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// ── Credit Card helpers ───────────────────────────────────────────────────────
+/** Returns { start, end } Date objects for the billing cycle that contains `refDate`.
+ *  settlementDate = day the billing period CLOSES (e.g. 18).
+ *  Cycle: [settlementDate of prev month+1 .. settlementDate of this/next month]
+ *  e.g. settlement=18, today=19 Mar → cycle 18 Mar – 17 Apr
+ *       settlement=18, today=10 Mar → cycle 18 Feb – 17 Mar  */
+export function ccCycleForDate(settlementDate, refDate = new Date()) {
+  const sd  = settlementDate;
+  const cy  = refDate.getFullYear();
+  const cm  = refDate.getMonth();
+  const cd  = refDate.getDate();
+  let cycleStart, cycleEnd;
+  if (cd >= sd) {
+    cycleStart = new Date(cy, cm,     sd);
+    cycleEnd   = new Date(cy, cm + 1, sd - 1);
+  } else {
+    cycleStart = new Date(cy, cm - 1, sd);
+    cycleEnd   = new Date(cy, cm,     sd - 1);
+  }
+  cycleEnd.setHours(23, 59, 59, 999);
+  return { start: cycleStart, end: cycleEnd };
+}
+
+/** Previous billing cycle (the one whose bill is now payable). */
+export function ccPrevCycle(settlementDate, refDate = new Date()) {
+  const { start } = ccCycleForDate(settlementDate, refDate);
+  // prevEnd = day before current cycle starts
+  const prevEnd = new Date(start.getFullYear(), start.getMonth(), start.getDate() - 1);
+  prevEnd.setHours(23, 59, 59, 999);
+  // prevStart = exactly one month before current cycle start
+  const prevStart = new Date(start);
+  prevStart.setMonth(prevStart.getMonth() - 1);
+  return { start: prevStart, end: prevEnd };
+}
+
+/** Sum of expenses (+ transfer-outs) for an account within a date range. */
+/**
+ * Core CC balance calculator — bank-statement model.
+ *
+ * Returns:
+ *   balancePayable  — what you owe on closed/billed cycles (after all payments)
+ *   outstanding     — net charges accumulating in the current open cycle
+ *
+ * Rules:
+ *  • Charges (Expense or Transfer-Out FROM card) before currCycleStart
+ *      → add to grossPayable
+ *  • Charges in currCycleStart..today
+ *      → add to grossOutstanding
+ *  • Payments (Income TO card, or Transfer-Out FROM another account TO card)
+ *      → always reduce balancePayable first; overflow reduces outstanding
+ *
+ * Sign convention returned: positive = you owe / you've spent (shown as −)
+ */
+function ccBalances(txns, acctName, settlementDate, today = new Date()) {
+  // Determine start of current (open) cycle
+  const sd = settlementDate;
+  const cy = today.getFullYear(), cm = today.getMonth(), cd = today.getDate();
+  let currStart;
+  if (cd >= sd) currStart = new Date(cy, cm,     sd);
+  else          currStart = new Date(cy, cm - 1, sd);
+  currStart.setHours(0, 0, 0, 0);
+
+  let grossPayable     = 0; // charges in all closed cycles
+  let grossOutstanding = 0; // charges in current open cycle
+  let totalPayments    = 0; // all payments ever made to this card
+
+  for (const t of txns) {
+    const d    = parseDate(t.Date);
+    const amt  = txnAmount(t);
+    const type = String(t['Income/Expense'] || '').trim();
+    const acct = String(t.Account || t.FromAccount || '').trim();
+    const dest = String(t.ToAccount || '').trim();
+
+    const isCharge  = (type === 'Expense' && acct === acctName)
+                   || (type === 'Transfer-Out' && acct === acctName);
+    // Payment = money going INTO the card account (Income credited, or bank→card transfer)
+    const isPayment = (type === 'Income' && acct === acctName)
+                   || (type === 'Transfer-Out' && dest === acctName);
+
+    if (isCharge) {
+      if (d < currStart) grossPayable     += amt;
+      else               grossOutstanding += amt;
+    }
+    if (isPayment) totalPayments += amt;
+  }
+
+  // Apply payments: reduce payable first, overflow spills into outstanding
+  const netPayable     = Math.max(0, grossPayable - totalPayments);
+  const overpayment    = Math.max(0, totalPayments - grossPayable);
+  // netOutstanding: positive = you owe on current cycle, negative = credit balance (overpaid)
+  const netOutstanding = grossOutstanding - overpayment;
+
+  return { balancePayable: netPayable, outstanding: netOutstanding };
+}
+
+/** Is this account a credit card? */
+export function isCreditCard(acct) {
+  if (!acct) return false;
+  // Explicit type always wins — empty string means explicitly set to Regular
+  if (acct.acctType === 'Credit Card') return true;
+  if (acct.acctType === '') return false;          // explicitly Regular, never override
+  // acctType undefined/null = old account created before this feature: fall back to name
+  // Only match 'credit' — never 'card' alone (debit cards, food cards, prepaid cards etc.)
+  return /\bcredit\b/i.test(acct.name || '');
+}
+
 const MS_F = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-const PERIODS = ['Month','Year','FY','All','Custom'];
+const PERIODS = ['Month','Year','FY','All','Custom','CC Cycle'];
 
 /**
  * Compute running balance for a named account from a list of transactions.
@@ -62,9 +169,12 @@ function buildBalanceMap(transactions) {
 }
 
 // ── Account Detail ────────────────────────────────────────────────────────────
-function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
+function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }) {
   const now = new Date();
-  const [period,    setPeriod]  = useState('Month');
+
+  // If this is a CC account, default period to 'CC Cycle'; otherwise 'Month'
+  const isCC = ccConfig && ccConfig.settlementDate > 0;
+  const [period,    setPeriod]  = useState(isCC ? 'CC Cycle' : 'Month');
   const [viewYear,  setViewYear] = useState(now.getFullYear());
   const [viewMonth, setViewMonth]= useState(now.getMonth());
   const [viewFY,    setViewFY]  = useState(currentFY());
@@ -76,6 +186,10 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
   const [multiMode, setMultiMode] = useState(false);
   const [copyTxn,   setCopyTxn] = useState(null);
   const [addKey, setAddKey] = useState(0);
+
+  // For CC Cycle navigation: which cycle offset (0 = current, -1 = previous, etc.)
+  const [ccCycleOffset, setCcCycleOffset] = useState(0);
+
   const addBackPrevRef = React.useRef(null);
   const multiModePrevHandler = React.useRef(null);
   const multiModeHandler = React.useRef(null);
@@ -139,27 +253,38 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
       return acct === acctName || dest === acctName;
     }), [allTxns, acctName]);
 
+  // Compute current CC cycle range based on offset
+  const ccCycleRange = useMemo(() => {
+    if (!isCC) return null;
+    const sd = ccConfig.settlementDate;
+    // Shift reference date by ccCycleOffset months
+    const ref = new Date(now.getFullYear(), now.getMonth() + ccCycleOffset, now.getDate());
+    return ccCycleForDate(sd, ref);
+  }, [isCC, ccConfig, ccCycleOffset]);
+
   const periodTxns = useMemo(() => {
-    if (period==='Month')  return acctTxns.filter(t=>{const d=parseDate(t.Date);return d.getFullYear()===viewYear&&d.getMonth()===viewMonth;});
-    if (period==='Year')   return acctTxns.filter(t=>parseDate(t.Date).getFullYear()===viewYear);
-    if (period==='FY')     return acctTxns.filter(t=>{const d=parseDate(t.Date);return d>=fyStart(viewFY)&&d<=fyEnd(viewFY);});
+    if (period==='Month')    return acctTxns.filter(t=>{const d=parseDate(t.Date);return d.getFullYear()===viewYear&&d.getMonth()===viewMonth;});
+    if (period==='Year')     return acctTxns.filter(t=>parseDate(t.Date).getFullYear()===viewYear);
+    if (period==='FY')       return acctTxns.filter(t=>{const d=parseDate(t.Date);return d>=fyStart(viewFY)&&d<=fyEnd(viewFY);});
+    if (period==='CC Cycle' && ccCycleRange) return acctTxns.filter(t=>{const d=parseDate(t.Date);return d>=ccCycleRange.start&&d<=ccCycleRange.end;});
     if (period==='Custom'&&customFrom&&customTo){const f=new Date(customFrom),to=new Date(customTo+'T23:59:59');return acctTxns.filter(t=>{const d=parseDate(t.Date);return d>=f&&d<=to;});}
     return acctTxns;
-  }, [acctTxns,period,viewYear,viewMonth,viewFY,customFrom,customTo]);
+  }, [acctTxns,period,viewYear,viewMonth,viewFY,customFrom,customTo,ccCycleRange]);
 
   // Opening balance = balance from all transactions BEFORE the period
   const openingBal = useMemo(() => {
     if (period === 'All') return 0;
     const beforePeriod = acctTxns.filter(t => {
       const d = parseDate(t.Date);
-      if (period==='Month')  return !(d.getFullYear()===viewYear && d.getMonth()===viewMonth) && d < new Date(viewYear, viewMonth, 1);
-      if (period==='Year')   return d.getFullYear() < viewYear;
-      if (period==='FY')     return d < fyStart(viewFY);
+      if (period==='Month')    return !(d.getFullYear()===viewYear && d.getMonth()===viewMonth) && d < new Date(viewYear, viewMonth, 1);
+      if (period==='Year')     return d.getFullYear() < viewYear;
+      if (period==='FY')       return d < fyStart(viewFY);
+      if (period==='CC Cycle' && ccCycleRange) return d < ccCycleRange.start;
       if (period==='Custom'&&customFrom) return d < new Date(customFrom);
       return false;
     });
     return computeBalance(beforePeriod, acctName);
-  }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, acctName]);
+  }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, acctName, ccCycleRange]);
 
   const periodBalance = useMemo(() => computeBalance(periodTxns, acctName), [periodTxns, acctName]);
   const closingBal    = openingBal + periodBalance;
@@ -197,10 +322,22 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
     return months;
   }, [acctTxns, acctName]);
 
-  const prev = () => { if(period==='Month'){if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1);}if(period==='Year')setViewYear(y=>y-1);if(period==='FY')setViewFY(y=>y-1); };
-  const next = () => { if(period==='Month'){if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);}if(period==='Year')setViewYear(y=>y+1);if(period==='FY')setViewFY(y=>y+1); };
+  const prev = () => {
+    if(period==='Month'){if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1);}
+    if(period==='Year') setViewYear(y=>y-1);
+    if(period==='FY')   setViewFY(y=>y-1);
+    if(period==='CC Cycle') setCcCycleOffset(o=>o-1);
+  };
+  const next = () => {
+    if(period==='Month'){if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);}
+    if(period==='Year') setViewYear(y=>y+1);
+    if(period==='FY')   setViewFY(y=>y+1);
+    if(period==='CC Cycle') setCcCycleOffset(o=>o+1);
+  };
   const swipe = useSwipe(next, prev);
-  const periodLabel = period==='Month'?`${MS_F[viewMonth]} ${viewYear}`:period==='Year'?String(viewYear):period==='FY'?fyLabel(viewFY):period==='Custom'&&customFrom&&customTo?`${customFrom} – ${customTo}`:'All Time';
+
+  const fmtCycleDate = d => d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+  const periodLabel = period==='Month'?`${MS_F[viewMonth]} ${viewYear}`:period==='Year'?String(viewYear):period==='FY'?fyLabel(viewFY):period==='CC Cycle'&&ccCycleRange?`${fmtCycleDate(ccCycleRange.start)} – ${fmtCycleDate(ccCycleRange.end)}`:period==='Custom'&&customFrom&&customTo?`${customFrom} – ${customTo}`:'All Time';
 
   const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
 
@@ -244,14 +381,24 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
       <div className="acct-detail-body" {...(multiMode ? {} : swipe)}>
         <div style={{padding:'8px var(--page-px) 4px'}}>
           <div className="period-tabs">
-            {PERIODS.map(p=><button key={p} className={`period-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</button>)}
+            {PERIODS.filter(p => p !== 'CC Cycle' || isCC).map(p=><button key={p} className={`period-tab ${period===p?'active':''}`} onClick={()=>{ setPeriod(p); if(p==='CC Cycle') setCcCycleOffset(0); }}>{p}</button>)}
           </div>
         </div>
         {!['All','Custom'].includes(period)&&(
           <div className="period-picker-row">
             <button className="pp-arrow" onClick={prev}>‹</button>
-            <div className="pp-label">{periodLabel}</div>
+            <div className="pp-label">
+              {periodLabel}
+              {period==='CC Cycle'&&isCC&&ccCycleOffset===0&&<span className="cc-cycle-badge">Current</span>}
+            </div>
             <button className="pp-arrow" onClick={next}>›</button>
+          </div>
+        )}
+        {period==='CC Cycle'&&isCC&&(
+          <div className="cc-cycle-info-strip">
+            <span>💳 Billing cycle closes on <strong>
+              {(()=>{const d=new Date(0,0,ccConfig.settlementDate);return d.toLocaleDateString('en-IN',{day:'numeric'});})()}
+            </strong> of each month</span>
           </div>
         )}
         {period==='Custom'&&(
@@ -466,15 +613,53 @@ export default function Accounts({ backInterceptRef } = {}) {
     return { groups, ungrouped };
   }, [uniqueAccounts, uniqueAccountGroups]);
 
-  if (drill) return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)} backInterceptRef={backInterceptRef} />;
+  if (drill) {
+    const drillAcct = (uniqueAccounts||[]).find(a => (a.name||a) === drill);
+    const ccCfg = drillAcct && isCreditCard(drillAcct) ? drillAcct : null;
+    return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)} backInterceptRef={backInterceptRef} ccConfig={ccCfg} />;
+  }
 
   const renderAcctRow = (a) => {
-    const name = a.name || a;
-    const bal  = acctBalances[name] ?? 0;
+    const name   = a.name || a;
+    const bal    = acctBalances[name] ?? 0;
+    const acctObj = typeof a === 'object' ? a : { name };
+
+    if (isCreditCard(acctObj)) {
+      const now  = new Date();
+      let balancePayable = 0, outstanding = 0;
+      if (acctObj.settlementDate > 0) {
+        ({ balancePayable, outstanding } = ccBalances(transactions, name, acctObj.settlementDate, now));
+      }
+
+      // outstanding: positive = you owe (shown as −), negative = credit/overpaid (shown as +)
+      const outAmt  = Math.abs(outstanding);
+      const outSign = outstanding > 0 ? '−' : outstanding < 0 ? '+' : '';
+      const outCls  = outstanding > 0 ? 'warn' : outstanding < 0 ? 'pos' : '';
+
+      return (
+        <div key={name} className="acct-row acct-row-cc" onClick={() => setDrill(name)}>
+          <div className="acct-row-name">{name}</div>
+          <div className="acct-row-cc-amounts">
+            <div className="acct-row-cc-col">
+              <div className={`acct-row-cc-val ${balancePayable > 0 ? 'neg' : balancePayable < 0 ? 'pos' : ''}`}>
+                {balancePayable < 0 ? '+' : balancePayable > 0 ? '−' : ''}{formatINR(Math.abs(balancePayable))}
+              </div>
+            </div>
+            <div className="acct-row-cc-col">
+              <div className={`acct-row-cc-val ${outCls}`}>
+                {outSign}{formatINR(outAmt)}
+              </div>
+            </div>
+          </div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11" style={{flexShrink:0}}><path d="M9 18l6-6-6-6"/></svg>
+        </div>
+      );
+    }
+
     return (
       <div key={name} className="acct-row" onClick={() => setDrill(name)}>
         <div className="acct-row-name">{name}</div>
-        <div className={`acct-row-bal ${bal>=0?'pos':'neg'}`}>{bal<0?'−':''}{formatINR(Math.abs(bal))}</div>
+        <div className={`acct-row-bal ${bal >= 0 ? 'pos' : 'neg'}`}>{bal < 0 ? '−' : ''}{formatINR(Math.abs(bal))}</div>
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11"><path d="M9 18l6-6-6-6"/></svg>
       </div>
     );
@@ -500,29 +685,96 @@ export default function Accounts({ backInterceptRef } = {}) {
 
       <div className="accounts-list">
         {(uniqueAccountGroups||[]).map(grp => {
-          const accts    = grouped.groups[grp] || [];
+          const accts = grouped.groups[grp] || [];
           if (!accts.length) return null;
-          const grpTotal = accts.reduce((s,a)=>s+(acctBalances[a.name||a]??0),0);
           const isCollapsed = collapsedGroups.has(grp);
-          return (
-            <div key={grp}>
+
+          // Check if this group has any CC accounts with settlement config
+          const now = new Date();
+          const ccAccts = accts.filter(a => isCreditCard(a) && a.settlementDate > 0);
+          const isAllCC = ccAccts.length === accts.length;
+
+          let grpHeader;
+          if (isAllCC && ccAccts.length > 0) {
+            // Sum payable and outstanding across all CC accounts in group
+            const totals = ccAccts.reduce((s, a) => {
+              const { balancePayable, outstanding } = ccBalances(transactions, a.name, a.settlementDate, now);
+              return { balancePayable: s.balancePayable + balancePayable, outstanding: s.outstanding + outstanding };
+            }, { balancePayable: 0, outstanding: 0 });
+            const totalPayable     = totals.balancePayable;
+            const totalOutstanding = totals.outstanding;
+            // outstanding sign: positive = owe (−), negative = credit (+)
+            const grpOutAmt  = Math.abs(totalOutstanding);
+            const grpOutSign = totalOutstanding > 0 ? '−' : totalOutstanding < 0 ? '+' : '';
+            const grpOutCls  = totalOutstanding > 0 ? 'warn' : totalOutstanding < 0 ? 'pos' : '';
+            grpHeader = (
+              <div className="acct-group-header acct-group-header-cc" onClick={() => toggleGroup(grp)}>
+                <div className="acct-group-label">📁 {grp}</div>
+                <div className="acct-group-cc-totals">
+                  <div className="acct-group-cc-col">
+                    <div className="acct-group-cc-lbl">Balance Payable</div>
+                    <div className={`acct-group-cc-val ${totalPayable > 0 ? 'neg' : totalPayable < 0 ? 'pos' : ''}`}>
+                      {totalPayable < 0 ? '+' : totalPayable > 0 ? '−' : ''}{formatINR(Math.abs(totalPayable))}
+                    </div>
+                  </div>
+                  <div className="acct-group-cc-divider"/>
+                  <div className="acct-group-cc-col">
+                    <div className="acct-group-cc-lbl">Outst. Balance</div>
+                    <div className={`acct-group-cc-val ${grpOutCls}`}>
+                      {grpOutSign}{formatINR(grpOutAmt)}
+                    </div>
+                  </div>
+                </div>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{width:12,height:12,transition:'transform 0.2s',transform:isCollapsed?'rotate(-90deg)':'rotate(0deg)',flexShrink:0}}><path d="M6 9l6 6 6-6"/></svg>
+              </div>
+            );
+          } else {
+            const grpTotal = accts.reduce((s, a) => s + (acctBalances[a.name||a] ?? 0), 0);
+            grpHeader = (
               <div className="acct-group-header" onClick={() => toggleGroup(grp)}>
                 <div className="acct-group-label">📁 {grp}</div>
                 <span className={`acct-group-bal ${grpTotal>=0?'pos':'neg'}`}>{grpTotal<0?'−':''}{formatINR(Math.abs(grpTotal))}</span>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{width:12,height:12,transition:'transform 0.2s',transform:isCollapsed?'rotate(-90deg)':'rotate(0deg)'}}><path d="M6 9l6 6 6-6"/></svg>
               </div>
-              {!isCollapsed && accts.map(renderAcctRow)}
+            );
+          }
+
+          return (
+            <div key={grp}>
+              {grpHeader}
+              {!isCollapsed && (
+                <>
+                  {ccAccts.length > 0 && (
+                    <div className="acct-cc-col-header">
+                      <div style={{flex:1}}/>
+                      <div className="acct-cc-col-lbl">Balance Payable</div>
+                      <div className="acct-cc-col-lbl">Outst. Balance</div>
+                    </div>
+                  )}
+                  {accts.map(renderAcctRow)}
+                </>
+              )}
             </div>
           );
         })}
-        {grouped.ungrouped.length > 0 && (
-          <div>
-            {(uniqueAccountGroups||[]).length > 0 && (
-              <div className="acct-group-header" style={{opacity:0.55}}><span>📋 Ungrouped</span></div>
-            )}
-            {grouped.ungrouped.map(renderAcctRow)}
-          </div>
-        )}
+        {grouped.ungrouped.length > 0 && (() => {
+          const hasCC = grouped.ungrouped.some(a => isCreditCard(typeof a === 'object' ? a : { name: a.name || a }));
+          return (
+            <div>
+              {(uniqueAccountGroups||[]).length > 0 && (
+                <div className="acct-group-header" style={{opacity:0.55}}><span>📋 Ungrouped</span></div>
+              )}
+              {hasCC && (
+                <div className="acct-cc-col-header">
+                  <div style={{flex:1}}/>
+                  <div className="acct-cc-col-lbl">Balance Payable</div>
+                  <div className="acct-cc-col-lbl">Outst. Balance</div>
+                </div>
+              )}
+              {grouped.ungrouped.map(renderAcctRow)}
+            </div>
+          );
+        })()}
         {uniqueAccounts.length === 0 && (
           <div className="empty-state"><div className="empty-icon">💳</div><div className="empty-title">No accounts yet</div><div className="empty-desc">Add accounts in Settings</div></div>
         )}

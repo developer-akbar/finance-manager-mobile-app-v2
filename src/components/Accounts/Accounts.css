@@ -34,3 +34,35 @@
 .acct-ob-div { width:1px; background:var(--border); flex-shrink:0; margin:8px 0; }
 .add-fab-sm { width:32px; height:32px; border-radius:50%; background:var(--green); border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-left:8px; color:#000; transition:var(--transition); }
 .add-fab-sm:active { transform:scale(0.9); }
+
+/* ── Credit Card account row — flat, like regular rows but with two amount cols ── */
+.acct-row-cc { display:flex; align-items:center; gap:6px; padding:11px var(--page-px); border-bottom:1px solid var(--border-light); background:var(--bg-card); cursor:pointer; transition:background 0.12s; }
+.acct-row-cc:active { background:var(--bg-hover); }
+.acct-row-cc .acct-row-name { flex:1; }
+.acct-row-cc-amounts { display:flex; align-items:center; gap:0; flex-shrink:0; }
+.acct-row-cc-col  { width:90px; text-align:right; }
+.acct-row-cc-val  { font-size:0.78rem; font-weight:800; font-family:var(--font); color:var(--text-primary); }
+.acct-row-cc-val.neg  { color:var(--expense); }
+.acct-row-cc-val.warn { color:#f5a623; }
+.acct-row-cc-val.pos  { color:var(--income); }
+
+/* Column label header row shown above CC rows in an all-CC group */
+.acct-cc-col-header { display:flex; align-items:center; padding:3px var(--page-px) 3px; background:var(--bg-card2); border-bottom:1px solid var(--border-light); }
+.acct-cc-col-lbl { width:90px; text-align:right; font-size:0.58rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; }
+
+/* CC group header with two-column totals */
+.acct-group-header-cc { flex-wrap:nowrap; gap:6px; }
+.acct-group-cc-totals { display:flex; align-items:center; flex-shrink:0; }
+.acct-group-cc-divider { width:1px; height:20px; background:rgba(255,255,255,0.15); margin:0 6px; flex-shrink:0; }
+.acct-group-cc-col { width:90px; text-align:right; }
+.acct-group-cc-lbl { font-size:0.55rem; font-weight:700; color:var(--gold); opacity:0.7; text-transform:uppercase; letter-spacing:0.3px; margin-bottom:1px; }
+.acct-group-cc-val { font-size:0.78rem; font-weight:800; font-family:var(--font); color:var(--gold); }
+.acct-group-cc-val.neg  { color:var(--expense); }
+.acct-group-cc-val.warn { color:#f5a623; }
+.acct-group-cc-val.pos  { color:var(--income); }
+
+/* ── CC cycle info strip in drill-down ──────────────────────────────────── */
+.cc-cycle-info-strip { display:flex; align-items:center; padding:6px var(--page-px); background:rgba(0,229,160,0.07); border-bottom:1px solid rgba(0,229,160,0.15); font-size:0.7rem; color:var(--text-muted); gap:6px; }
+.cc-cycle-info-strip strong { color:var(--accent); }
+.cc-cycle-badge { display:inline-block; font-size:0.58rem; font-weight:700; color:var(--accent); background:rgba(0,229,160,0.15); border-radius:4px; padding:1px 5px; margin-left:6px; text-transform:uppercase; letter-spacing:0.3px; vertical-align:middle; }
+

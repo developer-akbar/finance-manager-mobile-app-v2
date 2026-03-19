@@ -93,13 +93,17 @@ function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, onReorder,
 // ─────────────────────────────────────────────
 function AccountsManager({ onBack }) {
   const { state, updateSettings, renameAccount } = useApp();
-  const [accounts, setAccounts]       = useState(() => (state.accounts||[]).map(a=>typeof a==='string'?{name:a,group:'',icon:'💳'}:a));
+  const [accounts, setAccounts]       = useState(() => (state.accounts||[]).map(a=>typeof a==='string'?{name:a,group:'',icon:'💳',acctType:'',settlementDate:0,paymentDueDays:0}:a));
   const [groups,   setGroups]         = useState(() => state.accountGroups||[]);
   const [newAcct,  setNewAcct]        = useState('');
   const [newGrp,   setNewGrp]         = useState('');
-  const [editIdx,   setEditIdx]       = useState(null);
-  const [editName,  setEditName]      = useState('');
-  const [editGrp,   setEditGrp]       = useState('');
+  const [editIdx,       setEditIdx]       = useState(null);
+  const [editName,      setEditName]      = useState('');
+  const [editGrp,       setEditGrp]       = useState('');
+  const [editAcctType,  setEditAcctType]  = useState('');
+  const [editSettleDay, setEditSettleDay] = useState('');
+  const [editPayDays,   setEditPayDays]   = useState('');
+  const [editErrors,    setEditErrors]    = useState({});
   const [tabMode,   setTabMode]       = useState('list'); // 'list' | 'kanban'
   const [saving,    setSaving]        = useState(false);
   const [toast,     setToast]         = useState('');
@@ -166,7 +170,7 @@ function AccountsManager({ onBack }) {
   const addAccount = () => {
     const t = newAcct.trim();
     if (!t || accounts.some(a=>a.name===t)) return;
-    const upd = [...accounts, {name:t,group:'',icon:'💳'}];
+    const upd = [...accounts, {name:t,group:'',icon:'💳',acctType:'',settlementDate:0,paymentDueDays:0}];
     setAccounts(upd); setNewAcct(''); save(upd);
   };
 
@@ -175,14 +179,47 @@ function AccountsManager({ onBack }) {
     setAccounts(upd); save(upd);
   };
 
+  // Only suggest CC if name contains 'credit' — never trigger on 'card', 'cc' alone
+  const looksLikeCC = (name) => /\bcredit\b/i.test(name);
+
   const startEdit = (i) => {
-    setEditIdx(i); setEditName(accounts[i].name); setEditGrp(accounts[i].group||'');
+    const a = accounts[i];
+    // If acctType is explicitly set (even ''), respect it — don't override with name detection
+    // acctType === undefined/null means old account before feature: suggest from name
+    const hasExplicitType = a.acctType !== undefined && a.acctType !== null;
+    const inferredType = hasExplicitType ? a.acctType : (looksLikeCC(a.name) ? 'Credit Card' : '');
+    setEditIdx(i);
+    setEditName(a.name);
+    setEditGrp(a.group || '');
+    setEditAcctType(inferredType);
+    setEditSettleDay(a.settlementDate ? String(a.settlementDate) : '');
+    setEditPayDays(a.paymentDueDays ? String(a.paymentDueDays) : '');
+    setEditErrors({});
   };
 
   const saveEdit = async () => {
     if (!editName.trim()) return;
+    const errs = {};
+    const isCC = editAcctType === 'Credit Card';
+    if (isCC) {
+      const sd = parseInt(editSettleDay, 10);
+      const pd = parseInt(editPayDays, 10);
+      if (!editSettleDay || isNaN(sd) || sd < 1 || sd > 28)
+        errs.settlementDate = 'Enter a day between 1 and 28';
+      if (!editPayDays || isNaN(pd) || pd < 1 || pd > 30)
+        errs.paymentDueDays = 'Enter days between 1 and 30';
+    }
+    if (Object.keys(errs).length) { setEditErrors(errs); return; }
+    setEditErrors({});
     const old = accounts[editIdx].name;
-    const upd = accounts.map((a,i)=>i===editIdx?{...a,name:editName.trim(),group:editGrp}:a);
+    const upd = accounts.map((a,i) => i===editIdx ? {
+      ...a,
+      name:           editName.trim(),
+      group:          editGrp,
+      acctType:       isCC ? 'Credit Card' : '',
+      settlementDate: isCC ? parseInt(editSettleDay, 10) : 0,
+      paymentDueDays: isCC ? parseInt(editPayDays, 10)  : 0,
+    } : a);
     setAccounts(upd); setEditIdx(null);
     if (old !== editName.trim()) await renameAccount(old, editName.trim());
     await save(upd);
@@ -284,50 +321,136 @@ function AccountsManager({ onBack }) {
             onReorder={handleKanbanReorder}
             unassignedLabel="Ungrouped"
           />
-        ) : (
-          <div className="mgr-list">
-            {uniqueAccounts.length === 0 && <div className="mgr-empty">No accounts yet</div>}
-            {uniqueAccounts.map((a,i) => (
-              <div key={a.name}
-                draggable
-                onDragStart={()=>onDragStart(i)}
-                onDragOver={e=>onDragOver(e,i)}
-                onDragEnd={onDragEnd}
-              >
-                <div className="mgr-list-row">
-                  <span className="mgr-drag-handle">⠿</span>
-                  <div className="mgr-list-content" style={{flex:1}}>
-                    <div className="mgr-list-name">{a.name}</div>
-                    {a.group && <div style={{fontSize:'0.68rem',color:'var(--text-muted)'}}>📁 {a.group}</div>}
-                  </div>
-                  <button className="mgr-edit-btn" onClick={()=>editIdx===i?setEditIdx(null):startEdit(i)}>✏️</button>
-                  <button className="mgr-del-btn"  onClick={()=>removeAccount(a.name)}>✕</button>
-                </div>
-                {editIdx===i&&(
-                  <div className="mgr-edit-panel">
-                    <div className="mgr-edit-label">Edit Account</div>
-                    <div className="form-group" style={{marginBottom:8}}>
-                      <label className="form-label">Name</label>
-                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} spellCheck="true" autoCapitalize="sentences"/>
-                      <div className="mgr-edit-warn">⚠ Renaming updates all transactions</div>
-                    </div>
-                    <div className="form-group" style={{marginBottom:8}}>
-                      <label className="form-label">Group</label>
-                      <select className="form-input" value={editGrp} onChange={e=>setEditGrp(e.target.value)}>
-                        <option value="">No group</option>
-                        {uniqueGroups.map(g=><option key={g}>{g}</option>)}
-                      </select>
-                    </div>
-                    <div style={{display:'flex',gap:8}}>
-                      <button className="btn btn-ghost btn-sm"   onClick={()=>setEditIdx(null)}>Cancel</button>
-                      <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
-                    </div>
-                  </div>
-                )}
+        ) : (() => {
+          // Build grouped sections preserving flat indices for drag/edit/delete
+          const sections = [];
+          uniqueGroups.forEach(grp => {
+            const items = uniqueAccounts.map((a,i)=>({a,i})).filter(({a})=>(a.group||'')===grp);
+            if (items.length) sections.push({ label:grp, icon:'📁', items });
+          });
+          const ungrouped = uniqueAccounts.map((a,i)=>({a,i})).filter(({a})=>!a.group||!uniqueGroups.includes(a.group));
+          if (ungrouped.length) sections.push({ label:'Ungrouped', icon:'📋', items:ungrouped, muted:true });
+
+          const renderEditPanel = (i) => (
+            <div className="mgr-edit-panel">
+              <div className="mgr-edit-label">Edit Account</div>
+              <div className="form-group" style={{marginBottom:8}}>
+                <label className="form-label">Name</label>
+                <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} spellCheck="true" autoCapitalize="sentences"/>
+                <div className="mgr-edit-warn">⚠ Renaming updates all transactions</div>
               </div>
-            ))}
-          </div>
-        )}
+              <div className="form-group" style={{marginBottom:8}}>
+                <label className="form-label">Group</label>
+                <select className="form-input" value={editGrp} onChange={e=>setEditGrp(e.target.value)}>
+                  <option value="">No group</option>
+                  {uniqueGroups.map(g=><option key={g}>{g}</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{marginBottom:8}}>
+                <label className="form-label">Account Type</label>
+                <select className="form-input" value={editAcctType} onChange={e=>{ setEditAcctType(e.target.value); setEditErrors({}); }}>
+                  <option value="">Regular</option>
+                  <option value="Credit Card">💳 Credit Card</option>
+                </select>
+              </div>
+              {editAcctType === 'Credit Card' && (
+                <div className="cc-config-panel">
+                  <div className="cc-config-title">💳 Credit Card Settings</div>
+                  <div className="form-group" style={{marginBottom:8}}>
+                    <label className="form-label">Statement / Settlement Date <span className="form-label-hint">(day of month bill closes)</span></label>
+                    <input
+                      className={`form-input${editErrors.settlementDate?' input-error':''}`}
+                      type="number" inputMode="numeric" min="1" max="28"
+                      placeholder="e.g. 18"
+                      value={editSettleDay}
+                      onChange={e=>{ setEditSettleDay(e.target.value); setEditErrors(p=>({...p,settlementDate:''})); }}
+                    />
+                    {editErrors.settlementDate && <div className="form-error">{editErrors.settlementDate}</div>}
+                    <div className="form-hint">
+                      {editSettleDay && !editErrors.settlementDate && (()=>{
+                        const sd=parseInt(editSettleDay,10);
+                        if(sd>=1&&sd<=28){
+                          const now=new Date(),cy=now.getFullYear(),cm=now.getMonth(),cd=now.getDate();
+                          let cycleStart,cycleEnd;
+                          if(cd>=sd){cycleStart=new Date(cy,cm,sd);cycleEnd=new Date(cy,cm+1,sd-1);}
+                          else{cycleStart=new Date(cy,cm-1,sd);cycleEnd=new Date(cy,cm,sd-1);}
+                          const fmt=d=>d.toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+                          return <span>Current billing cycle: <strong>{fmt(cycleStart)} – {fmt(cycleEnd)}</strong></span>;
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  </div>
+                  <div className="form-group" style={{marginBottom:8}}>
+                    <label className="form-label">Payment Due Days <span className="form-label-hint">(days after statement date)</span></label>
+                    <input
+                      className={`form-input${editErrors.paymentDueDays?' input-error':''}`}
+                      type="number" inputMode="numeric" min="1" max="30"
+                      placeholder="e.g. 18"
+                      value={editPayDays}
+                      onChange={e=>{ setEditPayDays(e.target.value); setEditErrors(p=>({...p,paymentDueDays:''})); }}
+                    />
+                    {editErrors.paymentDueDays && <div className="form-error">{editErrors.paymentDueDays}</div>}
+                    <div className="form-hint">
+                      {editSettleDay && editPayDays && !editErrors.settlementDate && !editErrors.paymentDueDays && (()=>{
+                        const sd=parseInt(editSettleDay,10),pd=parseInt(editPayDays,10);
+                        if(sd>=1&&sd<=28&&pd>=1&&pd<=30){
+                          const now=new Date(),cy=now.getFullYear(),cm=now.getMonth(),cd=now.getDate();
+                          let stmtDate;
+                          if(cd>=sd) stmtDate=new Date(cy,cm,sd); else stmtDate=new Date(cy,cm-1,sd);
+                          const dueDate=new Date(stmtDate); dueDate.setDate(dueDate.getDate()+pd);
+                          return <span>Last due date: <strong>{dueDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}</strong></span>;
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div style={{display:'flex',gap:8}}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>setEditIdx(null)}>Cancel</button>
+                <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="mgr-list">
+              {uniqueAccounts.length === 0 && <div className="mgr-empty">No accounts yet</div>}
+              {sections.map(({label,icon,items,muted})=>(
+                <div key={label}>
+                  <div className="mgr-acct-group-header" style={muted?{opacity:0.55}:{}}>
+                    <span>{icon} {label}</span>
+                    <span className="mgr-acct-group-count">{items.length}</span>
+                  </div>
+                  {items.map(({a,i})=>(
+                    <div key={a.name}
+                      draggable
+                      onDragStart={()=>onDragStart(i)}
+                      onDragOver={e=>onDragOver(e,i)}
+                      onDragEnd={onDragEnd}
+                    >
+                      <div className="mgr-list-row mgr-list-row-indented">
+                        <span className="mgr-drag-handle">⠿</span>
+                        <div className="mgr-list-content" style={{flex:1}}>
+                          <div className="mgr-list-name">{a.name}</div>
+                          {a.acctType==='Credit Card'&&(
+                            <div style={{fontSize:'0.63rem',color:'var(--accent)',fontWeight:700}}>
+                              💳 Credit Card{a.settlementDate?` · settles ${a.settlementDate}th`:''}
+                            </div>
+                          )}
+                        </div>
+                        <button className="mgr-edit-btn" onClick={()=>editIdx===i?setEditIdx(null):startEdit(i)}>✏️</button>
+                        <button className="mgr-del-btn"  onClick={()=>removeAccount(a.name)}>✕</button>
+                      </div>
+                      {editIdx===i && renderEditPanel(i)}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
         <div className="h-8"/>
       </div>
     </div>
