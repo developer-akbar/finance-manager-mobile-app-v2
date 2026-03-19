@@ -227,7 +227,7 @@ function AccountsManager({ onBack }) {
         {/* Groups section */}
         <div className="mgr-section-label">Account Groups</div>
         <div style={{display:'flex',gap:8,padding:'0 var(--page-px) 8px'}}>
-          <input className="form-input" style={{flex:1}} placeholder="New group name" value={newGrp} onChange={e=>setNewGrp(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addGroup()}/>
+          <input className="form-input" style={{flex:1}} placeholder="New group name" value={newGrp} onChange={e=>setNewGrp(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addGroup()} spellCheck="true" autoCapitalize="sentences"/>
           <button className="btn btn-primary btn-sm" onClick={addGroup}>Add</button>
         </div>
         {uniqueGroups.length > 0 && (
@@ -249,7 +249,7 @@ function AccountsManager({ onBack }) {
                 {editGrpIdx===gi&&(
                   <div className="mgr-edit-panel">
                     <div className="mgr-edit-label">Rename Group</div>
-                    <input className="form-input" value={editGrpName} onChange={e=>setEditGrpName(e.target.value)} style={{marginBottom:8}}/>
+                    <input className="form-input" value={editGrpName} onChange={e=>setEditGrpName(e.target.value)} style={{marginBottom:8}} spellCheck="true" autoCapitalize="sentences"/>
                     <div style={{display:'flex',gap:8}}>
                       <button className="btn btn-ghost btn-sm" onClick={()=>setEditGrpIdx(null)}>Cancel</button>
                       <button className="btn btn-primary btn-sm" onClick={saveEditGrp}>Save</button>
@@ -264,7 +264,7 @@ function AccountsManager({ onBack }) {
         {/* Accounts section with List/Kanban tabs */}
         <div className="mgr-section-label">All Accounts ({uniqueAccounts.length})</div>
         <div style={{display:'flex',gap:8,padding:'0 var(--page-px) 8px'}}>
-          <input className="form-input" style={{flex:1}} placeholder="Account name" value={newAcct} onChange={e=>setNewAcct(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addAccount()}/>
+          <input className="form-input" style={{flex:1}} placeholder="Account name" value={newAcct} onChange={e=>setNewAcct(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addAccount()} spellCheck="true" autoCapitalize="sentences"/>
           <button className="btn btn-primary btn-sm" onClick={addAccount}>Add</button>
         </div>
 
@@ -308,7 +308,7 @@ function AccountsManager({ onBack }) {
                     <div className="mgr-edit-label">Edit Account</div>
                     <div className="form-group" style={{marginBottom:8}}>
                       <label className="form-label">Name</label>
-                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)}/>
+                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} spellCheck="true" autoCapitalize="sentences"/>
                       <div className="mgr-edit-warn">⚠ Renaming updates all transactions</div>
                     </div>
                     <div className="form-group" style={{marginBottom:8}}>
@@ -468,7 +468,7 @@ function CategoriesManager({ onBack }) {
               {editCat?.i===i&&editCat?.j===undefined&&(
                 <div className="mgr-edit-panel">
                   <div className="mgr-edit-label">Rename Category</div>
-                  <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} style={{marginBottom:8}}/>
+                  <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} style={{marginBottom:8}} spellCheck="true" autoCapitalize="sentences"/>
                   <div className="mgr-edit-warn">⚠ Updates all matching transactions</div>
                   <div style={{display:'flex',gap:8,marginTop:8}}>
                     <button className="btn btn-ghost btn-sm" onClick={()=>setEditCat(null)}>Cancel</button>
@@ -501,7 +501,7 @@ function CategoriesManager({ onBack }) {
                   {editCat?.i===i&&editCat?.j===j&&(
                     <div className="mgr-edit-panel">
                       <div className="mgr-edit-label">Rename Subcategory</div>
-                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} style={{marginBottom:8}}/>
+                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} style={{marginBottom:8}} spellCheck="true" autoCapitalize="sentences"/>
                       <div style={{display:'flex',gap:8}}>
                         <button className="btn btn-ghost btn-sm" onClick={()=>setEditCat(null)}>Cancel</button>
                         <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
@@ -534,7 +534,7 @@ function CategoriesManager({ onBack }) {
             <div style={{padding:'0 var(--page-px) 8px',display:'flex',gap:8,alignItems:'flex-end'}}>
               <div className="form-group" style={{flex:1}}>
                 <label className="form-label">Name</label>
-                <input className="form-input" value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addCat()}/>
+                <input className="form-input" value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addCat()} spellCheck="true" autoCapitalize="sentences"/>
               </div>
               <div className="form-group">
                 <label className="form-label">Type</label>
@@ -557,7 +557,7 @@ function CategoriesManager({ onBack }) {
               </div>
               <div className="form-group" style={{flex:1}}>
                 <label className="form-label">Name</label>
-                <input className="form-input" value={newSub} onChange={e=>setNewSub(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addSub()}/>
+                <input className="form-input" value={newSub} onChange={e=>setNewSub(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addSub()} spellCheck="true" autoCapitalize="sentences"/>
               </div>
               <button className="btn btn-primary btn-sm" style={{flexShrink:0}} onClick={addSub}>Add</button>
             </div>
@@ -640,17 +640,44 @@ function DataManager({ onBack }) {
     setPending(null);
   };
 
-  const exportCSV = () => {
+  // ── Capacitor-aware file save (no @capacitor/share — avoids Android 14 crash) ──
+  const saveFile = async (content, filename, mimeType) => {
+    const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform?.());
+    if (isNative) {
+      try {
+        const { Filesystem, Directory } = await import('@capacitor/filesystem');
+        // Write directly to Downloads folder — visible in Files app without Share plugin
+        await Filesystem.writeFile({
+          path: filename,
+          data: btoa(unescape(encodeURIComponent(content))),
+          directory: Directory.Documents,
+          recursive: true,
+        });
+        // Show a toast-style alert so user knows where to find it
+        alert(`Saved to Documents/${filename}\n\nOpen your Files app → Internal Storage → Documents`);
+        return;
+      } catch (err) {
+        console.error('Capacitor save failed, falling back to browser:', err);
+      }
+    }
+    // Browser fallback
+    const blob = new Blob([content], { type: mimeType });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  };
+
+  const exportCSV = async () => {
     const hdrs = ['Date','Time','Account','FromAccount','ToAccount','Category','Subcategory','Note','Description','INR','Amount','Currency','Income/Expense','ID'];
     const esc  = v => { const s=String(v||''); return s.includes(',')||s.includes('"')?`"${s.replace(/"/g,'""')}"`:s; };
     const rows = [hdrs.join(','), ...transactions.map(t => hdrs.map(h => esc(t[h])).join(','))];
-    const blob = new Blob([rows.join('\n')], { type:'text/csv' });
-    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`finman_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+    await saveFile(rows.join('\n'), `finman_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
   };
 
-  const exportJSON = () => {
-    const blob = new Blob([JSON.stringify(transactions, null, 2)], { type:'application/json' });
-    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`finman_backup_${new Date().toISOString().split('T')[0]}.json`; a.click();
+  const exportJSON = async () => {
+    await saveFile(JSON.stringify(transactions, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
   };
 
   const pct = importProgress ? Math.round((importProgress.processed / importProgress.total) * 100) : 0;
@@ -856,7 +883,7 @@ function ProfileManager({ onBack }) {
       <div className="settings-card" style={{padding:'14px var(--page-px)'}}>
         <div style={{fontSize:'0.7rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.6px',marginBottom:6}}>Display Name</div>
         <div style={{display:'flex',gap:8}}>
-          <input className="form-input" style={{flex:1}} value={name} onChange={e=>setName(e.target.value)} placeholder="Your name (optional)"/>
+          <input className="form-input" style={{flex:1}} value={name} onChange={e=>setName(e.target.value)} placeholder="Your name (optional)" spellCheck="true" autoCapitalize="sentences"/>
           <button className="btn btn-primary btn-sm" onClick={saveProfile}>Save</button>
         </div>
       </div>
@@ -980,10 +1007,122 @@ function BudgetsManager({ onBack }) {
 }
 
 // ─────────────────────────────────────────────
+// Appearance Manager
+// ─────────────────────────────────────────────
+function AppearanceManager({ onBack }) {
+  const { state, updateSettings, setTheme, setFontSize, setFontFamily } = useApp();
+  const { theme, fontSize } = state;
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState('');
+
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2200); };
+
+  const save = async (updates) => {
+    setSaving(true);
+    try {
+      await updateSettings(updates);
+      showToast('Saved ✓');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fontOptions = [
+    { name: 'Sora', family: "'Sora', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+    { name: 'Inter', family: "'Inter', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+    { name: 'Roboto', family: "'Roboto', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+    { name: 'Open Sans', family: "'Open Sans', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+    { name: 'Lato', family: "'Lato', sans-serif", preview: 'The quick brown fox jumps over the lazy dog' },
+  ];
+
+  const currentFont = state.fontFamily || 'Sora';
+  const fsLabel = fontSize < 0.9 ? 'Small' : fontSize > 1.1 ? 'Large' : 'Medium';
+
+  return (
+    <div className="sub-screen">
+      <div className="page-hdr">
+        <button className="back-btn" onClick={onBack}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <div className="page-hdr-title">Appearance</div>
+        {saving && <span style={{fontSize:'0.7rem',color:'var(--text-muted)',marginLeft:8}}>Saving…</span>}
+        {toast && <span style={{fontSize:'0.7rem',color:'var(--green)',marginLeft:8}}>{toast}</span>}
+      </div>
+
+      <div className="sub-body">
+        {/* Theme */}
+        <div className="mgr-section-label">Theme</div>
+        <div className="settings-card" style={{margin:'0 var(--page-px) 16px'}}>
+          <div className="settings-row" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+            <div className="settings-row-icon" style={{background: theme === 'dark' ? 'var(--bg-card2)' : '#fff3cd'}}>
+              {theme === 'dark' ? '🌙' : '☀️'}
+            </div>
+            <div className="settings-row-content">
+              <div className="settings-row-title">Theme</div>
+              <div className="settings-row-sub">{theme === 'dark' ? 'Dark' : 'Light'} — tap to switch</div>
+            </div>
+            <div style={{padding:'4px 10px',borderRadius:'var(--r-full)',background: theme === 'dark' ? 'var(--bg-card2)' : 'var(--bg-card)',border:'1px solid var(--border)',fontSize:'0.72rem',fontWeight:700,color:'var(--text-secondary)'}}>
+              {theme === 'dark' ? 'Dark' : 'Light'}
+            </div>
+          </div>
+        </div>
+
+        {/* Font Size */}
+        <div className="mgr-section-label">Font Size</div>
+        <div className="settings-card" style={{margin:'0 var(--page-px) 16px'}}>
+          <div style={{padding:'12px var(--page-px)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+              <div style={{fontSize:'0.85rem',fontWeight:700,color:'var(--text-primary)'}}>Font Size</div>
+              <div style={{fontSize:'0.75rem',color:'var(--text-muted)'}}>{fsLabel} ({Math.round(fontSize*100)}%)</div>
+            </div>
+            <div className="font-scale-row" style={{padding:0}}>
+              <span className="font-scale-label" style={{fontSize:'0.65rem'}}>A</span>
+              <input type="range" className="fs-slider" min="0.75" max="1.25" step="0.05"
+                value={fontSize}
+                onChange={e => setFontSize(parseFloat(e.target.value))}
+                onMouseUp={e => setFontSize(parseFloat(e.target.value))}/>
+              <span className="font-scale-label" style={{fontSize:'1rem'}}>A</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Font Family */}
+        <div className="mgr-section-label">Font Family</div>
+        <div className="settings-card" style={{margin:'0 var(--page-px) 16px'}}>
+          {fontOptions.map((font) => (
+            <div key={font.name} className="settings-row" onClick={() => setFontFamily(font.name)}>
+              <div className="settings-row-icon" style={{background:'rgba(167,139,250,0.15)'}}>
+                {currentFont === font.name ? '✓' : 'Aa'}
+              </div>
+              <div className="settings-row-content">
+                <div className="settings-row-title">{font.name}</div>
+                <div className="settings-row-sub" style={{
+                  fontFamily: font.family,
+                  fontSize: '0.85rem',
+                  color: 'var(--text-secondary)',
+                  marginTop: 4
+                }}>
+                  {font.preview}
+                </div>
+              </div>
+              {currentFont === font.name && (
+                <div style={{color:'var(--green)',fontSize:'1.2rem'}}>✓</div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="h-8"/>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // Main Settings screen
 // ─────────────────────────────────────────────
 export default function Settings({ backInterceptRef } = {}) {
-  const { state, setTheme, setFontSize } = useApp();
+  const { state } = useApp();
   const [screen, setScreen] = useState(null);
 
   // Register Android back intercept for sub-screens
@@ -1003,14 +1142,11 @@ export default function Settings({ backInterceptRef } = {}) {
   if (screen==='categories') return <CategoriesManager onBack={()=>setScreen(null)}/>;
   if (screen==='budgets')    return <BudgetsManager    onBack={()=>setScreen(null)}/>;
   if (screen==='profile')    return <ProfileManager    onBack={()=>setScreen(null)}/>;
+  if (screen==='appearance') return <AppearanceManager onBack={()=>setScreen(null)}/>;
 
   const txnCount  = state.transactions.length;
   const acctCount = (state.accounts||[]).length;
   const catCount  = Object.keys(state.categories||{}).length;
-
-  const isDark   = state.theme !== 'light';
-  const fontSize = state.fontSize || 1.0;
-  const fsLabel  = fontSize <= 0.85 ? 'Small' : fontSize >= 1.12 ? 'Large' : 'Default';
 
   return (
     <div className="settings-root">
@@ -1021,33 +1157,10 @@ export default function Settings({ backInterceptRef } = {}) {
       {/* Appearance */}
       <div className="settings-group-label">Appearance</div>
       <div className="settings-card">
-        {/* Theme */}
-        <div className="settings-row" onClick={()=>setTheme(isDark?'light':'dark')}>
-          <div className="settings-row-icon" style={{background:isDark?'var(--bg-card2)':'#fff3cd'}}>
-            {isDark ? '🌙' : '☀️'}
-          </div>
-          <div className="settings-row-content">
-            <div className="settings-row-title">Theme</div>
-            <div className="settings-row-sub">{isDark ? 'Dark' : 'Light'} — tap to switch</div>
-          </div>
-          <div style={{padding:'4px 10px',borderRadius:'var(--r-full)',background:isDark?'var(--bg-card2)':'var(--bg-card)',border:'1px solid var(--border)',fontSize:'0.72rem',fontWeight:700,color:'var(--text-secondary)'}}>
-            {isDark?'Dark':'Light'}
-          </div>
-        </div>
-        {/* Font size */}
-        <div style={{padding:'12px var(--page-px)',borderTop:'1px solid var(--border-light)'}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-            <div style={{fontSize:'0.85rem',fontWeight:700,color:'var(--text-primary)'}}>Font Size</div>
-            <div style={{fontSize:'0.75rem',color:'var(--text-muted)'}}>{fsLabel} ({Math.round(fontSize*100)}%)</div>
-          </div>
-          <div className="font-scale-row" style={{padding:0}}>
-            <span className="font-scale-label" style={{fontSize:'0.65rem'}}>A</span>
-            <input type="range" className="fs-slider" min="0.75" max="1.25" step="0.05"
-              value={fontSize}
-              onChange={e=>setFontSize(parseFloat(e.target.value))}
-              onMouseUp={e=>setFontSize(parseFloat(e.target.value))}/>
-            <span className="font-scale-label" style={{fontSize:'1rem'}}>A</span>
-          </div>
+        <div className="settings-row" onClick={()=>setScreen('appearance')}>
+          <div className="settings-row-icon" style={{background:'rgba(255,193,7,0.15)'}}>🎨</div>
+          <div className="settings-row-content"><div className="settings-row-title">Appearance</div><div className="settings-row-sub">Theme, font size, and font family</div></div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6"/></svg>
         </div>
       </div>
 

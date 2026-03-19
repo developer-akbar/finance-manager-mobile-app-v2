@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { inputToStorage, toInputDate, nowTimeStr } from '../../utils/format.js';
 
@@ -13,16 +13,46 @@ const todayVal = () => {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 };
 
-export default function AddTransaction({ onClose, editTransaction = null, prefillDate = null, prefillAccount = null, prefillCategory = null }) {
+export default function AddTransaction({ onClose, onSaveAndContinue = null, editTransaction = null, copyTransaction = null, prefillDate = null, prefillAccount = null, prefillCategory = null, backInterceptRef = null }) {
   const { state, addTransaction, updateTransaction } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
+  const isCopy = !!copyTransaction;
 
   const lastTime = useMemo(() => {
     if (!transactions.length) return nowTimeStr();
     const sorted = [...transactions].sort((a,b) => { try { return new Date(b.created_at||0)-new Date(a.created_at||0); } catch { return 0; } });
     return sorted[0]?.Time || nowTimeStr();
   }, [transactions]);
+
+  const lastTimeForDate = useMemo(() => {
+    if (!prefillDate || !transactions.length) return null;
+    // Find transactions for the prefill date
+    let dateTxns = transactions.filter(t => t.Date === prefillDate);
+    // If prefillAccount is available, filter by that too
+    if (prefillAccount) {
+      dateTxns = dateTxns.filter(t => (t.Account || t.FromAccount) === prefillAccount || t.ToAccount === prefillAccount);
+    }
+    // If prefillCategory is available, filter by that too
+    if (prefillCategory) {
+      dateTxns = dateTxns.filter(t => t.Category === prefillCategory);
+    }
+    if (!dateTxns.length) return null;
+    // Get the most recent transaction for that date (by time or creation time)
+    const sorted = dateTxns.sort((a, b) => {
+      // First try to sort by time if available
+      if (a.Time && b.Time) {
+        return b.Time.localeCompare(a.Time);
+      }
+      // Fall back to creation time
+      try {
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      } catch {
+        return 0;
+      }
+    });
+    return sorted[0]?.Time || null;
+  }, [prefillDate, prefillAccount, prefillCategory, transactions]);
 
   const [form, setForm] = useState(() => {
     if (isEdit) {
@@ -42,10 +72,27 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
         description: t.Description || '',
       };
     }
+    if (isCopy) {
+      const t = copyTransaction;
+      const rawType = t['Income/Expense'] || 'Expense';
+      return {
+        type:        rawType,
+        amount:      String(t.INR || t.Amount || ''),
+        date:        todayVal(), // Current date for copy
+        time:        nowTimeStr(), // Current time for copy
+        account:     rawType.startsWith('Transfer') ? '' : (t.Account || ''),
+        fromAccount: rawType.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
+        toAccount:   rawType.startsWith('Transfer') ? (t.ToAccount || '') : '',
+        category:    t.Category || '',
+        subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '',
+        note:        t.Note        || '',
+        description: t.Description || '',
+      };
+    }
     return {
       type:'Expense', amount:'',
       date: prefillDate ? (toInputDate(prefillDate) || todayVal()) : todayVal(),
-      time: nowTimeStr(),   // always current time for new transactions
+      time: prefillDate && lastTimeForDate ? lastTimeForDate : nowTimeStr(),
       account: prefillAccount || '',
       fromAccount:'', toAccount:'', category: prefillCategory || '', subcategory:'', note:'', description:'',
     };
@@ -55,10 +102,45 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
   const [saving,   setSaving]   = useState(false);
   const [noteSugs, setNoteSugs] = useState([]);
 
+  // textInputRef — sets all IME attributes at DOM node creation time
+  const textInputRef = (el) => {
+    if (!el) return;
+    el.setAttribute('autocomplete', 'on');
+    el.setAttribute('autocorrect', 'on');
+    el.setAttribute('spellcheck', 'true');
+    el.setAttribute('autocapitalize', 'sentences');
+    el.setAttribute('inputmode', 'text');
+  };
+
+  // Handle back button interception
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    backInterceptRef.current = onClose;
+    return () => {
+      if (backInterceptRef.current === onClose) {
+        backInterceptRef.current = null;
+      }
+    };
+  }, [backInterceptRef, onClose]);
+
   const set = (k, v) => {
     setForm(p => {
-      if (k === 'type')     return { ...p, [k]: v, category:'', subcategory:'' };
-      if (k === 'category') return { ...p, [k]: v, subcategory:'' };
+      if (k === 'type') {
+        const newForm = { ...p, type: v, category: '', subcategory: '' };
+        // From Expense/Income to Transfer
+        if (v === 'Transfer-Out' && p.account) {
+          newForm.fromAccount = p.account;
+          newForm.account = '';
+        } 
+        // From Transfer to Expense/Income
+        else if (p.type === 'Transfer-Out' && v !== 'Transfer-Out' && p.fromAccount) {
+          newForm.account = p.fromAccount;
+          newForm.fromAccount = '';
+          newForm.toAccount = '';
+        }
+        return newForm;
+      }
+      if (k === 'category') return { ...p, [k]: v, subcategory: '' };
       return { ...p, [k]: v };
     });
     if (errors[k]) setErrors(p => ({ ...p, [k]: '' }));
@@ -115,7 +197,7 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
     return Object.keys(e).length === 0;
   };
 
-  const handleSave = async () => {
+  const handleSave = async (shouldContinue = false) => {
     if (!validate() || saving) return;
     setSaving(true);
     try {
@@ -136,7 +218,12 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
       };
       if (isEdit) await updateTransaction(editTransaction._id, data);
       else        await addTransaction(data);
-      onClose();
+      
+      if (shouldContinue && onSaveAndContinue) {
+        onSaveAndContinue();
+      } else {
+        onClose();
+      }
     } finally { setSaving(false); }
   };
 
@@ -166,7 +253,16 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
           <span className="amount-prefix">₹</span>
           <input
             className={`form-input-amount ${errors.amount ? 'err' : ''}`}
-            type="number" inputMode="decimal"
+            type="tel"
+            inputMode="decimal"
+            pattern="[0-9]*([.,][0-9]+)?"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck="false"
+            onKeyDown={e => {
+              const allowed = ['Backspace','Delete','ArrowLeft','ArrowRight','Tab','Enter','.',','];
+              if (!allowed.includes(e.key) && !/^[0-9]$/.test(e.key)) e.preventDefault();
+            }}
             value={form.amount}
             onChange={e => set('amount', e.target.value)}
             autoFocus={!isEdit}/>
@@ -238,7 +334,8 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
 
           <div className="form-group" style={{position:'relative'}}>
             <label className="form-label">Note</label>
-            <input className="form-input" type="text" value={form.note}
+            <input ref={textInputRef} className="form-input" type="text" value={form.note}
+              autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
               onChange={e=>handleNoteChange(e.target.value)}
               onBlur={()=>setTimeout(()=>setNoteSugs([]),180)}/>
             {noteSugs.length > 0 && (
@@ -250,12 +347,21 @@ export default function AddTransaction({ onClose, editTransaction = null, prefil
 
           <div className="form-group">
             <label className="form-label">Description</label>
-            <textarea className="form-input" rows={3} value={form.description} onChange={e=>set('description',e.target.value)}/>
+            <textarea ref={textInputRef} className="form-input" rows={3} value={form.description}
+              autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
+              onChange={e=>set('description',e.target.value)}/>
           </div>
 
-          <button className="btn btn-primary btn-full btn-lg" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : isEdit ? 'Update' : 'Save'}
-          </button>
+          <div className="form-actions" style={{ display: 'flex', gap: '10px' }}>
+            <button className="btn btn-primary btn-lg" style={{ flex: 2 }} onClick={() => handleSave(false)} disabled={saving}>
+              {saving ? 'Saving…' : isEdit ? 'Update' : (isCopy ? 'Copy' : 'Save')}
+            </button>
+            {!isEdit && onSaveAndContinue && (
+              <button className="btn btn-secondary btn-lg" style={{ flex: 1 }} onClick={() => handleSave(true)} disabled={saving}>
+                {saving ? 'Saving…' : 'Continue'}
+              </button>
+            )}
+          </div>
           <div style={{height:16}}/>
         </div>
       </div>

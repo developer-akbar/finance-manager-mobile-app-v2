@@ -62,7 +62,7 @@ function buildBalanceMap(transactions) {
 }
 
 // ── Account Detail ────────────────────────────────────────────────────────────
-function AccountDetail({ acctName, allTxns, onBack }) {
+function AccountDetail({ acctName, allTxns, onBack, backInterceptRef }) {
   const now = new Date();
   const [period,    setPeriod]  = useState('Month');
   const [viewYear,  setViewYear] = useState(now.getFullYear());
@@ -72,6 +72,65 @@ function AccountDetail({ acctName, allTxns, onBack }) {
   const [customTo,  setTo]      = useState('');
   const [addDate,   setAddDate] = useState(null);
   const [showAdd,   setShowAdd] = useState(false);
+  const [selected,  setSelected] = useState(new Set());
+  const [multiMode, setMultiMode] = useState(false);
+  const [copyTxn,   setCopyTxn] = useState(null);
+  const [addKey, setAddKey] = useState(0);
+  const addBackPrevRef = React.useRef(null);
+  const multiModePrevHandler = React.useRef(null);
+  const multiModeHandler = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    const isOpen = Boolean(addDate) || showAdd;
+    if (isOpen) {
+      const handler = () => { setAddDate(null); setShowAdd(false); };
+      addBackPrevRef.current = backInterceptRef.current;
+      backInterceptRef.current = handler;
+      return () => {
+        if (backInterceptRef.current === handler) backInterceptRef.current = addBackPrevRef.current;
+        addBackPrevRef.current = null;
+      };
+    }
+    return undefined;
+  }, [addDate, showAdd, backInterceptRef]);
+
+  // Handle back button interception for multi-mode
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (multiMode) {
+      multiModePrevHandler.current = backInterceptRef.current;
+      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
+      backInterceptRef.current = multiModeHandler.current;
+    } else {
+      if (backInterceptRef.current === multiModeHandler.current) {
+        backInterceptRef.current = multiModePrevHandler.current;
+        multiModePrevHandler.current = null;
+        multiModeHandler.current = null;
+      }
+    }
+  }, [multiMode]);
+
+  const handleCopy = (txn) => {
+    // Create a copy with current date/time but keep all other data
+    setCopyTxn({
+      ...txn,
+      Date: new Date().toISOString().split('T')[0], // Current date
+      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
+      _id: undefined, // Remove ID so it gets a new one
+    });
+  };
+
+  // When viewing an account, treat transfer rows as income/expense for that account.
+  const accountTxnType = (t) => {
+    const base = txnType(t);
+    if (base !== 'transfer') return base;
+    const acct = t.Account || t.FromAccount || '';
+    const dest = t.ToAccount || '';
+    if (acct === acctName) return 'expense';
+    if (dest === acctName) return 'income';
+    return 'transfer';
+  };
 
   const acctTxns = useMemo(() =>
     allTxns.filter(t => {
@@ -143,6 +202,19 @@ function AccountDetail({ acctName, allTxns, onBack }) {
   const swipe = useSwipe(next, prev);
   const periodLabel = period==='Month'?`${MS_F[viewMonth]} ${viewYear}`:period==='Year'?String(viewYear):period==='FY'?fyLabel(viewFY):period==='Custom'&&customFrom&&customTo?`${customFrom} – ${customTo}`:'All Time';
 
+  const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
+
+  const selTotals = useMemo(() => {
+    let inc = 0, exp = 0, xfr = 0;
+    for (const t of periodTxns.filter(r => selected.has(r._id))) {
+      const tp = accountTxnType(t), amt = txnAmount(t);
+      if (tp === 'income') inc += amt;
+      else if (tp === 'expense') exp += amt;
+      else xfr += amt;
+    }
+    return { inc, exp, xfr };
+  }, [periodTxns, selected, acctName]);
+
   const groups = useMemo(() => {
     const map={};
     for(const t of [...periodTxns].sort((a,b)=>parseDate(b.Date)-parseDate(a.Date))){
@@ -164,12 +236,12 @@ function AccountDetail({ acctName, allTxns, onBack }) {
         <div className="entity-badge" style={{background:closingBal>=0?'var(--income-bg)':'var(--expense-bg)',color:closingBal>=0?'var(--income)':'var(--expense)'}}>
           {closingBal>=0?'+':''}{formatINRCompact(Math.abs(closingBal))}
         </div>
-        <button className="add-fab-sm" onClick={()=>setShowAdd(true)} title="Add transaction">
+        <button className="add-fab-sm" onClick={() => { setShowAdd(true); setAddKey(k => k + 1); }} title="Add transaction">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M12 5v14M5 12h14"/></svg>
         </button>
       </div>
 
-      <div className="acct-detail-body" {...swipe}>
+      <div className="acct-detail-body" {...(multiMode ? {} : swipe)}>
         <div style={{padding:'8px var(--page-px) 4px'}}>
           <div className="period-tabs">
             {PERIODS.map(p=><button key={p} className={`period-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</button>)}
@@ -267,32 +339,65 @@ function AccountDetail({ acctName, allTxns, onBack }) {
 
         {groups.length===0
           ? <div className="empty-state"><div className="empty-icon">📭</div><div className="empty-title">No transactions</div><div className="empty-desc">{periodLabel}</div></div>
-          : groups.map(([dk,txns])=>{
-              const gt=calcTotals(txns), d=parseDate(txns[0].Date);
-              return(
-                <div key={dk} className="date-group-container">
-                  <div className="dg-header" onClick={()=>setAddDate(txns[0].Date)}>
-                    <div className="dg-left">
-                      <div className="dg-day">{d.getDate()}</div>
-                      <div className="dg-meta">
-                        <div className="dg-wday">{d.toLocaleDateString('en-IN',{weekday:'short'}).toUpperCase()}</div>
-                        <div className="dg-month">{MS_S[d.getMonth()]} {d.getFullYear()}</div>
+          : <>
+              {multiMode && selected.size > 0 && (
+                <div className="search-sel-bar">
+                  <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
+                    <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
+                    {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
+                    {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
+                    {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
+                    {(selTotals.inc > 0 || selTotals.exp > 0) && (
+                      <span className="sel-total-net" style={{color: selTotals.inc - selTotals.exp >= 0 ? 'var(--income)' : 'var(--expense)'}}>
+                        = {selTotals.inc - selTotals.exp >= 0 ? '+' : '−'}{formatINR(Math.abs(selTotals.inc - selTotals.exp))}
+                      </span>
+                    )}
+                  </div>
+                  <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',flexShrink:0,fontSize:'0.82rem'}} onClick={() => { setMultiMode(false); setSelected(new Set()); }}>Done</button>
+                </div>
+              )}
+              {groups.map(([dk,txns])=>{
+                const gt = txns.reduce((acc, t) => {
+                  const amt = txnAmount(t);
+                  const tp  = accountTxnType(t);
+                  if (tp === 'income') acc.income += amt;
+                  else if (tp === 'expense') acc.expense += amt;
+                  return acc;
+                }, { income: 0, expense: 0 });
+                const d=parseDate(txns[0].Date);
+                return(
+                  <div key={dk} className="date-group-container">
+                    <div className="dg-header" onClick={multiMode ? null : ()=>setAddDate(txns[0].Date)}>
+                      <div className="dg-left">
+                        <div className="dg-day">{d.getDate()}</div>
+                        <div className="dg-meta">
+                          <div className="dg-wday">{d.toLocaleDateString('en-IN',{weekday:'short'}).toUpperCase()}</div>
+                          <div className="dg-month">{MS_S[d.getMonth()]} {d.getFullYear()}</div>
+                        </div>
+                      </div>
+                      <div className="dg-totals">
+                        {gt.income>0&&<span className="dg-inc">+{formatINR(gt.income)}</span>}
+                        {gt.expense>0&&<span className="dg-exp">−{formatINR(gt.expense)}</span>}
                       </div>
                     </div>
-                    <div className="dg-totals">
-                      {gt.income>0&&<span className="dg-inc">+{formatINR(gt.income)}</span>}
-                      {gt.expense>0&&<span className="dg-exp">−{formatINR(gt.expense)}</span>}
-                    </div>
+                    <div className="dg-items">{txns.map(t=><TransactionItem key={t._id} transaction={t}
+                      selected={selected.has(t._id)}
+                      overrideType={accountTxnType(t)}
+                      backInterceptRef={backInterceptRef}
+                      onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
+                      onTap={multiMode ? toggleSel : null}
+                      onCopy={handleCopy}
+                    />)}</div>
                   </div>
-                  <div className="dg-items">{txns.map(t=><TransactionItem key={t._id} transaction={t}/>)}</div>
-                </div>
-              );
-            })
+                );
+              })}
+            </>
         }
         <div style={{height:80}}/>
       </div>
-      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)}/>}
-      {showAdd&&<AddTransaction prefillAccount={acctName} onClose={()=>setShowAdd(false)}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
+      {showAdd&&<AddTransaction key={addKey} prefillAccount={acctName} onClose={()=>setShowAdd(false)} onSaveAndContinue={() => setAddKey(k => k + 1)} backInterceptRef={backInterceptRef}/>}
+      {copyTxn&&<AddTransaction copyTransaction={copyTxn} onClose={()=>setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})} backInterceptRef={backInterceptRef}/>}
     </div>
   );
 }
@@ -361,7 +466,7 @@ export default function Accounts({ backInterceptRef } = {}) {
     return { groups, ungrouped };
   }, [uniqueAccounts, uniqueAccountGroups]);
 
-  if (drill) return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)}/>;
+  if (drill) return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)} backInterceptRef={backInterceptRef} />;
 
   const renderAcctRow = (a) => {
     const name = a.name || a;

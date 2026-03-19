@@ -5,24 +5,86 @@ import AddTransaction from './AddTransaction.jsx';
 import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
-export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false }) {
+export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy }) {
   const [showDetail, setShowDetail] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const pressTimer = React.useRef(null);
+  const handlerRef = React.useRef(null);
+  const prevHandlerRef = React.useRef(null);
+  const startPos = React.useRef(null);
 
-  const type   = txnType(t);
-  const amount = txnAmount(t);
-  const cls    = type === 'income' ? 'income' : type === 'expense' ? 'expense' : 'transfer';
-  const sign   = type === 'income' ? '+' : type === 'expense' ? '−' : '';
-  const label  = type === 'transfer'
+  const baseType = txnType(t);
+  const type     = overrideType || baseType;
+  const amount   = txnAmount(t);
+  const cls      = type === 'income' ? 'income' : type === 'expense' ? 'expense' : 'transfer';
+  const sign     = type === 'income' ? '+' : type === 'expense' ? '−' : '';
+  const isTransfer = baseType === 'transfer';
+  const label    = isTransfer
     ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`
     : (t.Note || t.Category || '—');
-  const subLabel = type !== 'transfer' ? (t.Category || '') : '';
-  const hasAccount = type !== 'transfer' && t.Account;
+  const subLabel = !isTransfer ? (t.Category || '') : '';
+  const hasAccount = !isTransfer && t.Account;
 
-  const handlePressStart = () => {
-    if (onLongPress) pressTimer.current = setTimeout(() => onLongPress(t), 500);
+  const closeDetail = () => {
+    setShowEdit(false);
+    setShowDetail(false);
   };
-  const handlePressEnd = () => { if (pressTimer.current) clearTimeout(pressTimer.current); };
+
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (showDetail || showEdit) {
+      const handler = () => closeDetail();
+      handlerRef.current = handler;
+      prevHandlerRef.current = backInterceptRef.current;
+      backInterceptRef.current = handler;
+      return () => {
+        if (backInterceptRef.current === handler) backInterceptRef.current = prevHandlerRef.current;
+        handlerRef.current = null;
+        prevHandlerRef.current = null;
+      };
+    }
+    return undefined;
+  }, [showDetail, showEdit, backInterceptRef]);
+
+  const handlePressStart = (e) => {
+    if (onLongPress) {
+      pressTimer.current = setTimeout(() => onLongPress(t), 500);
+      // Track initial position for movement detection
+      if (e.touches && e.touches[0]) {
+        startPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      } else {
+        startPos.current = { x: e.clientX, y: e.clientY };
+      }
+    }
+  };
+  const handlePressEnd = () => { 
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    startPos.current = null;
+  };
+  const handlePressMove = (e) => {
+    if (!pressTimer.current || !startPos.current) return;
+    
+    // Calculate movement distance
+    let currentX, currentY;
+    if (e.touches && e.touches[0]) {
+      currentX = e.touches[0].clientX;
+      currentY = e.touches[0].clientY;
+    } else {
+      currentX = e.clientX;
+      currentY = e.clientY;
+    }
+    
+    const deltaX = Math.abs(currentX - startPos.current.x);
+    const deltaY = Math.abs(currentY - startPos.current.y);
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    
+    // Cancel timer if moved more than 10 pixels (tolerance for slight finger movement)
+    if (distance > 10) {
+      clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+      startPos.current = null;
+    }
+  };
 
   const handleTap = () => {
     if (onTap) { onTap(t); return; }
@@ -34,8 +96,8 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
       <div
         className={`txn-item ${selected ? 'selected-item' : ''}`}
         onClick={handleTap}
-        onMouseDown={handlePressStart} onMouseUp={handlePressEnd}
-        onTouchStart={handlePressStart} onTouchEnd={handlePressEnd}
+        onMouseDown={handlePressStart} onMouseUp={handlePressEnd} onMouseMove={handlePressMove}
+        onTouchStart={handlePressStart} onTouchEnd={handlePressEnd} onTouchMove={handlePressMove}
       >
         {/* Colored dot */}
         <div className={`txn-dot txn-dot-${cls}`}/>
@@ -54,13 +116,13 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
         <div className={`txn-amt-col ${cls}`}>{sign}{formatINR(amount)}</div>
       </div>
 
-      {showDetail && <DetailSheet t={t} onClose={() => setShowDetail(false)}/>}
+      {showDetail && <DetailSheet t={t} onClose={() => setShowDetail(false)} onCopy={onCopy} backInterceptRef={backInterceptRef}/>}
     </>
   );
 }
 
 // ── Detail + Edit sheet ──────────────────────────────────────────────────────
-function DetailSheet({ t, onClose }) {
+function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
   const { deleteTransaction } = useApp();
   const [showEdit,   setShowEdit]   = useState(false);
   const [showDelete, setShowDelete] = useState(false);
@@ -71,7 +133,7 @@ function DetailSheet({ t, onClose }) {
   const sign   = type === 'income' ? '+' : type === 'expense' ? '−' : '';
   const isXfer = type === 'transfer';
 
-  if (showEdit) return <AddTransaction editTransaction={t} onClose={onClose}/>;
+  if (showEdit) return <AddTransaction editTransaction={t} onClose={onClose} backInterceptRef={backInterceptRef}/>;
 
   return (
     <>
@@ -102,10 +164,10 @@ function DetailSheet({ t, onClose }) {
           {t.Description && <DPRow label="Description" value={t.Description}/>}
         </div>
         {/* Actions */}
-        <div className="dp-actions">
-          <button className="btn btn-ghost"     onClick={onClose}>Close</button>
-          <button className="btn btn-secondary" onClick={() => setShowEdit(true)}>✏️ Edit</button>
-          <button className="btn btn-danger"    onClick={() => setShowDelete(true)}>🗑 Delete</button>
+        <div className="dp-actions" style={{ display: 'flex', gap: '10px' }}>
+          {onCopy && <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => { onCopy(t); onClose(); }}>📋 Copy</button>}
+          <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowEdit(true)}>✏️ Edit</button>
+          <button className="btn btn-danger" style={{ flex: 1 }} onClick={() => setShowDelete(true)}>🗑 Delete</button>
         </div>
         {/* Delete confirm */}
         {showDelete && (

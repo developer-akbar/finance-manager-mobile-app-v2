@@ -57,7 +57,7 @@ function PeriodControls({ period, setPeriod, viewYear, viewMonth, viewFY, onPrev
 }
 
 // ── Category Detail screen ────────────────────────────────────────────────────
-function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allTxns, onBack }) {
+function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allTxns, onBack, backInterceptRef }) {
   const now = new Date();
   const [period,    setPeriod]   = useState(initPeriod  || 'Month');
   const [viewYear,  setViewYear] = useState(initYear    || now.getFullYear());
@@ -68,6 +68,52 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   const [selSub,    setSelSub]   = useState(null);
   const [addDate,   setAddDate]  = useState(null);
   const [addCat,    setAddCat]   = useState(null);
+  const [selected,  setSelected] = useState(new Set());
+  const [multiMode, setMultiMode] = useState(false);
+  const [copyTxn,   setCopyTxn]   = useState(null);  const addBackPrevRef = React.useRef(null);
+  const multiModePrevHandler = React.useRef(null);
+  const multiModeHandler = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    const isOpen = Boolean(addDate) || Boolean(addCat);
+    if (isOpen) {
+      const handler = () => { setAddDate(null); setAddCat(null); };
+      addBackPrevRef.current = backInterceptRef.current;
+      backInterceptRef.current = handler;
+      return () => {
+        if (backInterceptRef.current === handler) backInterceptRef.current = addBackPrevRef.current;
+        addBackPrevRef.current = null;
+      };
+    }
+    return undefined;
+  }, [addDate, addCat, backInterceptRef]);
+
+  // Handle back button interception for multi-mode
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
+    if (multiMode) {
+      multiModePrevHandler.current = backInterceptRef.current;
+      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
+      backInterceptRef.current = multiModeHandler.current;
+    } else {
+      if (backInterceptRef.current === multiModeHandler.current) {
+        backInterceptRef.current = multiModePrevHandler.current;
+        multiModePrevHandler.current = null;
+        multiModeHandler.current = null;
+      }
+    }
+  }, [multiMode]); // Removed backInterceptRef from deps
+
+  const handleCopy = (txn) => {
+    // Create a copy with current date/time but keep all other data
+    setCopyTxn({
+      ...txn,
+      Date: new Date().toISOString().split('T')[0], // Current date
+      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
+      _id: undefined, // Remove ID so it gets a new one
+    });
+  };
 
   const catTxns = useMemo(() => allTxns.filter(t => t.Category === catName), [allTxns, catName]);
 
@@ -103,6 +149,19 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   const swipe = useSwipe(next, prev);
   const periodLabel = period==='Month'?`${MS_F[viewMonth]} ${viewYear}`:period==='Year'?String(viewYear):period==='FY'?fyLabel(viewFY):period==='Custom'&&customFrom&&customTo?`${customFrom} – ${customTo}`:'All Time';
 
+  const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
+
+  const selTotals = useMemo(() => {
+    let inc = 0, exp = 0, xfr = 0;
+    for (const t of filtTxns.filter(r => selected.has(r._id))) {
+      const tp = txnType(t), amt = txnAmount(t);
+      if (tp === 'income') inc += amt;
+      else if (tp === 'expense') exp += amt;
+      else xfr += amt;
+    }
+    return { inc, exp, xfr };
+  }, [filtTxns, selected]);
+
   const trendData = useMemo(() => {
     const now = new Date();
     return Array.from({length:6}, (_,i) => {
@@ -132,7 +191,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
         <div className="entity-badge" style={{background:'var(--expense-bg)',color:'var(--expense)'}}>{formatINRCompact(totalAmt)}</div>
       </div>
 
-      <div className="cat-detail-body" {...swipe}>
+      <div className="cat-detail-body" {...(multiMode ? {} : swipe)}>
         <PeriodControls period={period} setPeriod={setPeriod}
           viewYear={viewYear} viewMonth={viewMonth} viewFY={viewFY}
           onPrev={prev} onNext={next}
@@ -190,32 +249,57 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
         {/* Date-grouped transactions */}
         {filtTxns.length===0
           ? <div className="empty-state"><div className="empty-icon">📭</div><div className="empty-title">No transactions</div><div className="empty-desc">{periodLabel}</div></div>
-          : groupedTxns.map(([dk,txns])=>{
-              const gt=calcTotals(txns), d=parseDate(txns[0].Date);
-              return (
-                <div key={dk} className="date-group-container">
-                  <div className="dg-header" onClick={()=>{ setAddDate(txns[0].Date); setAddCat(catName); }}>
-                    <div className="dg-left">
-                      <div className="dg-day">{d.getDate()}</div>
-                      <div className="dg-meta">
-                        <div className="dg-wday">{d.toLocaleDateString('en-IN',{weekday:'short'}).toUpperCase()}</div>
-                        <div className="dg-month">{MS_S[d.getMonth()]} {d.getFullYear()}</div>
+          : <>
+              {multiMode && selected.size > 0 && (
+                <div className="search-sel-bar">
+                  <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
+                    <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
+                    {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
+                    {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
+                    {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
+                    {(selTotals.inc > 0 || selTotals.exp > 0) && (
+                      <span className="sel-total-net" style={{color: selTotals.inc - selTotals.exp >= 0 ? 'var(--income)' : 'var(--expense)'}}>
+                        = {selTotals.inc - selTotals.exp >= 0 ? '+' : '−'}{formatINR(Math.abs(selTotals.inc - selTotals.exp))}
+                      </span>
+                    )}
+                  </div>
+                  <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',flexShrink:0,fontSize:'0.82rem'}} onClick={() => { setMultiMode(false); setSelected(new Set()); }}>Done</button>
+                </div>
+              )}
+              {groupedTxns.map(([dk,txns])=>{
+                const gt=calcTotals(txns), d=parseDate(txns[0].Date);
+                return (
+                  <div key={dk} className="date-group-container">
+                    <div className="dg-header" onClick={multiMode ? null : ()=>{ setAddDate(txns[0].Date); setAddCat(catName); }}>
+                      <div className="dg-left">
+                        <div className="dg-day">{d.getDate()}</div>
+                        <div className="dg-meta">
+                          <div className="dg-wday">{d.toLocaleDateString('en-IN',{weekday:'short'}).toUpperCase()}</div>
+                          <div className="dg-month">{MS_S[d.getMonth()]} {d.getFullYear()}</div>
+                        </div>
+                      </div>
+                      <div className="dg-totals">
+                        {gt.income>0&&<span className="dg-inc">+{formatINR(gt.income)}</span>}
+                        {gt.expense>0&&<span className="dg-exp">−{formatINR(gt.expense)}</span>}
                       </div>
                     </div>
-                    <div className="dg-totals">
-                      {gt.income>0&&<span className="dg-inc">+{formatINR(gt.income)}</span>}
-                      {gt.expense>0&&<span className="dg-exp">−{formatINR(gt.expense)}</span>}
-                    </div>
+                    <div className="dg-items">{txns.map(t=><TransactionItem key={t._id} transaction={t}
+                      selected={selected.has(t._id)}
+                      backInterceptRef={backInterceptRef}
+                      onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
+                      onTap={multiMode ? toggleSel : null}
+                      onCopy={handleCopy}
+                    />)}</div>
                   </div>
-                  <div className="dg-items">{txns.map(t=><TransactionItem key={t._id} transaction={t}/>)}</div>
-                </div>
-              );
-            })
+                );
+              })}
+            </>
         }
         <div style={{height:24}}/>
       </div>
 
-      {addDate&&<AddTransaction prefillDate={addDate} prefillCategory={addCat} onClose={()=>{ setAddDate(null); setAddCat(null); }}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillCategory={addCat} onClose={()=>{ setAddDate(null); setAddCat(null); }} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
+      {copyTxn&&<AddTransaction copyTransaction={copyTxn} onClose={()=>setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})} backInterceptRef={backInterceptRef}/>}
     </div>
   );
 }
@@ -284,7 +368,7 @@ export default function Categories({ backInterceptRef } = {}) {
   if (drill) return (
     <CategoryDetail catName={drill} allTxns={transactions}
       initPeriod={period} initYear={viewYear} initMonth={viewMonth} initFY={viewFY}
-      onBack={()=>setDrill(null)}/>
+      onBack={()=>setDrill(null)} backInterceptRef={backInterceptRef} />
   );
 
   return (
@@ -305,11 +389,11 @@ export default function Categories({ backInterceptRef } = {}) {
             <div className="cat-type-tabs">
               <button className={`cat-type-tab exp-tab ${catType==='Expense'?'active':''}`} onClick={()=>setCatType('Expense')}>
                 <div style={{fontSize:'0.72rem',fontWeight:700}}>Expense</div>
-                <div style={{fontSize:'0.74rem',fontFamily:'var(--font-mono)',fontWeight:800,color:catType==='Expense'?'var(--expense)':'var(--text-muted)',marginTop:2}}>{formatINR(expTotal)}</div>
+                <div style={{fontSize:'0.74rem',fontFamily:'var(--font)',fontWeight:800,color:catType==='Expense'?'var(--expense)':'var(--text-muted)',marginTop:2}}>{formatINR(expTotal)}</div>
               </button>
               <button className={`cat-type-tab inc-tab ${catType==='Income'?'active':''}`} onClick={()=>setCatType('Income')}>
                 <div style={{fontSize:'0.72rem',fontWeight:700}}>Income</div>
-                <div style={{fontSize:'0.74rem',fontFamily:'var(--font-mono)',fontWeight:800,color:catType==='Income'?'var(--income)':'var(--text-muted)',marginTop:2}}>{formatINR(incTotal)}</div>
+                <div style={{fontSize:'0.74rem',fontFamily:'var(--font)',fontWeight:800,color:catType==='Income'?'var(--income)':'var(--text-muted)',marginTop:2}}>{formatINR(incTotal)}</div>
               </button>
             </div>
           </div>
