@@ -227,7 +227,7 @@ function AccountsManager({ onBack }) {
         {/* Groups section */}
         <div className="mgr-section-label">Account Groups</div>
         <div style={{display:'flex',gap:8,padding:'0 var(--page-px) 8px'}}>
-          <input className="form-input" style={{flex:1}} placeholder="New group name" value={newGrp} onChange={e=>setNewGrp(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addGroup()}/>
+          <input className="form-input" style={{flex:1}} placeholder="New group name" value={newGrp} onChange={e=>setNewGrp(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addGroup()} spellCheck="true" autoCapitalize="sentences"/>
           <button className="btn btn-primary btn-sm" onClick={addGroup}>Add</button>
         </div>
         {uniqueGroups.length > 0 && (
@@ -249,7 +249,7 @@ function AccountsManager({ onBack }) {
                 {editGrpIdx===gi&&(
                   <div className="mgr-edit-panel">
                     <div className="mgr-edit-label">Rename Group</div>
-                    <input className="form-input" value={editGrpName} onChange={e=>setEditGrpName(e.target.value)} style={{marginBottom:8}}/>
+                    <input className="form-input" value={editGrpName} onChange={e=>setEditGrpName(e.target.value)} style={{marginBottom:8}} spellCheck="true" autoCapitalize="sentences"/>
                     <div style={{display:'flex',gap:8}}>
                       <button className="btn btn-ghost btn-sm" onClick={()=>setEditGrpIdx(null)}>Cancel</button>
                       <button className="btn btn-primary btn-sm" onClick={saveEditGrp}>Save</button>
@@ -264,7 +264,7 @@ function AccountsManager({ onBack }) {
         {/* Accounts section with List/Kanban tabs */}
         <div className="mgr-section-label">All Accounts ({uniqueAccounts.length})</div>
         <div style={{display:'flex',gap:8,padding:'0 var(--page-px) 8px'}}>
-          <input className="form-input" style={{flex:1}} placeholder="Account name" value={newAcct} onChange={e=>setNewAcct(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addAccount()}/>
+          <input className="form-input" style={{flex:1}} placeholder="Account name" value={newAcct} onChange={e=>setNewAcct(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addAccount()} spellCheck="true" autoCapitalize="sentences"/>
           <button className="btn btn-primary btn-sm" onClick={addAccount}>Add</button>
         </div>
 
@@ -308,7 +308,7 @@ function AccountsManager({ onBack }) {
                     <div className="mgr-edit-label">Edit Account</div>
                     <div className="form-group" style={{marginBottom:8}}>
                       <label className="form-label">Name</label>
-                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)}/>
+                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} spellCheck="true" autoCapitalize="sentences"/>
                       <div className="mgr-edit-warn">⚠ Renaming updates all transactions</div>
                     </div>
                     <div className="form-group" style={{marginBottom:8}}>
@@ -468,7 +468,7 @@ function CategoriesManager({ onBack }) {
               {editCat?.i===i&&editCat?.j===undefined&&(
                 <div className="mgr-edit-panel">
                   <div className="mgr-edit-label">Rename Category</div>
-                  <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} style={{marginBottom:8}}/>
+                  <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} style={{marginBottom:8}} spellCheck="true" autoCapitalize="sentences"/>
                   <div className="mgr-edit-warn">⚠ Updates all matching transactions</div>
                   <div style={{display:'flex',gap:8,marginTop:8}}>
                     <button className="btn btn-ghost btn-sm" onClick={()=>setEditCat(null)}>Cancel</button>
@@ -501,7 +501,7 @@ function CategoriesManager({ onBack }) {
                   {editCat?.i===i&&editCat?.j===j&&(
                     <div className="mgr-edit-panel">
                       <div className="mgr-edit-label">Rename Subcategory</div>
-                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} style={{marginBottom:8}}/>
+                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} style={{marginBottom:8}} spellCheck="true" autoCapitalize="sentences"/>
                       <div style={{display:'flex',gap:8}}>
                         <button className="btn btn-ghost btn-sm" onClick={()=>setEditCat(null)}>Cancel</button>
                         <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
@@ -534,7 +534,7 @@ function CategoriesManager({ onBack }) {
             <div style={{padding:'0 var(--page-px) 8px',display:'flex',gap:8,alignItems:'flex-end'}}>
               <div className="form-group" style={{flex:1}}>
                 <label className="form-label">Name</label>
-                <input className="form-input" value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addCat()}/>
+                <input className="form-input" value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addCat()} spellCheck="true" autoCapitalize="sentences"/>
               </div>
               <div className="form-group">
                 <label className="form-label">Type</label>
@@ -557,7 +557,7 @@ function CategoriesManager({ onBack }) {
               </div>
               <div className="form-group" style={{flex:1}}>
                 <label className="form-label">Name</label>
-                <input className="form-input" value={newSub} onChange={e=>setNewSub(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addSub()}/>
+                <input className="form-input" value={newSub} onChange={e=>setNewSub(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addSub()} spellCheck="true" autoCapitalize="sentences"/>
               </div>
               <button className="btn btn-primary btn-sm" style={{flexShrink:0}} onClick={addSub}>Add</button>
             </div>
@@ -640,17 +640,44 @@ function DataManager({ onBack }) {
     setPending(null);
   };
 
-  const exportCSV = () => {
+  // ── Capacitor-aware file save (no @capacitor/share — avoids Android 14 crash) ──
+  const saveFile = async (content, filename, mimeType) => {
+    const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform?.());
+    if (isNative) {
+      try {
+        const { Filesystem, Directory } = await import('@capacitor/filesystem');
+        // Write directly to Downloads folder — visible in Files app without Share plugin
+        await Filesystem.writeFile({
+          path: filename,
+          data: btoa(unescape(encodeURIComponent(content))),
+          directory: Directory.Documents,
+          recursive: true,
+        });
+        // Show a toast-style alert so user knows where to find it
+        alert(`Saved to Documents/${filename}\n\nOpen your Files app → Internal Storage → Documents`);
+        return;
+      } catch (err) {
+        console.error('Capacitor save failed, falling back to browser:', err);
+      }
+    }
+    // Browser fallback
+    const blob = new Blob([content], { type: mimeType });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  };
+
+  const exportCSV = async () => {
     const hdrs = ['Date','Time','Account','FromAccount','ToAccount','Category','Subcategory','Note','Description','INR','Amount','Currency','Income/Expense','ID'];
     const esc  = v => { const s=String(v||''); return s.includes(',')||s.includes('"')?`"${s.replace(/"/g,'""')}"`:s; };
     const rows = [hdrs.join(','), ...transactions.map(t => hdrs.map(h => esc(t[h])).join(','))];
-    const blob = new Blob([rows.join('\n')], { type:'text/csv' });
-    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`finman_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+    await saveFile(rows.join('\n'), `finman_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
   };
 
-  const exportJSON = () => {
-    const blob = new Blob([JSON.stringify(transactions, null, 2)], { type:'application/json' });
-    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`finman_backup_${new Date().toISOString().split('T')[0]}.json`; a.click();
+  const exportJSON = async () => {
+    await saveFile(JSON.stringify(transactions, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
   };
 
   const pct = importProgress ? Math.round((importProgress.processed / importProgress.total) * 100) : 0;
@@ -856,7 +883,7 @@ function ProfileManager({ onBack }) {
       <div className="settings-card" style={{padding:'14px var(--page-px)'}}>
         <div style={{fontSize:'0.7rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.6px',marginBottom:6}}>Display Name</div>
         <div style={{display:'flex',gap:8}}>
-          <input className="form-input" style={{flex:1}} value={name} onChange={e=>setName(e.target.value)} placeholder="Your name (optional)"/>
+          <input className="form-input" style={{flex:1}} value={name} onChange={e=>setName(e.target.value)} placeholder="Your name (optional)" spellCheck="true" autoCapitalize="sentences"/>
           <button className="btn btn-primary btn-sm" onClick={saveProfile}>Save</button>
         </div>
       </div>
