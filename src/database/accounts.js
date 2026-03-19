@@ -5,10 +5,13 @@ import { v4 as uuid } from 'uuid';
 export const getAccounts = async () => {
   const r = await getDB().query('SELECT * FROM accounts ORDER BY sort_order,name');
   return (r.values || []).map(a => ({
-    id:    a.id,
-    name:  a.name   || '',
-    group: a.group_name || '',   // DB col = group_name, app field = group
-    icon:  '💳',
+    id:              a.id,
+    name:            a.name        || '',
+    group:           a.group_name  || '',   // DB col = group_name, app field = group
+    icon:            '💳',
+    acctType:        a.acct_type   || '',
+    settlementDate:  a.settlement_date  ? Number(a.settlement_date)  : 0,
+    paymentDueDays:  a.payment_due_days ? Number(a.payment_due_days) : 0,
   }));
 };
 
@@ -31,9 +34,12 @@ export const replaceAccounts = async (list) => {
     const a    = typeof uniqueList[i] === 'string' ? { name: uniqueList[i] } : uniqueList[i];
     const name = a.name || '';
     const grp  = a.group || a.group_name || '';
+    const acctType       = a.acctType       || '';
+    const settlementDate = a.settlementDate ? Number(a.settlementDate) : 0;
+    const paymentDueDays = a.paymentDueDays ? Number(a.paymentDueDays) : 0;
     await db.run(
-      'INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at) VALUES (?,?,?,?,?)',
-      [a.id || uuid(), name, grp, i, now]
+      'INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days) VALUES (?,?,?,?,?,?,?,?)',
+      [a.id || uuid(), name, grp, i, now, acctType, settlementDate, paymentDueDays]
     );
   }
 };
