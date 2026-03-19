@@ -43,7 +43,7 @@
 .quick-nav-label { font-size:0.62rem; font-weight:700; color:var(--text-secondary); white-space:nowrap; }
 
 /* ── Tip ── */
-.dash-tip-card { margin:0 var(--page-px) 12px; background:rgba(0,229,160,0.06); border:1px solid rgba(0,229,160,0.15); border-radius:var(--r-lg); padding:10px 14px; display:flex; align-items:flex-start; gap:10px; }
+.dash-tip-card { margin:0 var(--page-px) 12px; background:rgba(0,229,160,0.06); border:1px solid rgba(0,229,160,0.15); border-radius:var(--r-lg); padding:10px 14px; display:flex; align-items:center; gap:10px; }
 .dash-tip-icon { font-size:1.2rem; flex-shrink:0; }
 .dash-tip-text { font-size:0.75rem; color:var(--text-secondary); line-height:1.5; font-weight:500; }
 
