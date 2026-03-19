@@ -11,6 +11,7 @@ import PinLock from './components/Common/PinLock.jsx';
 import AddTransaction from './components/Transactions/AddTransaction.jsx';
 import { initDB } from './database/index.js';
 import './styles/globals.css';
+import './SplashScreen.css';
 
 /**
  * Safe-area injection — runs synchronously before React paints.
@@ -66,16 +67,28 @@ applyAndroidSafeArea();
 // receive an `onBack` prop.  They do NOT call navigate(); instead they manage their
 // own local state (drill / screen).  The back button calls the ref callback when set.
 
+
+// ── Splash screen ─────────────────────────────────────────────────────────────
+const SplashScreen = () => (
+  <div className="splash-screen">
+    <div className="splash-logo-wrap">
+      <img src="/icon-xhdpi.png" alt="FinMan" className="splash-logo" />
+      <div className="splash-app-name">FinMan</div>
+      <div className="splash-tagline">Your Personal Finance Manager</div>
+    </div>
+    <div className="splash-spinner"/>
+  </div>
+);
+
 function AppInner() {
   const { state, navigate } = useApp();
   const { currentView } = state;
+
+  // ALL hooks must be called unconditionally before any early return
   const [showAdd, setShowAdd] = useState(false);
   const [addKey, setAddKey] = useState(0);
-  // Increment a key for each tab when it's re-tapped — child uses key= to force remount (reset)
   const [resetKeys, setResetKeys] = useState({ transactions:0, accounts:0, categories:0, settings:0, dashboard:0 });
   const handleNavTap = (id) => setResetKeys(k => ({ ...k, [id]: (k[id]||0)+1 }));
-
-  // Child screens register a "handle back" callback here
   const backInterceptRef = React.useRef(null);
 
   useEffect(() => {
@@ -102,6 +115,9 @@ function AppInner() {
     };
   }, [currentView, showAdd, navigate]);
 
+  // Safe to return early here — all hooks have already been called above
+  if (state.loading) return <SplashScreen />;
+
   const screen = (() => {
     switch (currentView) {
       case 'transactions': return <Transactions key={resetKeys.transactions} onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef}/>;
@@ -126,11 +142,6 @@ function AppInner() {
 export default function App() {
   const [ready, setReady] = React.useState(false);
   useEffect(() => { initDB().then(() => setReady(true)).catch(console.error); }, []);
-  if (!ready) return (
-    <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100dvh',background:'#0a0f1e',flexDirection:'column',gap:16}}>
-      <div style={{width:40,height:40,border:'3px solid #00e5a0',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-    </div>
-  );
+  if (!ready) return <SplashScreen />;
   return <AppProvider><AppInner/></AppProvider>;
 }
