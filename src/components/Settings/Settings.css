@@ -64,3 +64,13 @@
 .mgr-acct-group-header { display:flex; align-items:center; justify-content:space-between; padding:6px var(--page-px); background:var(--gold-bg); border-top:1px solid var(--border); border-bottom:1px solid var(--border); font-size:0.7rem; font-weight:800; color:var(--gold); letter-spacing:0.3px; }
 .mgr-acct-group-count  { font-size:0.65rem; font-weight:700; color:var(--text-muted); background:var(--bg-card2); border-radius:10px; padding:1px 7px; }
 .mgr-list-row-indented { padding-left:calc(var(--page-px) + 8px); }
+
+/* ── Profile card at top of Settings ─────────────────────────────────────── */
+.settings-profile-card { display:flex; align-items:center; gap:14px; margin:0 var(--page-px) 18px; padding:14px 16px; background:var(--bg-card); border-radius:14px; border:1px solid var(--border); cursor:pointer; transition:background 0.12s; }
+.settings-profile-card:active { background:var(--bg-hover); }
+.settings-profile-avatar { width:46px; height:46px; border-radius:50%; background:linear-gradient(135deg,#7c6ff7,#4f9ef8); display:flex; align-items:center; justify-content:center; font-size:1.3rem; font-weight:800; color:#fff; flex-shrink:0; }
+.settings-profile-info { flex:1; min-width:0; }
+.settings-profile-name { font-size:0.95rem; font-weight:800; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.settings-profile-sub  { font-size:0.7rem; color:var(--text-muted); margin-top:2px; }
+.settings-profile-edit-btn { flex-shrink:0; padding:6px 14px; border-radius:8px; border:1px solid var(--border); background:var(--bg-card2); color:var(--text-primary); font-size:0.78rem; font-weight:700; cursor:pointer; transition:background 0.12s; }
+.settings-profile-edit-btn:active { background:var(--bg-hover); }
