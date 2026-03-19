@@ -115,8 +115,22 @@ export default function AddTransaction({ onClose, onSaveAndContinue = null, edit
 
   const set = (k, v) => {
     setForm(p => {
-      if (k === 'type')     return { ...p, [k]: v, category:'', subcategory:'' };
-      if (k === 'category') return { ...p, [k]: v, subcategory:'' };
+      if (k === 'type') {
+        const newForm = { ...p, type: v, category: '', subcategory: '' };
+        // From Expense/Income to Transfer
+        if (v === 'Transfer-Out' && p.account) {
+          newForm.fromAccount = p.account;
+          newForm.account = '';
+        } 
+        // From Transfer to Expense/Income
+        else if (p.type === 'Transfer-Out' && v !== 'Transfer-Out' && p.fromAccount) {
+          newForm.account = p.fromAccount;
+          newForm.fromAccount = '';
+          newForm.toAccount = '';
+        }
+        return newForm;
+      }
+      if (k === 'category') return { ...p, [k]: v, subcategory: '' };
       return { ...p, [k]: v };
     });
     if (errors[k]) setErrors(p => ({ ...p, [k]: '' }));
