@@ -234,6 +234,10 @@ select.form-input {
   padding-top: var(--safe-top);
   padding-bottom: var(--safe-bottom);
   box-sizing: border-box;
+  /* Android WebView IME fix: composited layer re-enables autocorrect/suggestions */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  -webkit-overflow-scrolling: touch;
 }
 @keyframes fadeSlideIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
 

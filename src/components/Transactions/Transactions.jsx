@@ -137,6 +137,14 @@ function MonthlyView({ transactions, onMonthClick }) {
 
 // ── Search view ───────────────────────────────────────────────────────────────
 function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy }) {
+  const textInputRef = (el) => {
+    if (!el) return;
+    el.setAttribute('autocomplete', 'on');
+    el.setAttribute('autocorrect', 'on');
+    el.setAttribute('spellcheck', 'true');
+    el.setAttribute('autocapitalize', 'sentences');
+    el.setAttribute('inputmode', 'text');
+  };
   const [query,     setQuery]     = useState('');
   const [debouncedQ,setDebouncedQ]= useState('');
   const debTimer = useRef(null);
@@ -311,7 +319,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
         </button>
         <div className="search-input-wrap">
           <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" style={{width:14,height:14,flexShrink:0}}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input autoFocus type="text" className="search-input" value={query}
+          <input ref={textInputRef} autoFocus type="text" className="search-input" value={query}
             onChange={e => handleNoteInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.target.blur(); triggerSearch(); } }}
             onBlur={() => setTimeout(() => setNoteSugs([]), 180)}
