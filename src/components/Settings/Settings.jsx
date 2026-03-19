@@ -1277,6 +1277,18 @@ export default function Settings({ backInterceptRef } = {}) {
         <div style={{fontSize:'1.4rem',fontWeight:800}}>Settings</div>
       </div>
 
+      {/* Profile card — top of settings */}
+      <div className="settings-profile-card" onClick={()=>setScreen('profile')}>
+        <div className="settings-profile-avatar">
+          {(state.settings?.profileName || state.settings?.name || 'A').trim().charAt(0).toUpperCase()}
+        </div>
+        <div className="settings-profile-info">
+          <div className="settings-profile-name">{state.settings?.profileName || state.settings?.name || 'Your Name'}</div>
+          <div className="settings-profile-sub">{state.settings?.pin ? '🔒 PIN enabled' : 'Finance Manager v2'}</div>
+        </div>
+        <button className="settings-profile-edit-btn" onClick={e=>{e.stopPropagation();setScreen('profile');}}>Edit</button>
+      </div>
+
       {/* Appearance */}
       <div className="settings-group-label">Appearance</div>
       <div className="settings-card">
@@ -1317,22 +1329,12 @@ export default function Settings({ backInterceptRef } = {}) {
         </div>
       </div>
 
-      {/* Profile & Security */}
-      <div className="settings-group-label">Profile & Security</div>
-      <div className="settings-card">
-        <div className="settings-row" onClick={()=>setScreen('profile')}>
-          <div className="settings-row-icon" style={{background:'rgba(255,180,0,0.15)'}}>👤</div>
-          <div className="settings-row-content"><div className="settings-row-title">Profile & PIN Lock</div><div className="settings-row-sub">{state.settings?.pin ? 'PIN set — app locked after 10s idle' : 'Set a PIN to lock app when idle'}</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6"/></svg>
-        </div>
-      </div>
-
       {/* About */}
       <div className="settings-group-label">About</div>
       <div className="settings-card">
         <div className="settings-row">
           <div className="settings-row-icon" style={{background:'rgba(0,229,160,0.12)'}}>💰</div>
-          <div className="settings-row-content"><div className="settings-row-title">FinMan</div><div className="settings-row-sub">v2.2.1.1 — Built for you by Akbar 💚</div></div>
+          <div className="settings-row-content"><div className="settings-row-title">FinMan</div><div className="settings-row-sub">v2.2.1.3 — Built for you by Akbar 💚</div></div>
         </div>
       </div>
 
