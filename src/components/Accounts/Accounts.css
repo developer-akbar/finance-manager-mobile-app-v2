@@ -66,3 +66,23 @@
 .cc-cycle-info-strip strong { color:var(--accent); }
 .cc-cycle-badge { display:inline-block; font-size:0.58rem; font-weight:700; color:var(--accent); background:rgba(0,229,160,0.15); border-radius:4px; padding:1px 5px; margin-left:6px; text-transform:uppercase; letter-spacing:0.3px; vertical-align:middle; }
 
+
+/* ── CC Due Date Alert Banner ────────────────────────────────────────────── */
+.cc-due-banner { display:flex; align-items:flex-start; gap:10px; margin:6px var(--page-px) 2px; padding:10px 12px; border-radius:12px; border:1px solid; }
+.cc-due-banner.warning  { background:rgba(255,180,0,0.08); border-color:rgba(255,180,0,0.35); }
+.cc-due-banner.urgent   { background:rgba(255,120,0,0.10); border-color:rgba(255,120,0,0.45); }
+.cc-due-banner.overdue  { background:rgba(255,77,106,0.10); border-color:rgba(255,77,106,0.45); }
+.cc-due-banner-icon  { font-size:1.1rem; flex-shrink:0; margin-top:1px; }
+.cc-due-banner-body  { flex:1; min-width:0; }
+.cc-due-banner-title { font-size:0.78rem; font-weight:700; color:var(--text-primary); }
+.cc-due-banner-label { color:var(--gold); }
+.cc-due-banner.urgent  .cc-due-banner-label { color:#ff7800; }
+.cc-due-banner.overdue .cc-due-banner-label { color:var(--expense); }
+.cc-due-banner-sub   { font-size:0.68rem; color:var(--text-muted); margin-top:2px; }
+.cc-due-banner-dismiss { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:0.8rem; flex-shrink:0; padding:0 0 0 6px; line-height:1; }
+
+/* ── CC Due Date Dot on account row ─────────────────────────────────────── */
+.cc-due-dot { display:inline-flex; align-items:center; justify-content:center; min-width:16px; height:16px; border-radius:8px; font-size:0.58rem; font-weight:800; padding:0 4px; margin-left:6px; vertical-align:middle; flex-shrink:0; }
+.cc-due-dot.warn    { background:rgba(255,180,0,0.20); color:#f5a623; border:1px solid rgba(255,180,0,0.4); }
+.cc-due-dot.urgent  { background:rgba(255,120,0,0.20); color:#ff7800; border:1px solid rgba(255,120,0,0.5); }
+.cc-due-dot.overdue { background:rgba(255,77,106,0.20); color:var(--expense); border:1px solid rgba(255,77,106,0.5); }

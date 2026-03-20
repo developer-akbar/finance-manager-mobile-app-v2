@@ -115,6 +115,46 @@ export function isCreditCard(acct) {
   return /\bcredit\b/i.test(acct.name || '');
 }
 
+/**
+ * Returns the next payment due date for a CC account, or null if not configured.
+ * Due date = paymentDueDays days after the last settlement date.
+ */
+export function ccNextDueDate(acct, today = new Date()) {
+  if (!acct || !acct.settlementDate || !acct.paymentDueDays) return null;
+  const sd = acct.settlementDate, pd = acct.paymentDueDays;
+  const cy = today.getFullYear(), cm = today.getMonth(), cd = today.getDate();
+  // Last settlement date (the one that has already passed or is today)
+  let lastSettlement;
+  if (cd >= sd) lastSettlement = new Date(cy, cm, sd);
+  else          lastSettlement = new Date(cy, cm - 1, sd);
+  const due = new Date(lastSettlement);
+  due.setDate(due.getDate() + pd);
+  // If due date already passed this cycle, it means next due is next month's
+  if (due < today) {
+    const nextSettlement = new Date(cy, cm, sd); // this month's settlement (if cd < sd, this is future)
+    if (cd < sd) {
+      // settlement is still upcoming — last settlement was previous month, already computed
+      // due would be from that, already in the past → next due = next month settlement + pd
+    }
+    const ns2 = new Date(lastSettlement);
+    ns2.setMonth(ns2.getMonth() + 1);
+    const due2 = new Date(ns2);
+    due2.setDate(due2.getDate() + pd);
+    return due2;
+  }
+  return due;
+}
+
+/**
+ * Returns days until due (negative = overdue). null if no due date configured.
+ */
+export function ccDaysUntilDue(acct, today = new Date()) {
+  const due = ccNextDueDate(acct, today);
+  if (!due) return null;
+  const diff = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
+  return diff;
+}
+
 const MS_F = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const PERIODS = ['Month','Year','FY','All','Custom','CC Cycle'];
 
@@ -383,9 +423,40 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
     return { inc, exp, xfr };
   }, [periodTxns, selected, acctName]);
 
+  // Running balance map: txn._id → cumulative account balance AFTER that transaction.
+  // Built from ALL account transactions in chronological order (oldest first).
+  const runningBalMap = useMemo(() => {
+    const sorted = [...acctTxns].sort((a,b) => {
+      const da = parseDate(a.Date), db = parseDate(b.Date);
+      if (da - db !== 0) return da - db;
+      // same date: sort by time ascending
+      return (a.Time || '').localeCompare(b.Time || '');
+    });
+    let bal = 0;
+    const map = {};
+    for (const t of sorted) {
+      const amt  = txnAmount(t);
+      const type = String(t['Income/Expense'] || '').trim();
+      const acct = t.Account || t.FromAccount || '';
+      const dest = t.ToAccount || '';
+      if (type === 'Income'       && acct === acctName) bal += amt;
+      else if (type === 'Expense' && acct === acctName) bal -= amt;
+      else if (type === 'Transfer-Out') {
+        if (acct === acctName) bal -= amt;
+        if (dest === acctName) bal += amt;
+      }
+      map[t._id] = bal;
+    }
+    return map;
+  }, [acctTxns, acctName]);
+
   const groups = useMemo(() => {
     const map={};
-    for(const t of [...periodTxns].sort((a,b)=>parseDate(b.Date)-parseDate(a.Date))){
+    for(const t of [...periodTxns].sort((a,b)=>{
+      const da=parseDate(a.Date),db=parseDate(b.Date);
+      if(da-db!==0)return db-da; // date descending
+      return (b.Time||'').localeCompare(a.Time||''); // time descending within same date
+    })){
       if(!map[t.Date])map[t.Date]=[];map[t.Date].push(t);
     }
     return Object.entries(map);
@@ -560,14 +631,22 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
                         {gt.expense>0&&<span className="dg-exp">−{formatINR(gt.expense)}</span>}
                       </div>
                     </div>
-                    <div className="dg-items">{txns.map(t=><TransactionItem key={t._id} transaction={t}
-                      selected={selected.has(t._id)}
-                      overrideType={accountTxnType(t)}
-                      backInterceptRef={backInterceptRef}
-                      onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
-                      onTap={multiMode ? toggleSel : null}
-                      onCopy={handleCopy}
-                    />)}</div>
+                    <div className="dg-items">{txns.map((t, ti)=>{
+                      const runBal = runningBalMap[t._id];
+                      // ti===0 is the NEWEST transaction in the group (sorted time-desc).
+                      // "Balance X" label goes on the first/top item — most recent transaction.
+                      const isNewest = ti === 0;
+                      return <TransactionItem key={t._id} transaction={t}
+                        selected={selected.has(t._id)}
+                        overrideType={accountTxnType(t)}
+                        backInterceptRef={backInterceptRef}
+                        onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
+                        onTap={multiMode ? toggleSel : null}
+                        onCopy={handleCopy}
+                        runningBalance={runBal !== undefined ? runBal : null}
+                        isNewestInGroup={isNewest}
+                      />;
+                    })}</div>
                   </div>
                 );
               })}
@@ -588,6 +667,22 @@ export default function Accounts({ backInterceptRef } = {}) {
   const { accounts, accountGroups, transactions } = state;
   const [drill, setDrill] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+  const [dismissedDueAlerts, setDismissedDueAlerts] = useState(new Set());
+
+  // Compute due-date alerts for all configured CC accounts
+  const dueAlerts = useMemo(() => {
+    const today = new Date();
+    const alerts = [];
+    for (const a of (accounts || [])) {
+      if (!isCreditCard(a) || !a.settlementDate || !a.paymentDueDays) continue;
+      const days = ccDaysUntilDue(a, today);
+      if (days === null) continue;
+      if (days <= 7) {
+        alerts.push({ acct: a, days, due: ccNextDueDate(a, today) });
+      }
+    }
+    return alerts;
+  }, [accounts]);
 
   const toggleGroup = (groupName) => {
     setCollapsedGroups(prev => {
@@ -669,9 +764,17 @@ export default function Accounts({ backInterceptRef } = {}) {
       const outSign = outstanding > 0 ? '−' : outstanding < 0 ? '+' : '';
       const outCls  = outstanding > 0 ? 'warn' : outstanding < 0 ? 'pos' : '';
 
+      const dueDays = ccDaysUntilDue(acctObj, now);
       return (
         <div key={name} className="acct-row acct-row-cc" onClick={() => setDrill(name)}>
-          <div className="acct-row-name">{name}</div>
+          <div className="acct-row-name">
+            {name}
+            {dueDays !== null && dueDays <= 7 && (
+              <span className={`cc-due-dot ${dueDays<=0?'overdue':dueDays<=2?'urgent':'warn'}`}>
+                {dueDays <= 0 ? '!' : dueDays}
+              </span>
+            )}
+          </div>
           <div className="acct-row-cc-amounts">
             <div className="acct-row-cc-col">
               <div className={`acct-row-cc-val ${balancePayable > 0 ? 'neg' : balancePayable < 0 ? 'pos' : ''}`}>
@@ -715,6 +818,33 @@ export default function Accounts({ backInterceptRef } = {}) {
         <div className="bal-strip-div"/>
         <div className="bal-strip-item"><div className="bal-strip-l">Net Worth</div><div className="bal-strip-v" style={{color:netWorth>=0?'var(--income)':'var(--expense)',fontWeight:900}}>{netWorth>=0?'+':''}{formatINR(netWorth)}</div></div>
       </div>
+
+      {/* CC Payment Due Alerts */}
+      {dueAlerts.filter(a => !dismissedDueAlerts.has(a.acct.name)).map(alert => {
+        const { acct, days, due } = alert;
+        const { balancePayable } = ccBalances(transactions, acct.name, acct.settlementDate, new Date());
+        const isOverdue  = days <= 0;
+        const isUrgent   = days <= 2;
+        const dueLabel   = isOverdue ? `Overdue by ${Math.abs(days)} day${Math.abs(days)===1?'':'s'}`
+                         : days === 0 ? 'Due today'
+                         : `Due in ${days} day${days===1?'':'s'}`;
+        const dueDateStr = due ? due.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}) : '';
+        return (
+          <div key={acct.name} className={`cc-due-banner ${isOverdue?'overdue':isUrgent?'urgent':'warning'}`}>
+            <div className="cc-due-banner-icon">{isOverdue ? '🚨' : isUrgent ? '⚠️' : '🔔'}</div>
+            <div className="cc-due-banner-body">
+              <div className="cc-due-banner-title">
+                {acct.name} — <span className="cc-due-banner-label">{dueLabel}</span>
+              </div>
+              <div className="cc-due-banner-sub">
+                Payment due {dueDateStr}
+                {balancePayable > 0 ? ` · ₹${balancePayable.toLocaleString('en-IN')} payable` : ' · No outstanding balance'}
+              </div>
+            </div>
+            <button className="cc-due-banner-dismiss" onClick={() => setDismissedDueAlerts(p => new Set([...p, acct.name]))}>✕</button>
+          </div>
+        );
+      })}
 
       <div className="accounts-list">
         {(uniqueAccountGroups||[]).map(grp => {
