@@ -176,11 +176,25 @@ export default function AddTransaction({ onClose, onSaveAndContinue = null, edit
     (categories?.[form.category]?.subcategories || []).filter(s => s && s !== 'Default').sort(),
     [categories, form.category]);
 
+  const stripInstalment = (note) => {
+    // Strip installment suffixes like "(5/12)", "(2/6)" from note suggestions
+    return (note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
+  };
+
   const handleNoteChange = (v) => {
     set('note', v);
     if (v.trim().length > 0) {
       const q = v.toLowerCase(), seen = new Set();
-      const sugs = transactions.map(t => t.Note).filter(n => { if (!n || seen.has(n) || !n.toLowerCase().includes(q)) return false; seen.add(n); return true; }).slice(0, 6);
+      const sugs = [];
+      for (const t of transactions) {
+        const raw = t.Note; if (!raw) continue;
+        const stripped = stripInstalment(raw);
+        if (!stripped.toLowerCase().includes(q)) continue;
+        if (seen.has(stripped)) continue;
+        seen.add(stripped);
+        sugs.push(stripped);
+        if (sugs.length >= 6) break;
+      }
       setNoteSugs(sugs);
     } else setNoteSugs([]);
   };
