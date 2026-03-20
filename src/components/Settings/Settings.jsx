@@ -698,13 +698,14 @@ function CategoriesManager({ onBack }) {
 // Data Manager
 // ─────────────────────────────────────────────
 function DataManager({ onBack }) {
-  const { state, importData, cancelImport, clearAllData, cleanupAccounts, analyseImport } = useApp();
-  const { transactions, importProgress } = state;
+  const { state, importData, cancelImport, clearAllData, cleanupAccounts, analyseImport, updateSettings } = useApp();
+  const { transactions, accounts, accountGroups, accountMapping, categories, budgets, importProgress } = state;
   const fileRef = useRef(null);
   const [status,      setStatus]    = useState(null);
   const [showMode,    setShowMode]  = useState(false);
-  const [pendingRows, setPending]   = useState(null);
-  const [pendingName, setPendingNm] = useState('');
+  const [pendingRows, setPending]     = useState(null);
+  const [pendingName, setPendingNm]   = useState('');
+  const [pendingIsBackup, setIsBackup] = useState(false);
   const [showDel,     setShowDel]   = useState(false);
   const [analysis,    setAnalysis]  = useState(null);   // { total, fileDupeCount, dbDupeCount }
   const [analysing,   setAnalysing] = useState(false);
@@ -727,18 +728,46 @@ function DataManager({ onBack }) {
     setStatus(null);
     const name = file.name.toLowerCase();
     try {
-      let rows;
       const { parseFile } = await import('../../utils/xlsParser.js');
-      rows = await parseFile(file);
-      if (!Array.isArray(rows) || rows.length === 0) {
+      const parsed = await parseFile(file);
+
+      // ── Full FinMan backup JSON ─────────────────────────────────────────
+      // Detect by _finman_backup flag. These files contain both transactions
+      // AND settings (accounts, groups, categories, budgets).
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed._finman_backup) {
+        const backup = parsed;
+        const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
+        // Restore settings first so accounts/categories are ready before transactions
+        await updateSettings({
+          accounts:       Array.isArray(backup.accounts)        ? backup.accounts        : undefined,
+          accountGroups:  Array.isArray(backup.accountGroups)   ? backup.accountGroups   : undefined,
+          accountMapping: Array.isArray(backup.accountMapping)  ? backup.accountMapping  : undefined,
+          categories:     backup.categories && typeof backup.categories === 'object' ? backup.categories : undefined,
+        });
+        if (txnRows.length === 0) {
+          setStatus({ type:'success', msg:'✓ Settings restored. No transactions in backup.' });
+          if (fileRef.current) fileRef.current.value = '';
+          return;
+        }
+        setPending(txnRows);
+        setPendingNm(file.name);
+        setIsBackup(true);
+        setShowMode(true);
+        if (fileRef.current) fileRef.current.value = '';
+        return;
+      }
+
+      // ── Transactions-only file (CSV, XLS, or plain JSON array) ──────────
+      const rows = Array.isArray(parsed) ? parsed : [];
+      if (rows.length === 0) {
         setStatus({ type:'error', msg:'File appears empty or unreadable.' });
         if (fileRef.current) fileRef.current.value = '';
         return;
       }
       // Validate expected columns
       const firstRow = rows[0];
-      const hasDate  = 'Date' in firstRow;
-      const hasType  = 'Income/Expense' in firstRow;
+      const hasDate  = 'Date' in firstRow || 'date' in firstRow;
+      const hasType  = 'Income/Expense' in firstRow || 'type' in firstRow;
       if (!hasDate || !hasType) {
         setStatus({ type:'error', msg:`Missing required columns. Need: Date, Income/Expense, Amount/INR, Account, Category. Found: ${Object.keys(firstRow).slice(0,6).join(', ')}…` });
         if (fileRef.current) fileRef.current.value = '';
@@ -746,6 +775,7 @@ function DataManager({ onBack }) {
       }
       setPending(rows);
       setPendingNm(file.name);
+      setIsBackup(false);
       setShowMode(true);
     } catch (err) {
       setStatus({ type:'error', msg: `Parse error: ${err.message}` });
@@ -794,13 +824,26 @@ function DataManager({ onBack }) {
 
   const exportCSV = async () => {
     const hdrs = ['Date','Time','Account','FromAccount','ToAccount','Category','Subcategory','Note','Description','INR','Amount','Currency','Income/Expense','ID'];
-    const esc  = v => { const s=String(v||''); return s.includes(',')||s.includes('"')?`"${s.replace(/"/g,'""')}"`:s; };
+    // RFC 4180: quote any field containing comma, double-quote, newline or carriage-return
+    const esc  = v => { const s=String(v??''); return /[,"\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
     const rows = [hdrs.join(','), ...transactions.map(t => hdrs.map(h => esc(t[h])).join(','))];
     await saveFile(rows.join('\n'), `finman_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
   };
 
   const exportJSON = async () => {
-    await saveFile(JSON.stringify(transactions, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
+    // Full backup: transactions + all settings (accounts, groups, categories, budgets)
+    const backup = {
+      _finman_backup: true,
+      version: '2.2.1.3',
+      exportedAt: new Date().toISOString(),
+      transactions,
+      accounts:       accounts || [],
+      accountGroups:  accountGroups || [],
+      accountMapping: accountMapping || [],
+      categories:     categories || {},
+      budgets:        budgets || [],
+    };
+    await saveFile(JSON.stringify(backup, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
   };
 
   const pct = importProgress ? Math.round((importProgress.processed / importProgress.total) * 100) : 0;
@@ -858,7 +901,7 @@ function DataManager({ onBack }) {
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json" style={{display:'none'}} onChange={handleFile} disabled={!!importProgress}/>
           <div className="import-folder-icon">📂</div>
           <div className="import-drop-title">Choose file</div>
-          <div className="import-drop-sub">CSV · Excel (XLS / XLSX) · JSON</div>
+          <div className="import-drop-sub">CSV / XLS — transactions only · JSON — full backup incl. accounts &amp; categories</div>
         </label>
 
         {/* Export section */}
@@ -866,11 +909,11 @@ function DataManager({ onBack }) {
         <div className="dm-card" style={{margin:'0 var(--page-px) 14px'}}>
           <div className="dm-row" onClick={exportCSV}>
             <div className="dm-row-icon">📊</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export CSV</div><div className="dm-row-sub">All transactions as comma-separated</div></div>
+            <div className="dm-row-content"><div className="dm-row-title">Export CSV</div><div className="dm-row-sub">Transactions only · safe for spreadsheets</div></div>
           </div>
           <div className="dm-row" onClick={exportJSON}>
             <div className="dm-row-icon">🗃️</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export JSON</div><div className="dm-row-sub">Full backup with all fields</div></div>
+            <div className="dm-row-content"><div className="dm-row-title">Export Full Backup (JSON)</div><div className="dm-row-sub">Transactions + accounts, groups, categories · re-importable</div></div>
           </div>
         </div>
 
@@ -933,14 +976,12 @@ function DataManager({ onBack }) {
               )}
 
               <div style={{fontSize:'0.78rem',color:'var(--text-muted)',marginBottom:16}}>
-                <b style={{color:'var(--expense)'}}>Override</b> — deletes everything, imports all rows fresh (intentional duplicates included).<br/>
-                <b style={{color:'var(--green)'}}>Merge</b> — keeps existing data, adds only new rows (exact duplicates skipped).
+                <b style={{color:'var(--green)'}}>Merge</b> — keeps all existing transactions, accounts &amp; categories. Adds only new rows (exact duplicates skipped). <b>Recommended for FinMan exports.</b><br/><br/>
+                <b style={{color:'var(--expense)'}}>Override</b> — ⚠ deletes all existing transactions first, then imports fresh. Settings (accounts, categories) are rebuilt from the file. Use only when starting clean.
               </div>
-              <div style={{display:'flex',gap:10}}>
-                <button className="btn btn-danger  btn-full" onClick={() => doImport('override')}>Override all</button>
-                <button className="btn btn-primary btn-full" onClick={() => doImport('merge')}>Merge</button>
-              </div>
-              <button className="btn btn-ghost btn-full" style={{marginTop:8}} onClick={() => { setShowMode(false); setPending(null); setAnalysis(null); }}>Cancel</button>
+              <button className="btn btn-primary btn-full" style={{marginBottom:8}} onClick={() => doImport('merge')}>Merge (recommended)</button>
+              <button className="btn btn-danger  btn-full" onClick={() => doImport('override')}>Override — delete &amp; replace all</button>
+              <button className="btn btn-ghost btn-full" style={{marginTop:8}} onClick={() => { setShowMode(false); setPending(null); setAnalysis(null); setIsBackup(false); }}>Cancel</button>
             </div>
           </>
         )}

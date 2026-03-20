@@ -1,48 +1,75 @@
 /**
- * Parse CSV or Excel-like text into array of row objects.
- * Handles quoted fields, different line endings, and common date formats.
+ * csvParser.js — RFC 4180-compliant CSV parser.
+ *
+ * Key fix over the previous version: splits the raw text character-by-character
+ * so quoted fields containing embedded newlines (\n) or commas are handled
+ * correctly. The old split('\n')-first approach broke whenever a Description
+ * or Note field contained a newline, creating ghost rows on re-import.
  */
 export function parseCSV(text) {
-  // Normalize line endings
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  if (lines.length < 2) return [];
+  if (!text || !text.trim()) return [];
 
-  // Parse header
-  const headers = splitCSVLine(lines[0]);
-  if (!headers.length) return [];
+  // Normalise Windows line endings
+  const src = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
+  // ── RFC 4180 character-by-character tokeniser ─────────────────────────────
+  const records = [];   // array of string[]
+  let fields  = [];
+  let field   = '';
+  let inQ     = false;  // inside a quoted field
+  let i       = 0;
+
+  while (i < src.length) {
+    const ch   = src[i];
+    const next = src[i + 1];
+
+    if (inQ) {
+      if (ch === '"' && next === '"') {
+        // Escaped quote inside quoted field
+        field += '"'; i += 2; continue;
+      }
+      if (ch === '"') {
+        // End of quoted field
+        inQ = false; i++; continue;
+      }
+      // Any other character — including \n — is part of the field value
+      field += ch; i++; continue;
+    }
+
+    // Not in quotes
+    if (ch === '"') {
+      inQ = true; i++; continue;
+    }
+    if (ch === ',') {
+      fields.push(field); field = ''; i++; continue;
+    }
+    if (ch === '\n') {
+      fields.push(field); field = '';
+      records.push(fields); fields = [];
+      i++; continue;
+    }
+    field += ch; i++;
+  }
+  // Flush last field / record
+  fields.push(field);
+  if (fields.some(f => f !== '')) records.push(fields);
+
+  if (records.length < 2) return [];
+
+  // ── Build row objects using first record as headers ───────────────────────
+  const headers = records[0].map(h => h.trim());
   const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const values = splitCSVLine(line);
-    if (values.length === 0) continue;
+
+  for (let ri = 1; ri < records.length; ri++) {
+    const rec = records[ri];
     const row = {};
     headers.forEach((h, idx) => {
-      row[h.trim()] = (values[idx] || '').trim();
+      row[h] = (rec[idx] || '').trim();
     });
     // Skip completely empty rows
     if (Object.values(row).every(v => !v)) continue;
     rows.push(row);
   }
-  return rows;
-}
 
-function splitCSVLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
-      else inQuotes = !inQuotes;
-    } else if (ch === ',' && !inQuotes) {
-      result.push(current); current = '';
-    } else {
-      current += ch;
-    }
-  }
-  result.push(current);
-  return result;
+  return rows;
 }
