@@ -16,3 +16,7 @@
 .dp-actions { display:flex; gap:8px; padding:12px var(--page-px) 16px; border-top:1px solid var(--border); flex-shrink:0; }
 .dp-actions .btn { flex:1; }
 .dp-delete-confirm { position:absolute; inset:0; background:var(--bg-surface); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:var(--page-px); border-radius:22px 22px 0 0; z-index:10; }
+
+/* ── Running balance in account drill-down ─────────────────────────────── */
+.txn-amt-wrap       { display:flex; flex-direction:column; align-items:flex-end; flex-shrink:0; }
+.txn-running-bal    { font-size:0.62rem; font-weight:600; color:var(--text-muted); margin-top:2px; letter-spacing:0.1px; }

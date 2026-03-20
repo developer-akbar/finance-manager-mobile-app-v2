@@ -5,7 +5,7 @@ import AddTransaction from './AddTransaction.jsx';
 import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
-export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy }) {
+export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy, runningBalance = null, isNewestInGroup = false }) {
   const [showDetail, setShowDetail] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const pressTimer = React.useRef(null);
@@ -112,8 +112,16 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
             {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
           </div>
         </div>
-        {/* Amount */}
-        <div className={`txn-amt-col ${cls}`}>{sign}{formatINR(amount)}</div>
+        {/* Amount + running balance */}
+        <div className="txn-amt-wrap">
+          <div className={`txn-amt-col ${cls}`}>{sign}{formatINR(amount)}</div>
+          {runningBalance !== null && (
+            <div className="txn-running-bal">
+              {isNewestInGroup ? 'Balance ' : ''}
+              ({runningBalance >= 0 ? '' : '−'}{formatINR(Math.abs(runningBalance))})
+            </div>
+          )}
+        </div>
       </div>
 
       {showDetail && <DetailSheet t={t} onClose={() => setShowDetail(false)} onCopy={onCopy} backInterceptRef={backInterceptRef}/>}
