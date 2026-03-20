@@ -136,7 +136,7 @@ function MonthlyView({ transactions, onMonthClick }) {
 }
 
 // ── Search view ───────────────────────────────────────────────────────────────
-function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy }) {
+function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy, copyTxn, setCopyTxn }) {
   const textInputRef = (el) => {
     if (!el) return;
     el.setAttribute('autocomplete', 'on');
@@ -381,6 +381,14 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
         </div>
       )}
 
+      {/* Copy transaction form */}
+      {copyTxn&&<AddTransaction 
+        copyTransaction={copyTxn}
+        onClose={()=>setCopyTxn(null)} 
+        onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})}
+        backInterceptRef={backInterceptRef}
+      />}
+
       {/* Results */}
       <div className="search-list">
         {!hasQuery ? (
@@ -548,7 +556,7 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
   }, [monthTxns, selected]);
 
   if (viewMode==='search') return (
-    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
+    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')} backInterceptRef={backInterceptRef} onCopy={handleCopy} copyTxn={copyTxn} setCopyTxn={setCopyTxn} />
   );
 
   return (
