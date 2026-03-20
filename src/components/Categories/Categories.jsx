@@ -250,25 +250,33 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
         </div>
         )}
 
-        {/* Subcategories as list with totals */}
-        {subData.length>0&&(
-          <div style={{flexShrink:0}}>
-            <div className="cat-sub-list-header">
-              <span>Subcategories</span>
-              {selSub&&<button className="btn btn-ghost btn-sm" style={{padding:'2px 8px',fontSize:'0.68rem'}} onClick={()=>setSelSub(null)}>Show all</button>}
+        {/* Subcategories as list with totals — always shown, 100% on All row */}
+        <div style={{flexShrink:0}}>
+          <div className="cat-sub-list-header">
+            <span>Subcategories</span>
+            {selSub&&<button className="btn btn-ghost btn-sm" style={{padding:'2px 8px',fontSize:'0.68rem'}} onClick={()=>setSelSub(null)}>Show all</button>}
+          </div>
+          <div className={`cat-sub-list-row ${!selSub?'sub-active':''}`} onClick={()=>setSelSub(null)}>
+            <div className="cat-sub-list-name">
+              <span className="cat-sub-pct-badge" style={{background:"rgba(255,255,255,0.08)",color:"var(--text-muted)"}}>100%</span>
+              All
             </div>
-            <div className={`cat-sub-list-row ${!selSub?'sub-active':''}`} onClick={()=>setSelSub(null)}>
-              <div className="cat-sub-list-name">All</div>
-              <div className="cat-sub-list-amt">{formatINR(totalAmt)}</div>
-            </div>
-            {subData.map(([sub,amt])=>(
+            <div className="cat-sub-list-amt">{formatINR(totalAmt)}</div>
+          </div>
+          {subData.map(([sub,amt],si)=>{
+            const pct = totalAmt > 0 ? Math.round((amt / totalAmt) * 100) : 0;
+            const col = PIE_COLORS[si % PIE_COLORS.length];
+            return (
               <div key={sub} className={`cat-sub-list-row ${selSub===sub?'sub-active':''}`} onClick={()=>setSelSub(selSub===sub?null:sub)}>
-                <div className="cat-sub-list-name">{sub}</div>
+                <div className="cat-sub-list-name">
+                  <span className="cat-sub-pct-badge" style={{background:col+"28",color:col}}>{pct}%</span>
+                  {sub}
+                </div>
                 <div className="cat-sub-list-amt">{formatINR(amt)}</div>
               </div>
-            ))}
-          </div>
-        )}
+            );
+          })}
+        </div>
 
         {/* Date-grouped transactions */}
         {filtTxns.length===0
@@ -400,7 +408,6 @@ export default function Categories({ backInterceptRef } = {}) {
       <div className="page-hdr">
         <div style={{flex:1}}>
           <div className="page-hdr-title">Categories</div>
-          <div className="page-hdr-sub">{catType} · {formatINR(totalAmt)}</div>
         </div>
       </div>
 

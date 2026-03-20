@@ -532,13 +532,8 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
   const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
 
   const handleCopy = (txn) => {
-    // Create a copy with current date/time but keep all other data
-    setCopyTxn({
-      ...txn,
-      Date: new Date().toISOString().split('T')[0], // Current date
-      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
-      _id: undefined, // Remove ID so it gets a new one
-    });
+    // Pass txn as-is — the copy picker in DetailSheet sets date/time based on user choice.
+    setCopyTxn({ ...txn, _id: undefined });
   };
 
   const selTotals = useMemo(() => {
