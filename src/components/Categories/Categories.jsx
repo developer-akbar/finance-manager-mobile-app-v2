@@ -163,15 +163,37 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   }, [filtTxns, selected]);
 
   const trendData = useMemo(() => {
-    const now = new Date();
+    const src = selSub ? catTxns.filter(t => t.Subcategory === selSub) : catTxns;
+
+    if (period === 'Year') {
+      return Array.from({length:6}, (_,i) => {
+        const yr = viewYear - 5 + i;
+        const amt = src.filter(t => parseDate(t.Date).getFullYear() === yr)
+                       .reduce((s,t) => s + txnAmount(t), 0);
+        return { name: String(yr), amt };
+      });
+    }
+
+    if (period === 'FY') {
+      return Array.from({length:6}, (_,i) => {
+        const fy = viewFY - 5 + i;
+        const fs = fyStart(fy), fe = fyEnd(fy);
+        const amt = src.filter(t => { const d = parseDate(t.Date); return d >= fs && d <= fe; })
+                       .reduce((s,t) => s + txnAmount(t), 0);
+        return { name: `FY${String(fy).slice(-2)}`, amt };
+      });
+    }
+
+    if (['All','Custom'].includes(period)) return [];
+
+    // Month — last 6 months ending at viewYear/viewMonth
     return Array.from({length:6}, (_,i) => {
-      const d = new Date(now.getFullYear(), now.getMonth()-5+i, 1);
-      const src = selSub ? catTxns.filter(t=>t.Subcategory===selSub) : catTxns;
-      const amt = src.filter(t=>{const td=parseDate(t.Date);return td.getFullYear()===d.getFullYear()&&td.getMonth()===d.getMonth();})
-                      .reduce((s,t)=>s+txnAmount(t),0);
+      const d = new Date(viewYear, viewMonth - 5 + i, 1);
+      const amt = src.filter(t => { const td = parseDate(t.Date); return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth(); })
+                     .reduce((s,t) => s + txnAmount(t), 0);
       return { name: MS_S[d.getMonth()], amt };
     });
-  }, [catTxns, selSub]);
+  }, [catTxns, selSub, period, viewYear, viewMonth, viewFY]);
 
   const groupedTxns = useMemo(() => {
     const map = {};
@@ -206,10 +228,11 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
           <div className="bal-strip-item"><div className="bal-strip-l">Txns</div><div className="bal-strip-v">{filtTxns.length}</div></div>
         </div>
 
-        {/* 6-month trend chart */}
+        {/* trend chart — hidden for All / Custom */}
+        {trendData.length > 0 && (
         <div style={{padding:'8px var(--page-px) 4px',flexShrink:0}}>
           <div style={{fontSize:'0.62rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.7px',marginBottom:6}}>
-            6-Month Trend{selSub ? ` — ${selSub}` : ''}
+            {period==='Year' ? '6-Year Trend' : period==='FY' ? '6-FY Trend' : '6-Month Trend'}{selSub ? ` — ${selSub}` : ''}
           </div>
           <div style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:'var(--r-lg)',padding:'10px 6px 4px'}}>
             <ResponsiveContainer width="100%" height={110}>
@@ -225,6 +248,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
             </ResponsiveContainer>
           </div>
         </div>
+        )}
 
         {/* Subcategories as list with totals */}
         {subData.length>0&&(

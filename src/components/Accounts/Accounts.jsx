@@ -309,18 +309,49 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
   }, [periodTxns, acctName]);
 
   const barData = useMemo(() => {
-    const months = [];
-    for (let i=5; i>=0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
-      // Running balance up to end of this month (cumulative = bank balance)
+    if (['All','Custom'].includes(period)) return [];
+
+    if (period === 'Year') {
+      // Last 6 years ending at viewYear
+      return Array.from({length:6}, (_,i) => {
+        const yr = viewYear - 5 + i;
+        const yearTxns = acctTxns.filter(t => parseDate(t.Date).getFullYear() <= yr);
+        return { name: String(yr), value: computeBalance(yearTxns, acctName) };
+      });
+    }
+
+    if (period === 'FY') {
+      // Last 6 FYs ending at viewFY
+      return Array.from({length:6}, (_,i) => {
+        const fy = viewFY - 5 + i;
+        const upTo = fyEnd(fy);
+        const fyTxns = acctTxns.filter(t => parseDate(t.Date) <= upTo);
+        return { name: `FY${String(fy).slice(-2)}`, value: computeBalance(fyTxns, acctName) };
+      });
+    }
+
+    // Month / CC Cycle — last 6 months ending at viewed month
+    const anchorYear  = period === 'CC Cycle' ? now.getFullYear() + Math.floor((now.getMonth() + ccCycleOffset) / 12) : viewYear;
+    const anchorMonth = period === 'CC Cycle'
+      ? ((now.getMonth() + ccCycleOffset) % 12 + 12) % 12
+      : viewMonth;
+
+    return Array.from({length:6}, (_,i) => {
+      const d = new Date(anchorYear, anchorMonth - 5 + i, 1);
       const upToMonth = acctTxns.filter(t => {
         const td = parseDate(t.Date);
-        return td <= new Date(d.getFullYear(), d.getMonth()+1, 0, 23, 59, 59);
+        return td <= new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
       });
-      months.push({ name: MS_S[d.getMonth()], value: computeBalance(upToMonth, acctName) });
-    }
-    return months;
-  }, [acctTxns, acctName]);
+      return { name: MS_S[d.getMonth()], value: computeBalance(upToMonth, acctName) };
+    });
+  }, [acctTxns, acctName, period, viewYear, viewMonth, viewFY, ccCycleOffset]);
+
+  const chartTitle = useMemo(() => {
+    if (period === 'Year')     return '6-Year Balance Trend';
+    if (period === 'FY')       return '6-FY Balance Trend';
+    if (['All','Custom'].includes(period)) return null;
+    return '6-Month Balance Trend';
+  }, [period]);
 
   const prev = () => {
     if(period==='Month'){if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1);}
@@ -454,8 +485,9 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
           </div>
         </div>
 
+        {chartTitle && (
         <div className="chart-wrap">
-          <div style={{fontSize:'0.62rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.7px',marginBottom:6}}>6-Month Balance Trend</div>
+          <div style={{fontSize:'0.62rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.7px',marginBottom:6}}>{chartTitle}</div>
           <ResponsiveContainer width="100%" height={130}>
             <AreaChart data={barData} margin={{top:6,right:4,bottom:0,left:0}}>
               <defs>
@@ -483,6 +515,7 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
             </AreaChart>
           </ResponsiveContainer>
         </div>
+        )}
 
         {groups.length===0
           ? <div className="empty-state"><div className="empty-icon">📭</div><div className="empty-title">No transactions</div><div className="empty-desc">{periodLabel}</div></div>
