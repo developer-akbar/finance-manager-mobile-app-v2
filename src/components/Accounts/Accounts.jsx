@@ -266,13 +266,9 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
   }, [multiMode]);
 
   const handleCopy = (txn) => {
-    // Create a copy with current date/time but keep all other data
-    setCopyTxn({
-      ...txn,
-      Date: new Date().toISOString().split('T')[0], // Current date
-      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
-      _id: undefined, // Remove ID so it gets a new one
-    });
+    // Pass txn as-is — the copy picker in DetailSheet sets date/time based on user choice.
+    // DetailSheet's handleCopyWithToday will inject today's date; handleCopyWithOriginal uses t as-is.
+    setCopyTxn({ ...txn, _id: undefined });
   };
 
   // When viewing an account, treat transfer rows as income/expense for that account.
@@ -607,7 +603,7 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
                   <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',flexShrink:0,fontSize:'0.82rem'}} onClick={() => { setMultiMode(false); setSelected(new Set()); }}>Done</button>
                 </div>
               )}
-              {groups.map(([dk,txns])=>{
+              {groups.map(([dk,txns], gi)=>{
                 const gt = txns.reduce((acc, t) => {
                   const amt = txnAmount(t);
                   const tp  = accountTxnType(t);
@@ -633,9 +629,9 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
                     </div>
                     <div className="dg-items">{txns.map((t, ti)=>{
                       const runBal = runningBalMap[t._id];
-                      // ti===0 is the NEWEST transaction in the group (sorted time-desc).
-                      // "Balance X" label goes on the first/top item — most recent transaction.
-                      const isNewest = ti === 0;
+                      // Show "(Balance X)" only on the very first transaction of the whole list
+                      // (gi===0 && ti===0) — the newest transaction in the viewed period.
+                      const isOverallNewest = gi === 0 && ti === 0;
                       return <TransactionItem key={t._id} transaction={t}
                         selected={selected.has(t._id)}
                         overrideType={accountTxnType(t)}
@@ -644,7 +640,7 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
                         onTap={multiMode ? toggleSel : null}
                         onCopy={handleCopy}
                         runningBalance={runBal !== undefined ? runBal : null}
-                        isNewestInGroup={isNewest}
+                        isNewestInGroup={isOverallNewest}
                       />;
                     })}</div>
                   </div>
@@ -806,7 +802,6 @@ export default function Accounts({ backInterceptRef } = {}) {
       <div className="page-hdr">
         <div style={{flex:1}}>
           <div className="page-hdr-title">Accounts</div>
-          <div className="page-hdr-sub">Net worth: <span style={{color:netWorth>=0?'var(--income)':'var(--expense)',fontWeight:800}}>{formatINR(netWorth)}</span></div>
         </div>
       </div>
 

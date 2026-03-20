@@ -75,11 +75,14 @@ export default function AddTransaction({ onClose, onSaveAndContinue = null, edit
     if (isCopy) {
       const t = copyTransaction;
       const rawType = t['Income/Expense'] || 'Expense';
+      // Date and Time are already set correctly by the copy picker in DetailSheet:
+      //   "Today's date & time"  → t.Date/t.Time = current date/time (set by handleCopyWithToday)
+      //   "Original date & time" → t.Date/t.Time = original transaction's date/time
       return {
         type:        rawType,
         amount:      String(t.INR || t.Amount || ''),
-        date:        todayVal(), // Current date for copy
-        time:        nowTimeStr(), // Current time for copy
+        date:        toInputDate(t.Date) || todayVal(),
+        time:        t.Time || nowTimeStr(),
         account:     rawType.startsWith('Transfer') ? '' : (t.Account || ''),
         fromAccount: rawType.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
         toAccount:   rawType.startsWith('Transfer') ? (t.ToAccount || '') : '',
@@ -100,7 +103,8 @@ export default function AddTransaction({ onClose, onSaveAndContinue = null, edit
 
   const [errors,   setErrors]   = useState({});
   const [saving,   setSaving]   = useState(false);
-  const [noteSugs, setNoteSugs] = useState([]);
+  const [noteSugs,    setNoteSugs]    = useState([]);
+  const [noteFocused,  setNoteFocused]  = useState(false);
 
   // textInputRef — sets all IME attributes at DOM node creation time
   const textInputRef = (el) => {
@@ -334,10 +338,21 @@ export default function AddTransaction({ onClose, onSaveAndContinue = null, edit
 
           <div className="form-group" style={{position:'relative'}}>
             <label className="form-label">Note</label>
-            <input ref={textInputRef} className="form-input" type="text" value={form.note}
-              autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
-              onChange={e=>handleNoteChange(e.target.value)}
-              onBlur={()=>setTimeout(()=>setNoteSugs([]),180)}/>
+            <div style={{position:'relative'}}>
+              <input ref={textInputRef} className="form-input" type="text" value={form.note}
+                style={{paddingRight: (form.note || noteFocused) ? '30px' : undefined}}
+                autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
+                onChange={e=>handleNoteChange(e.target.value)}
+                onFocus={()=>setNoteFocused(true)}
+                onBlur={()=>{ setNoteFocused(false); setTimeout(()=>setNoteSugs([]),180); }}/>
+              {(form.note || noteFocused) && (
+                <button
+                  type="button"
+                  onMouseDown={e=>{e.preventDefault(); set('note',''); setNoteSugs([]); setNoteFocused(false);}}
+                  style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:'1.1rem',lineHeight:1,padding:'2px 4px',zIndex:1}}
+                >✕</button>
+              )}
+            </div>
             {noteSugs.length > 0 && (
               <div className="note-sug-list">
                 {noteSugs.map(s=><div key={s} className="note-sug-item" onMouseDown={()=>{set('note',s);setNoteSugs([]);}}>{s}</div>)}

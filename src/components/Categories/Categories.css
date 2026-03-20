@@ -21,3 +21,6 @@
 .cat-sub-list-row.sub-active { background:var(--green-dim); }
 .cat-sub-list-name { flex:1; font-size:0.8rem; font-weight:600; color:var(--text-primary); }
 .cat-sub-list-amt  { font-size:0.8rem; font-family:var(--font); font-weight:700; color:var(--expense); }
+
+/* Subcategory percentage badge */
+.cat-sub-pct-badge { display:inline-block; font-size:0.62rem; font-weight:700; border-radius:4px; padding:1px 6px; margin-right:10px; min-width:34px; text-align:center; flex-shrink:0; vertical-align:middle; }
