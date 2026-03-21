@@ -41,7 +41,7 @@ const normalizeAccounts = (raw) =>
 const INIT = {
   transactions: [], accounts: [], categories: {},
   accountGroups: [], budgets: [], settings: {},
-  theme: 'dark', fontSize: 1.0, fontFamily: 'Sora',
+  theme: 'dark', fontSize: 1.0, fontFamily: 'Sora', fontDataWeight: 'light',
   loading: true, error: null, importProgress: null,
   currentView: 'dashboard',
 };
@@ -56,7 +56,8 @@ function reducer(s, a) {
     case 'SET_IMPORT':   return { ...s, importProgress: a.payload };
     case 'SET_THEME':    return { ...s, theme: a.payload };
     case 'SET_FONTSIZE': return { ...s, fontSize: a.payload };
-    case 'SET_FONTFAMILY': return { ...s, fontFamily: a.payload };
+    case 'SET_FONTFAMILY':     return { ...s, fontFamily: a.payload };
+    case 'SET_FONTDATAWEIGHT': return { ...s, fontDataWeight: a.payload };
     case 'UPD_SETTINGS': return { ...s, settings: { ...s.settings, ...a.payload } };
     case 'NAVIGATE': return { ...s, currentView: a.payload };
     default: return s;
@@ -88,8 +89,11 @@ export function AppProvider({ children }) {
         const theme     = settings.theme     || 'dark';
         const fontSize  = parseFloat(settings.fontSize  || '1.0');
         const fontFamily = settings.fontFamily || 'Sora';
+        const fontDataWeight = settings.fontDataWeight || 'light';
+        const fwMap = { light: '400', regular: '500', bold: '700' };
         document.documentElement.setAttribute('data-theme', theme);
         document.documentElement.style.setProperty('--fs-scale', String(fontSize));
+        document.documentElement.style.setProperty('--fw-data', fwMap[fontDataWeight] || '400');
         document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
           fontFamily === 'Inter' ? "'Inter', sans-serif" :
           fontFamily === 'Roboto' ? "'Roboto', sans-serif" :
@@ -101,15 +105,18 @@ export function AppProvider({ children }) {
           categories: catsArrToObj(seedCats),
           accountGroups: seedGroups || [],
           accountMapping: aMapping || [],
-          budgets, settings, theme, fontSize, fontFamily,
+          budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
         }});
         return;
       }
       const theme     = settings.theme     || 'dark';
       const fontSize  = parseFloat(settings.fontSize  || '1.0');
       const fontFamily = settings.fontFamily || 'Sora';
+      const fontDataWeight = settings.fontDataWeight || 'light';
+      const fwMap = { light: '400', regular: '500', bold: '700' };
       document.documentElement.setAttribute('data-theme', theme);
       document.documentElement.style.setProperty('--fs-scale', String(fontSize));
+      document.documentElement.style.setProperty('--fw-data', fwMap[fontDataWeight] || '400');
       document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
         fontFamily === 'Inter' ? "'Inter', sans-serif" :
         fontFamily === 'Roboto' ? "'Roboto', sans-serif" :
@@ -122,12 +129,12 @@ export function AppProvider({ children }) {
           categories:    catsArrToObj(catsArr),
           accountGroups: aGroups || [],
           accountMapping: aMapping || [],
-          budgets, settings, theme, fontSize, fontFamily,
+          budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
         },
       });
     } catch (e) {
       console.error('AppContext load error:', e);
-      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora' } });
+      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'light' } });
     }
   }, []);
 
@@ -290,7 +297,7 @@ export function AppProvider({ children }) {
     if (data.accountGroups  !== undefined) await replaceAccountGroups(data.accountGroups);
     if (data.accountMapping !== undefined) await replaceAccountMapping(data.accountMapping);
     // Persist simple key-value settings (profileName, pin, pinIdleSeconds, etc.)
-    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory'];
+    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight'];
     const changed = {};
     for (const key of settingsKeys) {
       if (data[key] !== undefined) {
@@ -317,6 +324,13 @@ export function AppProvider({ children }) {
     try { await setSetting('fontSize', String(scale)); } catch (e) { console.error('setFontSize:', e); }
   };
 
+  const setFontDataWeight = async (weight) => {
+    const fwMap = { light: '400', regular: '500', bold: '700' };
+    document.documentElement.style.setProperty('--fw-data', fwMap[weight] || '400');
+    dispatch({ type: 'SET_FONTDATAWEIGHT', payload: weight });
+    try { await setSetting('fontDataWeight', weight); } catch (e) { console.error('setFontDataWeight:', e); }
+  };
+
   const setFontFamily = async (family) => {
     const fontMap = {
       'Sora': "'Sora', sans-serif",
@@ -340,7 +354,7 @@ export function AppProvider({ children }) {
       addTransaction, updateTransaction, deleteTransaction,
       renameAccount, renameCategory, cleanupAccounts,
       importData, cancelImport, clearAllData, analyseImport,
-      updateSettings, setTheme, setFontSize, setFontFamily,
+      updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight,
       saveBudget, removeBudget,
     }}>
       {children}
