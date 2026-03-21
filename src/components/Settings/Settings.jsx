@@ -1282,8 +1282,9 @@ function BudgetsManager({ onBack }) {
 // Appearance Manager
 // ─────────────────────────────────────────────
 function AppearanceManager({ onBack }) {
-  const { state, updateSettings, setTheme, setFontSize, setFontFamily } = useApp();
+  const { state, updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight } = useApp();
   const { theme, fontSize } = state;
+  const fontDataWeight = state.fontDataWeight || 'light';
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
 
@@ -1354,6 +1355,56 @@ function AppearanceManager({ onBack }) {
                 onChange={e => setFontSize(parseFloat(e.target.value))}
                 onMouseUp={e => setFontSize(parseFloat(e.target.value))}/>
               <span className="font-scale-label" style={{fontSize:'1rem'}}>A</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Font Weight */}
+        <div className="mgr-section-label">Content Font Weight</div>
+        <div className="settings-card" style={{margin:'0 var(--page-px) 16px'}}>
+          <div style={{padding:'12px var(--page-px)'}}>
+            <div style={{fontSize:'0.72rem',color:'var(--text-muted)',marginBottom:12}}>
+              Applies to transaction notes, amounts, account names, category names. Headings and labels are unaffected.
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              {[
+                { key:'light',   label:'Light',   fw:'400', desc:'Airy & minimal' },
+                { key:'regular', label:'Regular',  fw:'500', desc:'Balanced' },
+                { key:'bold',    label:'Bold',     fw:'700', desc:'High contrast' },
+              ].map(opt => (
+                <div key={opt.key}
+                  onClick={() => setFontDataWeight(opt.key)}
+                  style={{
+                    flex:1, borderRadius:10, border:`2px solid ${fontDataWeight===opt.key?'var(--accent)':'var(--border)'}`,
+                    background: fontDataWeight===opt.key ? 'rgba(0,229,160,0.08)' : 'var(--bg-card2)',
+                    padding:'10px 8px', cursor:'pointer', textAlign:'center', transition:'all 0.15s',
+                  }}>
+                  <div style={{fontFamily:'var(--font)',fontSize:'1rem',fontWeight:opt.fw,color:fontDataWeight===opt.key?'var(--accent)':'var(--text-primary)',marginBottom:4}}>
+                    ₹1,234
+                  </div>
+                  <div style={{fontSize:'0.72rem',fontWeight:opt.fw,color:fontDataWeight===opt.key?'var(--accent)':'var(--text-primary)',marginBottom:2}}>
+                    {opt.label}
+                  </div>
+                  <div style={{fontSize:'0.6rem',color:'var(--text-muted)'}}>
+                    {opt.desc}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Live preview */}
+            <div style={{marginTop:12,padding:'10px 12px',background:'var(--bg-surface)',borderRadius:8,border:'1px solid var(--border-light)'}}>
+              <div style={{fontSize:'0.6rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:8}}>Preview</div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                <div>
+                  <div style={{fontSize:'0.8rem',fontWeight:fontDataWeight==='light'?400:fontDataWeight==='regular'?500:700,color:'var(--text-primary)'}}>Groceries · Milk</div>
+                  <div style={{fontSize:'0.65rem',color:'var(--text-muted)',marginTop:2}}>10:30 am · To Home</div>
+                </div>
+                <div style={{fontFamily:'var(--font)',fontSize:'0.78rem',fontWeight:fontDataWeight==='light'?400:fontDataWeight==='regular'?500:700,color:'var(--expense)'}}>−₹250</div>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div style={{fontSize:'0.8rem',fontWeight:fontDataWeight==='light'?400:fontDataWeight==='regular'?500:700,color:'var(--text-primary)'}}>HDFC</div>
+                <div style={{fontFamily:'var(--font)',fontSize:'0.78rem',fontWeight:fontDataWeight==='light'?400:fontDataWeight==='regular'?500:700,color:'var(--income)'}}>+₹9,67,413</div>
+              </div>
             </div>
           </div>
         </div>
