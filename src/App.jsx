@@ -85,9 +85,21 @@ function AppInner() {
   const { currentView } = state;
 
   // ALL hooks must be called unconditionally before any early return
-  const [showAdd, setShowAdd] = useState(false);
-  const [addKey, setAddKey] = useState(0);
+  const [showAdd, setShowAdd]   = useState(false);
+  const [addKey,  setAddKey]    = useState(0);
   const [resetKeys, setResetKeys] = useState({ transactions:0, accounts:0, categories:0, settings:0, dashboard:0 });
+  const [backupDue, setBackupDue] = useState(false);
+
+  // Check if auto backup is due on app load
+  React.useEffect(() => {
+    const schedule = state.settings?.backupSchedule;
+    if (!schedule || schedule === 'off') return;
+    const last = state.settings?.lastBackupCheck;
+    if (!last) { setBackupDue(true); return; }
+    const daysSince = (Date.now() - new Date(last).getTime()) / (1000*60*60*24);
+    const threshold = schedule === 'daily' ? 1 : schedule === 'weekly' ? 7 : 30;
+    if (daysSince >= threshold) setBackupDue(true);
+  }, [state.settings?.backupSchedule, state.settings?.lastBackupCheck]);
   const handleNavTap = (id) => setResetKeys(k => ({ ...k, [id]: (k[id]||0)+1 }));
   const backInterceptRef = React.useRef(null);
 
@@ -135,6 +147,17 @@ function AppInner() {
         {screen}
       </Layout>
       {showAdd && <AddTransaction key={addKey} onClose={() => setShowAdd(false)} onSaveAndContinue={() => setAddKey(k => k + 1)} backInterceptRef={backInterceptRef}/>}
+      {backupDue && (
+        <div style={{position:'fixed',bottom:'calc(64px + var(--safe-bottom, 0px) + 8px)',left:12,right:12,background:'var(--bg-card)',border:'1px solid rgba(0,229,160,0.35)',borderRadius:12,padding:'10px 14px',display:'flex',alignItems:'center',gap:10,zIndex:9998,boxShadow:'0 4px 20px rgba(0,0,0,0.4)'}}>
+          <span style={{fontSize:'1.2rem'}}>☁️</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:'0.78rem',fontWeight:700,color:'var(--text-primary)'}}>Backup Due</div>
+            <div style={{fontSize:'0.65rem',color:'var(--text-muted)'}}>Go to Settings → Data to back up now</div>
+          </div>
+          <button onClick={() => { navigate('settings'); setBackupDue(false); }} style={{background:'var(--accent)',border:'none',borderRadius:8,color:'#000',fontSize:'0.68rem',fontWeight:700,padding:'5px 10px',cursor:'pointer',flexShrink:0}}>Back up</button>
+          <button onClick={() => setBackupDue(false)} style={{background:'none',border:'none',color:'var(--text-muted)',fontSize:'1rem',cursor:'pointer',padding:'0 2px',flexShrink:0}}>✕</button>
+        </div>
+      )}
     </PinLock>
   );
 }

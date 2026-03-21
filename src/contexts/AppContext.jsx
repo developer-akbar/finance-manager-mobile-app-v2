@@ -290,7 +290,7 @@ export function AppProvider({ children }) {
     if (data.accountGroups  !== undefined) await replaceAccountGroups(data.accountGroups);
     if (data.accountMapping !== undefined) await replaceAccountMapping(data.accountMapping);
     // Persist simple key-value settings (profileName, pin, pinIdleSeconds, etc.)
-    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name'];
+    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory'];
     const changed = {};
     for (const key of settingsKeys) {
       if (data[key] !== undefined) {

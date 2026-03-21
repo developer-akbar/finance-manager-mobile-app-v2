@@ -705,7 +705,12 @@ function DataManager({ onBack }) {
   const [showMode,    setShowMode]  = useState(false);
   const [pendingRows, setPending]     = useState(null);
   const [pendingName, setPendingNm]   = useState('');
-  const [pendingIsBackup, setIsBackup] = useState(false);
+  const [pendingIsBackup, setIsBackup]        = useState(false);
+  const [backupSchedule,  setBackupSchedule]  = useState(() => state.settings?.backupSchedule || 'off');
+  const [backupHistory,   setBackupHistory]   = useState(() => {
+    try { return JSON.parse(state.settings?.backupHistory || '[]'); } catch { return []; }
+  });
+  const [showBackupSheet, setShowBackupSheet] = useState(false);
   const [showDel,     setShowDel]   = useState(false);
   const [analysis,    setAnalysis]  = useState(null);   // { total, fileDupeCount, dbDupeCount }
   const [analysing,   setAnalysing] = useState(false);
@@ -794,6 +799,49 @@ function DataManager({ onBack }) {
   };
 
   // ── Capacitor-aware file save (no @capacitor/share — avoids Android 14 crash) ──
+  // ── Backup helpers ─────────────────────────────────────────────────────────
+  const MAX_BACKUPS = 3;
+
+  const buildBackupPayload = () => ({
+    _finman_backup: true,
+    version: '2.2.1.3',
+    exportedAt: new Date().toISOString(),
+    transactions,
+    accounts:       accounts || [],
+    accountGroups:  accountGroups || [],
+    accountMapping: accountMapping || [],
+    categories:     categories || {},
+    budgets:        budgets || [],
+  });
+
+  const runBackupNow = async () => {
+    const payload  = buildBackupPayload();
+    const now      = new Date();
+    const dateStr  = now.toISOString().split('T')[0];
+    const filename = `finman_backup_${dateStr}.json`;
+    const json     = JSON.stringify(payload, null, 2);
+
+    // Update history (keep last 3) AND mark lastBackupCheck
+    const entry = { date: now.toISOString(), filename, size: json.length };
+    const newHistory = [entry, ...backupHistory].slice(0, MAX_BACKUPS);
+    setBackupHistory(newHistory);
+    await updateSettings({
+      backupHistory:   JSON.stringify(newHistory),
+      lastBackupCheck: now.toISOString(),
+    });
+
+    // Trigger download
+    await saveFile(json, filename, 'application/json');
+    setStatus({ type:'success', msg:`✓ Backup saved — ${filename}` });
+  };
+
+  const saveBackupSchedule = async (val) => {
+    setBackupSchedule(val);
+    // Only save schedule — do NOT reset lastBackupCheck here.
+    // lastBackupCheck is only updated when an actual backup is taken.
+    await updateSettings({ backupSchedule: val });
+  };
+
   const saveFile = async (content, filename, mimeType) => {
     const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform?.());
     if (isNative) {
@@ -831,18 +879,7 @@ function DataManager({ onBack }) {
   };
 
   const exportJSON = async () => {
-    // Full backup: transactions + all settings (accounts, groups, categories, budgets)
-    const backup = {
-      _finman_backup: true,
-      version: '2.2.1.3',
-      exportedAt: new Date().toISOString(),
-      transactions,
-      accounts:       accounts || [],
-      accountGroups:  accountGroups || [],
-      accountMapping: accountMapping || [],
-      categories:     categories || {},
-      budgets:        budgets || [],
-    };
+    const backup = buildBackupPayload();
     await saveFile(JSON.stringify(backup, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
   };
 
@@ -916,6 +953,77 @@ function DataManager({ onBack }) {
             <div className="dm-row-content"><div className="dm-row-title">Export Full Backup (JSON)</div><div className="dm-row-sub">Transactions + accounts, groups, categories · re-importable</div></div>
           </div>
         </div>
+
+        {/* Backup section */}
+        <div className="dm-section-hdr">Backup</div>
+        <div className="dm-card" style={{margin:'0 var(--page-px) 14px'}}>
+          <div className="dm-row" onClick={runBackupNow}>
+            <div className="dm-row-icon">📲</div>
+            <div className="dm-row-content">
+              <div className="dm-row-title">Backup Now</div>
+              <div className="dm-row-sub">Save full backup to device storage</div>
+            </div>
+          </div>
+          <div className="dm-row" style={{opacity:0.5,cursor:'default'}}>
+            <div className="dm-row-icon">🔵</div>
+            <div className="dm-row-content">
+              <div className="dm-row-title">Google Drive <span style={{fontSize:'0.62rem',fontWeight:700,background:'rgba(255,180,0,0.15)',color:'var(--gold)',borderRadius:4,padding:'1px 5px',marginLeft:4}}>Coming Soon</span></div>
+              <div className="dm-row-sub">Requires Google Cloud OAuth setup · auto-sync to Drive app folder</div>
+            </div>
+          </div>
+          <div className="dm-row" onClick={() => setShowBackupSheet(true)}>
+            <div className="dm-row-icon">⏰</div>
+            <div className="dm-row-content">
+              <div className="dm-row-title">Auto Backup</div>
+              <div className="dm-row-sub">
+                {backupSchedule === 'off' ? 'Disabled' : `${backupSchedule.charAt(0).toUpperCase() + backupSchedule.slice(1)} · keeps last ${MAX_BACKUPS} backups`}
+              </div>
+            </div>
+            <div style={{fontSize:'0.72rem',fontWeight:700,color:'var(--accent)',flexShrink:0}}>
+              {backupSchedule === 'off' ? 'Off' : backupSchedule.charAt(0).toUpperCase() + backupSchedule.slice(1)}
+            </div>
+          </div>
+          {backupHistory.length > 0 && (
+            <div style={{padding:'8px var(--page-px)',borderTop:'1px solid var(--border-light)'}}>
+              <div style={{fontSize:'0.6rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:6}}>Backup History (last {MAX_BACKUPS})</div>
+              {backupHistory.map((b, i) => (
+                <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 0',borderBottom:i<backupHistory.length-1?'1px solid var(--border-light)':'none'}}>
+                  <div>
+                    <div style={{fontSize:'0.72rem',fontWeight:600,color:'var(--text-primary)'}}>{b.filename}</div>
+                    <div style={{fontSize:'0.62rem',color:'var(--text-muted)'}}>{new Date(b.date).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+                  </div>
+                  <div style={{fontSize:'0.65rem',color:'var(--text-muted)'}}>{b.size ? (b.size/1024).toFixed(1)+'KB' : ''}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Auto backup schedule picker */}
+        {showBackupSheet && (
+          <>
+            <div className="overlay" onClick={() => setShowBackupSheet(false)}/>
+            <div className="bottom-sheet">
+              <div className="sheet-handle"/>
+              <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:4}}>Auto Backup Schedule</div>
+              <div style={{fontSize:'0.73rem',color:'var(--text-muted)',marginBottom:16}}>
+                Backup reminder triggers on app open when due. Saves to your device and keeps the last {MAX_BACKUPS} backups.
+              </div>
+              {[['off','Disabled','No automatic backups'],['daily','Daily','Reminder every day'],['weekly','Weekly','Reminder every 7 days'],['monthly','Monthly','Reminder every 30 days']].map(([val,label,sub]) => (
+                <div key={val}
+                  onClick={() => { saveBackupSchedule(val); setShowBackupSheet(false); }}
+                  style={{display:'flex',alignItems:'center',gap:12,padding:'12px 0',borderBottom:'1px solid var(--border-light)',cursor:'pointer'}}>
+                  <div style={{width:18,height:18,borderRadius:'50%',border:`2px solid ${backupSchedule===val?'var(--accent)':'var(--border)'}`,background:backupSchedule===val?'var(--accent)':'transparent',flexShrink:0}}/>
+                  <div>
+                    <div style={{fontSize:'0.85rem',fontWeight:700,color:'var(--text-primary)'}}>{label}</div>
+                    <div style={{fontSize:'0.68rem',color:'var(--text-muted)'}}>{sub}</div>
+                  </div>
+                </div>
+              ))}
+              <button className="btn btn-ghost btn-full" style={{marginTop:12}} onClick={() => setShowBackupSheet(false)}>Cancel</button>
+            </div>
+          </>
+        )}
 
         {/* Danger Zone */}
         <div className="dm-section-hdr" style={{color:'var(--expense)'}}>Danger Zone</div>
