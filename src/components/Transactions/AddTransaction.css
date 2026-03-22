@@ -21,11 +21,11 @@
 .picker-list { flex:1; overflow-y:auto; padding:0 0 24px; }
 .picker-section-label { font-size:0.6rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.8px; padding:10px 0 6px; }
 
-/* Recent — horizontal chip row */
+/* Recent — horizontal wrapping chip row */
 .picker-recent-row { display:flex; flex-wrap:wrap; gap:8px; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
 .picker-recent-row::-webkit-scrollbar { display:none; }
 
-/* All — 3-column chip grid */
+/* All — 3-column chip grid, no gap/padding (per user spec) */
 .picker-chip-grid { display:grid; grid-template-columns:repeat(3,1fr); }
 
 /* Chips shared */
@@ -35,13 +35,21 @@
   background:var(--bg-card2); font-size:0.75rem; font-weight:var(--fw-data);
   color:var(--text-primary); font-family:var(--font); text-align:center;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  transition:background 0.12s, border-color 0.12s; min-height:40px; line-height:1.2; text-wrap: auto;
+  transition:background 0.12s, border-color 0.12s; min-height:40px; line-height:1.2; text-wrap:auto;
 }
 .picker-chip:active { background:var(--bg-hover); }
 .picker-chip-active { background:rgba(0,229,160,0.12); border-color:var(--accent); color:var(--accent); font-weight:600; }
 .picker-chip-check { font-size:0.7rem; margin-left:3px; flex-shrink:0; }
 
-/* Recent chips are slightly different — pill shape */
-.picker-recent-row .picker-chip { border-radius:var(--r-full); padding:7px 14px; min-height:34px; white-space:nowrap; flex-shrink:0; }
+/* Recent chips — pill shape with gap */
+.picker-recent-row .picker-chip { border-radius:var(--r-full); padding:7px 14px; min-height:34px; flex-shrink:0; }
 
-.picker-empty { text-align:center; color:var(--text-muted); font-size:0.82rem; padding:32px var(--page-px); }
+/* Reorder hint link */
+.picker-reorder-hint { font-size:0.65rem; color:var(--accent); background:none; border:none; cursor:pointer; padding:0; text-decoration:underline; text-underline-offset:2px; opacity:0.8; }
+
+.picker-empty { text-align:center; color:var(--text-muted); font-size:0.82rem; padding:32px 0; }
+
+/* ── Swap button between transfer accounts ──────────────────────────────── */
+.transfer-swap-row { display:grid; grid-template-columns:1fr auto 1fr; align-items:end; gap:6px; }
+.swap-btn { display:flex; align-items:center; justify-content:center; width:34px; height:38px; background:var(--bg-card2); border:1.5px solid var(--border); border-radius:var(--r-md); cursor:pointer; flex-shrink:0; margin-bottom:0; color:var(--text-muted); font-size:1rem; transition:background 0.12s; }
+.swap-btn:active { background:var(--bg-hover); color:var(--accent); }
