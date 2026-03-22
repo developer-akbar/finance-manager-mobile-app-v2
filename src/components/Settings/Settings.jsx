@@ -91,15 +91,19 @@ function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, onReorder,
 // ─────────────────────────────────────────────
 // Accounts Manager
 // ─────────────────────────────────────────────
-function AccountsManager({ onBack }) {
+export function AccountsManager({ onBack }) {
   const { state, updateSettings, renameAccount } = useApp();
-  const [accounts, setAccounts]       = useState(() => (state.accounts||[]).map(a=>typeof a==='string'?{name:a,group:'',icon:'💳'}:a));
+  const [accounts, setAccounts]       = useState(() => (state.accounts||[]).map(a=>typeof a==='string'?{name:a,group:'',icon:'💳',acctType:'',settlementDate:0,paymentDueDays:0}:a));
   const [groups,   setGroups]         = useState(() => state.accountGroups||[]);
   const [newAcct,  setNewAcct]        = useState('');
   const [newGrp,   setNewGrp]         = useState('');
-  const [editIdx,   setEditIdx]       = useState(null);
-  const [editName,  setEditName]      = useState('');
-  const [editGrp,   setEditGrp]       = useState('');
+  const [editIdx,       setEditIdx]       = useState(null);
+  const [editName,      setEditName]      = useState('');
+  const [editGrp,       setEditGrp]       = useState('');
+  const [editAcctType,  setEditAcctType]  = useState('');
+  const [editSettleDay, setEditSettleDay] = useState('');
+  const [editPayDays,   setEditPayDays]   = useState('');
+  const [editErrors,    setEditErrors]    = useState({});
   const [tabMode,   setTabMode]       = useState('list'); // 'list' | 'kanban'
   const [saving,    setSaving]        = useState(false);
   const [toast,     setToast]         = useState('');
@@ -166,7 +170,7 @@ function AccountsManager({ onBack }) {
   const addAccount = () => {
     const t = newAcct.trim();
     if (!t || accounts.some(a=>a.name===t)) return;
-    const upd = [...accounts, {name:t,group:'',icon:'💳'}];
+    const upd = [...accounts, {name:t,group:'',icon:'💳',acctType:'',settlementDate:0,paymentDueDays:0}];
     setAccounts(upd); setNewAcct(''); save(upd);
   };
 
@@ -175,14 +179,47 @@ function AccountsManager({ onBack }) {
     setAccounts(upd); save(upd);
   };
 
+  // Only suggest CC if name contains 'credit' — never trigger on 'card', 'cc' alone
+  const looksLikeCC = (name) => /\bcredit\b/i.test(name);
+
   const startEdit = (i) => {
-    setEditIdx(i); setEditName(accounts[i].name); setEditGrp(accounts[i].group||'');
+    const a = accounts[i];
+    // If acctType is explicitly set (even ''), respect it — don't override with name detection
+    // acctType === undefined/null means old account before feature: suggest from name
+    const hasExplicitType = a.acctType !== undefined && a.acctType !== null;
+    const inferredType = hasExplicitType ? a.acctType : (looksLikeCC(a.name) ? 'Credit Card' : '');
+    setEditIdx(i);
+    setEditName(a.name);
+    setEditGrp(a.group || '');
+    setEditAcctType(inferredType);
+    setEditSettleDay(a.settlementDate ? String(a.settlementDate) : '');
+    setEditPayDays(a.paymentDueDays ? String(a.paymentDueDays) : '');
+    setEditErrors({});
   };
 
   const saveEdit = async () => {
     if (!editName.trim()) return;
+    const errs = {};
+    const isCC = editAcctType === 'Credit Card';
+    if (isCC) {
+      const sd = parseInt(editSettleDay, 10);
+      const pd = parseInt(editPayDays, 10);
+      if (!editSettleDay || isNaN(sd) || sd < 1 || sd > 28)
+        errs.settlementDate = 'Enter a day between 1 and 28';
+      if (!editPayDays || isNaN(pd) || pd < 1 || pd > 30)
+        errs.paymentDueDays = 'Enter days between 1 and 30';
+    }
+    if (Object.keys(errs).length) { setEditErrors(errs); return; }
+    setEditErrors({});
     const old = accounts[editIdx].name;
-    const upd = accounts.map((a,i)=>i===editIdx?{...a,name:editName.trim(),group:editGrp}:a);
+    const upd = accounts.map((a,i) => i===editIdx ? {
+      ...a,
+      name:           editName.trim(),
+      group:          editGrp,
+      acctType:       isCC ? 'Credit Card' : '',
+      settlementDate: isCC ? parseInt(editSettleDay, 10) : 0,
+      paymentDueDays: isCC ? parseInt(editPayDays, 10)  : 0,
+    } : a);
     setAccounts(upd); setEditIdx(null);
     if (old !== editName.trim()) await renameAccount(old, editName.trim());
     await save(upd);
@@ -262,7 +299,9 @@ function AccountsManager({ onBack }) {
         )}
 
         {/* Accounts section with List/Kanban tabs */}
-        <div className="mgr-section-label">All Accounts ({uniqueAccounts.length})</div>
+        <div className="mgr-section-label">All Accounts ({uniqueAccounts.length})
+          <span style={{float:'right',fontWeight:400,textTransform:'none',letterSpacing:0,fontSize:'0.65rem',opacity:0.6}}>⠿ drag to set picker order</span>
+        </div>
         <div style={{display:'flex',gap:8,padding:'0 var(--page-px) 8px'}}>
           <input className="form-input" style={{flex:1}} placeholder="Account name" value={newAcct} onChange={e=>setNewAcct(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addAccount()} spellCheck="true" autoCapitalize="sentences"/>
           <button className="btn btn-primary btn-sm" onClick={addAccount}>Add</button>
@@ -284,50 +323,136 @@ function AccountsManager({ onBack }) {
             onReorder={handleKanbanReorder}
             unassignedLabel="Ungrouped"
           />
-        ) : (
-          <div className="mgr-list">
-            {uniqueAccounts.length === 0 && <div className="mgr-empty">No accounts yet</div>}
-            {uniqueAccounts.map((a,i) => (
-              <div key={a.name}
-                draggable
-                onDragStart={()=>onDragStart(i)}
-                onDragOver={e=>onDragOver(e,i)}
-                onDragEnd={onDragEnd}
-              >
-                <div className="mgr-list-row">
-                  <span className="mgr-drag-handle">⠿</span>
-                  <div className="mgr-list-content" style={{flex:1}}>
-                    <div className="mgr-list-name">{a.name}</div>
-                    {a.group && <div style={{fontSize:'0.68rem',color:'var(--text-muted)'}}>📁 {a.group}</div>}
-                  </div>
-                  <button className="mgr-edit-btn" onClick={()=>editIdx===i?setEditIdx(null):startEdit(i)}>✏️</button>
-                  <button className="mgr-del-btn"  onClick={()=>removeAccount(a.name)}>✕</button>
-                </div>
-                {editIdx===i&&(
-                  <div className="mgr-edit-panel">
-                    <div className="mgr-edit-label">Edit Account</div>
-                    <div className="form-group" style={{marginBottom:8}}>
-                      <label className="form-label">Name</label>
-                      <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} spellCheck="true" autoCapitalize="sentences"/>
-                      <div className="mgr-edit-warn">⚠ Renaming updates all transactions</div>
-                    </div>
-                    <div className="form-group" style={{marginBottom:8}}>
-                      <label className="form-label">Group</label>
-                      <select className="form-input" value={editGrp} onChange={e=>setEditGrp(e.target.value)}>
-                        <option value="">No group</option>
-                        {uniqueGroups.map(g=><option key={g}>{g}</option>)}
-                      </select>
-                    </div>
-                    <div style={{display:'flex',gap:8}}>
-                      <button className="btn btn-ghost btn-sm"   onClick={()=>setEditIdx(null)}>Cancel</button>
-                      <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
-                    </div>
-                  </div>
-                )}
+        ) : (() => {
+          // Build grouped sections preserving flat indices for drag/edit/delete
+          const sections = [];
+          uniqueGroups.forEach(grp => {
+            const items = uniqueAccounts.map((a,i)=>({a,i})).filter(({a})=>(a.group||'')===grp);
+            if (items.length) sections.push({ label:grp, icon:'📁', items });
+          });
+          const ungrouped = uniqueAccounts.map((a,i)=>({a,i})).filter(({a})=>!a.group||!uniqueGroups.includes(a.group));
+          if (ungrouped.length) sections.push({ label:'Ungrouped', icon:'📋', items:ungrouped, muted:true });
+
+          const renderEditPanel = (i) => (
+            <div className="mgr-edit-panel">
+              <div className="mgr-edit-label">Edit Account</div>
+              <div className="form-group" style={{marginBottom:8}}>
+                <label className="form-label">Name</label>
+                <input className="form-input" value={editName} onChange={e=>setEditName(e.target.value)} spellCheck="true" autoCapitalize="sentences"/>
+                <div className="mgr-edit-warn">⚠ Renaming updates all transactions</div>
               </div>
-            ))}
-          </div>
-        )}
+              <div className="form-group" style={{marginBottom:8}}>
+                <label className="form-label">Group</label>
+                <select className="form-input" value={editGrp} onChange={e=>setEditGrp(e.target.value)}>
+                  <option value="">No group</option>
+                  {uniqueGroups.map(g=><option key={g}>{g}</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{marginBottom:8}}>
+                <label className="form-label">Account Type</label>
+                <select className="form-input" value={editAcctType} onChange={e=>{ setEditAcctType(e.target.value); setEditErrors({}); }}>
+                  <option value="">Regular</option>
+                  <option value="Credit Card">💳 Credit Card</option>
+                </select>
+              </div>
+              {editAcctType === 'Credit Card' && (
+                <div className="cc-config-panel">
+                  <div className="cc-config-title">💳 Credit Card Settings</div>
+                  <div className="form-group" style={{marginBottom:8}}>
+                    <label className="form-label">Statement / Settlement Date <span className="form-label-hint">(day of month bill closes)</span></label>
+                    <input
+                      className={`form-input${editErrors.settlementDate?' input-error':''}`}
+                      type="number" inputMode="numeric" min="1" max="28"
+                      placeholder="e.g. 18"
+                      value={editSettleDay}
+                      onChange={e=>{ setEditSettleDay(e.target.value); setEditErrors(p=>({...p,settlementDate:''})); }}
+                    />
+                    {editErrors.settlementDate && <div className="form-error">{editErrors.settlementDate}</div>}
+                    <div className="form-hint">
+                      {editSettleDay && !editErrors.settlementDate && (()=>{
+                        const sd=parseInt(editSettleDay,10);
+                        if(sd>=1&&sd<=28){
+                          const now=new Date(),cy=now.getFullYear(),cm=now.getMonth(),cd=now.getDate();
+                          let cycleStart,cycleEnd;
+                          if(cd>=sd){cycleStart=new Date(cy,cm,sd);cycleEnd=new Date(cy,cm+1,sd-1);}
+                          else{cycleStart=new Date(cy,cm-1,sd);cycleEnd=new Date(cy,cm,sd-1);}
+                          const fmt=d=>d.toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+                          return <span>Current billing cycle: <strong>{fmt(cycleStart)} – {fmt(cycleEnd)}</strong></span>;
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  </div>
+                  <div className="form-group" style={{marginBottom:8}}>
+                    <label className="form-label">Payment Due Days <span className="form-label-hint">(days after statement date)</span></label>
+                    <input
+                      className={`form-input${editErrors.paymentDueDays?' input-error':''}`}
+                      type="number" inputMode="numeric" min="1" max="30"
+                      placeholder="e.g. 18"
+                      value={editPayDays}
+                      onChange={e=>{ setEditPayDays(e.target.value); setEditErrors(p=>({...p,paymentDueDays:''})); }}
+                    />
+                    {editErrors.paymentDueDays && <div className="form-error">{editErrors.paymentDueDays}</div>}
+                    <div className="form-hint">
+                      {editSettleDay && editPayDays && !editErrors.settlementDate && !editErrors.paymentDueDays && (()=>{
+                        const sd=parseInt(editSettleDay,10),pd=parseInt(editPayDays,10);
+                        if(sd>=1&&sd<=28&&pd>=1&&pd<=30){
+                          const now=new Date(),cy=now.getFullYear(),cm=now.getMonth(),cd=now.getDate();
+                          let stmtDate;
+                          if(cd>=sd) stmtDate=new Date(cy,cm,sd); else stmtDate=new Date(cy,cm-1,sd);
+                          const dueDate=new Date(stmtDate); dueDate.setDate(dueDate.getDate()+pd);
+                          return <span>Last due date: <strong>{dueDate.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}</strong></span>;
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div style={{display:'flex',gap:8}}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>setEditIdx(null)}>Cancel</button>
+                <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="mgr-list">
+              {uniqueAccounts.length === 0 && <div className="mgr-empty">No accounts yet</div>}
+              {sections.map(({label,icon,items,muted})=>(
+                <div key={label}>
+                  <div className="mgr-acct-group-header" style={muted?{opacity:0.55}:{}}>
+                    <span>{icon} {label}</span>
+                    <span className="mgr-acct-group-count">{items.length}</span>
+                  </div>
+                  {items.map(({a,i})=>(
+                    <div key={a.name}
+                      draggable
+                      onDragStart={()=>onDragStart(i)}
+                      onDragOver={e=>onDragOver(e,i)}
+                      onDragEnd={onDragEnd}
+                    >
+                      <div className="mgr-list-row mgr-list-row-indented">
+                        <span className="mgr-drag-handle">⠿</span>
+                        <div className="mgr-list-content" style={{flex:1}}>
+                          <div className="mgr-list-name">{a.name}</div>
+                          {a.acctType==='Credit Card'&&(
+                            <div style={{fontSize:'0.63rem',color:'var(--accent)',fontWeight:700}}>
+                              💳 Credit Card{a.settlementDate?` · settles ${a.settlementDate}th`:''}
+                            </div>
+                          )}
+                        </div>
+                        <button className="mgr-edit-btn" onClick={()=>editIdx===i?setEditIdx(null):startEdit(i)}>✏️</button>
+                        <button className="mgr-del-btn"  onClick={()=>removeAccount(a.name)}>✕</button>
+                      </div>
+                      {editIdx===i && renderEditPanel(i)}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
         <div className="h-8"/>
       </div>
     </div>
@@ -337,9 +462,14 @@ function AccountsManager({ onBack }) {
 // ─────────────────────────────────────────────
 // Categories Manager
 // ─────────────────────────────────────────────
-function CategoriesManager({ onBack }) {
+export function CategoriesManager({ onBack }) {
   const { state, updateSettings, renameCategory } = useApp();
   const [cats,    setCats]    = useState(() => {
+    // Use categoriesArr (DB sort_order preserved) if available, else fall back to categories object
+    const arr = state.categoriesArr;
+    if (arr && arr.length > 0) {
+      return arr.map(c => ({name:c.name, type:c.type||'Expense', subcategories:(c.subcategories||[]).map(s=>s.name||s)}));
+    }
     const obj = state.categories||{};
     return Object.entries(obj).map(([name,d])=>({name,type:d.type||'Expense',subcategories:(d.subcategories||[]).map(s=>s)}));
   });
@@ -364,8 +494,9 @@ function CategoriesManager({ onBack }) {
 
   const save = async (updated = cats) => {
     setSaving(true);
+    // Pass sortOrder so replaceCategories preserves drag order in DB
     const o={};
-    for(const c of updated) o[c.name]={type:c.type,subcategories:c.subcategories};
+    for(const [i,c] of updated.entries()) o[c.name]={type:c.type,subcategories:c.subcategories,sortOrder:i};
     try { await updateSettings({categories:o}); showToast('Saved ✓'); }
     finally { setSaving(false); }
   };
@@ -438,7 +569,9 @@ function CategoriesManager({ onBack }) {
 
   const renderSection = (list, typeLabel) => (
     <>
-      <div className="mgr-section-label">{typeLabel} Categories</div>
+      <div className="mgr-section-label">{typeLabel} Categories
+            <span style={{float:'right',fontWeight:400,textTransform:'none',letterSpacing:0,fontSize:'0.65rem',opacity:0.6}}>⠿ drag to set picker order</span>
+          </div>
       <div className="mgr-list">
         {list.length===0&&<div className="mgr-empty">No {typeLabel.toLowerCase()} categories</div>}
         {list.map((c) => {
@@ -575,13 +708,19 @@ function CategoriesManager({ onBack }) {
 // Data Manager
 // ─────────────────────────────────────────────
 function DataManager({ onBack }) {
-  const { state, importData, cancelImport, clearAllData, cleanupAccounts, analyseImport } = useApp();
-  const { transactions, importProgress } = state;
+  const { state, importData, cancelImport, clearAllData, cleanupAccounts, analyseImport, updateSettings } = useApp();
+  const { transactions, accounts, accountGroups, accountMapping, categories, budgets, importProgress } = state;
   const fileRef = useRef(null);
   const [status,      setStatus]    = useState(null);
   const [showMode,    setShowMode]  = useState(false);
-  const [pendingRows, setPending]   = useState(null);
-  const [pendingName, setPendingNm] = useState('');
+  const [pendingRows, setPending]     = useState(null);
+  const [pendingName, setPendingNm]   = useState('');
+  const [pendingIsBackup, setIsBackup]        = useState(false);
+  const [backupSchedule,  setBackupSchedule]  = useState(() => state.settings?.backupSchedule || 'off');
+  const [backupHistory,   setBackupHistory]   = useState(() => {
+    try { return JSON.parse(state.settings?.backupHistory || '[]'); } catch { return []; }
+  });
+  const [showBackupSheet, setShowBackupSheet] = useState(false);
   const [showDel,     setShowDel]   = useState(false);
   const [analysis,    setAnalysis]  = useState(null);   // { total, fileDupeCount, dbDupeCount }
   const [analysing,   setAnalysing] = useState(false);
@@ -604,18 +743,46 @@ function DataManager({ onBack }) {
     setStatus(null);
     const name = file.name.toLowerCase();
     try {
-      let rows;
       const { parseFile } = await import('../../utils/xlsParser.js');
-      rows = await parseFile(file);
-      if (!Array.isArray(rows) || rows.length === 0) {
+      const parsed = await parseFile(file);
+
+      // ── Full FinMan backup JSON ─────────────────────────────────────────
+      // Detect by _finman_backup flag. These files contain both transactions
+      // AND settings (accounts, groups, categories, budgets).
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed._finman_backup) {
+        const backup = parsed;
+        const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
+        // Restore settings first so accounts/categories are ready before transactions
+        await updateSettings({
+          accounts:       Array.isArray(backup.accounts)        ? backup.accounts        : undefined,
+          accountGroups:  Array.isArray(backup.accountGroups)   ? backup.accountGroups   : undefined,
+          accountMapping: Array.isArray(backup.accountMapping)  ? backup.accountMapping  : undefined,
+          categories:     backup.categories && typeof backup.categories === 'object' ? backup.categories : undefined,
+        });
+        if (txnRows.length === 0) {
+          setStatus({ type:'success', msg:'✓ Settings restored. No transactions in backup.' });
+          if (fileRef.current) fileRef.current.value = '';
+          return;
+        }
+        setPending(txnRows);
+        setPendingNm(file.name);
+        setIsBackup(true);
+        setShowMode(true);
+        if (fileRef.current) fileRef.current.value = '';
+        return;
+      }
+
+      // ── Transactions-only file (CSV, XLS, or plain JSON array) ──────────
+      const rows = Array.isArray(parsed) ? parsed : [];
+      if (rows.length === 0) {
         setStatus({ type:'error', msg:'File appears empty or unreadable.' });
         if (fileRef.current) fileRef.current.value = '';
         return;
       }
       // Validate expected columns
       const firstRow = rows[0];
-      const hasDate  = 'Date' in firstRow;
-      const hasType  = 'Income/Expense' in firstRow;
+      const hasDate  = 'Date' in firstRow || 'date' in firstRow;
+      const hasType  = 'Income/Expense' in firstRow || 'type' in firstRow;
       if (!hasDate || !hasType) {
         setStatus({ type:'error', msg:`Missing required columns. Need: Date, Income/Expense, Amount/INR, Account, Category. Found: ${Object.keys(firstRow).slice(0,6).join(', ')}…` });
         if (fileRef.current) fileRef.current.value = '';
@@ -623,6 +790,7 @@ function DataManager({ onBack }) {
       }
       setPending(rows);
       setPendingNm(file.name);
+      setIsBackup(false);
       setShowMode(true);
     } catch (err) {
       setStatus({ type:'error', msg: `Parse error: ${err.message}` });
@@ -641,6 +809,49 @@ function DataManager({ onBack }) {
   };
 
   // ── Capacitor-aware file save (no @capacitor/share — avoids Android 14 crash) ──
+  // ── Backup helpers ─────────────────────────────────────────────────────────
+  const MAX_BACKUPS = 3;
+
+  const buildBackupPayload = () => ({
+    _finman_backup: true,
+    version: '2.2.1.3',
+    exportedAt: new Date().toISOString(),
+    transactions,
+    accounts:       accounts || [],
+    accountGroups:  accountGroups || [],
+    accountMapping: accountMapping || [],
+    categories:     categories || {},
+    budgets:        budgets || [],
+  });
+
+  const runBackupNow = async () => {
+    const payload  = buildBackupPayload();
+    const now      = new Date();
+    const dateStr  = now.toISOString().split('T')[0];
+    const filename = `finman_backup_${dateStr}.json`;
+    const json     = JSON.stringify(payload, null, 2);
+
+    // Update history (keep last 3) AND mark lastBackupCheck
+    const entry = { date: now.toISOString(), filename, size: json.length };
+    const newHistory = [entry, ...backupHistory].slice(0, MAX_BACKUPS);
+    setBackupHistory(newHistory);
+    await updateSettings({
+      backupHistory:   JSON.stringify(newHistory),
+      lastBackupCheck: now.toISOString(),
+    });
+
+    // Trigger download
+    await saveFile(json, filename, 'application/json');
+    setStatus({ type:'success', msg:`✓ Backup saved — ${filename}` });
+  };
+
+  const saveBackupSchedule = async (val) => {
+    setBackupSchedule(val);
+    // Only save schedule — do NOT reset lastBackupCheck here.
+    // lastBackupCheck is only updated when an actual backup is taken.
+    await updateSettings({ backupSchedule: val });
+  };
+
   const saveFile = async (content, filename, mimeType) => {
     const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform?.());
     if (isNative) {
@@ -671,13 +882,15 @@ function DataManager({ onBack }) {
 
   const exportCSV = async () => {
     const hdrs = ['Date','Time','Account','FromAccount','ToAccount','Category','Subcategory','Note','Description','INR','Amount','Currency','Income/Expense','ID'];
-    const esc  = v => { const s=String(v||''); return s.includes(',')||s.includes('"')?`"${s.replace(/"/g,'""')}"`:s; };
+    // RFC 4180: quote any field containing comma, double-quote, newline or carriage-return
+    const esc  = v => { const s=String(v??''); return /[,"\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
     const rows = [hdrs.join(','), ...transactions.map(t => hdrs.map(h => esc(t[h])).join(','))];
     await saveFile(rows.join('\n'), `finman_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
   };
 
   const exportJSON = async () => {
-    await saveFile(JSON.stringify(transactions, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
+    const backup = buildBackupPayload();
+    await saveFile(JSON.stringify(backup, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
   };
 
   const pct = importProgress ? Math.round((importProgress.processed / importProgress.total) * 100) : 0;
@@ -735,7 +948,7 @@ function DataManager({ onBack }) {
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json" style={{display:'none'}} onChange={handleFile} disabled={!!importProgress}/>
           <div className="import-folder-icon">📂</div>
           <div className="import-drop-title">Choose file</div>
-          <div className="import-drop-sub">CSV · Excel (XLS / XLSX) · JSON</div>
+          <div className="import-drop-sub">CSV / XLS — transactions only · JSON — full backup incl. accounts &amp; categories</div>
         </label>
 
         {/* Export section */}
@@ -743,13 +956,84 @@ function DataManager({ onBack }) {
         <div className="dm-card" style={{margin:'0 var(--page-px) 14px'}}>
           <div className="dm-row" onClick={exportCSV}>
             <div className="dm-row-icon">📊</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export CSV</div><div className="dm-row-sub">All transactions as comma-separated</div></div>
+            <div className="dm-row-content"><div className="dm-row-title">Export CSV</div><div className="dm-row-sub">Transactions only · safe for spreadsheets</div></div>
           </div>
           <div className="dm-row" onClick={exportJSON}>
             <div className="dm-row-icon">🗃️</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export JSON</div><div className="dm-row-sub">Full backup with all fields</div></div>
+            <div className="dm-row-content"><div className="dm-row-title">Export Full Backup (JSON)</div><div className="dm-row-sub">Transactions + accounts, groups, categories · re-importable</div></div>
           </div>
         </div>
+
+        {/* Backup section */}
+        <div className="dm-section-hdr">Backup</div>
+        <div className="dm-card" style={{margin:'0 var(--page-px) 14px'}}>
+          <div className="dm-row" onClick={runBackupNow}>
+            <div className="dm-row-icon">📲</div>
+            <div className="dm-row-content">
+              <div className="dm-row-title">Backup Now</div>
+              <div className="dm-row-sub">Save full backup to device storage</div>
+            </div>
+          </div>
+          <div className="dm-row" style={{opacity:0.5,cursor:'default'}}>
+            <div className="dm-row-icon">🔵</div>
+            <div className="dm-row-content">
+              <div className="dm-row-title">Google Drive <span style={{fontSize:'0.62rem',fontWeight:700,background:'rgba(255,180,0,0.15)',color:'var(--gold)',borderRadius:4,padding:'1px 5px',marginLeft:4}}>Coming Soon</span></div>
+              <div className="dm-row-sub">Requires Google Cloud OAuth setup · auto-sync to Drive app folder</div>
+            </div>
+          </div>
+          <div className="dm-row" onClick={() => setShowBackupSheet(true)}>
+            <div className="dm-row-icon">⏰</div>
+            <div className="dm-row-content">
+              <div className="dm-row-title">Auto Backup</div>
+              <div className="dm-row-sub">
+                {backupSchedule === 'off' ? 'Disabled' : `${backupSchedule.charAt(0).toUpperCase() + backupSchedule.slice(1)} · keeps last ${MAX_BACKUPS} backups`}
+              </div>
+            </div>
+            <div style={{fontSize:'0.72rem',fontWeight:700,color:'var(--accent)',flexShrink:0}}>
+              {backupSchedule === 'off' ? 'Off' : backupSchedule.charAt(0).toUpperCase() + backupSchedule.slice(1)}
+            </div>
+          </div>
+          {backupHistory.length > 0 && (
+            <div style={{padding:'8px var(--page-px)',borderTop:'1px solid var(--border-light)'}}>
+              <div style={{fontSize:'0.6rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:6}}>Backup History (last {MAX_BACKUPS})</div>
+              {backupHistory.map((b, i) => (
+                <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 0',borderBottom:i<backupHistory.length-1?'1px solid var(--border-light)':'none'}}>
+                  <div>
+                    <div style={{fontSize:'0.72rem',fontWeight:600,color:'var(--text-primary)'}}>{b.filename}</div>
+                    <div style={{fontSize:'0.62rem',color:'var(--text-muted)'}}>{new Date(b.date).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+                  </div>
+                  <div style={{fontSize:'0.65rem',color:'var(--text-muted)'}}>{b.size ? (b.size/1024).toFixed(1)+'KB' : ''}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Auto backup schedule picker */}
+        {showBackupSheet && (
+          <>
+            <div className="overlay" onClick={() => setShowBackupSheet(false)}/>
+            <div className="bottom-sheet">
+              <div className="sheet-handle"/>
+              <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:4}}>Auto Backup Schedule</div>
+              <div style={{fontSize:'0.73rem',color:'var(--text-muted)',marginBottom:16}}>
+                Backup reminder triggers on app open when due. Saves to your device and keeps the last {MAX_BACKUPS} backups.
+              </div>
+              {[['off','Disabled','No automatic backups'],['daily','Daily','Reminder every day'],['weekly','Weekly','Reminder every 7 days'],['monthly','Monthly','Reminder every 30 days']].map(([val,label,sub]) => (
+                <div key={val}
+                  onClick={() => { saveBackupSchedule(val); setShowBackupSheet(false); }}
+                  style={{display:'flex',alignItems:'center',gap:12,padding:'12px 0',borderBottom:'1px solid var(--border-light)',cursor:'pointer'}}>
+                  <div style={{width:18,height:18,borderRadius:'50%',border:`2px solid ${backupSchedule===val?'var(--accent)':'var(--border)'}`,background:backupSchedule===val?'var(--accent)':'transparent',flexShrink:0}}/>
+                  <div>
+                    <div style={{fontSize:'0.85rem',fontWeight:700,color:'var(--text-primary)'}}>{label}</div>
+                    <div style={{fontSize:'0.68rem',color:'var(--text-muted)'}}>{sub}</div>
+                  </div>
+                </div>
+              ))}
+              <button className="btn btn-ghost btn-full" style={{marginTop:12}} onClick={() => setShowBackupSheet(false)}>Cancel</button>
+            </div>
+          </>
+        )}
 
         {/* Danger Zone */}
         <div className="dm-section-hdr" style={{color:'var(--expense)'}}>Danger Zone</div>
@@ -810,14 +1094,12 @@ function DataManager({ onBack }) {
               )}
 
               <div style={{fontSize:'0.78rem',color:'var(--text-muted)',marginBottom:16}}>
-                <b style={{color:'var(--expense)'}}>Override</b> — deletes everything, imports all rows fresh (intentional duplicates included).<br/>
-                <b style={{color:'var(--green)'}}>Merge</b> — keeps existing data, adds only new rows (exact duplicates skipped).
+                <b style={{color:'var(--green)'}}>Merge</b> — keeps all existing transactions, accounts &amp; categories. Adds only new rows (exact duplicates skipped). <b>Recommended for FinMan exports.</b><br/><br/>
+                <b style={{color:'var(--expense)'}}>Override</b> — ⚠ deletes all existing transactions first, then imports fresh. Settings (accounts, categories) are rebuilt from the file. Use only when starting clean.
               </div>
-              <div style={{display:'flex',gap:10}}>
-                <button className="btn btn-danger  btn-full" onClick={() => doImport('override')}>Override all</button>
-                <button className="btn btn-primary btn-full" onClick={() => doImport('merge')}>Merge</button>
-              </div>
-              <button className="btn btn-ghost btn-full" style={{marginTop:8}} onClick={() => { setShowMode(false); setPending(null); setAnalysis(null); }}>Cancel</button>
+              <button className="btn btn-primary btn-full" style={{marginBottom:8}} onClick={() => doImport('merge')}>Merge (recommended)</button>
+              <button className="btn btn-danger  btn-full" onClick={() => doImport('override')}>Override — delete &amp; replace all</button>
+              <button className="btn btn-ghost btn-full" style={{marginTop:8}} onClick={() => { setShowMode(false); setPending(null); setAnalysis(null); setIsBackup(false); }}>Cancel</button>
             </div>
           </>
         )}
@@ -1010,8 +1292,9 @@ function BudgetsManager({ onBack }) {
 // Appearance Manager
 // ─────────────────────────────────────────────
 function AppearanceManager({ onBack }) {
-  const { state, updateSettings, setTheme, setFontSize, setFontFamily } = useApp();
+  const { state, updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight } = useApp();
   const { theme, fontSize } = state;
+  const fontDataWeight = state.fontDataWeight || 'regular';
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
 
@@ -1086,6 +1369,56 @@ function AppearanceManager({ onBack }) {
           </div>
         </div>
 
+        {/* Font Weight */}
+        <div className="mgr-section-label">Content Font Weight</div>
+        <div className="settings-card" style={{margin:'0 var(--page-px) 16px'}}>
+          <div style={{padding:'12px var(--page-px)'}}>
+            <div style={{fontSize:'0.72rem',color:'var(--text-muted)',marginBottom:12}}>
+              Applies to transaction notes, amounts, account names, category names. Headings and labels are unaffected.
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              {[
+                { key:'light',   label:'Light',   fw:'400', desc:'Airy & minimal' },
+                { key:'regular', label:'Regular',  fw:'500', desc:'Balanced' },
+                { key:'bold',    label:'Bold',     fw:'700', desc:'High contrast' },
+              ].map(opt => (
+                <div key={opt.key}
+                  onClick={() => setFontDataWeight(opt.key)}
+                  style={{
+                    flex:1, borderRadius:10, border:`2px solid ${fontDataWeight===opt.key?'var(--accent)':'var(--border)'}`,
+                    background: fontDataWeight===opt.key ? 'rgba(0,229,160,0.08)' : 'var(--bg-card2)',
+                    padding:'10px 8px', cursor:'pointer', textAlign:'center', transition:'all 0.15s',
+                  }}>
+                  <div style={{fontFamily:'var(--font)',fontSize:'1rem',fontWeight:opt.fw,color:fontDataWeight===opt.key?'var(--accent)':'var(--text-primary)',marginBottom:4}}>
+                    ₹1,234
+                  </div>
+                  <div style={{fontSize:'0.72rem',fontWeight:opt.fw,color:fontDataWeight===opt.key?'var(--accent)':'var(--text-primary)',marginBottom:2}}>
+                    {opt.label}
+                  </div>
+                  <div style={{fontSize:'0.6rem',color:'var(--text-muted)'}}>
+                    {opt.desc}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Live preview */}
+            <div style={{marginTop:12,padding:'10px 12px',background:'var(--bg-surface)',borderRadius:8,border:'1px solid var(--border-light)'}}>
+              <div style={{fontSize:'0.6rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:8}}>Preview</div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                <div>
+                  <div style={{fontSize:'0.8rem',fontWeight:fontDataWeight==='light'?400:fontDataWeight==='regular'?500:700,color:'var(--text-primary)'}}>Groceries · Milk</div>
+                  <div style={{fontSize:'0.65rem',color:'var(--text-muted)',marginTop:2}}>10:30 am · To Home</div>
+                </div>
+                <div style={{fontFamily:'var(--font)',fontSize:'0.78rem',fontWeight:fontDataWeight==='light'?400:fontDataWeight==='regular'?500:700,color:'var(--expense)'}}>−₹250</div>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div style={{fontSize:'0.8rem',fontWeight:fontDataWeight==='light'?400:fontDataWeight==='regular'?500:700,color:'var(--text-primary)'}}>HDFC</div>
+                <div style={{fontFamily:'var(--font)',fontSize:'0.78rem',fontWeight:fontDataWeight==='light'?400:fontDataWeight==='regular'?500:700,color:'var(--income)'}}>+₹9,67,413</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Font Family */}
         <div className="mgr-section-label">Font Family</div>
         <div className="settings-card" style={{margin:'0 var(--page-px) 16px'}}>
@@ -1123,6 +1456,7 @@ function AppearanceManager({ onBack }) {
 // ─────────────────────────────────────────────
 export default function Settings({ backInterceptRef } = {}) {
   const { state } = useApp();
+  // Check if we navigated here from AddTransaction to reorder accounts/categories
   const [screen, setScreen] = useState(null);
 
   // Register Android back intercept for sub-screens
@@ -1152,6 +1486,18 @@ export default function Settings({ backInterceptRef } = {}) {
     <div className="settings-root">
       <div className="settings-title-row">
         <div style={{fontSize:'1.4rem',fontWeight:800}}>Settings</div>
+      </div>
+
+      {/* Profile card — top of settings */}
+      <div className="settings-profile-card" onClick={()=>setScreen('profile')}>
+        <div className="settings-profile-avatar">
+          {(state.settings?.profileName || state.settings?.name || 'A').trim().charAt(0).toUpperCase()}
+        </div>
+        <div className="settings-profile-info">
+          <div className="settings-profile-name">{state.settings?.profileName || state.settings?.name || 'Your Name'}</div>
+          <div className="settings-profile-sub">{state.settings?.pin ? '🔒 PIN enabled' : 'Finance Manager v2'}</div>
+        </div>
+        <button className="settings-profile-edit-btn" onClick={e=>{e.stopPropagation();setScreen('profile');}}>Edit</button>
       </div>
 
       {/* Appearance */}
@@ -1194,22 +1540,12 @@ export default function Settings({ backInterceptRef } = {}) {
         </div>
       </div>
 
-      {/* Profile & Security */}
-      <div className="settings-group-label">Profile & Security</div>
-      <div className="settings-card">
-        <div className="settings-row" onClick={()=>setScreen('profile')}>
-          <div className="settings-row-icon" style={{background:'rgba(255,180,0,0.15)'}}>👤</div>
-          <div className="settings-row-content"><div className="settings-row-title">Profile & PIN Lock</div><div className="settings-row-sub">{state.settings?.pin ? 'PIN set — app locked after 10s idle' : 'Set a PIN to lock app when idle'}</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6"/></svg>
-        </div>
-      </div>
-
       {/* About */}
       <div className="settings-group-label">About</div>
       <div className="settings-card">
         <div className="settings-row">
           <div className="settings-row-icon" style={{background:'rgba(0,229,160,0.12)'}}>💰</div>
-          <div className="settings-row-content"><div className="settings-row-title">FinMan</div><div className="settings-row-sub">v2.2.1.1 — Built for you by Akbar 💚</div></div>
+          <div className="settings-row-content"><div className="settings-row-title">FinMan</div><div className="settings-row-sub">v2.2.1.3 — Built for you by Akbar 💚</div></div>
         </div>
       </div>
 

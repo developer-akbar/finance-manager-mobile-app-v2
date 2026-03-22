@@ -5,7 +5,7 @@
 import { Capacitor } from '@capacitor/core';
 
 const IDB_NAME    = 'finman_v2';
-const IDB_VERSION = 6; // bump forces onupgradeneeded
+const IDB_VERSION = 7; // v7 — credit card config fields on accounts
 
 // Each store and its primary key field
 const STORE_DEFS = [
@@ -230,7 +230,10 @@ const applySchema = async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY,date TEXT NOT NULL,time TEXT DEFAULT '',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',note TEXT DEFAULT '',description TEXT DEFAULT '',inr REAL DEFAULT 0,amount TEXT DEFAULT '0',currency TEXT DEFAULT 'INR',type TEXT DEFAULT 'Expense',created_at TEXT,updated_at TEXT);`);
   try { await db.execute(`ALTER TABLE transactions ADD COLUMN description TEXT DEFAULT '';`); } catch {}
   try { await db.execute(`ALTER TABLE transactions ADD COLUMN time TEXT DEFAULT '';`); } catch {}
-  await db.execute(`CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,group_name TEXT DEFAULT '',sort_order INTEGER DEFAULT 0,created_at TEXT);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,group_name TEXT DEFAULT '',sort_order INTEGER DEFAULT 0,created_at TEXT,acct_type TEXT DEFAULT '',settlement_date INTEGER DEFAULT 0,payment_due_days INTEGER DEFAULT 0);`);
+  try { await db.execute(`ALTER TABLE accounts ADD COLUMN acct_type TEXT DEFAULT '';`); } catch {}
+  try { await db.execute(`ALTER TABLE accounts ADD COLUMN settlement_date INTEGER DEFAULT 0;`); } catch {}
+  try { await db.execute(`ALTER TABLE accounts ADD COLUMN payment_due_days INTEGER DEFAULT 0;`); } catch {}
   await db.execute(`CREATE TABLE IF NOT EXISTS account_groups (id TEXT PRIMARY KEY,name TEXT NOT NULL,sort_order INTEGER DEFAULT 0);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS account_mapping (id TEXT PRIMARY KEY,source_name TEXT,account_name TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY,name TEXT NOT NULL,type TEXT DEFAULT 'Expense',sort_order INTEGER DEFAULT 0);`);
