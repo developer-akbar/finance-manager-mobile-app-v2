@@ -6,6 +6,7 @@ import {
   getAllSettings, setSetting,
   getAccounts, replaceAccounts,
   getAccountGroups, replaceAccountGroups,
+  getAccountMapping, replaceAccountMapping,
   getCategories, replaceCategories,
   getBudgets, setBudget, deleteBudget,
 } from '../database/index.js';
@@ -25,21 +26,23 @@ const catsArrToObj = (arr) => {
   return o;
 };
 const catsObjToArr = (obj) =>
-  Object.entries(obj || {}).map(([name, d]) => ({
+  Object.entries(obj || {}).map(([name, d], i) => ({
     name, type: d.type || 'Expense',
-    subcategories: (d.subcategories || []).map(s => ({ name: s })),
+    sortOrder: d.sortOrder !== undefined ? d.sortOrder : i,
+    subcategories: (d.subcategories || []).map((s, si) => ({ name: s, sortOrder: si })),
   }));
 
 const normalizeAccounts = (raw) =>
   (raw || []).map(a => typeof a === 'string'
-    ? { name: a, group: '', icon: '💳' }
-    : { name: a.name || '', group: a.group || a.group_name || '', icon: '💳' });
+    ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0 }
+    : { name: a.name || '', group: a.group || a.group_name || '', icon: '💳',
+        acctType: a.acctType || '', settlementDate: a.settlementDate ? Number(a.settlementDate) : 0, paymentDueDays: a.paymentDueDays ? Number(a.paymentDueDays) : 0 });
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
 const INIT = {
   transactions: [], accounts: [], categories: {},
   accountGroups: [], budgets: [], settings: {},
-  theme: 'dark', fontSize: 1.0, fontFamily: 'Sora',
+  theme: 'dark', fontSize: 1.0, fontFamily: 'Sora', fontDataWeight: 'regular',
   loading: true, error: null, importProgress: null,
   currentView: 'dashboard',
 };
@@ -54,7 +57,8 @@ function reducer(s, a) {
     case 'SET_IMPORT':   return { ...s, importProgress: a.payload };
     case 'SET_THEME':    return { ...s, theme: a.payload };
     case 'SET_FONTSIZE': return { ...s, fontSize: a.payload };
-    case 'SET_FONTFAMILY': return { ...s, fontFamily: a.payload };
+    case 'SET_FONTFAMILY':     return { ...s, fontFamily: a.payload };
+    case 'SET_FONTDATAWEIGHT': return { ...s, fontDataWeight: a.payload };
     case 'UPD_SETTINGS': return { ...s, settings: { ...s.settings, ...a.payload } };
     case 'NAVIGATE': return { ...s, currentView: a.payload };
     default: return s;
@@ -68,9 +72,9 @@ export function AppProvider({ children }) {
 
   const load = useCallback(async () => {
     try {
-      const [txns, accts, catsArr, aGroups, budgets, settings] = await Promise.all([
+      const [txns, accts, catsArr, aGroups, aMapping, budgets, settings] = await Promise.all([
         getTransactions(), getAccounts(), getCategories(),
-        getAccountGroups(), getBudgets(), getAllSettings(),
+        getAccountGroups(), getAccountMapping(), getBudgets(), getAllSettings(),
       ]);
 
       // Seed defaults on very first launch (empty accounts AND categories)
@@ -86,8 +90,11 @@ export function AppProvider({ children }) {
         const theme     = settings.theme     || 'dark';
         const fontSize  = parseFloat(settings.fontSize  || '1.0');
         const fontFamily = settings.fontFamily || 'Sora';
+        const fontDataWeight = settings.fontDataWeight || 'regular';
+        const fwMap = { light: '400', regular: '500', bold: '700' };
         document.documentElement.setAttribute('data-theme', theme);
         document.documentElement.style.setProperty('--fs-scale', String(fontSize));
+        document.documentElement.style.setProperty('--fw-data', fwMap[fontDataWeight] || '400');
         document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
           fontFamily === 'Inter' ? "'Inter', sans-serif" :
           fontFamily === 'Roboto' ? "'Roboto', sans-serif" :
@@ -97,16 +104,21 @@ export function AppProvider({ children }) {
           transactions: txns,
           accounts: normalizeAccounts(seedAccts),
           categories: catsArrToObj(seedCats),
+          categoriesArr: seedCats || [],
           accountGroups: seedGroups || [],
-          budgets, settings, theme, fontSize, fontFamily,
+          accountMapping: aMapping || [],
+          budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
         }});
         return;
       }
       const theme     = settings.theme     || 'dark';
       const fontSize  = parseFloat(settings.fontSize  || '1.0');
       const fontFamily = settings.fontFamily || 'Sora';
+      const fontDataWeight = settings.fontDataWeight || 'regular';
+      const fwMap = { light: '400', regular: '500', bold: '700' };
       document.documentElement.setAttribute('data-theme', theme);
       document.documentElement.style.setProperty('--fs-scale', String(fontSize));
+      document.documentElement.style.setProperty('--fw-data', fwMap[fontDataWeight] || '400');
       document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
         fontFamily === 'Inter' ? "'Inter', sans-serif" :
         fontFamily === 'Roboto' ? "'Roboto', sans-serif" :
@@ -117,13 +129,15 @@ export function AppProvider({ children }) {
           transactions:  txns,
           accounts:      normalizeAccounts(accts),
           categories:    catsArrToObj(catsArr),
+          categoriesArr: catsArr || [],
           accountGroups: aGroups || [],
-          budgets, settings, theme, fontSize, fontFamily,
+          accountMapping: aMapping || [],
+          budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
         },
       });
     } catch (e) {
       console.error('AppContext load error:', e);
-      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora' } });
+      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'light' } });
     }
   }, []);
 
@@ -171,66 +185,88 @@ export function AppProvider({ children }) {
       await new Promise(r => setTimeout(r, 0)); // yield to UI
     }
 
-    // Auto-extract accounts & categories from imported rows
-    // Uses same field-mapping logic as bulkImport (Transfer-Out: FromAccount = real source)
+    // Auto-extract accounts & categories from imported rows.
+    // Supports both Money Manager XLS and FinMan CSV/JSON export formats.
     const acctSet = new Set(), catMap = {};
     const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(s);
+    // UUID pattern — category/account names that look like UUIDs are corruption
+    // artefacts from previous bad imports and must never be stored.
+    const looksLikeUUID = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+    // Reserved words that must never become account or category names
+    const RESERVED_ACCT = new Set(['INR','USD','GBP','EUR','Transfer','Transfer-Out','Transfer-In']);
+    const RESERVED_CAT  = new Set(['Transfer','Transfer-Out','Transfer-In','Income','Expense']);
+
     for (const r of rows) {
       const typeRaw = String(r['Income/Expense'] || r.type || '').trim();
       const isXfer  = typeRaw.toLowerCase().startsWith('transfer');
-      const cat     = String(r.Category || r.category || '').trim();
-      const sub     = String(r.Subcategory || r.subcategory || '').trim();
+      const rawCat  = String(r.Category    || r.category    || '').trim();
+      const rawTo   = String(r.ToAccount   || r.to_account  || '').trim();
+      const rawSub  = String(r.Subcategory || r.subcategory || '').trim();
+      const sub     = rawSub.toLowerCase() === 'default' ? '' : rawSub;
 
-      // Account col = source account (always real name after duplicate-header fix in parser)
-      // Guard against numeric values from old imports
-      const rawAcct = String(r.Account || r.account || '').trim();
+      // Source account — guard against numeric/UUID/reserved values
+      const rawAcct  = String(r.Account || r.account || '').trim();
       const realAcct = looksNumeric(rawAcct)
         ? String(r.FromAccount || r.from_account || '').trim() || rawAcct
         : rawAcct;
 
-      if (realAcct) acctSet.add(realAcct);
+      if (realAcct && !RESERVED_ACCT.has(realAcct) && !looksNumeric(realAcct) && !looksLikeUUID(realAcct))
+        acctSet.add(realAcct);
 
       if (isXfer) {
-        // For Transfer: Category column = destination account name
-        if (cat && !looksNumeric(cat)) acctSet.add(cat);
+        // Destination account: prefer explicit ToAccount (FinMan export),
+        // fall back to Category (Money Manager format).
+        const destAcct = (rawTo && !RESERVED_ACCT.has(rawTo) && !looksNumeric(rawTo))
+          ? rawTo
+          : rawCat;
+        if (destAcct && !RESERVED_ACCT.has(destAcct) && !looksNumeric(destAcct) && !looksLikeUUID(destAcct))
+          acctSet.add(destAcct);
       } else {
-        // For Expense/Income: Category = expense category (do NOT add to accounts)
-        if (cat) {
+        // For Expense/Income: Category = expense category (never add to accounts)
+        // Also skip UUID-looking names and reserved words.
+        if (rawCat && !RESERVED_CAT.has(rawCat) && !looksLikeUUID(rawCat)) {
           const catType = typeRaw === 'Income' ? 'Income' : 'Expense';
-          if (!catMap[cat]) catMap[cat] = { type: catType, subs: new Set() };
-          if (sub && sub.toLowerCase() !== 'default') catMap[cat].subs.add(sub);
+          if (!catMap[rawCat]) catMap[rawCat] = { type: catType, subs: new Set() };
+          if (sub && !looksLikeUUID(sub)) catMap[rawCat].subs.add(sub);
         }
       }
     }
 
     // Build account list from imported rows
-    // Override mode: replace accounts entirely (removes stale numeric accounts from bad imports)
-    // Merge mode: add new accounts to existing list (preserve user-added accounts)
     const newAcctNames = [...acctSet].filter(n => n);
     if (mode === 'override') {
-      // Rebuild from scratch — no pollution from previous bad imports
-      await replaceAccounts(newAcctNames.map(name => ({ name, group:'', icon:'💳' })));
+      await replaceAccounts(newAcctNames.map(name => ({ name, group:'', icon:'💳', acctType:'', settlementDate:0, paymentDueDays:0 })));
     } else {
       const existAccts = normalizeAccounts(await getAccounts());
       const existNames = new Set(existAccts.map(a => a.name));
-      const brandNew   = newAcctNames.filter(n => !existNames.has(n)).map(name => ({ name, group:'', icon:'💳' }));
+      const brandNew   = newAcctNames.filter(n => !existNames.has(n)).map(name => ({ name, group:'', icon:'💳', acctType:'', settlementDate:0, paymentDueDays:0 }));
       await replaceAccounts([...existAccts, ...brandNew]);
     }
 
-    // Merge with existing categories
+    // Merge with existing categories — case-insensitive dedup.
+    // Build a lookup: lowercase name → canonical (Title Case preferred) name already in DB.
     const existCatsArr = await getCategories();
     const existCatsObj = catsArrToObj(existCatsArr);
+    // Remove any UUID-named categories that leaked in from previous bad imports
+    for (const key of Object.keys(existCatsObj)) {
+      if (looksLikeUUID(key)) delete existCatsObj[key];
+    }
+    // Build case-insensitive map: lowercase → existing canonical key
+    const existCatLC = {};
+    for (const key of Object.keys(existCatsObj)) existCatLC[key.toLowerCase()] = key;
+
     for (const [cat, d] of Object.entries(catMap)) {
-      if (!existCatsObj[cat]) {
-        existCatsObj[cat] = { type: d.type, subcategories: [...d.subs] };
+      // Find existing key case-insensitively; prefer the one already in DB
+      const canonical = existCatLC[cat.toLowerCase()] || cat;
+      if (!existCatsObj[canonical]) {
+        existCatsObj[canonical] = { type: d.type, subcategories: [...d.subs] };
+        existCatLC[canonical.toLowerCase()] = canonical;
       } else {
-        const sc = new Set(existCatsObj[cat].subcategories);
+        const sc = new Set(existCatsObj[canonical].subcategories);
         d.subs.forEach(s => sc.add(s));
-        existCatsObj[cat].subcategories = [...sc];
-        // If the data says Income but category was Expense, update type
-        if (d.type !== existCatsObj[cat].type && d.type === 'Income') {
-          existCatsObj[cat].type = 'Income';
-        }
+        existCatsObj[canonical].subcategories = [...sc];
+        if (d.type !== existCatsObj[canonical].type && d.type === 'Income')
+          existCatsObj[canonical].type = 'Income';
       }
     }
     await replaceCategories(catsObjToArr(existCatsObj));
@@ -259,11 +295,12 @@ export function AppProvider({ children }) {
   const clearAllData = async () => { await deleteAllTransactions(); await load(); };
 
   const updateSettings = async (data) => {
-    if (data.accounts      !== undefined) await replaceAccounts(data.accounts);
-    if (data.categories    !== undefined) await replaceCategories(catsObjToArr(data.categories));
-    if (data.accountGroups !== undefined) await replaceAccountGroups(data.accountGroups);
+    if (data.accounts       !== undefined) await replaceAccounts(data.accounts);
+    if (data.categories     !== undefined) await replaceCategories(catsObjToArr(data.categories));
+    if (data.accountGroups  !== undefined) await replaceAccountGroups(data.accountGroups);
+    if (data.accountMapping !== undefined) await replaceAccountMapping(data.accountMapping);
     // Persist simple key-value settings (profileName, pin, pinIdleSeconds, etc.)
-    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name'];
+    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight'];
     const changed = {};
     for (const key of settingsKeys) {
       if (data[key] !== undefined) {
@@ -290,6 +327,13 @@ export function AppProvider({ children }) {
     try { await setSetting('fontSize', String(scale)); } catch (e) { console.error('setFontSize:', e); }
   };
 
+  const setFontDataWeight = async (weight) => {
+    const fwMap = { light: '400', regular: '500', bold: '700' };
+    document.documentElement.style.setProperty('--fw-data', fwMap[weight] || '400');
+    dispatch({ type: 'SET_FONTDATAWEIGHT', payload: weight });
+    try { await setSetting('fontDataWeight', weight); } catch (e) { console.error('setFontDataWeight:', e); }
+  };
+
   const setFontFamily = async (family) => {
     const fontMap = {
       'Sora': "'Sora', sans-serif",
@@ -313,7 +357,7 @@ export function AppProvider({ children }) {
       addTransaction, updateTransaction, deleteTransaction,
       renameAccount, renameCategory, cleanupAccounts,
       importData, cancelImport, clearAllData, analyseImport,
-      updateSettings, setTheme, setFontSize, setFontFamily,
+      updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight,
       saveBudget, removeBudget,
     }}>
       {children}

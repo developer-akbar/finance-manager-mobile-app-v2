@@ -5,7 +5,7 @@ import AddTransaction from './AddTransaction.jsx';
 import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
-export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy }) {
+export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy, runningBalance = null, isNewestInGroup = false }) {
   const [showDetail, setShowDetail] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const pressTimer = React.useRef(null);
@@ -112,8 +112,18 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
             {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
           </div>
         </div>
-        {/* Amount */}
-        <div className={`txn-amt-col ${cls}`}>{sign}{formatINR(amount)}</div>
+        {/* Amount + running balance */}
+        <div className="txn-amt-wrap">
+          <div className={`txn-amt-col ${cls}`}>{sign}{formatINR(amount)}</div>
+          {runningBalance !== null && (
+            <div className="txn-running-bal">
+              {isNewestInGroup
+                ? `(Balance ${runningBalance < 0 ? '−' : ''}${formatINR(Math.abs(runningBalance))})`
+                : `(${runningBalance < 0 ? '−' : ''}${formatINR(Math.abs(runningBalance))})`
+              }
+            </div>
+          )}
+        </div>
       </div>
 
       {showDetail && <DetailSheet t={t} onClose={() => setShowDetail(false)} onCopy={onCopy} backInterceptRef={backInterceptRef}/>}
@@ -126,12 +136,27 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
   const { deleteTransaction } = useApp();
   const [showEdit,   setShowEdit]   = useState(false);
   const [showDelete, setShowDelete] = useState(false);
+  const [showCopyPicker, setShowCopyPicker] = useState(false);
 
   const type   = txnType(t);
   const amount = txnAmount(t);
   const cls    = type === 'income' ? 'income' : type === 'expense' ? 'expense' : 'transfer';
   const sign   = type === 'income' ? '+' : type === 'expense' ? '−' : '';
   const isXfer = type === 'transfer';
+
+  const handleCopyWithToday = () => {
+    const now = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    onCopy({ ...t,
+      Date: `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`,
+      Time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    });
+    onClose();
+  };
+  const handleCopyWithOriginal = () => {
+    onCopy(t);
+    onClose();
+  };
 
   if (showEdit) return <AddTransaction editTransaction={t} onClose={onClose} backInterceptRef={backInterceptRef}/>;
 
@@ -165,10 +190,33 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
         </div>
         {/* Actions */}
         <div className="dp-actions" style={{ display: 'flex', gap: '10px' }}>
-          {onCopy && <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => { onCopy(t); onClose(); }}>📋 Copy</button>}
           <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowEdit(true)}>✏️ Edit</button>
+          {onCopy && <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowCopyPicker(true)}>📋 Copy</button>}
           <button className="btn btn-danger" style={{ flex: 1 }} onClick={() => setShowDelete(true)}>🗑 Delete</button>
         </div>
+        {/* Copy date picker popup */}
+        {showCopyPicker && onCopy && (
+          <div className="dp-delete-confirm">
+            <div style={{fontSize:'1.4rem',marginBottom:8}}>📋</div>
+            <div style={{fontSize:'0.95rem',fontWeight:800,marginBottom:6}}>Copy transaction as</div>
+            <div style={{fontSize:'0.73rem',color:'var(--text-muted)',marginBottom:18,textAlign:'center'}}>
+              Choose the date and time for the copied transaction
+            </div>
+            <button className="btn btn-primary btn-full" style={{marginBottom:10}} onClick={handleCopyWithToday}>
+              Today's date &amp; time
+              <div style={{fontSize:'0.65rem',fontWeight:400,opacity:0.75,marginTop:2}}>
+                {new Date().toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})} · {new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}
+              </div>
+            </button>
+            <button className="btn btn-secondary btn-full" style={{marginBottom:10}} onClick={handleCopyWithOriginal}>
+              Original date &amp; time
+              <div style={{fontSize:'0.65rem',fontWeight:400,opacity:0.75,marginTop:2}}>
+                {t.Date ? t.Date.split('-').reverse().join('/') : ''}{t.Time ? ' · '+t.Time : ''}
+              </div>
+            </button>
+            <button className="btn btn-ghost btn-full" onClick={() => setShowCopyPicker(false)}>Cancel</button>
+          </div>
+        )}
         {/* Delete confirm */}
         {showDelete && (
           <div className="dp-delete-confirm">

@@ -12,7 +12,11 @@
 .dp-row { display:flex; align-items:flex-start; gap:20px; padding:9px 0; border-bottom:1px solid var(--border-light); }
 .dp-row:last-child { border-bottom:none; }
 .dp-row-label { font-size:0.62rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; width:80px; flex-shrink:0; padding-top:2px; }
-.dp-row-value { flex:1; font-size:0.82rem; font-weight:600; color:var(--text-primary); word-break:break-word; }
+.dp-row-value { flex:1; font-size:0.82rem; font-weight:var(--fw-data); color:var(--text-primary); word-break:break-word; }
 .dp-actions { display:flex; gap:8px; padding:12px var(--page-px) 16px; border-top:1px solid var(--border); flex-shrink:0; }
 .dp-actions .btn { flex:1; }
 .dp-delete-confirm { position:absolute; inset:0; background:var(--bg-surface); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:var(--page-px); border-radius:22px 22px 0 0; z-index:10; }
+
+/* ── Running balance in account drill-down ─────────────────────────────── */
+.txn-amt-wrap       { display:flex; flex-direction:column; align-items:flex-end; flex-shrink:0; }
+.txn-running-bal    { font-size:0.62rem; font-weight:600; color:var(--text-muted); margin-top:2px; letter-spacing:0.1px; }

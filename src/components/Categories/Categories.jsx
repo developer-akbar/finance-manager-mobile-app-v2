@@ -106,13 +106,8 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   }, [multiMode]); // Removed backInterceptRef from deps
 
   const handleCopy = (txn) => {
-    // Create a copy with current date/time but keep all other data
-    setCopyTxn({
-      ...txn,
-      Date: new Date().toISOString().split('T')[0], // Current date
-      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
-      _id: undefined, // Remove ID so it gets a new one
-    });
+    // Pass txn as-is — the copy picker in DetailSheet sets date/time based on user choice.
+    setCopyTxn({ ...txn, _id: undefined });
   };
 
   const catTxns = useMemo(() => allTxns.filter(t => t.Category === catName), [allTxns, catName]);
@@ -163,15 +158,37 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   }, [filtTxns, selected]);
 
   const trendData = useMemo(() => {
-    const now = new Date();
+    const src = selSub ? catTxns.filter(t => t.Subcategory === selSub) : catTxns;
+
+    if (period === 'Year') {
+      return Array.from({length:6}, (_,i) => {
+        const yr = viewYear - 5 + i;
+        const amt = src.filter(t => parseDate(t.Date).getFullYear() === yr)
+                       .reduce((s,t) => s + txnAmount(t), 0);
+        return { name: String(yr), amt };
+      });
+    }
+
+    if (period === 'FY') {
+      return Array.from({length:6}, (_,i) => {
+        const fy = viewFY - 5 + i;
+        const fs = fyStart(fy), fe = fyEnd(fy);
+        const amt = src.filter(t => { const d = parseDate(t.Date); return d >= fs && d <= fe; })
+                       .reduce((s,t) => s + txnAmount(t), 0);
+        return { name: `FY${String(fy).slice(-2)}`, amt };
+      });
+    }
+
+    if (['All','Custom'].includes(period)) return [];
+
+    // Month — last 6 months ending at viewYear/viewMonth
     return Array.from({length:6}, (_,i) => {
-      const d = new Date(now.getFullYear(), now.getMonth()-5+i, 1);
-      const src = selSub ? catTxns.filter(t=>t.Subcategory===selSub) : catTxns;
-      const amt = src.filter(t=>{const td=parseDate(t.Date);return td.getFullYear()===d.getFullYear()&&td.getMonth()===d.getMonth();})
-                      .reduce((s,t)=>s+txnAmount(t),0);
+      const d = new Date(viewYear, viewMonth - 5 + i, 1);
+      const amt = src.filter(t => { const td = parseDate(t.Date); return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth(); })
+                     .reduce((s,t) => s + txnAmount(t), 0);
       return { name: MS_S[d.getMonth()], amt };
     });
-  }, [catTxns, selSub]);
+  }, [catTxns, selSub, period, viewYear, viewMonth, viewFY]);
 
   const groupedTxns = useMemo(() => {
     const map = {};
@@ -206,10 +223,11 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
           <div className="bal-strip-item"><div className="bal-strip-l">Txns</div><div className="bal-strip-v">{filtTxns.length}</div></div>
         </div>
 
-        {/* 6-month trend chart */}
+        {/* trend chart — hidden for All / Custom */}
+        {trendData.length > 0 && (
         <div style={{padding:'8px var(--page-px) 4px',flexShrink:0}}>
           <div style={{fontSize:'0.62rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.7px',marginBottom:6}}>
-            6-Month Trend{selSub ? ` — ${selSub}` : ''}
+            {period==='Year' ? '6-Year Trend' : period==='FY' ? '6-FY Trend' : '6-Month Trend'}{selSub ? ` — ${selSub}` : ''}
           </div>
           <div style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:'var(--r-lg)',padding:'10px 6px 4px'}}>
             <ResponsiveContainer width="100%" height={110}>
@@ -225,26 +243,35 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
             </ResponsiveContainer>
           </div>
         </div>
+        )}
 
-        {/* Subcategories as list with totals */}
-        {subData.length>0&&(
-          <div style={{flexShrink:0}}>
-            <div className="cat-sub-list-header">
-              <span>Subcategories</span>
-              {selSub&&<button className="btn btn-ghost btn-sm" style={{padding:'2px 8px',fontSize:'0.68rem'}} onClick={()=>setSelSub(null)}>Show all</button>}
+        {/* Subcategories as list with totals — always shown, 100% on All row */}
+        <div style={{flexShrink:0}}>
+          <div className="cat-sub-list-header">
+            <span>Subcategories</span>
+            {selSub&&<button className="btn btn-ghost btn-sm" style={{padding:'2px 8px',fontSize:'0.68rem'}} onClick={()=>setSelSub(null)}>Show all</button>}
+          </div>
+          <div className={`cat-sub-list-row ${!selSub?'sub-active':''}`} onClick={()=>setSelSub(null)}>
+            <div className="cat-sub-list-name">
+              <span className="cat-sub-pct-badge" style={{background:"rgba(255,255,255,0.08)",color:"var(--text-muted)"}}>100%</span>
+              All
             </div>
-            <div className={`cat-sub-list-row ${!selSub?'sub-active':''}`} onClick={()=>setSelSub(null)}>
-              <div className="cat-sub-list-name">All</div>
-              <div className="cat-sub-list-amt">{formatINR(totalAmt)}</div>
-            </div>
-            {subData.map(([sub,amt])=>(
+            <div className="cat-sub-list-amt">{formatINR(totalAmt)}</div>
+          </div>
+          {subData.map(([sub,amt],si)=>{
+            const pct = totalAmt > 0 ? Math.round((amt / totalAmt) * 100) : 0;
+            const col = PIE_COLORS[si % PIE_COLORS.length];
+            return (
               <div key={sub} className={`cat-sub-list-row ${selSub===sub?'sub-active':''}`} onClick={()=>setSelSub(selSub===sub?null:sub)}>
-                <div className="cat-sub-list-name">{sub}</div>
+                <div className="cat-sub-list-name">
+                  <span className="cat-sub-pct-badge" style={{background:col+"28",color:col}}>{pct}%</span>
+                  {sub}
+                </div>
                 <div className="cat-sub-list-amt">{formatINR(amt)}</div>
               </div>
-            ))}
-          </div>
-        )}
+            );
+          })}
+        </div>
 
         {/* Date-grouped transactions */}
         {filtTxns.length===0
@@ -376,7 +403,6 @@ export default function Categories({ backInterceptRef } = {}) {
       <div className="page-hdr">
         <div style={{flex:1}}>
           <div className="page-hdr-title">Categories</div>
-          <div className="page-hdr-sub">{catType} · {formatINR(totalAmt)}</div>
         </div>
       </div>
 

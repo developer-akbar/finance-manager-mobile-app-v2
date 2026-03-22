@@ -143,18 +143,35 @@ export const getTransactionCount = async () => {
 // Analyse rows before import:
 //   fileDupeCount  = rows with identical stableKey within the file itself
 //   dbDupeCount    = rows whose stableKey already exists in the DB (merge scenario)
+
+// Words that must never appear as account or category names —
+// they are format/type markers that leak in from broken CSV rows.
+const RESERVED_ACCT_WORDS  = new Set(['INR','USD','GBP','EUR','Transfer','Transfer-Out','Transfer-In']);
+const RESERVED_CAT_WORDS   = new Set(['Transfer','Transfer-Out','Transfer-In','Income','Expense']);
+const isReservedAcct = (s) => !s || RESERVED_ACCT_WORDS.has(s);
+const isReservedCat  = (s) => !s || RESERVED_CAT_WORDS.has(s);
+
+// A date string is valid if it looks like dd/mm/yyyy (after normalisation).
+const isValidDateStr = (s) => /^\d{2}\/\d{2}\/\d{4}$/.test(String(s||'').trim());
+
 export const analyseImport = async (rows) => {
   const seenKeys = new Map(); // stableKey → count
   const itemKeys = [];
 
   for (const r of rows) {
-    const dateVal = r.Date || r.date || '';
-    if (!dateVal && !(r.INR || r.Amount || r.inr || r.amount)) { itemKeys.push(null); continue; }
+    const rawDate = r.Date || r.date || '';
+    const dateVal = normaliseDateStr(rawDate);
+    // Skip rows with no valid date — these are overflow lines from unquoted newlines
+    // in old exports, or genuinely blank rows.
+    if (!isValidDateStr(dateVal)) { itemKeys.push(null); continue; }
     const typeStr = normaliseType(r['Income/Expense'] || r.type || '');
     const isXfer  = typeStr.startsWith('Transfer');
-    const acctName = isXfer
-      ? String(r.FromAccount || r.from_account || '').trim()
-      : String(r.Account     || r.account      || '').trim();
+    // FinMan export has explicit FromAccount; MM export uses Account for source
+    const rawAcct = String(r.Account || r.account || '').trim();
+    const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(s);
+    const acctName = looksNumeric(rawAcct)
+      ? String(r.FromAccount || r.from_account || rawAcct).trim()
+      : rawAcct;
     const stableKey = `${dateVal}|${String(r.Time||r.time||'').trim()}|${acctName}|${parseFloat(r.INR||r.Amount||r.inr||r.amount||0)}|${String(r.Note||r.note||'').trim()}`;
     itemKeys.push(stableKey);
     seenKeys.set(stableKey, (seenKeys.get(stableKey) || 0) + 1);
@@ -188,50 +205,69 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
   // Prepare all objects first (avoid per-row async overhead)
   const items = [];
   for (const r of rows) {
-    // Skip header-looking or blank rows
-    const dateVal = r.Date || r.date || '';
-    if (!dateVal && !(r.INR || r.Amount || r.inr || r.amount)) { skipped++; continue; }
+    // ── Row validation ────────────────────────────────────────────────────
+    // Skip rows whose date doesn't normalise to dd/mm/yyyy.
+    // These are either blank rows or overflow lines produced by old exports
+    // that had unquoted newlines in Description/Note fields.
+    const rawDate = r.Date || r.date || '';
+    const dateVal = normaliseDateStr(rawDate);
+    if (!isValidDateStr(dateVal)) { skipped++; continue; }
 
     // Determine type early — needed for account field mapping below
     const typeStr = normaliseType(r['Income/Expense'] || r.type || '');
     const isXfer  = typeStr.startsWith('Transfer');
 
     // ── Account field mapping ──────────────────────────────────────────────
-    // Money Manager XLS column structure (confirmed from real export):
-    //   Col 1 "Account"  = source account (always a real account name like "Canara", "HDFC")
-    //   Col 2 "Category" = destination account for Transfer type, expense category otherwise
-    //   Col 10 "Account" = DUPLICATE column containing INR amount as text — ignored by parser
+    // Two supported source formats:
     //
-    // There is NO FromAccount / ToAccount in this file format.
-    // SheetJS duplicate header handling renames col 10 to "Account_2" so r.Account = col 1.
+    // 1. Money Manager XLS (no FromAccount/ToAccount columns):
+    //      Account  = source account
+    //      Category = destination account for Transfers; expense category otherwise
+    //
+    // 2. FinMan CSV export (explicit FromAccount & ToAccount columns):
+    //      Account / FromAccount = source account
+    //      ToAccount             = destination account for Transfers
+    //      Category              = mirrors destination (or 'Transfer' for old MM rows)
+    //
     const rawAcct = String(r.Account || r.account || '').trim();
-    // Guard: if Account still looks numeric (old data), fall back to FromAccount if available
     const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(s);
     const acctName = looksNumeric(rawAcct)
       ? String(r.FromAccount || r.from_account || rawAcct).trim()
       : rawAcct;
-    // For Transfer: Category = destination account name
-    // For Expense/Income: no to_account
+
+    // For Transfer rows: prefer explicit ToAccount (FinMan export),
+    // fall back to Category (Money Manager format).
+    // Never use reserved words (INR, Transfer-Out, etc.) as account names.
+    const rawTo  = String(r.ToAccount  || r.to_account  || '').trim();
+    const rawCat = String(r.Category   || r.category    || '').trim();
     const toAcctName = isXfer
-      ? String(r.Category || r.category || r.ToAccount || r.to_account || '').trim()
+      ? (rawTo && !isReservedAcct(rawTo) ? rawTo : rawCat)
       : '';
 
     // ID strategy:
     //  • firstImport (empty DB) → always use uuid so intentional in-file duplicates
     //    get unique IDs and all rows are inserted.
-    //  • merge → deterministic hash from key fields so the same transaction
-    //    always maps to the same ID and INSERT OR IGNORE skips true duplicates.
+    //  • merge → deterministic hash so the same transaction always maps to the
+    //    same ID and INSERT OR IGNORE skips true duplicates.
     const stableKey = `${dateVal}|${String(r.Time||r.time||'').trim()}|${acctName}|${parseFloat(r.INR||r.Amount||r.inr||r.amount||0)}|${String(r.Note||r.note||'').trim()}`;
     const id = r.ID || r.id || (firstImport ? uuid() : deterministicId(stableKey));
+    // For Transfer rows: category holds the destination account name in both formats.
+    // For FinMan exports where toAcctName was already resolved from ToAccount,
+    // category may still be set to the destination or to 'Transfer' — store toAcctName.
+    const categoryVal = isXfer ? toAcctName : rawCat;
+    // Strip 'Default' subcategory — it's a Money Manager placeholder, not a real value.
+    const rawSub = String(r.Subcategory || r.subcategory || '').trim();
+    const subcategoryVal = rawSub.toLowerCase() === 'default' ? '' : rawSub;
+
     items.push({
       id,
-      date:         normaliseDateStr(dateVal),
+      date:         dateVal,
       time:         String(r.Time || r.time || '').trim(),
       account:      acctName,
       from_account: acctName,   // same as account; kept for query/filter compatibility
       to_account:   toAcctName,
-      category:     String(r.Category || r.category || '').trim(),
-      subcategory:  String(r.Subcategory || r.subcategory || '').trim(),
+      category:     categoryVal,
+      subcategory:  subcategoryVal,
       note:         String(r.Note || r.note || '').trim(),
       description:  String(r.Description || r.description || '').trim(),
       inr:          parseFloat(r.INR || r.Amount || r.inr || r.amount || 0),

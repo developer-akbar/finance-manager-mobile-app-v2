@@ -122,9 +122,9 @@ export default function Analytics() {
         return {label:MONTHS_SHORT[mi],...calcTotals(txns)};
       });
     }
-    // Default: last 6 months
+    // Default: last 6 months ending at viewed month
     return Array.from({length:6},(_,i)=>{
-      const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);
+      const d=new Date(selYear,selMonth-5+i,1);
       const txns=transactions.filter(t=>{const td=parseDate(t.Date);return td.getFullYear()===d.getFullYear()&&td.getMonth()===d.getMonth();});
       return {label:MONTHS_SHORT[d.getMonth()],...calcTotals(txns)};
     });
@@ -201,7 +201,7 @@ export default function Analytics() {
 
       {/* Bar chart */}
       <div className="an-card">
-        <div className="an-card-title">{period==='Year'?`${selAYear} Monthly`:period==='FY'?`${fyLabel(selFY)} Monthly`:'Last 6 Months'}</div>
+        <div className="an-card-title">{period==='Year'?`${selAYear} Monthly`:period==='FY'?`${fyLabel(selFY)} Monthly`:`6 Months to ${new Date(selYear,selMonth,1).toLocaleDateString('en-IN',{month:'short',year:'numeric'})}`}</div>
         <ResponsiveContainer width="100%" height={150}>
           <BarChart data={barData} barGap={3} barSize={10}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false}/>

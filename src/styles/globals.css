@@ -68,6 +68,7 @@
 
 /* ── TOKENS ── */
 :root {
+  --fw-data: 400; /* data text weight: 400=light 500=regular 700=bold */
   --page-px: 14px;
   --card-p:  14px;
   --r-sm:6px; --r-md:11px; --r-lg:15px; --r-xl:19px; --r-2xl:22px; --r-full:9999px;
@@ -267,11 +268,11 @@ select.form-input {
 .txn-item:active { background:var(--bg-hover); }
 .txn-item.selected-item { background:rgba(0,229,160,0.12); border-left:3px solid var(--accent); padding-left:calc(var(--page-px) - 3px); }
 .txn-mid  { flex:1; min-width:0; }
-.txn-note-l { font-size:0.8rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.txn-note-l { font-size:0.8rem; font-weight:var(--fw-data); color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .txn-sub-l  { display:flex; gap:4px; margin-top:2px; align-items:center; flex-wrap:nowrap; overflow:hidden; }
 .txn-cat-tag  { font-size:0.62rem; color:var(--text-muted); background:var(--bg-input); padding:1px 5px; border-radius:4px; white-space:nowrap; max-width:80px; overflow:hidden; text-overflow:ellipsis; }
 .txn-time-tag { font-size:0.62rem; color:var(--text-muted); white-space:nowrap; }
-.txn-amt-col  { font-size:0.78rem; font-family:var(--font); font-weight:700; flex-shrink:0; }
+.txn-amt-col  { font-size:0.78rem; font-family:var(--font); font-weight:var(--fw-data); flex-shrink:0; }
 .txn-amt-col.income   { color:var(--income); }
 .txn-amt-col.expense  { color:var(--expense); }
 .txn-amt-col.transfer { color:var(--transfer); }

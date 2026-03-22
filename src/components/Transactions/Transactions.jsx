@@ -136,7 +136,7 @@ function MonthlyView({ transactions, onMonthClick }) {
 }
 
 // ── Search view ───────────────────────────────────────────────────────────────
-function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy }) {
+function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy, copyTxn, setCopyTxn }) {
   const textInputRef = (el) => {
     if (!el) return;
     el.setAttribute('autocomplete', 'on');
@@ -156,6 +156,10 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   const [periodOffset, setPeriodOffset] = useState(0); // for prev/next navigation
   const [customFrom,setFrom]      = useState('');
   const [customTo,  setTo]        = useState('');
+  const [selNotes,  setSelNotes]  = useState(true);  // Include notes in search
+  const [selDesc,   setSelDesc]   = useState(true);  // Include description in search
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
   const [selected,  setSelected]  = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
   const now = new Date();
@@ -232,7 +236,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     return '';
   }, [periodRange, selPeriod]);
 
-  const hasQuery = debouncedQ.trim().length > 0 || selAccts.size > 0 || selCats.size > 0 || selPeriod !== 'All';
+  const hasQuery = debouncedQ.trim().length > 0 || selAccts.size > 0 || selCats.size > 0 || selPeriod !== 'All' || minAmount || maxAmount;
 
   const results = useMemo(() => {
     if (!hasQuery) return [];
@@ -246,11 +250,16 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       }
       if (selAccts.size > 0 && !selAccts.has(t.Account) && !selAccts.has(t.FromAccount) && !selAccts.has(t.ToAccount)) return false;
       if (selCats.size > 0 && !selCats.has(t.Category)) return false;
+      const amt = txnAmount(t);
+      if (minAmount && amt < parseFloat(minAmount)) return false;
+      if (maxAmount && amt > parseFloat(maxAmount)) return false;
       if (!q) return true;
-      return [t.Note, t.Category, t.Account, t.Subcategory, t.Description, t.FromAccount, t.ToAccount]
-        .some(f => f && f.toLowerCase().includes(q));
+      const fieldsToSearch = [];
+      if (selNotes) fieldsToSearch.push(t.Note);
+      if (selDesc) fieldsToSearch.push(t.Description);
+      return fieldsToSearch.some(f => f && f.toLowerCase().includes(q));
     }).sort((a, b) => parseDate(b.Date) - parseDate(a.Date));
-  }, [transactions, debouncedQ, selPeriod, periodRange, selAccts, selCats, customFrom, customTo, hasQuery]);
+  }, [transactions, debouncedQ, selPeriod, periodRange, selAccts, selCats, customFrom, customTo, selNotes, selDesc, minAmount, maxAmount, hasQuery]);
 
   const totals = useMemo(() => {
     let inc = 0, exp = 0, xfr = 0;
@@ -381,6 +390,14 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
         </div>
       )}
 
+      {/* Copy transaction form */}
+      {copyTxn&&<AddTransaction 
+        copyTransaction={copyTxn}
+        onClose={()=>setCopyTxn(null)} 
+        onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})}
+        backInterceptRef={backInterceptRef}
+      />}
+
       {/* Results */}
       <div className="search-list">
         {!hasQuery ? (
@@ -411,9 +428,29 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
             <div className="sheet-handle" style={{marginTop:14}}/>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'0 var(--page-px) 10px',borderBottom:'1px solid var(--border)'}}>
               <div style={{fontWeight:800,fontSize:'0.9rem'}}>Filters</div>
-              <button className="btn btn-ghost btn-sm" onClick={() => { setSelAccts(new Set()); setSelCats(new Set()); setSelPeriod('All'); setPeriodOffset(0); setShowFilter(false); }}>Clear all</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setSelAccts(new Set()); setSelCats(new Set()); setSelPeriod('All'); setPeriodOffset(0); setSelNotes(true); setSelDesc(true); setMinAmount(''); setMaxAmount(''); setShowFilter(false); }}>Clear all</button>
             </div>
             <div style={{overflow:'auto',flex:1,padding:'10px var(--page-px)'}}>
+              <div className="filter-section">
+                <div className="filter-section-label">Search Fields</div>
+                <div className="filter-checkbox-list">
+                  <div className="filter-check-row" onClick={() => setSelNotes(!selNotes)}>
+                    <div className={`filter-check-box ${selNotes ? 'checked' : ''}`}>{selNotes && '✓'}</div>
+                    <div className="filter-check-label">Notes</div>
+                  </div>
+                  <div className="filter-check-row" onClick={() => setSelDesc(!selDesc)}>
+                    <div className={`filter-check-box ${selDesc ? 'checked' : ''}`}>{selDesc && '✓'}</div>
+                    <div className="filter-check-label">Description</div>
+                  </div>
+                </div>
+              </div>
+              <div className="filter-section">
+                <div className="filter-section-label">Amount Range</div>
+                <div style={{display:'flex',gap:8}}>
+                  <input type="number" className="form-input" style={{flex:1}} placeholder="Min" value={minAmount} onChange={e => setMinAmount(e.target.value)}/>
+                  <input type="number" className="form-input" style={{flex:1}} placeholder="Max" value={maxAmount} onChange={e => setMaxAmount(e.target.value)}/>
+                </div>
+              </div>
               <div className="filter-section">
                 <div className="filter-section-label">Period</div>
                 <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
@@ -532,13 +569,8 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
   const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
 
   const handleCopy = (txn) => {
-    // Create a copy with current date/time but keep all other data
-    setCopyTxn({
-      ...txn,
-      Date: new Date().toISOString().split('T')[0], // Current date
-      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
-      _id: undefined, // Remove ID so it gets a new one
-    });
+    // Pass txn as-is — the copy picker in DetailSheet sets date/time based on user choice.
+    setCopyTxn({ ...txn, _id: undefined });
   };
 
   const selTotals = useMemo(() => {
@@ -553,7 +585,7 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
   }, [monthTxns, selected]);
 
   if (viewMode==='search') return (
-    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
+    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')} backInterceptRef={backInterceptRef} onCopy={handleCopy} copyTxn={copyTxn} setCopyTxn={setCopyTxn} />
   );
 
   return (
