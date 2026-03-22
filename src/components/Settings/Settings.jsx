@@ -91,7 +91,7 @@ function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, onReorder,
 // ─────────────────────────────────────────────
 // Accounts Manager
 // ─────────────────────────────────────────────
-function AccountsManager({ onBack }) {
+export function AccountsManager({ onBack }) {
   const { state, updateSettings, renameAccount } = useApp();
   const [accounts, setAccounts]       = useState(() => (state.accounts||[]).map(a=>typeof a==='string'?{name:a,group:'',icon:'💳',acctType:'',settlementDate:0,paymentDueDays:0}:a));
   const [groups,   setGroups]         = useState(() => state.accountGroups||[]);
@@ -462,7 +462,7 @@ function AccountsManager({ onBack }) {
 // ─────────────────────────────────────────────
 // Categories Manager
 // ─────────────────────────────────────────────
-function CategoriesManager({ onBack }) {
+export function CategoriesManager({ onBack }) {
   const { state, updateSettings, renameCategory } = useApp();
   const [cats,    setCats]    = useState(() => {
     // Use categoriesArr (DB sort_order preserved) if available, else fall back to categories object
@@ -1456,6 +1456,7 @@ function AppearanceManager({ onBack }) {
 // ─────────────────────────────────────────────
 export default function Settings({ backInterceptRef } = {}) {
   const { state } = useApp();
+  // Check if we navigated here from AddTransaction to reorder accounts/categories
   const [screen, setScreen] = useState(null);
 
   // Register Android back intercept for sub-screens
