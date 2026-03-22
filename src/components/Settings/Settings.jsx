@@ -299,7 +299,9 @@ function AccountsManager({ onBack }) {
         )}
 
         {/* Accounts section with List/Kanban tabs */}
-        <div className="mgr-section-label">All Accounts ({uniqueAccounts.length})</div>
+        <div className="mgr-section-label">All Accounts ({uniqueAccounts.length})
+          <span style={{float:'right',fontWeight:400,textTransform:'none',letterSpacing:0,fontSize:'0.65rem',opacity:0.6}}>⠿ drag to set picker order</span>
+        </div>
         <div style={{display:'flex',gap:8,padding:'0 var(--page-px) 8px'}}>
           <input className="form-input" style={{flex:1}} placeholder="Account name" value={newAcct} onChange={e=>setNewAcct(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addAccount()} spellCheck="true" autoCapitalize="sentences"/>
           <button className="btn btn-primary btn-sm" onClick={addAccount}>Add</button>
@@ -463,6 +465,11 @@ function AccountsManager({ onBack }) {
 function CategoriesManager({ onBack }) {
   const { state, updateSettings, renameCategory } = useApp();
   const [cats,    setCats]    = useState(() => {
+    // Use categoriesArr (DB sort_order preserved) if available, else fall back to categories object
+    const arr = state.categoriesArr;
+    if (arr && arr.length > 0) {
+      return arr.map(c => ({name:c.name, type:c.type||'Expense', subcategories:(c.subcategories||[]).map(s=>s.name||s)}));
+    }
     const obj = state.categories||{};
     return Object.entries(obj).map(([name,d])=>({name,type:d.type||'Expense',subcategories:(d.subcategories||[]).map(s=>s)}));
   });
@@ -487,8 +494,9 @@ function CategoriesManager({ onBack }) {
 
   const save = async (updated = cats) => {
     setSaving(true);
+    // Pass sortOrder so replaceCategories preserves drag order in DB
     const o={};
-    for(const c of updated) o[c.name]={type:c.type,subcategories:c.subcategories};
+    for(const [i,c] of updated.entries()) o[c.name]={type:c.type,subcategories:c.subcategories,sortOrder:i};
     try { await updateSettings({categories:o}); showToast('Saved ✓'); }
     finally { setSaving(false); }
   };
@@ -561,7 +569,9 @@ function CategoriesManager({ onBack }) {
 
   const renderSection = (list, typeLabel) => (
     <>
-      <div className="mgr-section-label">{typeLabel} Categories</div>
+      <div className="mgr-section-label">{typeLabel} Categories
+            <span style={{float:'right',fontWeight:400,textTransform:'none',letterSpacing:0,fontSize:'0.65rem',opacity:0.6}}>⠿ drag to set picker order</span>
+          </div>
       <div className="mgr-list">
         {list.length===0&&<div className="mgr-empty">No {typeLabel.toLowerCase()} categories</div>}
         {list.map((c) => {
@@ -1284,7 +1294,7 @@ function BudgetsManager({ onBack }) {
 function AppearanceManager({ onBack }) {
   const { state, updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight } = useApp();
   const { theme, fontSize } = state;
-  const fontDataWeight = state.fontDataWeight || 'light';
+  const fontDataWeight = state.fontDataWeight || 'regular';
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
 

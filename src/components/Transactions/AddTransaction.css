@@ -1,1 +1,47 @@
 /* Uses globals — nothing extra */
+
+/* ── Picker trigger button (replaces <select>) ──────────────────────────── */
+.picker-trigger { display:flex; align-items:center; justify-content:space-between; gap:8px; text-align:left; cursor:pointer; width:100%; }
+.picker-trigger-value { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.picker-trigger-empty .picker-trigger-value { color:var(--text-muted); }
+
+/* ── Picker bottom sheet ─────────────────────────────────────────────────── */
+.picker-sheet { max-height:82dvh; display:flex; flex-direction:column; padding-bottom:0; }
+.picker-sheet-hdr { display:flex; align-items:center; justify-content:space-between; padding:0 var(--page-px) 10px; flex-shrink:0; }
+.picker-sheet-title { font-size:0.95rem; font-weight:800; color:var(--text-primary); }
+.picker-sheet-close { background:none; border:none; color:var(--text-muted); font-size:1rem; cursor:pointer; padding:2px 4px; }
+
+/* Search box */
+.picker-search-wrap { display:flex; align-items:center; gap:8px; margin:0 var(--page-px) 8px; background:var(--bg-input); border:1.5px solid var(--input-border); border-radius:var(--r-md); padding:8px 10px; flex-shrink:0; }
+.picker-search-icon { font-size:0.85rem; flex-shrink:0; }
+.picker-search-input { flex:1; background:none; border:none; outline:none; font-size:0.85rem; font-family:var(--font); color:var(--text-primary); }
+.picker-search-clear { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:0.85rem; padding:0; flex-shrink:0; }
+
+/* Section labels + scrollable content */
+.picker-list { flex:1; overflow-y:auto; padding:0 0 24px; }
+.picker-section-label { font-size:0.6rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.8px; padding:10px var(--page-px) 6px; }
+
+/* Recent — horizontal chip row */
+.picker-recent-row { display:flex; flex-wrap:wrap; gap:8px; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+.picker-recent-row::-webkit-scrollbar { display:none; }
+
+/* All — 3-column chip grid */
+.picker-chip-grid { display:grid; grid-template-columns:repeat(3,1fr); }
+
+/* Chips shared */
+.picker-chip {
+  display:flex; align-items:center; justify-content:center;
+  padding:9px 8px; cursor:pointer; border:1.5px solid var(--border);
+  background:var(--bg-card2); font-size:0.75rem; font-weight:var(--fw-data);
+  color:var(--text-primary); font-family:var(--font); text-align:center;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  transition:background 0.12s, border-color 0.12s; min-height:40px; line-height:1.2; text-wrap: auto;
+}
+.picker-chip:active { background:var(--bg-hover); }
+.picker-chip-active { background:rgba(0,229,160,0.12); border-color:var(--accent); color:var(--accent); font-weight:600; }
+.picker-chip-check { font-size:0.7rem; margin-left:3px; flex-shrink:0; }
+
+/* Recent chips are slightly different — pill shape */
+.picker-recent-row .picker-chip { border-radius:var(--r-full); padding:7px 14px; min-height:34px; white-space:nowrap; flex-shrink:0; }
+
+.picker-empty { text-align:center; color:var(--text-muted); font-size:0.82rem; padding:32px var(--page-px); }

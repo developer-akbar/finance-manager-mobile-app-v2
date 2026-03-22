@@ -26,9 +26,10 @@ const catsArrToObj = (arr) => {
   return o;
 };
 const catsObjToArr = (obj) =>
-  Object.entries(obj || {}).map(([name, d]) => ({
+  Object.entries(obj || {}).map(([name, d], i) => ({
     name, type: d.type || 'Expense',
-    subcategories: (d.subcategories || []).map(s => ({ name: s })),
+    sortOrder: d.sortOrder !== undefined ? d.sortOrder : i,
+    subcategories: (d.subcategories || []).map((s, si) => ({ name: s, sortOrder: si })),
   }));
 
 const normalizeAccounts = (raw) =>
@@ -41,7 +42,7 @@ const normalizeAccounts = (raw) =>
 const INIT = {
   transactions: [], accounts: [], categories: {},
   accountGroups: [], budgets: [], settings: {},
-  theme: 'dark', fontSize: 1.0, fontFamily: 'Sora', fontDataWeight: 'light',
+  theme: 'dark', fontSize: 1.0, fontFamily: 'Sora', fontDataWeight: 'regular',
   loading: true, error: null, importProgress: null,
   currentView: 'dashboard',
 };
@@ -89,7 +90,7 @@ export function AppProvider({ children }) {
         const theme     = settings.theme     || 'dark';
         const fontSize  = parseFloat(settings.fontSize  || '1.0');
         const fontFamily = settings.fontFamily || 'Sora';
-        const fontDataWeight = settings.fontDataWeight || 'light';
+        const fontDataWeight = settings.fontDataWeight || 'regular';
         const fwMap = { light: '400', regular: '500', bold: '700' };
         document.documentElement.setAttribute('data-theme', theme);
         document.documentElement.style.setProperty('--fs-scale', String(fontSize));
@@ -103,6 +104,7 @@ export function AppProvider({ children }) {
           transactions: txns,
           accounts: normalizeAccounts(seedAccts),
           categories: catsArrToObj(seedCats),
+          categoriesArr: seedCats || [],
           accountGroups: seedGroups || [],
           accountMapping: aMapping || [],
           budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
@@ -112,7 +114,7 @@ export function AppProvider({ children }) {
       const theme     = settings.theme     || 'dark';
       const fontSize  = parseFloat(settings.fontSize  || '1.0');
       const fontFamily = settings.fontFamily || 'Sora';
-      const fontDataWeight = settings.fontDataWeight || 'light';
+      const fontDataWeight = settings.fontDataWeight || 'regular';
       const fwMap = { light: '400', regular: '500', bold: '700' };
       document.documentElement.setAttribute('data-theme', theme);
       document.documentElement.style.setProperty('--fs-scale', String(fontSize));
@@ -127,6 +129,7 @@ export function AppProvider({ children }) {
           transactions:  txns,
           accounts:      normalizeAccounts(accts),
           categories:    catsArrToObj(catsArr),
+          categoriesArr: catsArr || [],
           accountGroups: aGroups || [],
           accountMapping: aMapping || [],
           budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
