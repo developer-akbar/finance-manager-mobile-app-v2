@@ -6,6 +6,67 @@ import AddTransaction from './AddTransaction.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Transactions.css';
 
+// ── BulkSelectionBar — reusable selection bar with delete ────────────────────
+export function BulkSelectionBar({ selected, selTotals, allTxns, onDone, onDeleted }) {
+  const { deleteTransaction } = useApp();
+  const [confirm, setConfirm] = React.useState(false);
+  const selArr = allTxns.filter(t => selected.has(t._id));
+  if (!selected.size) return null;
+  return (
+    <>
+      <div className="search-sel-bar">
+        <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
+          <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
+          {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
+          {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
+          {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
+          {(selTotals.inc > 0 || selTotals.exp > 0) && (
+            <span className="sel-total-net" style={{color:selTotals.inc-selTotals.exp>=0?'var(--income)':'var(--expense)'}}>
+              = {selTotals.inc-selTotals.exp>=0?'+':'−'}{formatINR(Math.abs(selTotals.inc-selTotals.exp))}
+            </span>
+          )}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+          <button onClick={()=>setConfirm(true)}
+            style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--expense)'}}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="18" height="18"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+          </button>
+          <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',fontSize:'0.82rem'}} onClick={onDone}>Done</button>
+        </div>
+      </div>
+      {confirm && (
+        <>
+          <div className="overlay" onClick={()=>setConfirm(false)}/>
+          <div className="bottom-sheet" style={{paddingBottom:'calc(var(--safe-bottom) + 16px)'}}>
+            <div className="sheet-handle"/>
+            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:6}}>Delete {selected.size} transaction{selected.size>1?'s':''}?</div>
+            <div style={{fontSize:'0.73rem',color:'var(--text-muted)',marginBottom:12}}>This cannot be undone.</div>
+            <div style={{maxHeight:'40dvh',overflowY:'auto',marginBottom:14,borderRadius:8,border:'1px solid var(--border-light)'}}>
+              {selArr.map(t=>(
+                <div key={t._id} style={{display:'flex',justifyContent:'space-between',padding:'7px 12px',borderBottom:'1px solid var(--border-light)',fontSize:'0.75rem'}}>
+                  <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',paddingRight:8,color:'var(--text-primary)'}}>
+                    {t.Note||t.Category||'—'} · {t.Date}
+                  </span>
+                  <span style={{color:'var(--expense)',flexShrink:0,fontFamily:'var(--font)',fontWeight:600}}>−{formatINR(t.INR||0)}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button className="btn btn-ghost btn-full" onClick={()=>setConfirm(false)}>Cancel</button>
+              <button className="btn btn-danger btn-full" onClick={async()=>{
+                for (const id of [...selected]) await deleteTransaction(id);
+                setConfirm(false);
+                onDeleted();
+              }}>Delete {selected.size}</button>
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+
 const MONTHS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTHS_F = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
@@ -136,7 +197,7 @@ function MonthlyView({ transactions, onMonthClick }) {
 }
 
 // ── Search view ───────────────────────────────────────────────────────────────
-function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy, copyTxn, setCopyTxn }) {
+function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy }) {
   const textInputRef = (el) => {
     if (!el) return;
     el.setAttribute('autocomplete', 'on');
@@ -156,10 +217,6 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   const [periodOffset, setPeriodOffset] = useState(0); // for prev/next navigation
   const [customFrom,setFrom]      = useState('');
   const [customTo,  setTo]        = useState('');
-  const [selNotes,  setSelNotes]  = useState(true);  // Include notes in search
-  const [selDesc,   setSelDesc]   = useState(true);  // Include description in search
-  const [minAmount, setMinAmount] = useState('');
-  const [maxAmount, setMaxAmount] = useState('');
   const [selected,  setSelected]  = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
   const now = new Date();
@@ -236,7 +293,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     return '';
   }, [periodRange, selPeriod]);
 
-  const hasQuery = debouncedQ.trim().length > 0 || selAccts.size > 0 || selCats.size > 0 || selPeriod !== 'All' || minAmount || maxAmount;
+  const hasQuery = debouncedQ.trim().length > 0 || selAccts.size > 0 || selCats.size > 0 || selPeriod !== 'All';
 
   const results = useMemo(() => {
     if (!hasQuery) return [];
@@ -250,16 +307,11 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       }
       if (selAccts.size > 0 && !selAccts.has(t.Account) && !selAccts.has(t.FromAccount) && !selAccts.has(t.ToAccount)) return false;
       if (selCats.size > 0 && !selCats.has(t.Category)) return false;
-      const amt = txnAmount(t);
-      if (minAmount && amt < parseFloat(minAmount)) return false;
-      if (maxAmount && amt > parseFloat(maxAmount)) return false;
       if (!q) return true;
-      const fieldsToSearch = [];
-      if (selNotes) fieldsToSearch.push(t.Note);
-      if (selDesc) fieldsToSearch.push(t.Description);
-      return fieldsToSearch.some(f => f && f.toLowerCase().includes(q));
+      return [t.Note, t.Category, t.Account, t.Subcategory, t.Description, t.FromAccount, t.ToAccount]
+        .some(f => f && f.toLowerCase().includes(q));
     }).sort((a, b) => parseDate(b.Date) - parseDate(a.Date));
-  }, [transactions, debouncedQ, selPeriod, periodRange, selAccts, selCats, customFrom, customTo, selNotes, selDesc, minAmount, maxAmount, hasQuery]);
+  }, [transactions, debouncedQ, selPeriod, periodRange, selAccts, selCats, customFrom, customTo, hasQuery]);
 
   const totals = useMemo(() => {
     let inc = 0, exp = 0, xfr = 0;
@@ -363,22 +415,9 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       )}
 
       {/* Multi-select summary bar */}
-      {multiMode && selected.size > 0 && (
-        <div className="search-sel-bar">
-          <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
-            <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
-            {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
-            {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
-            {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
-            {(selTotals.inc > 0 || selTotals.exp > 0) && (
-              <span className="sel-total-net" style={{color: selTotals.inc - selTotals.exp >= 0 ? 'var(--income)' : 'var(--expense)'}}>
-                = {selTotals.inc - selTotals.exp >= 0 ? '+' : '−'}{formatINR(Math.abs(selTotals.inc - selTotals.exp))}
-              </span>
-            )}
-          </div>
-          <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',flexShrink:0,fontSize:'0.82rem'}} onClick={() => { setMultiMode(false); setSelected(new Set()); }}>Done</button>
-        </div>
-      )}
+      {multiMode && <BulkSelectionBar selected={selected} selTotals={selTotals} allTxns={transactions}
+        onDone={()=>{setMultiMode(false);setSelected(new Set());}}
+        onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
 
       {/* Totals bar */}
       {hasQuery && results.length > 0 && (
@@ -389,14 +428,6 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
           <div className="search-total-item"><div className="search-total-l">Count</div><div className="search-total-v">{results.length}</div></div>
         </div>
       )}
-
-      {/* Copy transaction form */}
-      {copyTxn&&<AddTransaction 
-        copyTransaction={copyTxn}
-        onClose={()=>setCopyTxn(null)} 
-        onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})}
-        backInterceptRef={backInterceptRef}
-      />}
 
       {/* Results */}
       <div className="search-list">
@@ -428,29 +459,9 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
             <div className="sheet-handle" style={{marginTop:14}}/>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'0 var(--page-px) 10px',borderBottom:'1px solid var(--border)'}}>
               <div style={{fontWeight:800,fontSize:'0.9rem'}}>Filters</div>
-              <button className="btn btn-ghost btn-sm" onClick={() => { setSelAccts(new Set()); setSelCats(new Set()); setSelPeriod('All'); setPeriodOffset(0); setSelNotes(true); setSelDesc(true); setMinAmount(''); setMaxAmount(''); setShowFilter(false); }}>Clear all</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setSelAccts(new Set()); setSelCats(new Set()); setSelPeriod('All'); setPeriodOffset(0); setShowFilter(false); }}>Clear all</button>
             </div>
             <div style={{overflow:'auto',flex:1,padding:'10px var(--page-px)'}}>
-              <div className="filter-section">
-                <div className="filter-section-label">Search Fields</div>
-                <div className="filter-checkbox-list">
-                  <div className="filter-check-row" onClick={() => setSelNotes(!selNotes)}>
-                    <div className={`filter-check-box ${selNotes ? 'checked' : ''}`}>{selNotes && '✓'}</div>
-                    <div className="filter-check-label">Notes</div>
-                  </div>
-                  <div className="filter-check-row" onClick={() => setSelDesc(!selDesc)}>
-                    <div className={`filter-check-box ${selDesc ? 'checked' : ''}`}>{selDesc && '✓'}</div>
-                    <div className="filter-check-label">Description</div>
-                  </div>
-                </div>
-              </div>
-              <div className="filter-section">
-                <div className="filter-section-label">Amount Range</div>
-                <div style={{display:'flex',gap:8}}>
-                  <input type="number" className="form-input" style={{flex:1}} placeholder="Min" value={minAmount} onChange={e => setMinAmount(e.target.value)}/>
-                  <input type="number" className="form-input" style={{flex:1}} placeholder="Max" value={maxAmount} onChange={e => setMaxAmount(e.target.value)}/>
-                </div>
-              </div>
               <div className="filter-section">
                 <div className="filter-section-label">Period</div>
                 <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
@@ -536,7 +547,7 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
   const [addDate,   setAddDate]   = useState(null);
   const [selected,  setSelected]  = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
-  const [copyTxn,   setCopyTxn]   = useState(null);
+  const [copyTxn,       setCopyTxn]       = useState(null);
 
   const multiModePrevHandler = React.useRef(null);
   const multiModeHandler = React.useRef(null);
@@ -585,7 +596,7 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
   }, [monthTxns, selected]);
 
   if (viewMode==='search') return (
-    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')} backInterceptRef={backInterceptRef} onCopy={handleCopy} copyTxn={copyTxn} setCopyTxn={setCopyTxn} />
+    <SearchView transactions={transactions} accounts={accounts} categories={categories} onClose={()=>setViewMode('daily')} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
   );
 
   return (
@@ -629,22 +640,9 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
         <MonthlyView transactions={transactions} onMonthClick={(y,mi)=>{setViewYear(y);setViewMonth(mi);setViewMode('daily');}}/>
       ) : (
         <>
-          {multiMode && selected.size > 0 && (
-            <div className="search-sel-bar">
-              <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
-                <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
-                {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
-                {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
-                {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
-                {(selTotals.inc > 0 || selTotals.exp > 0) && (
-                  <span className="sel-total-net" style={{color: selTotals.inc - selTotals.exp >= 0 ? 'var(--income)' : 'var(--expense)'}}>
-                    = {selTotals.inc - selTotals.exp >= 0 ? '+' : '−'}{formatINR(Math.abs(selTotals.inc - selTotals.exp))}
-                  </span>
-                )}
-              </div>
-              <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',flexShrink:0,fontSize:'0.82rem'}} onClick={() => { setMultiMode(false); setSelected(new Set()); }}>Done</button>
-            </div>
-          )}
+          {multiMode && <BulkSelectionBar selected={selected} selTotals={selTotals} allTxns={transactions}
+            onDone={()=>{setMultiMode(false);setSelected(new Set());}}
+            onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
           <div className="txn-list">
             {monthTxns.length===0
               ? <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">No transactions</div><div className="empty-desc">{MONTHS_F[viewMonth]} {viewYear}</div></div>

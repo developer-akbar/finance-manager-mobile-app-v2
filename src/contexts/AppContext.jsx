@@ -1,5 +1,10 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, useCallback } from 'react';
 import {
+  getAllRecurringRules, saveRecurringRule, updateRecurringRule, deleteRecurringRule,
+  getActiveRecurringRules, buildInstalmentSchedule, computeNextRepeatDate,
+  buildInstalmentNote,
+} from '../database/recurring.js';
+import {
   getTransactions, addTransaction as dbAdd, updateTransaction as dbUpdate,
   deleteTransaction as dbDelete, deleteAllTransactions, bulkImport,
   getTransactionCount, analyseImport,
@@ -43,6 +48,7 @@ const INIT = {
   transactions: [], accounts: [], categories: {},
   accountGroups: [], budgets: [], settings: {},
   theme: 'dark', fontSize: 1.0, fontFamily: 'Sora', fontDataWeight: 'regular',
+  recurringRules: [],
   loading: true, error: null, importProgress: null,
   currentView: 'dashboard',
 };
@@ -58,7 +64,8 @@ function reducer(s, a) {
     case 'SET_THEME':    return { ...s, theme: a.payload };
     case 'SET_FONTSIZE': return { ...s, fontSize: a.payload };
     case 'SET_FONTFAMILY':     return { ...s, fontFamily: a.payload };
-    case 'SET_FONTDATAWEIGHT': return { ...s, fontDataWeight: a.payload };
+    case 'SET_FONTDATAWEIGHT':   return { ...s, fontDataWeight: a.payload };
+    case 'SET_RECURRING':        return { ...s, recurringRules: a.payload };
     case 'UPD_SETTINGS': return { ...s, settings: { ...s.settings, ...a.payload } };
     case 'NAVIGATE': return { ...s, currentView: a.payload };
     default: return s;
@@ -72,9 +79,10 @@ export function AppProvider({ children }) {
 
   const load = useCallback(async () => {
     try {
-      const [txns, accts, catsArr, aGroups, aMapping, budgets, settings] = await Promise.all([
+      const [txns, accts, catsArr, aGroups, aMapping, budgets, settings, recurringRules] = await Promise.all([
         getTransactions(), getAccounts(), getCategories(),
         getAccountGroups(), getAccountMapping(), getBudgets(), getAllSettings(),
+        getAllRecurringRules(),
       ]);
 
       // Seed defaults on very first launch (empty accounts AND categories)
@@ -108,6 +116,7 @@ export function AppProvider({ children }) {
           accountGroups: seedGroups || [],
           accountMapping: aMapping || [],
           budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
+          recurringRules: recurringRules || [],
         }});
         return;
       }
@@ -133,11 +142,12 @@ export function AppProvider({ children }) {
           accountGroups: aGroups || [],
           accountMapping: aMapping || [],
           budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
+          recurringRules: recurringRules || [],
         },
       });
     } catch (e) {
       console.error('AppContext load error:', e);
-      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'light' } });
+      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'regular', recurringRules:[] } });
     }
   }, []);
 
@@ -148,6 +158,66 @@ export function AppProvider({ children }) {
   const addTransaction    = async (data) => { const r = await dbAdd(data);    if (r) dispatch({ type:'ADD_TXN', payload:r }); return r; };
   const updateTransaction = async (id,d) => { const r = await dbUpdate(id,d); if (r) dispatch({ type:'UPD_TXN', payload:r }); return r; };
   const deleteTransaction = async (id)   => { await dbDelete(id); dispatch({ type:'DEL_TXN', payload:id }); };
+
+  // ── Instalment bulk operations ─────────────────────────────────────────
+  // Edit non-Amount fields on all instalment transactions sharing the same rule
+  const updateInstalmentSiblings = async (ruleId, updatedTxn) => {
+    if (!ruleId) return;
+    // Fetch fresh transactions from DB to avoid stale state
+    const freshTxns = await getTransactions();
+    const allTxns = freshTxns.filter(t => t.recurring_rule_id === ruleId);
+    // baseNote is already stripped of (x/x) — the edit form strips it before saving
+    const baseNote = (updatedTxn.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
+    for (const sibling of allTxns) {
+      // Re-apply the original (x/x) suffix from this sibling's note
+      const partMatch = (sibling.Note || '').match(/\((\d+\/\d+)\)\s*$/);
+      const suffix = partMatch ? ` (${partMatch[1]})` : '';
+      const newNote = suffix ? baseNote + suffix : baseNote;
+      const updated = {
+        ...sibling,
+        Account:     updatedTxn.Account     || sibling.Account,
+        FromAccount: updatedTxn.FromAccount || sibling.FromAccount || '',
+        ToAccount:   updatedTxn.ToAccount   || sibling.ToAccount   || '',
+        Category:    updatedTxn.Category    || sibling.Category,
+        Subcategory: updatedTxn.Subcategory || 'Default',
+        Note:        newNote,
+        Description: updatedTxn.Description !== undefined ? updatedTxn.Description : (sibling.Description || ''),
+        // Keep original Date, Time, INR, Amount per instalment
+      };
+      await dbUpdate(sibling._id, updated);
+      dispatch({ type:'UPD_TXN', payload:{...updated, _id: sibling._id} });
+    }
+    // Update rule metadata
+    await updateRecurringRule(ruleId, {
+      base_note:   baseNote,
+      category:    updatedTxn.Category,
+      subcategory: updatedTxn.Subcategory || '',
+      account:     updatedTxn.Account,
+    });
+  };
+
+  // Update amount on one instalment and adjust rule total_amount
+  const updateInstalmentAmount = async (ruleId, oldAmount, newAmount) => {
+    if (!ruleId) return;
+    const rules = state.recurringRules || [];
+    const rule = rules.find(r => r.id === ruleId);
+    if (!rule) return;
+    const diff = newAmount - oldAmount;
+    await updateRecurringRule(ruleId, { total_amount: (rule.total_amount || 0) + diff });
+  };
+
+  // Delete all instalment transactions and cancel the rule
+  const deleteAllInstalments = async (ruleId) => {
+    if (!ruleId) return;
+    const toDelete = state.transactions.filter(t => t.recurring_rule_id === ruleId);
+    for (const t of toDelete) {
+      await dbDelete(t._id);
+      dispatch({ type:'DEL_TXN', payload:t._id });
+    }
+    await updateRecurringRule(ruleId, { status: 'cancelled' });
+    const rules = await getAllRecurringRules();
+    dispatch({ type:'SET_RECURRING', payload: rules });
+  };
 
   const renameAccount = async (oldName, newName) => {
     for (const t of state.transactions.filter(t => t.Account===oldName||t.FromAccount===oldName||t.ToAccount===oldName))
@@ -298,7 +368,14 @@ export function AppProvider({ children }) {
     if (data.accounts       !== undefined) await replaceAccounts(data.accounts);
     if (data.categories     !== undefined) await replaceCategories(catsObjToArr(data.categories));
     if (data.accountGroups  !== undefined) await replaceAccountGroups(data.accountGroups);
-    if (data.accountMapping !== undefined) await replaceAccountMapping(data.accountMapping);
+    if (data.accountMapping  !== undefined) await replaceAccountMapping(data.accountMapping);
+    if (data.recurringRules  !== undefined) {
+      // Restore each rule
+      const { saveRecurringRule: saveRule } = await import('../database/recurring.js');
+      for (const rule of data.recurringRules) { await saveRule(rule); }
+      const rules = await getAllRecurringRules();
+      dispatch({ type:'SET_RECURRING', payload: rules });
+    }
     // Persist simple key-value settings (profileName, pin, pinIdleSeconds, etc.)
     const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight'];
     const changed = {};
@@ -313,6 +390,60 @@ export function AppProvider({ children }) {
       dispatch({ type: 'UPD_SETTINGS', payload: changed });
     }
     await load();
+  };
+
+  // ── Recurring rules ─────────────────────────────────────────────────────
+  const createRecurringRule = async (rule) => {
+    const saved = await saveRecurringRule(rule);
+    const rules = await getAllRecurringRules();
+    dispatch({ type:'SET_RECURRING', payload: rules });
+    return saved;
+  };
+
+  const modifyRecurringRule = async (id, updates) => {
+    await updateRecurringRule(id, updates);
+    const rules = await getAllRecurringRules();
+    dispatch({ type:'SET_RECURRING', payload: rules });
+  };
+
+  const removeRecurringRule = async (id) => {
+    await deleteRecurringRule(id);
+    const rules = await getAllRecurringRules();
+    dispatch({ type:'SET_RECURRING', payload: rules });
+  };
+
+  // Process due repeat transactions on app open
+  const processDueRepeat = async () => {
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+    const active = await getActiveRecurringRules();
+    // next_date stored as YYYY-MM-DD — compare directly as strings
+    const due = active.filter(r => r.rule_type === 'repeat' && r.next_date && r.next_date <= todayStr);
+    if (!due.length) return;
+    for (const rule of due) {
+      // Convert YYYY-MM-DD → DD/MM/YYYY for transaction Date storage
+      const [dy, dm, dd] = rule.next_date.split('-');
+      const txnDate = `${dd}/${dm}/${dy}`;
+      const data = {
+        Date: txnDate, Time: '00:00',
+        Account: rule.account || rule.from_account || '',
+        FromAccount: rule.from_account || '', ToAccount: rule.to_account || '',
+        Category: rule.txn_type === 'Transfer-Out' ? 'Transfer' : (rule.category || ''),
+        Subcategory: rule.subcategory || 'Default',
+        Note: rule.base_note || '', Description: rule.description || '',
+        INR: rule.amount_per_part || 0, Amount: String(rule.amount_per_part || 0),
+        Currency: rule.currency || 'INR', 'Income/Expense': rule.txn_type || 'Expense',
+        recurring_rule_id: rule.id,
+      };
+      await dbAdd(data);
+      // next_date stays as YYYY-MM-DD for consistent comparison
+      const nextDate = computeNextRepeatDate(rule.next_date, rule.frequency, rule.schedule_mode);
+      await updateRecurringRule(rule.id, {
+        next_date: nextDate,
+        completed_parts: (rule.completed_parts || 0) + 1,
+      });
+    }
+    if (due.length) await load();
   };
 
   const setTheme = async (theme) => {
@@ -355,9 +486,11 @@ export function AppProvider({ children }) {
     <Ctx.Provider value={{
       state, dispatch, load, navigate,
       addTransaction, updateTransaction, deleteTransaction,
+      updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments,
       renameAccount, renameCategory, cleanupAccounts,
       importData, cancelImport, clearAllData, analyseImport,
       updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight,
+      createRecurringRule, modifyRecurringRule, removeRecurringRule, processDueRepeat,
       saveBudget, removeBudget,
     }}>
       {children}

@@ -708,8 +708,8 @@ export function CategoriesManager({ onBack }) {
 // Data Manager
 // ─────────────────────────────────────────────
 function DataManager({ onBack }) {
-  const { state, importData, cancelImport, clearAllData, cleanupAccounts, analyseImport, updateSettings } = useApp();
-  const { transactions, accounts, accountGroups, accountMapping, categories, budgets, importProgress } = state;
+  const { state, importData, cancelImport, clearAllData, cleanupAccounts, analyseImport, updateSettings, modifyRecurringRule, removeRecurringRule } = useApp();
+  const { transactions, accounts, accountGroups, accountMapping, categories, budgets, importProgress, recurringRules } = state;
   const fileRef = useRef(null);
   const [status,      setStatus]    = useState(null);
   const [showMode,    setShowMode]  = useState(false);
@@ -754,10 +754,11 @@ function DataManager({ onBack }) {
         const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
         // Restore settings first so accounts/categories are ready before transactions
         await updateSettings({
-          accounts:       Array.isArray(backup.accounts)        ? backup.accounts        : undefined,
-          accountGroups:  Array.isArray(backup.accountGroups)   ? backup.accountGroups   : undefined,
-          accountMapping: Array.isArray(backup.accountMapping)  ? backup.accountMapping  : undefined,
-          categories:     backup.categories && typeof backup.categories === 'object' ? backup.categories : undefined,
+          accounts:        Array.isArray(backup.accounts)        ? backup.accounts        : undefined,
+          accountGroups:   Array.isArray(backup.accountGroups)   ? backup.accountGroups   : undefined,
+          accountMapping:  Array.isArray(backup.accountMapping)  ? backup.accountMapping  : undefined,
+          categories:      backup.categories && typeof backup.categories === 'object' ? backup.categories : undefined,
+          recurringRules:  Array.isArray(backup.recurringRules)  ? backup.recurringRules  : undefined,
         });
         if (txnRows.length === 0) {
           setStatus({ type:'success', msg:'✓ Settings restored. No transactions in backup.' });
@@ -814,7 +815,7 @@ function DataManager({ onBack }) {
 
   const buildBackupPayload = () => ({
     _finman_backup: true,
-    version: '2.2.1.3',
+    version: '2.2.1.4',
     exportedAt: new Date().toISOString(),
     transactions,
     accounts:       accounts || [],
@@ -822,6 +823,7 @@ function DataManager({ onBack }) {
     accountMapping: accountMapping || [],
     categories:     categories || {},
     budgets:        budgets || [],
+    recurringRules: recurringRules || [],
   });
 
   const runBackupNow = async () => {
@@ -1451,6 +1453,138 @@ function AppearanceManager({ onBack }) {
   );
 }
 
+
+// ── RecurringManager — Repeat rules only (instalments are pre-created, no management needed)
+function RecurringManager({ onBack }) {
+  const { state, modifyRecurringRule, removeRecurringRule } = useApp();
+  // Only show repeat rules (instalment rules have status='completed' already)
+  const rules = (state.recurringRules || []).filter(r => r.rule_type === 'repeat');
+  const [confirmDelete, setConfirmDelete] = React.useState(null);
+
+  const active    = rules.filter(r => r.status === 'active');
+  const paused    = rules.filter(r => r.status === 'paused');
+  const completed = rules.filter(r => r.status === 'cancelled');
+
+  // next_date stored as YYYY-MM-DD
+  const fmtDate = (d) => {
+    if (!d || d === '') return '—';
+    const parts = d.split('-');
+    if (parts.length !== 3) return d;
+    const [y, m, day] = parts;
+    return `${day}/${m}/${y.slice(2)}`;
+  };
+
+  const FREQ_LABELS = { daily:'Daily', weekly:'Weekly', fortnightly:'Every 2 weeks',
+    monthly:'Monthly', '3months':'Every 3 months', '6months':'Every 6 months', annually:'Annually' };
+
+  const RuleRow = ({ rule }) => {
+    const nextLabel = rule.next_date && rule.next_date !== '' ? `Next: ${fmtDate(rule.next_date)}` : '';
+    return (
+      <div style={{padding:'12px var(--page-px)',borderBottom:'1px solid var(--border-light)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <span style={{fontSize:'1rem'}}>🔁</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:'0.82rem',fontWeight:700,color:'var(--text-primary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+              {rule.base_note || 'Repeat'}
+            </div>
+            <div style={{fontSize:'0.68rem',color:'var(--text-muted)',marginTop:2}}>
+              {FREQ_LABELS[rule.frequency] || rule.frequency}
+              {' · '}{rule.schedule_mode === 'start_of_month' ? 'Start of month' : 'On date'}
+              {' · '}₹{rule.amount_per_part}
+              {nextLabel ? ` · ${nextLabel}` : ''}
+            </div>
+          </div>
+          <div style={{display:'flex',gap:6,flexShrink:0}}>
+            {rule.status === 'active' && (
+              <button className="btn btn-sm btn-secondary"
+                onClick={()=>modifyRecurringRule(rule.id,{status:'paused'})}>Pause</button>
+            )}
+            {rule.status === 'paused' && (
+              <button className="btn btn-sm btn-primary"
+                onClick={()=>modifyRecurringRule(rule.id,{status:'active'})}>Resume</button>
+            )}
+            <button className="btn btn-sm btn-danger"
+              onClick={()=>setConfirmDelete(rule)}>✕</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="sub-screen">
+      <div className="page-hdr">
+        <button className="back-btn" onClick={onBack}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <div className="page-hdr-title">Recurring</div>
+      </div>
+      <div className="sub-body">
+        {rules.length === 0 ? (
+          <div className="empty-state" style={{marginTop:60}}>
+            <div className="empty-icon">🔁</div>
+            <div className="empty-title">No recurring rules</div>
+            <div className="empty-desc">Add a transaction with 🔁 Repeat to see it here</div>
+          </div>
+        ) : (
+          <>
+            {active.length > 0 && (
+              <>
+                <div className="mgr-section-label">Active ({active.length})</div>
+                <div className="settings-card" style={{margin:'0 var(--page-px) 12px'}}>
+                  {active.map(r => <RuleRow key={r.id} rule={r} />)}
+                </div>
+              </>
+            )}
+            {paused.length > 0 && (
+              <>
+                <div className="mgr-section-label">Paused ({paused.length})</div>
+                <div className="settings-card" style={{margin:'0 var(--page-px) 12px'}}>
+                  {paused.map(r => <RuleRow key={r.id} rule={r} />)}
+                </div>
+              </>
+            )}
+            {completed.length > 0 && (
+              <>
+                <div className="mgr-section-label">Completed / Cancelled ({completed.length})</div>
+                <div className="settings-card" style={{margin:'0 var(--page-px) 12px',opacity:0.6}}>
+                  {completed.map(r => <RuleRow key={r.id} rule={r} />)}
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+      {confirmDelete && (
+        <>
+          <div className="overlay" onClick={()=>setConfirmDelete(null)}/>
+          <div className="bottom-sheet">
+            <div className="sheet-handle"/>
+            <div style={{textAlign:'center',padding:'0 var(--page-px) 16px'}}>
+              <div style={{fontSize:'1.5rem',marginBottom:8}}>
+                {confirmDelete.rule_type==='instalment'?'📋':'🔁'}
+              </div>
+              <div style={{fontWeight:800,marginBottom:6}}>
+                Stop repeating?
+              </div>
+              <div style={{fontSize:'0.75rem',color:'var(--text-muted)',marginBottom:20}}>
+                The rule will be removed. Transactions already created are kept. No new occurrences will run.
+              </div>
+              <div style={{display:'flex',gap:10}}>
+                <button className="btn btn-ghost btn-full" onClick={()=>setConfirmDelete(null)}>Keep</button>
+                <button className="btn btn-danger btn-full" onClick={async()=>{
+                  await modifyRecurringRule(confirmDelete.id,{status:'cancelled'});
+                  setConfirmDelete(null);
+                }}>Cancel rule</button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────
 // Main Settings screen
 // ─────────────────────────────────────────────
@@ -1471,6 +1605,7 @@ export default function Settings({ backInterceptRef } = {}) {
   }, [screen, backInterceptRef]);
 
 
+  if (screen==='recurring')  return <RecurringManager  onBack={()=>setScreen(null)}/>;
   if (screen==='data')       return <DataManager       onBack={()=>setScreen(null)}/>;
   if (screen==='accounts')   return <AccountsManager   onBack={()=>setScreen(null)}/>;
   if (screen==='categories') return <CategoriesManager onBack={()=>setScreen(null)}/>;
@@ -1523,6 +1658,14 @@ export default function Settings({ backInterceptRef } = {}) {
       {/* Manage */}
       <div className="settings-group-label">Manage</div>
       <div className="settings-card">
+        <div className="settings-row" onClick={()=>setScreen('recurring')}>
+          <div className="settings-row-icon" style={{background:'rgba(99,179,237,0.15)'}}>🔁</div>
+          <div className="settings-row-content">
+            <div className="settings-row-title">Recurring</div>
+            <div className="settings-row-sub">{(state.recurringRules||[]).filter(r=>r.rule_type==='repeat'&&r.status==='active').length} active repeat rules</div>
+          </div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6"/></svg>
+        </div>
         <div className="settings-row" onClick={()=>setScreen('accounts')}>
           <div className="settings-row-icon" style={{background:'rgba(0,229,160,0.12)'}}>💳</div>
           <div className="settings-row-content"><div className="settings-row-title">Accounts</div><div className="settings-row-sub">{acctCount} accounts</div></div>
