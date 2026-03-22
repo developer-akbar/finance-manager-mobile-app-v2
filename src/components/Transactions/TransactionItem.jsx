@@ -133,9 +133,9 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
 
 // ── Detail + Edit sheet ──────────────────────────────────────────────────────
 function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
-  const { deleteTransaction } = useApp();
-  const [showEdit,   setShowEdit]   = useState(false);
-  const [showDelete, setShowDelete] = useState(false);
+  const { deleteTransaction, updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments, state } = useApp();
+  const [showEdit,       setShowEdit]       = useState(false);
+  const [showDelete,     setShowDelete]     = useState(false);
   const [showCopyPicker, setShowCopyPicker] = useState(false);
 
   const type   = txnType(t);
@@ -143,6 +143,16 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
   const cls    = type === 'income' ? 'income' : type === 'expense' ? 'expense' : 'transfer';
   const sign   = type === 'income' ? '+' : type === 'expense' ? '−' : '';
   const isXfer = type === 'transfer';
+
+  // Instalment detection: use note pattern AND recurring_rule_id
+  const ruleId      = t.recurring_rule_id;
+  // (x/x) suffix in note reliably identifies instalment transactions
+  const partMatch   = (t.Note||'').match(/\((\d+\/\d+)\)\s*$/);
+  const partLabel   = partMatch ? partMatch[1] : null;
+  // Also check rule type from state as fallback
+  const ruleEntry   = ruleId ? (state.recurringRules||[]).find(r=>r.id===ruleId) : null;
+  const isInstalment = !!(partLabel || (ruleEntry?.rule_type === 'instalment'));
+  const isRepeat     = ruleEntry?.rule_type === 'repeat';
 
   const handleCopyWithToday = () => {
     const now = new Date();
@@ -158,7 +168,21 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
     onClose();
   };
 
-  if (showEdit) return <AddTransaction editTransaction={t} onClose={onClose} backInterceptRef={backInterceptRef}/>;
+  if (showEdit) return (
+    <AddTransaction
+      editTransaction={t}
+      onClose={onClose}
+      backInterceptRef={backInterceptRef}
+      onSaveInstalment={isInstalment ? async (updatedData) => {
+        // Non-amount fields → apply to all siblings
+        await updateInstalmentSiblings(ruleId, updatedData);
+        // If amount changed → update rule total
+        const oldAmt = txnAmount(t);
+        const newAmt = parseFloat(updatedData.INR) || 0;
+        if (newAmt !== oldAmt) await updateInstalmentAmount(ruleId, oldAmt, newAmt);
+      } : null}
+    />
+  );
 
   return (
     <>
@@ -168,10 +192,22 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
         {/* Hero */}
         <div className="dp-hero" onClick={() => setShowEdit(true)} style={{cursor:'pointer'}}>
           <div className={`dp-amount ${cls}`}>{sign}{formatINR(amount)}</div>
-          <div className="dp-badge" style={{
-            background: type==='income'?'var(--income-bg)':type==='expense'?'var(--expense-bg)':'var(--transfer-bg)',
-            color: type==='income'?'var(--income)':type==='expense'?'var(--expense)':'var(--transfer)',
-          }}>{t['Income/Expense'] || type}</div>
+          <div style={{display:'flex',gap:6,alignItems:'center',justifyContent:'center',flexWrap:'wrap'}}>
+            <div className="dp-badge" style={{
+              background: type==='income'?'var(--income-bg)':type==='expense'?'var(--expense-bg)':'var(--transfer-bg)',
+              color: type==='income'?'var(--income)':type==='expense'?'var(--expense)':'var(--transfer)',
+            }}>{t['Income/Expense'] || type}</div>
+            {isInstalment && partLabel && (
+              <div className="dp-badge" style={{background:'rgba(99,179,237,0.15)',color:'#63b3ed'}}>
+                📋 Instalment {partLabel}
+              </div>
+            )}
+            {isRepeat && (
+              <div className="dp-badge" style={{background:'rgba(167,139,250,0.15)',color:'#a78bfa'}}>
+                🔁 Repeat
+              </div>
+            )}
+          </div>
         </div>
         {/* Fields */}
         <div className="dp-fields" onClick={() => setShowEdit(true)} style={{cursor:'pointer'}}>
@@ -221,15 +257,32 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
         {showDelete && (
           <div className="dp-delete-confirm">
             <div style={{fontSize:'2rem',marginBottom:10}}>🗑️</div>
-            <div style={{fontSize:'0.95rem',fontWeight:800,marginBottom:6}}>Delete this transaction?</div>
+            <div style={{fontSize:'0.95rem',fontWeight:800,marginBottom:6}}>
+              {isInstalment ? 'Delete instalment?' : 'Delete this transaction?'}
+            </div>
             <div style={{fontSize:'0.75rem',color:'var(--text-muted)',marginBottom:18,textAlign:'center'}}>
               {t.Category} · {sign}{formatINR(amount)}<br/>
               <span style={{fontSize:'0.68rem'}}>{formatDate(t.Date,'short')}{t.Note ? ` · ${t.Note}` : ''}</span>
             </div>
-            <div style={{display:'flex',gap:10,width:'100%'}}>
-              <button className="btn btn-ghost btn-full"  onClick={() => setShowDelete(false)}>Cancel</button>
-              <button className="btn btn-danger btn-full" onClick={async () => { await deleteTransaction(t._id); onClose(); }}>Delete</button>
-            </div>
+            {isInstalment ? (
+              <div style={{display:'flex',flexDirection:'column',gap:8,width:'100%'}}>
+                <button className="btn btn-ghost btn-full" onClick={() => setShowDelete(false)}>Cancel</button>
+                <button className="btn btn-secondary btn-full" onClick={async () => { await deleteTransaction(t._id); onClose(); }}>
+                  Delete this instalment only
+                </button>
+                <button className="btn btn-danger btn-full" onClick={async () => {
+                  if (!ruleId) { await deleteTransaction(t._id); onClose(); return; }
+                  await deleteAllInstalments(ruleId); onClose();
+                }}>
+                  🗑 Delete all instalments
+                </button>
+              </div>
+            ) : (
+              <div style={{display:'flex',gap:10,width:'100%'}}>
+                <button className="btn btn-ghost btn-full"  onClick={() => setShowDelete(false)}>Cancel</button>
+                <button className="btn btn-danger btn-full" onClick={async () => { await deleteTransaction(t._id); onClose(); }}>Delete</button>
+              </div>
+            )}
           </div>
         )}
       </div>

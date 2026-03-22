@@ -4,6 +4,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, txnType, txnAmount, calcTotals, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
+import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Categories.css';
 
@@ -106,8 +107,13 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   }, [multiMode]); // Removed backInterceptRef from deps
 
   const handleCopy = (txn) => {
-    // Pass txn as-is — the copy picker in DetailSheet sets date/time based on user choice.
-    setCopyTxn({ ...txn, _id: undefined });
+    // Create a copy with current date/time but keep all other data
+    setCopyTxn({
+      ...txn,
+      Date: new Date().toISOString().split('T')[0], // Current date
+      Time: new Date().toTimeString().slice(0, 5), // Current time (HH:MM)
+      _id: undefined, // Remove ID so it gets a new one
+    });
   };
 
   const catTxns = useMemo(() => allTxns.filter(t => t.Category === catName), [allTxns, catName]);
@@ -277,22 +283,9 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
         {filtTxns.length===0
           ? <div className="empty-state"><div className="empty-icon">📭</div><div className="empty-title">No transactions</div><div className="empty-desc">{periodLabel}</div></div>
           : <>
-              {multiMode && selected.size > 0 && (
-                <div className="search-sel-bar">
-                  <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
-                    <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
-                    {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
-                    {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
-                    {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
-                    {(selTotals.inc > 0 || selTotals.exp > 0) && (
-                      <span className="sel-total-net" style={{color: selTotals.inc - selTotals.exp >= 0 ? 'var(--income)' : 'var(--expense)'}}>
-                        = {selTotals.inc - selTotals.exp >= 0 ? '+' : '−'}{formatINR(Math.abs(selTotals.inc - selTotals.exp))}
-                      </span>
-                    )}
-                  </div>
-                  <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',flexShrink:0,fontSize:'0.82rem'}} onClick={() => { setMultiMode(false); setSelected(new Set()); }}>Done</button>
-                </div>
-              )}
+              {multiMode && <BulkSelectionBar selected={selected} selTotals={selTotals} allTxns={filtTxns}
+                onDone={()=>{setMultiMode(false);setSelected(new Set());}}
+                onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
               {groupedTxns.map(([dk,txns])=>{
                 const gt=calcTotals(txns), d=parseDate(txns[0].Date);
                 return (
