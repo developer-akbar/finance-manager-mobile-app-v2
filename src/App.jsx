@@ -81,7 +81,7 @@ const SplashScreen = () => (
 );
 
 function AppInner() {
-  const { state, navigate } = useApp();
+  const { state, navigate, processDueRepeat } = useApp();
   const { currentView } = state;
 
   // ALL hooks must be called unconditionally before any early return
@@ -89,6 +89,11 @@ function AppInner() {
   const [addKey,  setAddKey]    = useState(0);
   const [resetKeys, setResetKeys] = useState({ transactions:0, accounts:0, categories:0, settings:0, dashboard:0 });
   const [backupDue, setBackupDue] = useState(false);
+
+  // Process due repeat transactions on app open
+  React.useEffect(() => {
+    if (!state.loading) processDueRepeat();
+  }, [state.loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check if auto backup is due on app load
   React.useEffect(() => {

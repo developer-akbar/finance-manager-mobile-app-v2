@@ -3,6 +3,10 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { inputToStorage, toInputDate, nowTimeStr } from '../../utils/format.js';
 import './AddTransaction.css';
 import { AccountsManager, CategoriesManager } from '../Settings/Settings.jsx';
+import {
+  buildInstalmentSchedule, computeNextRepeatDate,
+  buildInstalmentNote, stripInstalmentSuffix,
+} from '../../database/recurring.js';
 
 const TYPES = [
   { id:'Income',       label:'Income',   cls:'income'   },
@@ -25,6 +29,174 @@ function ReorderOverlay({ screen, onClose }) {
       {screen === 'accounts'   && <AccountsManager   onBack={onClose} />}
       {screen === 'categories' && <CategoriesManager onBack={onClose} />}
     </div>
+  );
+}
+
+
+// ── RecurringSheet — Instalment / Repeat picker ────────────────────────────
+const REPEAT_OPTIONS = [
+  { id:'daily',       label:'Daily',         icon:'📅' },
+  { id:'weekly',      label:'Weekly',        icon:'🗓' },
+  { id:'fortnightly', label:'Every 2 weeks', icon:'🗓' },
+  { id:'monthly',     label:'Monthly',       icon:'📆' },
+  { id:'3months',     label:'Every 3 months',icon:'📆' },
+  { id:'6months',     label:'Every 6 months',icon:'📆' },
+  { id:'annually',    label:'Annually',      icon:'🎯' },
+];
+
+function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
+  const [mode, setMode]           = React.useState(null);           // null | 'instalment' | 'repeat'
+  const [scheduleMode, setSchedule] = React.useState('start_of_month'); // default: start of month
+  const [days, setDays]           = React.useState('');             // instalment days
+  const [months, setMonths]       = React.useState('');             // instalment months (alt input)
+  const [inputMode, setInputMode] = React.useState('months');       // 'months' | 'days'
+  const [repeatFreq, setRepeatFreq] = React.useState('monthly');
+  const [step, setStep]           = React.useState(1);              // 1=type, 2=details, 3=schedule
+
+  const handleInstSave = () => {
+    const totalDays = inputMode === 'months'
+      ? Math.round(parseFloat(months || 0) * 30)
+      : parseInt(days || 0);
+    if (!totalDays || totalDays < 1) return;
+    onSave({ type: 'instalment', totalDays, scheduleMode });
+    onClose();
+  };
+
+  const handleRepeatSave = () => {
+    onSave({ type: 'repeat', frequency: repeatFreq, scheduleMode });
+    onClose();
+  };
+
+  return (
+    <>
+      <div className="overlay" onMouseDown={onClose} style={{zIndex:210}} />
+      <div className="bottom-sheet" style={{paddingBottom:'calc(var(--safe-bottom) + 16px)',zIndex:211}}>
+        <div className="sheet-handle" />
+
+        {step === 1 && (
+          <>
+            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:4}}>Recurring</div>
+            <div style={{fontSize:'0.73rem',color:'var(--text-muted)',marginBottom:16}}>
+              Set up recurring or instalment payments
+            </div>
+            {/* Instalment — only for Expense */}
+            {isExpense && (
+              <div className="recur-option-row" onClick={()=>{setMode('instalment');setStep(2);}}>
+                <div className="recur-option-icon">📋</div>
+                <div className="recur-option-body">
+                  <div className="recur-option-title">Instalment</div>
+                  <div className="recur-option-sub">Split total amount over days/months</div>
+                </div>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14" style={{opacity:0.4}}><path d="M9 18l6-6-6-6"/></svg>
+              </div>
+            )}
+            <div className="recur-option-row" onClick={()=>{setMode('repeat');setStep(2);}}>
+              <div className="recur-option-icon">🔁</div>
+              <div className="recur-option-body">
+                <div className="recur-option-title">Repeat</div>
+                <div className="recur-option-sub">Create same transaction on a schedule</div>
+              </div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14" style={{opacity:0.4}}><path d="M9 18l6-6-6-6"/></svg>
+            </div>
+            <button className="btn btn-ghost btn-full" style={{marginTop:12}} onMouseDown={onClose}>Cancel</button>
+          </>
+        )}
+
+        {step === 2 && mode === 'instalment' && (
+          <>
+            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:2}}>📋 Instalment</div>
+            <div style={{fontSize:'0.72rem',color:'var(--text-muted)',marginBottom:14}}>
+              Amount will be split proportionally across instalments
+            </div>
+            {/* Months / Days toggle */}
+            <div style={{display:'flex',gap:8,marginBottom:12}}>
+              <button className={`btn btn-sm ${inputMode==='months'?'btn-primary':'btn-secondary'}`}
+                onClick={()=>setInputMode('months')}>Months</button>
+              <button className={`btn btn-sm ${inputMode==='days'?'btn-primary':'btn-secondary'}`}
+                onClick={()=>setInputMode('days')}>Days</button>
+            </div>
+            <div className="form-group" style={{marginBottom:14}}>
+              <label className="form-label">{inputMode === 'months' ? 'Number of Months' : 'Number of Days'}</label>
+              <input
+                ref={el => { if (el) setTimeout(() => el.focus(), 150); }}
+                className="form-input" type="tel" inputMode="numeric" pattern="[0-9]*"
+                placeholder={inputMode === 'months' ? 'e.g. 3' : 'e.g. 84'}
+                value={inputMode === 'months' ? months : days}
+                onChange={e => inputMode === 'months' ? setMonths(e.target.value) : setDays(e.target.value)}
+              />
+            </div>
+            <button className="btn btn-primary btn-full" style={{marginBottom:8}}
+              onClick={()=>setStep(3)}>Next →</button>
+            <button className="btn btn-ghost btn-full" onClick={()=>setStep(1)}>← Back</button>
+          </>
+        )}
+
+        {step === 2 && mode === 'repeat' && (
+          <>
+            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:14}}>🔁 Repeat frequency</div>
+            <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:14}}>
+              {REPEAT_OPTIONS.map(opt => (
+                <div key={opt.id}
+                  onClick={()=>setRepeatFreq(opt.id)}
+                  style={{display:'flex',alignItems:'center',gap:12,padding:'10px 12px',borderRadius:10,
+                    background: repeatFreq===opt.id ? 'rgba(0,229,160,0.10)' : 'var(--bg-card2)',
+                    border: `1.5px solid ${repeatFreq===opt.id ? 'var(--accent)' : 'var(--border)'}`,
+                    cursor:'pointer'}}>
+                  <span style={{fontSize:'1.1rem'}}>{opt.icon}</span>
+                  <span style={{flex:1,fontSize:'0.85rem',fontWeight:600,color:repeatFreq===opt.id?'var(--accent)':'var(--text-primary)'}}>{opt.label}</span>
+                  {repeatFreq===opt.id && <span style={{color:'var(--accent)',fontWeight:700}}>✓</span>}
+                </div>
+              ))}
+            </div>
+            <button className="btn btn-primary btn-full" style={{marginBottom:8}}
+              onClick={()=>setStep(3)}>Next →</button>
+            <button className="btn btn-ghost btn-full" onClick={()=>setStep(1)}>← Back</button>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:2}}>
+              {mode === 'instalment' ? '📋 Instalment — Schedule' : '🔁 Repeat — Schedule'}
+            </div>
+            <div style={{fontSize:'0.72rem',color:'var(--text-muted)',marginBottom:14}}>
+              How should dates be calculated?
+            </div>
+            {/* Schedule mode options */}
+            {[
+              { id:'start_of_month', label:'Start of month',
+                sub: mode==='instalment'
+                  ? 'Remaining days this month, then 1st of each month (good for recharges)'
+                  : 'Repeats on the 1st of each period' },
+              { id:'on_date', label: mode==='instalment' ? 'On the day' : 'On the date',
+                sub: mode==='instalment'
+                  ? `Same date each month (e.g. ${startDate ? startDate.slice(8) : '22'}nd of each month)`
+                  : 'Repeats on the same date each period' },
+            ].map(opt => (
+              <div key={opt.id} onClick={()=>setSchedule(opt.id)}
+                style={{display:'flex',alignItems:'flex-start',gap:12,padding:'12px',borderRadius:10,marginBottom:8,
+                  background: scheduleMode===opt.id ? 'rgba(0,229,160,0.10)' : 'var(--bg-card2)',
+                  border:`1.5px solid ${scheduleMode===opt.id?'var(--accent)':'var(--border)'}`,cursor:'pointer'}}>
+                <div style={{width:18,height:18,borderRadius:'50%',marginTop:2,flexShrink:0,
+                  border:`2px solid ${scheduleMode===opt.id?'var(--accent)':'var(--border)'}`,
+                  background:scheduleMode===opt.id?'var(--accent)':'transparent'}}/>
+                <div>
+                  <div style={{fontSize:'0.85rem',fontWeight:700,color:scheduleMode===opt.id?'var(--accent)':'var(--text-primary)'}}>{opt.label}</div>
+                  <div style={{fontSize:'0.7rem',color:'var(--text-muted)',marginTop:2}}>{opt.sub}</div>
+                </div>
+              </div>
+            ))}
+            <div style={{display:'flex',gap:8,marginTop:8}}>
+              <button className="btn btn-ghost" style={{flex:1}} onClick={()=>setStep(2)}>← Back</button>
+              <button className="btn btn-primary" style={{flex:2}}
+                onClick={mode==='instalment' ? handleInstSave : handleRepeatSave}>
+                Save
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -213,8 +385,8 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
 });
 
 // ── Main AddTransaction ────────────────────────────────────────────────────
-export default function AddTransaction({ onClose, onSaveAndContinue=null, editTransaction=null, copyTransaction=null, prefillDate=null, prefillAccount=null, prefillCategory=null, backInterceptRef=null }) {
-  const { state, addTransaction, updateTransaction } = useApp();
+export default function AddTransaction({ onClose, onSaveAndContinue=null, editTransaction=null, copyTransaction=null, prefillDate=null, prefillAccount=null, prefillCategory=null, backInterceptRef=null, onSaveInstalment=null }) {
+  const { state, addTransaction, updateTransaction, createRecurringRule } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
   const isCopy = !!copyTransaction;
@@ -247,10 +419,12 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   const [form, setForm] = useState(() => {
     if (isEdit) {
       const t=editTransaction, rt=t['Income/Expense']||'Expense';
+      // Strip (x/x) instalment suffix from Note so user sees clean note in edit form
+      const cleanNote = (t.Note||'').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
       return {type:rt,amount:String(t.INR||t.Amount||''),date:toInputDate(t.Date)||todayVal(),time:t.Time||lastTime,
         account:rt.startsWith('Transfer')?'':(t.Account||''),fromAccount:rt.startsWith('Transfer')?(t.Account||t.FromAccount||''):'',
         toAccount:rt.startsWith('Transfer')?(t.ToAccount||''):'',category:t.Category||'',
-        subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:t.Note||'',description:t.Description||''};
+        subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:cleanNote,description:t.Description||''};
     }
     if (isCopy) {
       const t=copyTransaction, rt=t['Income/Expense']||'Expense';
@@ -268,6 +442,9 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   const [saving,      setSaving]      = useState(false);
   const [noteSugs,    setNoteSugs]    = useState([]);
   const [noteFocused, setNoteFocused] = useState(false);
+  // Recurring
+  const [showRecurring, setShowRecurring] = useState(false);
+  const [recurringConfig, setRecurringConfig] = useState(null); // {type, totalDays?, scheduleMode, frequency?}
 
   const textInputRef = (el) => {
     if (!el) return;
@@ -364,7 +541,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     set('note',v);
     if (v.trim().length>0){
       const q=v.toLowerCase(),seen=new Set();
-      const sugs=transactions.map(t=>t.Note).filter(n=>{if(!n||seen.has(n)||!n.toLowerCase().includes(q))return false;seen.add(n);return true;}).slice(0,6);
+      const sugs=transactions.map(t=>stripInstalmentSuffix(t.Note||'')).filter(n=>{if(!n||seen.has(n)||!n.toLowerCase().includes(q))return false;seen.add(n);return true;}).slice(0,6);
       setNoteSugs(sugs);
     } else setNoteSugs([]);
   };
@@ -388,18 +565,112 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     if (!validate()||saving) return;
     setSaving(true);
     try {
-      const data={
-        Date:inputToStorage(form.date),Time:form.time||'',
-        Account:isTransfer?form.fromAccount:form.account,
-        FromAccount:isTransfer?form.fromAccount:'',ToAccount:isTransfer?form.toAccount:'',
-        Category:isTransfer?'Transfer':form.category,
-        Subcategory:form.subcategory||'Default',
-        Note:form.note||'',Description:form.description||'',
-        INR:parseFloat(form.amount)||0,Amount:form.amount,
-        Currency:'INR','Income/Expense':form.type,
-      };
-      if (isEdit) await updateTransaction(editTransaction._id,data);
-      else        await addTransaction(data);
+      const baseNote = form.note || '';
+      const totalAmount = parseFloat(form.amount) || 0;
+
+      if (!isEdit && recurringConfig) {
+        // form.date is YYYY-MM-DD (HTML date input format)
+        // inputToStorage converts to DD/MM/YYYY for transaction storage
+        // recurring rule stores start_date/next_date in YYYY-MM-DD internally
+        const isoDate = form.date; // YYYY-MM-DD — used for recurring rule storage
+        const txnDate = inputToStorage(form.date); // DD/MM/YYYY — used for transaction records
+
+        if (recurringConfig.type === 'instalment') {
+          // Rule stores start_date in YYYY-MM-DD so buildInstalmentSchedule can parse it
+          const rule = {
+            rule_type: 'instalment', status: 'completed', // all parts created upfront
+            txn_type: form.type,
+            account: form.account, from_account: form.fromAccount || '', to_account: form.toAccount || '',
+            category: form.category, subcategory: form.subcategory || '',
+            base_note: baseNote, description: form.description || '',
+            currency: 'INR', total_amount: totalAmount,
+            total_days: recurringConfig.totalDays,
+            start_date: isoDate,                // YYYY-MM-DD
+            schedule_mode: recurringConfig.scheduleMode,
+          };
+          const schedule = buildInstalmentSchedule(rule);
+          rule.total_parts    = schedule.length;
+          rule.completed_parts = schedule.length; // all created now
+          rule.next_date      = '';               // no pending parts
+          rule.end_date       = schedule[schedule.length - 1]?.date || '';
+          rule.amount_per_part = schedule[0]?.amount || 0;
+          const saved = await createRecurringRule(rule);
+          // Create all instalment transactions — inst.date is YYYY-MM-DD, convert to DD/MM/YYYY
+          for (const inst of schedule) {
+            const [iy, im, id2] = inst.date.split('-');
+            const instTxnDate = `${id2}/${im}/${iy}`;
+            await addTransaction({
+              Date: instTxnDate, Time: form.time || '00:00',
+              Account: form.account, FromAccount: form.fromAccount || '', ToAccount: form.toAccount || '',
+              Category: form.category, Subcategory: form.subcategory || 'Default',
+              Note: buildInstalmentNote(baseNote, inst.part, inst.total),
+              Description: form.description || '',
+              INR: inst.amount, Amount: String(inst.amount),
+              Currency: 'INR', 'Income/Expense': form.type,
+              recurring_rule_id: saved.id,
+            });
+          }
+        } else if (recurringConfig.type === 'repeat') {
+          // next_date stored as YYYY-MM-DD
+          const nextDate = computeNextRepeatDate(isoDate, recurringConfig.frequency, recurringConfig.scheduleMode);
+          const rule = {
+            rule_type: 'repeat', status: 'active',
+            txn_type: form.type,
+            account: form.account, from_account: form.fromAccount || '', to_account: form.toAccount || '',
+            category: form.category, subcategory: form.subcategory || '',
+            base_note: baseNote, description: form.description || '',
+            currency: 'INR', amount_per_part: totalAmount,
+            start_date:    isoDate,             // YYYY-MM-DD
+            next_date:     nextDate,            // YYYY-MM-DD
+            schedule_mode: recurringConfig.scheduleMode,
+            frequency:     recurringConfig.frequency,
+            completed_parts: 1,
+          };
+          const saved = await createRecurringRule(rule);
+          // Save first transaction
+          await addTransaction({
+            Date: txnDate, Time: form.time || '',
+            Account: form.account, FromAccount: form.fromAccount || '', ToAccount: form.toAccount || '',
+            Category: isTransfer ? 'Transfer' : form.category,
+            Subcategory: form.subcategory || 'Default',
+            Note: baseNote, Description: form.description || '',
+            INR: totalAmount, Amount: form.amount,
+            Currency: 'INR', 'Income/Expense': form.type,
+            recurring_rule_id: saved.id,
+          });
+        }
+      } else {
+        // Normal single transaction
+        // For instalment edits: keep recurring_rule_id and re-apply (x/x) suffix to THIS transaction
+        const thisNote = isEdit && onSaveInstalment
+          ? (() => {
+              // Re-apply the original (x/x) suffix from the transaction being edited
+              const m = (editTransaction.Note||'').match(/\s*\(\d+\/\d+\)\s*$/);
+              return m ? baseNote + m[0].trimStart() : baseNote;
+            })()
+          : baseNote;
+        const data={
+          Date:inputToStorage(form.date),Time:form.time||'',
+          Account:isTransfer?form.fromAccount:form.account,
+          FromAccount:isTransfer?form.fromAccount:'',ToAccount:isTransfer?form.toAccount:'',
+          Category:isTransfer?'Transfer':form.category,
+          Subcategory:form.subcategory||'Default',
+          Note:thisNote,Description:form.description||'',
+          INR:totalAmount,Amount:form.amount,
+          Currency:'INR','Income/Expense':form.type,
+          // Preserve recurring_rule_id so instalment link is never lost
+          recurring_rule_id: editTransaction?.recurring_rule_id || '',
+        };
+        if (isEdit && onSaveInstalment) {
+          // Instalment edit: update this transaction (with its own suffix), bulk-update siblings
+          await updateTransaction(editTransaction._id, data);
+          await onSaveInstalment(data);
+        } else if (isEdit) {
+          await updateTransaction(editTransaction._id, data);
+        } else {
+          await addTransaction(data);
+        }
+      }
       if (shouldContinue&&onSaveAndContinue) onSaveAndContinue(); else onClose();
     } finally { setSaving(false); }
   };
@@ -452,7 +723,18 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
         </div>
 
         <div className="add-form">
-          {/* Row 1: Date + Time */}
+          {/* Row 1: Date + Time — Rep/Inst label floats right above row */}
+          {!isEdit && (
+            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:2}}>
+              <span
+                onClick={()=>setShowRecurring(true)}
+                style={{fontSize:'0.68rem',fontWeight:700,cursor:'pointer',
+                  color:recurringConfig?'var(--accent)':'var(--text-muted)',
+                  display:'flex',alignItems:'center',gap:3}}>
+                {recurringConfig ? (recurringConfig.type==='instalment'?'📋 Instalment':'🔁 Repeat') : '🔁 Rep / Inst'}
+              </span>
+            </div>
+          )}
           <div className="grid-2">
             <div className="form-group">
               <label className="form-label">Date</label>
@@ -463,6 +745,20 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
               <input className="form-input" type="time" value={form.time} onChange={e=>set('time',e.target.value)}/>
             </div>
           </div>
+          {/* Show recurring config summary */}
+          {!isEdit && recurringConfig && (
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
+              padding:'6px 10px',borderRadius:8,background:'rgba(0,229,160,0.08)',
+              border:'1px solid rgba(0,229,160,0.25)',marginTop:-4}}>
+              <span style={{fontSize:'0.72rem',color:'var(--accent)',fontWeight:600}}>
+                {recurringConfig.type==='instalment'
+                  ? `📋 Instalment · ${recurringConfig.totalDays} days · ${recurringConfig.scheduleMode==='start_of_month'?'Start of month':'On the day'}`
+                  : `🔁 Repeat ${recurringConfig.frequency} · ${recurringConfig.scheduleMode==='start_of_month'?'Start of month':'On date'}`}
+              </span>
+              <button type="button" onClick={()=>setRecurringConfig(null)}
+                style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:'0.8rem',padding:'0 2px'}}>✕</button>
+            </div>
+          )}
 
           {/* Row 2: Account(s) */}
           {isTransfer ? (
@@ -573,6 +869,15 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
 
       {/* Inline reorder overlay — keeps AddTransaction mounted */}
       <ReorderOverlay screen={reorderScreen} onClose={()=>setReorderScreen(null)} />
+      {/* Recurring sheet */}
+      {showRecurring && (
+        <RecurringSheet
+          isExpense={form.type==='Expense'}
+          startDate={form.date}
+          onClose={()=>setShowRecurring(false)}
+          onSave={cfg=>{setRecurringConfig(cfg);setShowRecurring(false);}}
+        />
+      )}
     </>
   );
 }
