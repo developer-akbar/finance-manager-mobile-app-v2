@@ -4,6 +4,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
+import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Accounts.css';
 
@@ -587,22 +588,9 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
         {groups.length===0
           ? <div className="empty-state"><div className="empty-icon">📭</div><div className="empty-title">No transactions</div><div className="empty-desc">{periodLabel}</div></div>
           : <>
-              {multiMode && selected.size > 0 && (
-                <div className="search-sel-bar">
-                  <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
-                    <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
-                    {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
-                    {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
-                    {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
-                    {(selTotals.inc > 0 || selTotals.exp > 0) && (
-                      <span className="sel-total-net" style={{color: selTotals.inc - selTotals.exp >= 0 ? 'var(--income)' : 'var(--expense)'}}>
-                        = {selTotals.inc - selTotals.exp >= 0 ? '+' : '−'}{formatINR(Math.abs(selTotals.inc - selTotals.exp))}
-                      </span>
-                    )}
-                  </div>
-                  <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',flexShrink:0,fontSize:'0.82rem'}} onClick={() => { setMultiMode(false); setSelected(new Set()); }}>Done</button>
-                </div>
-              )}
+              {multiMode && <BulkSelectionBar selected={selected} selTotals={selTotals} allTxns={periodTxns}
+                onDone={()=>{setMultiMode(false);setSelected(new Set());}}
+                onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
               {groups.map(([dk,txns], gi)=>{
                 const gt = txns.reduce((acc, t) => {
                   const amt = txnAmount(t);
@@ -663,7 +651,69 @@ export default function Accounts({ backInterceptRef } = {}) {
   const { accounts, accountGroups, transactions } = state;
   const [drill, setDrill] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
-  const [dismissedDueAlerts, setDismissedDueAlerts] = useState(new Set());
+
+  const PAID_ALERT_STORAGE = 'finman-paid-due-alerts';
+  const DISMISS_ALERT_STORAGE = 'finman-dismissed-due-alerts';
+
+  const [paidDueAlerts, setPaidDueAlerts] = useState(() => {
+    if (typeof localStorage === 'undefined') return new Set();
+    try {
+      const raw = localStorage.getItem(PAID_ALERT_STORAGE);
+      const arr = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (e) {
+      return new Set();
+    }
+  });
+
+  const [dismissedDueAlerts, setDismissedDueAlerts] = useState(() => {
+    if (typeof localStorage === 'undefined') return {};
+    try {
+      const raw = localStorage.getItem(DISMISS_ALERT_STORAGE);
+      const obj = raw ? JSON.parse(raw) : {};
+      return (obj && typeof obj === 'object') ? obj : {};
+    } catch (e) {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(PAID_ALERT_STORAGE, JSON.stringify([...paidDueAlerts]));
+    } catch (e) {
+      // ignore localStorage failures
+    }
+  }, [paidDueAlerts]);
+
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(DISMISS_ALERT_STORAGE, JSON.stringify(dismissedDueAlerts));
+    } catch (e) {
+      // ignore localStorage failures
+    }
+  }, [dismissedDueAlerts]);
+
+  const todayKey = new Date().toISOString().split('T')[0];
+
+  const markPaid = (acctName) => {
+    setPaidDueAlerts(prev => {
+      if (prev.has(acctName)) return prev;
+      const next = new Set(prev);
+      next.add(acctName);
+      return next;
+    });
+    setDismissedDueAlerts(prev => {
+      const next = { ...prev };
+      delete next[acctName];
+      return next;
+    });
+  };
+
+  const markDismissed = (acctName) => {
+    setDismissedDueAlerts(prev => ({ ...prev, [acctName]: todayKey }));
+  };
 
   // Compute due-date alerts for all configured CC accounts
   const dueAlerts = useMemo(() => {
@@ -761,11 +811,12 @@ export default function Accounts({ backInterceptRef } = {}) {
       const outCls  = outstanding > 0 ? 'warn' : outstanding < 0 ? 'pos' : '';
 
       const dueDays = ccDaysUntilDue(acctObj, now);
+      const showDueDot = !paidDueAlerts.has(name) && dueDays !== null && dueDays <= 7;
       return (
         <div key={name} className="acct-row acct-row-cc" onClick={() => setDrill(name)}>
           <div className="acct-row-name">
             {name}
-            {dueDays !== null && dueDays <= 7 && (
+            {showDueDot && (
               <span className={`cc-due-dot ${dueDays<=0?'overdue':dueDays<=2?'urgent':'warn'}`}>
                 {dueDays <= 0 ? '!' : dueDays}
               </span>
@@ -815,7 +866,10 @@ export default function Accounts({ backInterceptRef } = {}) {
       </div>
 
       {/* CC Payment Due Alerts */}
-      {dueAlerts.filter(a => !dismissedDueAlerts.has(a.acct.name)).map(alert => {
+      {dueAlerts.filter(a => !paidDueAlerts.has(a.acct.name)).filter(alert => {
+        const canDismiss = dismissedDueAlerts[alert.acct.name] === todayKey;
+        return !canDismiss;
+      }).map(alert => {
         const { acct, days, due } = alert;
         const { balancePayable } = ccBalances(transactions, acct.name, acct.settlementDate, new Date());
         const isOverdue  = days <= 0;
@@ -836,7 +890,10 @@ export default function Accounts({ backInterceptRef } = {}) {
                 {balancePayable > 0 ? ` · ₹${balancePayable.toLocaleString('en-IN')} payable` : ' · No outstanding balance'}
               </div>
             </div>
-            <button className="cc-due-banner-dismiss" onClick={() => setDismissedDueAlerts(p => new Set([...p, acct.name]))}>✕</button>
+            <div className="cc-due-banner-actions">
+              <button className="cc-due-banner-chip" onClick={() => markPaid(acct.name)}>Paid</button>
+              <button className="cc-due-banner-chip" onClick={() => markDismissed(acct.name)}>Dismiss</button>
+            </div>
           </div>
         );
       })}

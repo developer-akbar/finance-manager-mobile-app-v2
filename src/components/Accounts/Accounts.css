@@ -79,7 +79,10 @@
 .cc-due-banner.urgent  .cc-due-banner-label { color:#ff7800; }
 .cc-due-banner.overdue .cc-due-banner-label { color:var(--expense); }
 .cc-due-banner-sub   { font-size:0.68rem; color:var(--text-muted); margin-top:2px; }
-.cc-due-banner-dismiss { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:0.8rem; flex-shrink:0; padding:0 0 0 6px; line-height:1; }
+.cc-due-banner-actions { display:flex; align-items:center; gap:8px; margin-left:8px; }
+.cc-due-banner-chip { background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.2); color:var(--text-muted); border-radius:12px; padding:2px 8px; font-size:0.7rem; font-weight:700; cursor:pointer; }
+.cc-due-banner-chip:hover { background:rgba(255,255,255,0.2); }
+.cc-due-banner-dismiss { display:none; }
 
 /* ── CC Due Date Dot on account row ─────────────────────────────────────── */
 .cc-due-dot { display:inline-flex; align-items:center; justify-content:center; min-width:16px; height:16px; border-radius:8px; font-size:0.58rem; font-weight:800; padding:0 4px; margin-left:6px; vertical-align:middle; flex-shrink:0; }

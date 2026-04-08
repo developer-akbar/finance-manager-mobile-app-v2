@@ -53,3 +53,11 @@
 .transfer-swap-row { display:grid; grid-template-columns:1fr auto 1fr; align-items:end; gap:6px; }
 .swap-btn { display:flex; align-items:center; justify-content:center; width:34px; height:38px; background:var(--bg-card2); border:1.5px solid var(--border); border-radius:var(--r-md); cursor:pointer; flex-shrink:0; margin-bottom:0; color:var(--text-muted); font-size:1rem; transition:background 0.12s; }
 .swap-btn:active { background:var(--bg-hover); color:var(--accent); }
+
+/* ── Recurring sheet option rows ─────────────────────────────────────────── */
+.recur-option-row { display:flex; align-items:center; gap:12px; padding:12px; border-radius:10px; background:var(--bg-card2); border:1.5px solid var(--border); margin-bottom:8px; cursor:pointer; transition:background 0.12s; }
+.recur-option-row:active { background:var(--bg-hover); }
+.recur-option-icon { font-size:1.4rem; flex-shrink:0; }
+.recur-option-body { flex:1; }
+.recur-option-title { font-size:0.88rem; font-weight:700; color:var(--text-primary); }
+.recur-option-sub   { font-size:0.68rem; color:var(--text-muted); margin-top:2px; }
