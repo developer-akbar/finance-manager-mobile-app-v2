@@ -69,7 +69,7 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
 
   return (
     <>
-      <div className="overlay" onMouseDown={onClose} style={{zIndex:210}} />
+      <div className="fullscreen-overlay" onClick={onClose} style={{zIndex:210}} />
       <div className="bottom-sheet" style={{paddingBottom:'calc(var(--safe-bottom) + 16px)',zIndex:211}}>
         <div className="sheet-handle" />
 
@@ -200,12 +200,18 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
   );
 }
 
-// ── PickerSheet — chip grid with recent row ────────────────────────────────
-function PickerSheet({ label, items, recent, value, onSelect, onClose, exclude='', onReorder }) {
+// ── PickerSheetInline — inline chip grid with recent row ────────────────────────────────
+function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exclude='', onReorder }) {
   const [query, setQuery] = React.useState('');
   const inputRef = React.useRef(null);
+  const recentRef = React.useRef(null);
 
-  // No auto-focus on search — user opens picker and taps search if needed
+  React.useEffect(() => {
+    // Scroll to recent row on open
+    if (recentRef.current) {
+      recentRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, []);
 
   const q = query.trim().toLowerCase();
   const recentList = recent.filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
@@ -222,50 +228,43 @@ function PickerSheet({ label, items, recent, value, onSelect, onClose, exclude='
   );
 
   return (
-    <>
-      <div className="overlay" onMouseDown={onClose} />
-      <div className="bottom-sheet picker-sheet">
-        <div className="sheet-handle" />
-        <div className="picker-sheet-hdr">
-          <div className="picker-sheet-title">{label}</div>
-          <button className="picker-sheet-close" onMouseDown={onClose}>✕</button>
-        </div>
-        <div className="picker-search-wrap">
-          <span className="picker-search-icon">🔍</span>
-          <input ref={inputRef} className="picker-search-input"
-            placeholder={`Search ${label.toLowerCase()}…`}
-            value={query} onChange={e => setQuery(e.target.value)} />
-          {query && <button className="picker-search-clear" onMouseDown={e=>{e.preventDefault();setQuery('');}}>✕</button>}
-        </div>
-        <div className="picker-list">
-          {recentList.length > 0 && (
-            <>
-              <div className="picker-section-label">Recent</div>
-              <div className="picker-recent-row">{recentList.map(n => <Chip key={n} name={n} />)}</div>
-            </>
-          )}
-          {allItems.length > 0 && (
-            <>
-              <div className="picker-section-label" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-                <span>{recentList.length > 0 ? 'All' : ''}</span>
-                {!q && onReorder && (
-                  <button className="picker-reorder-hint" onMouseDown={e=>{e.preventDefault();onReorder();onClose();}}>
-                    ⠿ reorder in Settings
-                  </button>
-                )}
-              </div>
-              <div className="picker-chip-grid">{allItems.map(n => <Chip key={n} name={n} />)}</div>
-            </>
-          )}
-          {noResults && <div className="picker-empty">No results for "{query}"</div>}
-        </div>
+    <div className="picker-sheet-inline">
+      <div className="picker-sheet-hdr" style={{position:'sticky',top:0,zIndex:10}}>
+        <div className="picker-sheet-title">{label}</div>
+        {!q && onReorder && (
+          <button className="picker-reorder-hint" onMouseDown={e=>{e.preventDefault();onReorder();onClose();}}>
+            ⠿ Edit
+          </button>
+        )}
+        <button className="picker-sheet-close" onMouseDown={onClose}>✕</button>
       </div>
-    </>
+      <div className="picker-search-wrap" style={{marginTop:'8px'}}>
+        <span className="picker-search-icon">🔍</span>
+        <input ref={inputRef} className="picker-search-input"
+          placeholder={`Search ${label.toLowerCase()}…`}
+          value={query} onChange={e => setQuery(e.target.value)} />
+        {query && <button className="picker-search-clear" onMouseDown={e=>{e.preventDefault();setQuery('');}}>✕</button>}
+      </div>
+      <div className="picker-list">
+        {recentList.length > 0 && (
+          <>
+            <div ref={recentRef} className="picker-section-label">Recent</div>
+            <div className="picker-recent-row">{recentList.map(n => <Chip key={n} name={n} />)}</div>
+          </>
+        )}
+        {allItems.length > 0 && (
+          <>
+            <div className="picker-chip-grid">{allItems.map(n => <Chip key={n} name={n} />)}</div>
+          </>
+        )}
+        {noResults && <div className="picker-empty">No results for "{query}"</div>}
+      </div>
+    </div>
   );
 }
 
-// ── SubcategoryPicker — chip grid (no search needed, small list) ──────────
-function SubcategoryPicker({ items, value, onSelect, onClose }) {
+// ── SubcategoryPickerInline — inline chip grid ──────────
+function SubcategoryPickerInline({ items, value, onSelect, onClose }) {
   const Chip = ({ name }) => (
     <button type="button"
       className={`picker-chip ${value === name ? 'picker-chip-active' : ''}`}
@@ -274,54 +273,64 @@ function SubcategoryPicker({ items, value, onSelect, onClose }) {
     </button>
   );
   return (
-    <>
-      <div className="overlay" onMouseDown={onClose} />
-      <div className="bottom-sheet picker-sheet" style={{maxHeight:'50dvh'}}>
-        <div className="sheet-handle" />
-        <div className="picker-sheet-hdr">
-          <div className="picker-sheet-title">Subcategory</div>
-          <button className="picker-sheet-close" onMouseDown={onClose}>✕</button>
-        </div>
-        <div className="picker-list" style={{paddingBottom:16}}>
-          <div className="picker-chip-grid">
-            <button type="button"
-              className={`picker-chip ${!value ? 'picker-chip-active' : ''}`}
-              onMouseDown={e=>{e.preventDefault();onSelect('');onClose();}}>
-              None
-            </button>
-            {items.map(n => <Chip key={n} name={n} />)}
-          </div>
+    <div className="picker-sheet-inline">
+      <div className="picker-sheet-hdr" style={{position:'sticky',top:0,zIndex:10}}>
+        <div className="picker-sheet-title">Subcategory</div>
+        <button className="picker-sheet-close" onMouseDown={onClose}>✕</button>
+      </div>
+      <div className="picker-list" style={{paddingBottom:16}}>
+        <div className="picker-chip-grid">
+          <button type="button"
+            className={`picker-chip ${!value ? 'picker-chip-active' : ''}`}
+            onMouseDown={e=>{e.preventDefault();onSelect('');onClose();}}>
+            None
+          </button>
+          {items.map(n => <Chip key={n} name={n} />)}
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
-function PickerField({ label, value, placeholder, error, items, recent, onSelect, exclude='', onReorder, onAfterSelect }, ref) {
-  const [open, setOpen] = React.useState(false);
-  React.useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), []);
-  const handleSelect = (v) => { onSelect(v); if (onAfterSelect) setTimeout(onAfterSelect, 100); };
+function PickerField({ label, value, placeholder, error, items, recent, onSelect, exclude='', onReorder, onAfterSelect, setPickerState, hideLabel=false }, ref) {
+  React.useImperativeHandle(ref, () => ({ open: () => {
+    setPickerState({
+      type: label.toLowerCase().replace(' ', ''),
+      label,
+      value,
+      items,
+      recent,
+      onSelect: (v) => { onSelect(v); if (onAfterSelect) setTimeout(onAfterSelect, 100); },
+      exclude,
+      onReorder
+    });
+  } }), [label, value, items, recent, onSelect, onAfterSelect, exclude, onReorder, setPickerState]);
   return (
     <div className="form-group">
-      <label className="form-label">{label}</label>
+      {!hideLabel && <label className="form-label">{label}</label>}
       <button type="button"
         className={`form-input picker-trigger ${error?'err':''} ${!value?'picker-trigger-empty':''}`}
-        onClick={() => setOpen(true)}>
+        onClick={() => {
+          setPickerState({
+            type: label.toLowerCase().replace(' ', ''),
+            label,
+            value,
+            items,
+            recent,
+            onSelect: (v) => { onSelect(v); if (onAfterSelect) setTimeout(onAfterSelect, 100); },
+            exclude,
+            onReorder
+          });
+        }}>
         <span className="picker-trigger-value">{value || placeholder}</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="12" height="12" style={{flexShrink:0,opacity:0.5}}><path d="M6 9l6 6 6-6"/></svg>
       </button>
       {error && <div className="field-error">{error}</div>}
-      {open && (
-        <PickerSheet label={label} items={items} recent={recent}
-          value={value} onSelect={handleSelect} onClose={()=>setOpen(false)}
-          exclude={exclude} onReorder={onReorder} />
-      )}
     </div>
   );
 }
 const PickerFieldFR = React.forwardRef(PickerField);
 
-function SubcatField({ value, items, onChange, onAfterSelect }) {
+function SubcatField({ value, items, onChange, onAfterSelect, hideLabel=false }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef(null);
   // Expose open via ref for focus flow
@@ -334,7 +343,7 @@ function SubcatField({ value, items, onChange, onAfterSelect }) {
 
   if (items.length === 0) return (
     <div className="form-group">
-      <label className="form-label">Subcategory</label>
+      {!hideLabel && <label className="form-label">Subcategory</label>}
       <div className="form-input picker-trigger picker-trigger-empty" style={{cursor:'default',opacity:0.5}}>
         <span className="picker-trigger-value">None</span>
       </div>
@@ -343,12 +352,11 @@ function SubcatField({ value, items, onChange, onAfterSelect }) {
 
   return (
     <div className="form-group">
-      <label className="form-label">Subcategory</label>
+      {!hideLabel && <label className="form-label">Subcategory</label>}
       <button type="button"
         className={`form-input picker-trigger ${!value?'picker-trigger-empty':''}`}
         onClick={() => setOpen(true)}>
         <span className="picker-trigger-value">{value || 'None'}</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="12" height="12" style={{flexShrink:0,opacity:0.5}}><path d="M6 9l6 6 6-6"/></svg>
       </button>
       {open && (
         <SubcategoryPicker items={items} value={value}
@@ -358,13 +366,21 @@ function SubcatField({ value, items, onChange, onAfterSelect }) {
   );
 }
 const SubcatFieldFR = React.forwardRef((props, ref) => {
-  const [open, setOpen] = React.useState(false);
-  React.useImperativeHandle(ref, () => ({ open: () => { if (props.items.length > 0) setOpen(true); } }), [props.items]);
+  React.useImperativeHandle(ref, () => ({ open: () => { if (props.items.length > 0) {
+    props.setPickerState({
+      type: 'subcategory',
+      label: 'Subcategory',
+      value: props.value,
+      items: props.items,
+      recent: [],
+      onSelect: (v) => { props.onChange(v); if (props.onAfterSelect) setTimeout(() => props.onAfterSelect(v), 100); },
+      exclude: '',
+      onReorder: null
+    });
+  } } }), [props.items, props.value, props.onChange, props.onAfterSelect, props.setPickerState]);
   // Always mark key='subcategory' so goNextEmpty knows subcat was explicitly touched (even None)
-  const handleSelect = (v) => { props.onChange(v); if (props.onAfterSelect) setTimeout(() => props.onAfterSelect(v), 100); };
   if (props.items.length === 0) return (
     <div className="form-group">
-      <label className="form-label">Subcategory</label>
       <div className="form-input picker-trigger picker-trigger-empty" style={{cursor:'default',opacity:0.5}}>
         <span className="picker-trigger-value">None</span>
       </div>
@@ -372,14 +388,23 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
   );
   return (
     <div className="form-group">
-      <label className="form-label">Subcategory</label>
       <button type="button"
         className={`form-input picker-trigger ${!props.value?'picker-trigger-empty':''}`}
-        onClick={() => setOpen(true)}>
+        onClick={() => {
+          props.setPickerState({
+            type: 'subcategory',
+            label: 'Subcategory',
+            value: props.value,
+            items: props.items,
+            recent: [],
+            onSelect: (v) => { props.onChange(v); if (props.onAfterSelect) setTimeout(() => props.onAfterSelect(v), 100); },
+            exclude: '',
+            onReorder: null
+          });
+        }}>
         <span className="picker-trigger-value">{props.value || 'None'}</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="12" height="12" style={{flexShrink:0,opacity:0.5}}><path d="M6 9l6 6 6-6"/></svg>
       </button>
-      {open && <SubcategoryPicker items={props.items} value={props.value} onSelect={handleSelect} onClose={()=>setOpen(false)} />}
     </div>
   );
 });
@@ -394,12 +419,17 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   // Reorder overlay state (stays inside AddTransaction — no navigation needed)
   const [reorderScreen, setReorderScreen] = useState(null);
 
+  // Picker state for inline sheet below form
+  const [pickerState, setPickerState] = useState(null); // {type, label, value, items, recent, onSelect, exclude?, onReorder?}
+
   // Refs for focus flow
   const amountRef       = useRef(null);
   const noteRef         = useRef(null);
   const accountRef      = useRef(null);
   const categoryRef     = useRef(null);
   const subcatRef       = useRef(null);
+  const fromRef         = useRef(null);
+  const toRef           = useRef(null);
 
   const lastTime = useMemo(() => {
     if (!transactions.length) return nowTimeStr();
@@ -453,6 +483,15 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     el.setAttribute('inputmode','text');
   };
 
+  // Auto-resize textarea on mount and description changes
+  React.useEffect(() => {
+    const textarea = document.querySelector('.description-section textarea');
+    if (textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 220) + 'px';
+    }
+  }, [form.description]);
+
   React.useEffect(() => {
     if (!backInterceptRef) return;
     if (reorderScreen) {
@@ -489,6 +528,18 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
       return {...p,[k]:v};
     });
     if (errors[k]) setErrors(p=>({...p,[k]:''}));
+    // Auto-open picker for Transfer
+    if (k==='type' && v==='Transfer-Out') {
+      setTimeout(() => setPickerState({
+        type: 'fromAccount',
+        label: 'From',
+        value: form.fromAccount,
+        items: accountList,
+        recent: recentAccounts,
+        onSelect: (val) => { set('fromAccount', val); goNextEmpty({key:'fromAccount',val}); },
+        onReorder: () => setReorderScreen('accounts')
+      }), 100);
+    }
   };
 
   const isTransfer = form.type==='Transfer-Out';
@@ -697,7 +748,13 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     const snap = { ...form };
     if (justFilled) snap[justFilled.key] = justFilled.val;
     setTimeout(() => {
-      if (!isTransfer) {
+      if (isTransfer) {
+        if (!snap.fromAccount) { fromRef.current?.open(); return; }
+        if (!snap.toAccount) {
+          setTimeout(() => { toRef.current?.open(); }, 80);
+          return;
+        }
+      } else {
         if (!snap.account)  { accountRef.current?.open();  return; }
         if (!snap.category) { categoryRef.current?.open(); return; }
       }
@@ -708,10 +765,9 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
 
   return (
     <>
-      <div className="fullscreen-overlay" onClick={onClose}/>
       <div className="fullscreen-modal" data-type={form.type}>
         <div className="add-hdr">
-          <div className="add-title">{isEdit?'Edit':'Add'}</div>
+          <div className="add-title">{form.type==='Transfer-Out' ? 'Transfer' : form.type || (isEdit ? 'Edit' : 'Add')}</div>
           <button className="add-close" onClick={onClose}>✕</button>
         </div>
         <div className="type-tabs">
@@ -723,81 +779,80 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
         </div>
 
         <div className="add-form">
-          {/* Row 1: Date + Time — Rep/Inst label floats right above row */}
-          {!isEdit && (
-            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:2}}>
-              <span
-                onClick={()=>setShowRecurring(true)}
-                style={{fontSize:'0.68rem',fontWeight:700,cursor:'pointer',
-                  color:recurringConfig?'var(--accent)':'var(--text-muted)',
-                  display:'flex',alignItems:'center',gap:3}}>
-                {recurringConfig ? (recurringConfig.type==='instalment'?'📋 Instalment':'🔁 Repeat') : '🔁 Rep / Inst'}
-              </span>
-            </div>
-          )}
-          <div className="grid-2">
-            <div className="form-group">
-              <label className="form-label">Date</label>
-              <input className={`form-input ${errors.date?'err':''}`} type="date" value={form.date} onChange={e=>set('date',e.target.value)}/>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Time</label>
-              <input className="form-input" type="time" value={form.time} onChange={e=>set('time',e.target.value)}/>
+          {/* Row 1: Date + Time */}
+          <div className="form-group date-time-group">
+            <label className="form-label">Date</label>
+            <div className="date-time-row">
+              <div className="date-time-inputs">
+                <input className={`form-input ${errors.date?'err':''}`} type="date" value={form.date} onChange={e=>set('date',e.target.value)}/>
+                <input className="form-input" type="time" value={form.time} onChange={e=>set('time',e.target.value)}/>
+              </div>
+              {!isEdit && (
+                <button type="button" className="recurring-button" onClick={()=>setShowRecurring(true)}>
+                  <span>{recurringConfig ? (recurringConfig.type==='instalment'?'📋':'🔁') : '🔁'}</span>
+                  <span>{recurringConfig ? (recurringConfig.type==='instalment'?'Instalment':'Repeat') : 'Rep/Inst'}</span>
+                </button>
+              )}
             </div>
           </div>
-          {/* Show recurring config summary */}
+          {/* Recurring summary for selected config */}
           {!isEdit && recurringConfig && (
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
-              padding:'6px 10px',borderRadius:8,background:'rgba(0,229,160,0.08)',
-              border:'1px solid rgba(0,229,160,0.25)',marginTop:-4}}>
-              <span style={{fontSize:'0.72rem',color:'var(--accent)',fontWeight:600}}>
+            <div className="recurring-summary">
+              <span>
                 {recurringConfig.type==='instalment'
                   ? `📋 Instalment · ${recurringConfig.totalDays} days · ${recurringConfig.scheduleMode==='start_of_month'?'Start of month':'On the day'}`
                   : `🔁 Repeat ${recurringConfig.frequency} · ${recurringConfig.scheduleMode==='start_of_month'?'Start of month':'On date'}`}
               </span>
-              <button type="button" onClick={()=>setRecurringConfig(null)}
-                style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:'0.8rem',padding:'0 2px'}}>✕</button>
+              <button type="button" onClick={()=>setRecurringConfig(null)} className="recurring-clear">✕</button>
             </div>
           )}
 
           {/* Row 2: Account(s) */}
           {isTransfer ? (
             <div className="transfer-swap-row">
-              <PickerFieldFR label="From" value={form.fromAccount} placeholder="Select"
+              <PickerFieldFR ref={fromRef} setPickerState={setPickerState} label="From" value={form.fromAccount} placeholder="Select"
                 error={errors.fromAccount} items={accountList} recent={recentAccounts}
                 onSelect={v=>{set('fromAccount',v);goNextEmpty({key:'fromAccount',val:v});}}
+                onAfterSelect={() => setPickerState(null)}
                 onReorder={()=>setReorderScreen('accounts')} />
               <button type="button" className="swap-btn" title="Swap"
                 onClick={()=>setForm(p=>({...p,fromAccount:p.toAccount,toAccount:p.fromAccount}))}>
-                ⇄
+                ⇅
               </button>
-              <PickerFieldFR label="To" value={form.toAccount} placeholder="Select"
+              <PickerFieldFR ref={toRef} setPickerState={setPickerState} label="To" value={form.toAccount} placeholder="Select"
                 error={errors.toAccount} items={accountList} recent={recentAccounts}
                 onSelect={v=>{set('toAccount',v);goNextEmpty({key:'toAccount',val:v});}}
-                exclude={form.fromAccount}
+                onAfterSelect={() => setPickerState(null)}
                 onReorder={()=>setReorderScreen('accounts')} />
             </div>
           ) : (
-            <PickerFieldFR ref={accountRef} label="Account" value={form.account} placeholder="Select account"
+            <PickerFieldFR setPickerState={setPickerState} ref={accountRef} label="Account" value={form.account} placeholder="Select account"
               error={errors.account} items={accountList} recent={recentAccounts}
               onSelect={v=>{set('account',v);goNextEmpty({key:'account',val:v});}}
+              onAfterSelect={() => setPickerState(null)}
               onReorder={()=>setReorderScreen('accounts')} />
           )}
 
           {/* Row 3: Category + Subcategory */}
           {!isTransfer && (
-            <div className="grid-2">
-              <PickerFieldFR ref={categoryRef} label="Category" value={form.category} placeholder="Select category"
-                error={errors.category} items={availCats} recent={recentCats}
-                onSelect={v=>{
-                  set('category',v);
-                  const freshSubs=(categories?.[v]?.subcategories||[]).filter(s=>s&&s!=='Default');
-                  afterCategory(v, freshSubs);
-                }}
-                onReorder={()=>setReorderScreen('categories')} />
-              <SubcatFieldFR ref={subcatRef} value={form.subcategory} items={availSubs}
-                onChange={v=>set('subcategory',v)}
-                onAfterSelect={()=>{ if(!isEdit){ if(!form.amount) setTimeout(()=>amountRef.current?.focus(),120); else setTimeout(()=>noteRef.current?.focus(),120); } }} />
+            <div className="form-group category-subcat-group">
+              <label className="form-label">Category</label>
+              <div className="category-subcat-wrap">
+                <PickerFieldFR setPickerState={setPickerState} ref={categoryRef} label="Category" value={form.category} placeholder="Select category"
+                  hideLabel
+                  error={errors.category} items={availCats} recent={recentCats}
+                  onSelect={v=>{
+                    set('category',v);
+                    const freshSubs=(categories?.[v]?.subcategories||[]).filter(s=>s&&s!=='Default');
+                    afterCategory(v, freshSubs);
+                  }}
+                  onAfterSelect={() => setPickerState(null)}
+                  onReorder={()=>setReorderScreen('categories')} />
+                <SubcatFieldFR setPickerState={setPickerState} ref={subcatRef} value={form.subcategory} items={availSubs}
+                  hideLabel
+                  onChange={v=>set('subcategory',v)}
+                  onAfterSelect={()=>{ if(!isEdit){ if(!form.amount) setTimeout(()=>amountRef.current?.focus(),120); else setTimeout(()=>noteRef.current?.focus(),120); } }} />
+              </div>
             </div>
           )}
 
@@ -833,9 +888,9 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                 onBlur={()=>{setNoteFocused(false);setTimeout(()=>setNoteSugs([]),180);}}
                 onKeyDown={e=>{if(e.key==='Enter'&&!isEdit){e.preventDefault();noteRef.current?.blur();}}}
               />
-              {(form.note||noteFocused)&&(
+              {noteFocused&&(
                 <button type="button" onMouseDown={e=>{e.preventDefault();set('note','');setNoteSugs([]);setNoteFocused(false);}}
-                  style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:'1.1rem',lineHeight:1,padding:'2px 4px',zIndex:1}}>✕</button>
+                  style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:'0.8rem',lineHeight:1,padding:'4px',borderRadius:'50%',zIndex:1}}>✕</button>
               )}
             </div>
             {noteSugs.length>0&&(
@@ -845,12 +900,13 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
             )}
           </div>
 
-          {/* Row 6: Description */}
-          <div className="form-group">
-            <label className="form-label">Description</label>
-            <textarea ref={textInputRef} className="form-input" rows={3} value={form.description}
-              autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
-              onChange={e=>set('description',e.target.value)}/>
+          <div className="description-section">
+            <div className="form-group">
+              <textarea ref={textInputRef} className="form-input" rows={1} value={form.description}
+                autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
+                onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 220) + 'px'; }}
+                onChange={e=>set('description',e.target.value)} placeholder='Description'/>
+            </div>
           </div>
 
           <div className="form-actions" style={{display:'flex',gap:'10px'}}>
@@ -863,6 +919,32 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
               </button>
             )}
           </div>
+
+          {/* Inline Picker Room */}
+          {pickerState && (
+            <div className="picker-room">
+              {pickerState.type === 'subcategory' ? (
+                <SubcategoryPickerInline
+                  items={pickerState.items}
+                  value={pickerState.value}
+                  onSelect={pickerState.onSelect}
+                  onClose={() => setPickerState(null)}
+                />
+              ) : (
+                <PickerSheetInline
+                  label={pickerState.label}
+                  items={pickerState.items}
+                  recent={pickerState.recent}
+                  value={pickerState.value}
+                  onSelect={pickerState.onSelect}
+                  onClose={() => setPickerState(null)}
+                  exclude={pickerState.exclude}
+                  onReorder={pickerState.onReorder}
+                />
+              )}
+            </div>
+          )}
+
           <div style={{height:16}}/>
         </div>
       </div>
