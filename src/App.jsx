@@ -159,7 +159,7 @@ function AppInner() {
             <div style={{fontSize:'0.78rem',fontWeight:700,color:'var(--text-primary)'}}>Backup Due</div>
             <div style={{fontSize:'0.65rem',color:'var(--text-muted)'}}>Go to Settings → Data to back up now</div>
           </div>
-          <button onClick={() => { navigate('settings'); setBackupDue(false); }} style={{background:'var(--accent)',border:'none',borderRadius:8,color:'#000',fontSize:'0.68rem',fontWeight:700,padding:'5px 10px',cursor:'pointer',flexShrink:0}}>Back up</button>
+          <button onClick={() => { navigate('settings'); setBackupDue(false); }} style={{background:'var(--accent)',border:'none',borderRadius:8,color:'var(--text-primary)',fontSize:'0.68rem',fontWeight:700,padding:'5px 10px',cursor:'pointer',flexShrink:0}}>Back up</button>
           <button onClick={() => setBackupDue(false)} style={{background:'none',border:'none',color:'var(--text-muted)',fontSize:'1rem',cursor:'pointer',padding:'0 2px',flexShrink:0}}>✕</button>
         </div>
       )}
