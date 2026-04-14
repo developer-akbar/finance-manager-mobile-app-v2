@@ -909,19 +909,22 @@ export default function Accounts({ backInterceptRef } = {}) {
           const ccAccts = accts.filter(a => isCreditCard(a) && a.settlementDate > 0);
           const isAllCC = ccAccts.length === accts.length;
 
-          let grpHeader;
-          if (isAllCC && ccAccts.length > 0) {
-            // Sum payable and outstanding across all CC accounts in group
+          // Calculate CC totals upfront if needed
+          let totalPayable = 0, totalOutstanding = 0, grpOutAmt = 0, grpOutSign = '', grpOutCls = '';
+          if (ccAccts.length > 0 && isAllCC) {
             const totals = ccAccts.reduce((s, a) => {
               const { balancePayable, outstanding } = ccBalances(transactions, a.name, a.settlementDate, now);
               return { balancePayable: s.balancePayable + balancePayable, outstanding: s.outstanding + outstanding };
             }, { balancePayable: 0, outstanding: 0 });
-            const totalPayable     = totals.balancePayable;
-            const totalOutstanding = totals.outstanding;
-            // outstanding sign: positive = owe (−), negative = credit (+)
-            const grpOutAmt  = Math.abs(totalOutstanding);
-            const grpOutSign = totalOutstanding > 0 ? '−' : totalOutstanding < 0 ? '+' : '';
-            const grpOutCls  = totalOutstanding > 0 ? 'warn' : totalOutstanding < 0 ? 'pos' : '';
+            totalPayable = totals.balancePayable;
+            totalOutstanding = totals.outstanding;
+            grpOutAmt = Math.abs(totalOutstanding);
+            grpOutSign = totalOutstanding > 0 ? '−' : totalOutstanding < 0 ? '+' : '';
+            grpOutCls = totalOutstanding > 0 ? 'warn' : totalOutstanding < 0 ? 'pos' : '';
+          }
+
+          let grpHeader;
+          if (isAllCC && ccAccts.length > 0) {
             grpHeader = (
               <div className="acct-group-header acct-group-header-cc" onClick={() => toggleGroup(grp)}>
                 <div className="acct-group-label">📁 {grp}</div>
@@ -959,13 +962,6 @@ export default function Accounts({ backInterceptRef } = {}) {
               {grpHeader}
               {!isCollapsed && (
                 <>
-                  {ccAccts.length > 0 && (
-                    <div className="acct-cc-col-header">
-                      <div style={{flex:1}}/>
-                      <div className="acct-cc-col-lbl">Balance Payable</div>
-                      <div className="acct-cc-col-lbl">Outst. Balance</div>
-                    </div>
-                  )}
                   {accts.map(renderAcctRow)}
                 </>
               )}
@@ -978,13 +974,6 @@ export default function Accounts({ backInterceptRef } = {}) {
             <div>
               {(uniqueAccountGroups||[]).length > 0 && (
                 <div className="acct-group-header" style={{opacity:0.55}}><span>📋 Ungrouped</span></div>
-              )}
-              {hasCC && (
-                <div className="acct-cc-col-header">
-                  <div style={{flex:1}}/>
-                  <div className="acct-cc-col-lbl">Balance Payable</div>
-                  <div className="acct-cc-col-lbl">Outst. Balance</div>
-                </div>
               )}
               {grouped.ungrouped.map(renderAcctRow)}
             </div>
