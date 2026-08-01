@@ -371,8 +371,7 @@ export function AppProvider({ children }) {
     if (data.accountMapping  !== undefined) await replaceAccountMapping(data.accountMapping);
     if (data.recurringRules  !== undefined) {
       // Restore each rule
-      const { saveRecurringRule: saveRule } = await import('../database/recurring.js');
-      for (const rule of data.recurringRules) { await saveRule(rule); }
+      for (const rule of data.recurringRules) { await saveRecurringRule(rule); }
       const rules = await getAllRecurringRules();
       dispatch({ type:'SET_RECURRING', payload: rules });
     }
