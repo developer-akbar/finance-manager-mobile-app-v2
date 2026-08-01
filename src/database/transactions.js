@@ -282,11 +282,37 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     });
   }
 
-  // Use fast bulk insert if available (web/IDB), fall back to row-by-row for SQLite
+  // Use fast bulk insert if available (web/IDB), fall back to executeSet for SQLite, or row-by-row as last resort
   if (typeof db.bulkInsertIgnore === 'function') {
     const res = await db.bulkInsertIgnore('transactions', items);
     imported = res.added;
     skipped += res.skipped;
+  } else if (typeof db.executeSet === 'function') {
+    const set = items.map(obj => ({
+      statement: `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      values: [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
+               obj.category, obj.subcategory, obj.note, obj.description,
+               obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at]
+    }));
+    try {
+      const res = await db.executeSet(set);
+      const changes = res.changes?.changes ?? 0;
+      imported = changes;
+      skipped += (items.length - changes);
+    } catch (e) {
+      console.warn('executeSet failed, falling back to row-by-row:', e);
+      for (const obj of items) {
+        try {
+          const res = await db.run(
+            `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
+             obj.category, obj.subcategory, obj.note, obj.description,
+             obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at]
+          );
+          if (res.changes?.changes > 0) imported++; else skipped++;
+        } catch { skipped++; }
+      }
+    }
   } else {
     for (const obj of items) {
       try {

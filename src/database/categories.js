@@ -11,12 +11,32 @@ export const getCategories = async () => {
 };
 
 export const replaceCategories = async (list) => {
-  const db=getDB();
-  await db.run('DELETE FROM subcategories');
-  await db.run('DELETE FROM categories');
-  for(const cat of list){
-    const catId=cat.id||uuid();
-    await db.run('INSERT INTO categories (id,name,type,sort_order) VALUES (?,?,?,?)',[catId,cat.name,cat.type||'Expense',cat.sortOrder||0]);
-    for(const sub of(cat.subcategories||[])){ await db.run('INSERT INTO subcategories (id,name,category_id,sort_order) VALUES (?,?,?,?)',[sub.id||uuid(),sub.name||sub,catId,sub.sortOrder||0]); }
+  const db = getDB();
+  const set = [
+    { statement: 'DELETE FROM subcategories', values: [] },
+    { statement: 'DELETE FROM categories', values: [] }
+  ];
+  for (const cat of list) {
+    const catId = cat.id || uuid();
+    set.push({
+      statement: 'INSERT INTO categories (id,name,type,sort_order) VALUES (?,?,?,?)',
+      values: [catId, cat.name, cat.type || 'Expense', cat.sortOrder || 0]
+    });
+    for (const sub of (cat.subcategories || [])) {
+      set.push({
+        statement: 'INSERT INTO subcategories (id,name,category_id,sort_order) VALUES (?,?,?,?)',
+        values: [sub.id || uuid(), sub.name || sub, catId, sub.sortOrder || 0]
+      });
+    }
+  }
+
+  if (typeof db.executeSet === 'function') {
+    await db.executeSet(set);
+  } else {
+    await db.run('DELETE FROM subcategories');
+    await db.run('DELETE FROM categories');
+    for (const stmt of set.slice(2)) {
+      await db.run(stmt.statement, stmt.values);
+    }
   }
 };
