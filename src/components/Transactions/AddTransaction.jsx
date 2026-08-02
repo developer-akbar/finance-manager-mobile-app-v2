@@ -292,7 +292,7 @@ function SubcategoryPickerInline({ items, value, onSelect, onClose }) {
   );
 }
 
-function PickerField({ label, value, placeholder, error, items, recent, onSelect, exclude='', onReorder, onAfterSelect, setPickerState, hideLabel=false }, ref) {
+function PickerField({ label, value, placeholder, error, items, recent, onSelect, exclude='', onReorder, onAfterSelect, setPickerState, hideLabel=false, active }, ref) {
   React.useImperativeHandle(ref, () => ({ open: () => {
     setPickerState({
       type: label.toLowerCase().replace(' ', ''),
@@ -309,7 +309,7 @@ function PickerField({ label, value, placeholder, error, items, recent, onSelect
     <div className="form-group">
       {!hideLabel && <label className="form-label">{label}</label>}
       <button type="button"
-        className={`form-input picker-trigger ${error?'err':''} ${!value?'picker-trigger-empty':''}`}
+        className={`form-input picker-trigger ${error?'err':''} ${!value?'picker-trigger-empty':''}` + (active ? ' focus' : '')}
         onClick={() => {
           setPickerState({
             type: label.toLowerCase().replace(' ', ''),
@@ -381,7 +381,7 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
   // Always mark key='subcategory' so goNextEmpty knows subcat was explicitly touched (even None)
   if (props.items.length === 0) return (
     <div className="form-group">
-      <div className="form-input picker-trigger picker-trigger-empty" style={{cursor:'default',opacity:0.5}}>
+      <div className={`form-input picker-trigger picker-trigger-empty` + (props.active ? ' focus' : '')} style={{cursor:'default',opacity:0.5}}>
         <span className="picker-trigger-value">None</span>
       </div>
     </div>
@@ -389,7 +389,7 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
   return (
     <div className="form-group">
       <button type="button"
-        className={`form-input picker-trigger ${!props.value?'picker-trigger-empty':''}`}
+        className={`form-input picker-trigger ${!props.value?'picker-trigger-empty':''}` + (props.active ? ' focus' : '')}
         onClick={() => {
           props.setPickerState({
             type: 'subcategory',
@@ -411,7 +411,7 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
 
 // ── Main AddTransaction ────────────────────────────────────────────────────
 export default function AddTransaction({ onClose, onSaveAndContinue=null, editTransaction=null, copyTransaction=null, prefillDate=null, prefillAccount=null, prefillCategory=null, backInterceptRef=null, onSaveInstalment=null }) {
-  const { state, addTransaction, updateTransaction, createRecurringRule } = useApp();
+  const { state, navigate, addTransaction, updateTransaction, createRecurringRule } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
   const isCopy = !!copyTransaction;
@@ -472,6 +472,8 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   const [saving,      setSaving]      = useState(false);
   const [noteSugs,    setNoteSugs]    = useState([]);
   const [noteFocused, setNoteFocused] = useState(false);
+  const formRefLatest = useRef(form);
+  formRefLatest.current = form;
   // Recurring
   const [showRecurring, setShowRecurring] = useState(false);
   const [recurringConfig, setRecurringConfig] = useState(null); // {type, totalDays?, scheduleMode, frequency?}
@@ -529,16 +531,23 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     });
     if (errors[k]) setErrors(p=>({...p,[k]:''}));
     // Auto-open picker for Transfer
-    if (k==='type' && v==='Transfer-Out') {
-      setTimeout(() => setPickerState({
-        type: 'fromAccount',
-        label: 'From',
-        value: form.fromAccount,
-        items: accountList,
-        recent: recentAccounts,
-        onSelect: (val) => { set('fromAccount', val); goNextEmpty({key:'fromAccount',val}); },
-        onReorder: () => setReorderScreen('accounts')
-      }), 100);
+    if (k==='type') {
+      setPickerState(null);
+      if (v==='Transfer-Out') {
+        setTimeout(() => setPickerState({
+          type: 'from',
+          label: 'From',
+          value: form.fromAccount,
+          items: accountList,
+          recent: recentAccounts,
+          onSelect: (val) => { set('fromAccount', val); goNextEmpty({key:'fromAccount',val}); },
+          onReorder: () => setReorderScreen('accounts')
+        }), 100);
+      } else {
+        setTimeout(() => {
+          accountRef.current?.open();
+        }, 100);
+      }
     }
   };
 
@@ -588,13 +597,92 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     return result;
   }, [transactions, form.type]);
 
+  const getRecentAndMostUsedNotes = (targetType = form.type) => {
+    const isTargetXfer = targetType.toLowerCase().startsWith('transfer');
+    const matchingTxns = transactions.filter(t => {
+      const tType = (t['Income/Expense'] || 'Expense').toLowerCase();
+      if (isTargetXfer) return tType.startsWith('transfer');
+      return tType === targetType.toLowerCase();
+    });
+
+    // Compute frequencies of each note (stripped of instalment suffixes)
+    const frequencies = {};
+    for (const t of matchingTxns) {
+      const note = stripInstalmentSuffix(t.Note || '').trim();
+      if (!note) continue;
+      frequencies[note] = (frequencies[note] || 0) + 1;
+    }
+
+    // 1. Most Used: Sort distinct notes by frequency descending
+    const mostUsedNotes = Object.keys(frequencies)
+      .sort((a, b) => frequencies[b] - frequencies[a])
+      .slice(0, 2);
+
+    // 2. Recent Used: Sort transactions by created_at descending (saved dates)
+    const sortedByCreated = [...matchingTxns].sort((a, b) => {
+      // Sort by created_at (DB saving timestamp)
+      const ta = new Date(a.created_at || 0).getTime();
+      const tb = new Date(b.created_at || 0).getTime();
+      if (Math.abs(tb - ta) > 2000) { // If difference is more than 2 seconds, trust created_at
+        return tb - ta;
+      }
+      // Fallback to calendar date
+      const da = (a.Date || '').split('/').reverse().join('-'); // Convert dd/mm/yyyy to yyyy-mm-dd
+      const db = (b.Date || '').split('/').reverse().join('-');
+      const dateCompare = db.localeCompare(da);
+      if (dateCompare !== 0) return dateCompare;
+      
+      // Fallback to Time
+      return (b.Time || '').localeCompare(a.Time || '');
+    });
+
+    const recentNotes = [];
+    const seenRecent = new Set(mostUsedNotes); // Do not duplicate most used notes in recent notes
+    for (const t of sortedByCreated) {
+      const note = stripInstalmentSuffix(t.Note || '').trim();
+      if (note && !seenRecent.has(note)) {
+        seenRecent.add(note);
+        recentNotes.push(note);
+      }
+      if (recentNotes.length >= 3) break;
+    }
+
+    const result = [];
+    for (const note of mostUsedNotes) {
+      result.push({ note, type: 'most_used' });
+    }
+    for (const note of recentNotes) {
+      result.push({ note, type: 'recent' });
+    }
+    return result;
+  };
+
   const handleNoteChange = (v) => {
-    set('note',v);
-    if (v.trim().length>0){
-      const q=v.toLowerCase(),seen=new Set();
-      const sugs=transactions.map(t=>stripInstalmentSuffix(t.Note||'')).filter(n=>{if(!n||seen.has(n)||!n.toLowerCase().includes(q))return false;seen.add(n);return true;}).slice(0,6);
+    set('note', v);
+    if (v.trim().length > 0) {
+      const q = v.toLowerCase(), seen = new Set();
+      const matchedTxns = transactions.filter(t => {
+        const isTargetXfer = form.type.toLowerCase().startsWith('transfer');
+        const tType = (t['Income/Expense'] || 'Expense').toLowerCase();
+        if (isTargetXfer) return tType.startsWith('transfer');
+        return tType === form.type.toLowerCase();
+      });
+      const sugs = matchedTxns.map(t => stripInstalmentSuffix(t.Note || '')).filter(n => {
+        if (!n || seen.has(n) || !n.toLowerCase().includes(q)) return false;
+        seen.add(n);
+        return true;
+      }).slice(0, 6);
       setNoteSugs(sugs);
-    } else setNoteSugs([]);
+    } else {
+      setNoteSugs(getRecentAndMostUsedNotes());
+    }
+  };
+
+  const handleNoteFocus = () => {
+    setNoteFocused(true);
+    if (!form.note || !form.note.trim()) {
+      setNoteSugs(getRecentAndMostUsedNotes());
+    }
   };
 
   const validate = () => {
@@ -722,7 +810,9 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
           await addTransaction(data);
         }
       }
-      if (shouldContinue&&onSaveAndContinue) onSaveAndContinue(); else onClose();
+      if (shouldContinue&&onSaveAndContinue) onSaveAndContinue(); else {
+        onClose();
+      }
     } finally { setSaving(false); }
   };
 
@@ -745,10 +835,12 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   // goNextEmpty: smart flow for account/amount/note — does NOT touch subcategory
   const goNextEmpty = (justFilled) => {
     if (isEdit) return;
-    const snap = { ...form };
+    const currentForm = formRefLatest.current;
+    const snap = { ...currentForm };
     if (justFilled) snap[justFilled.key] = justFilled.val;
+    const currentIsTransfer = snap.type === 'Transfer-Out';
     setTimeout(() => {
-      if (isTransfer) {
+      if (currentIsTransfer) {
         if (!snap.fromAccount) { fromRef.current?.open(); return; }
         if (!snap.toAccount) {
           setTimeout(() => { toRef.current?.open(); }, 80);
@@ -772,7 +864,25 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
         </div>
         <div className="type-tabs">
           {TYPES.map(tp=>(
-            <button key={tp.id} className={`type-tab ${tp.cls} ${form.type===tp.id?'active':''}`} onClick={()=>set('type',tp.id)}>
+            <button key={tp.id} className={`type-tab ${tp.cls} ${form.type===tp.id?'active':''}`} onClick={() => {
+              set('type', tp.id);
+              if (noteFocused) {
+                if (!form.note || !form.note.trim()) {
+                  setNoteSugs(getRecentAndMostUsedNotes(tp.id));
+                } else {
+                  const q = form.note.toLowerCase(), seen = new Set();
+                  const matched = transactions
+                    .filter(t => (t['Income/Expense'] || 'Expense').toLowerCase() === tp.id.toLowerCase())
+                    .map(t => stripInstalmentSuffix(t.Note || ''))
+                    .filter(n => {
+                      if (!n || seen.has(n) || !n.toLowerCase().includes(q)) return false;
+                      seen.add(n);
+                      return true;
+                    }).slice(0, 6);
+                  setNoteSugs(matched);
+                }
+              }
+            }}>
               {tp.label}
             </button>
           ))}
@@ -814,7 +924,8 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                 error={errors.fromAccount} items={accountList} recent={recentAccounts}
                 onSelect={v=>{set('fromAccount',v);goNextEmpty({key:'fromAccount',val:v});}}
                 onAfterSelect={() => setPickerState(null)}
-                onReorder={()=>setReorderScreen('accounts')} />
+                onReorder={()=>setReorderScreen('accounts')}
+                active={pickerState && pickerState.type === 'from'} />
               <button type="button" className="swap-btn" title="Swap"
                 onClick={()=>setForm(p=>({...p,fromAccount:p.toAccount,toAccount:p.fromAccount}))}>
                 ⇅
@@ -823,14 +934,16 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                 error={errors.toAccount} items={accountList} recent={recentAccounts}
                 onSelect={v=>{set('toAccount',v);goNextEmpty({key:'toAccount',val:v});}}
                 onAfterSelect={() => setPickerState(null)}
-                onReorder={()=>setReorderScreen('accounts')} />
+                onReorder={()=>setReorderScreen('accounts')}
+                active={pickerState && pickerState.type === 'to'} />
             </div>
           ) : (
             <PickerFieldFR setPickerState={setPickerState} ref={accountRef} label="Account" value={form.account} placeholder="Select account"
               error={errors.account} items={accountList} recent={recentAccounts}
               onSelect={v=>{set('account',v);goNextEmpty({key:'account',val:v});}}
               onAfterSelect={() => setPickerState(null)}
-              onReorder={()=>setReorderScreen('accounts')} />
+              onReorder={()=>setReorderScreen('accounts')}
+              active={pickerState && pickerState.type === 'account'} />
           )}
 
           {/* Row 3: Category + Subcategory */}
@@ -847,11 +960,13 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                     afterCategory(v, freshSubs);
                   }}
                   onAfterSelect={() => setPickerState(null)}
-                  onReorder={()=>setReorderScreen('categories')} />
+                  onReorder={()=>setReorderScreen('categories')}
+                  active={pickerState && pickerState.type === 'category'} />
                 <SubcatFieldFR setPickerState={setPickerState} ref={subcatRef} value={form.subcategory} items={availSubs}
                   hideLabel
                   onChange={v=>set('subcategory',v)}
-                  onAfterSelect={()=>{ if(!isEdit){ if(!form.amount) setTimeout(()=>amountRef.current?.focus(),120); else setTimeout(()=>noteRef.current?.focus(),120); } }} />
+                  onAfterSelect={()=>{ if(!isEdit){ if(!form.amount) setTimeout(()=>amountRef.current?.focus(),120); else setTimeout(()=>noteRef.current?.focus(),120); } }}
+                  active={pickerState && pickerState.type === 'subcategory'} />
               </div>
             </div>
           )}
@@ -864,7 +979,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
               <input ref={amountRef}
                 className={`form-input ${errors.amount?'err':''}`}
                 style={{paddingLeft:24}}
-                type="tel" inputMode="decimal" pattern="[0-9]*([.,][0-9]+)?"
+                type="text" inputMode="decimal" pattern="[0-9]*([.,][0-9]+)?"
                 autoComplete="off" autoCorrect="off" spellCheck="false"
                 onKeyDown={e=>{
                   const a=['Backspace','Delete','ArrowLeft','ArrowRight','Tab','.',','];
@@ -877,14 +992,14 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
           </div>
 
           {/* Row 5: Note */}
-          <div className="form-group" style={{position:'relative'}}>
+          <div className="form-group">
             <label className="form-label">Note</label>
-            <div style={{position:'relative'}}>
+            <div style={{position:'relative', flex: 1}}>
               <input ref={el=>{textInputRef(el);noteRef.current=el;}} className="form-input" type="text" value={form.note}
                 style={{paddingRight:(form.note||noteFocused)?'30px':undefined}}
                 autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
                 onChange={e=>handleNoteChange(e.target.value)}
-                onFocus={()=>setNoteFocused(true)}
+                onFocus={handleNoteFocus}
                 onBlur={()=>{setNoteFocused(false);setTimeout(()=>setNoteSugs([]),180);}}
                 onKeyDown={e=>{if(e.key==='Enter'&&!isEdit){e.preventDefault();noteRef.current?.blur();}}}
               />
@@ -892,12 +1007,22 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                 <button type="button" onMouseDown={e=>{e.preventDefault();set('note','');setNoteSugs([]);setNoteFocused(false);}}
                   style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:'0.8rem',lineHeight:1,padding:'4px',borderRadius:'50%',zIndex:1}}>✕</button>
               )}
+              {noteSugs.length>0&&(
+                <div className="note-sug-list">
+                  {noteSugs.map(s => {
+                    const isObj = typeof s === 'object';
+                    const label = isObj ? s.note : s;
+                    const icon = isObj ? (s.type === 'most_used' ? '🔥' : '🕒') : null;
+                    return (
+                      <div key={label} className="note-sug-item" onMouseDown={()=>{set('note',label);setNoteSugs([]);}} style={{display:'flex',alignItems:'center'}}>
+                        {icon && <span className="note-sug-icon" style={{marginRight:8,fontSize:'0.75rem'}}>{icon}</span>}
+                        <span className="note-sug-text">{label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-            {noteSugs.length>0&&(
-              <div className="note-sug-list">
-                {noteSugs.map(s=><div key={s} className="note-sug-item" onMouseDown={()=>{set('note',s);setNoteSugs([]);}}>{s}</div>)}
-              </div>
-            )}
           </div>
 
           <div className="description-section">

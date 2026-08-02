@@ -147,8 +147,7 @@ function DateGroupedList({ txns, onDateTap, selected, multiMode, onLongPress, on
 }
 
 // ── Monthly summary ───────────────────────────────────────────────────────────
-function MonthlyView({ transactions, onMonthClick }) {
-  const [year, setYear] = useState(new Date().getFullYear());
+function MonthlyView({ transactions, year, setYear, onMonthClick }) {
   const now = new Date();
 
   const prevYear = () => setYear(y => y - 1);
@@ -534,8 +533,8 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
 }
 
 // ── Main Transactions screen ──────────────────────────────────────────────────
-export default function Transactions({ onAddTransaction, backInterceptRef }) {
-  const { state } = useApp();
+export default function Transactions({ onAddTransaction, backInterceptRef, viewParams }) {
+  const { state, clearNavParams } = useApp();
   const { transactions, accounts, categories } = state;
   const now = new Date();
 
@@ -549,8 +548,56 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
   const [multiMode, setMultiMode] = useState(false);
   const [copyTxn,       setCopyTxn]       = useState(null);
 
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const scrollRef = useRef(null);
+
   const multiModePrevHandler = React.useRef(null);
   const multiModeHandler = React.useRef(null);
+
+  // Sync year and view from dashboard clicks
+  useEffect(() => {
+    if (viewParams) {
+      if (viewParams.year !== undefined && viewParams.year !== null) {
+        setViewYear(Number(viewParams.year));
+      }
+      if (viewParams.month !== undefined && viewParams.month !== null) {
+        setViewMonth(Number(viewParams.month));
+        setViewMode('daily');
+      } else if (viewParams.year !== undefined && viewParams.year !== null) {
+        setViewMode('monthly');
+      }
+      clearNavParams();
+    }
+  }, [viewParams, clearNavParams]);
+
+  // Handle double-tap tab reset to Daily tab / current date
+  useEffect(() => {
+    const handleReset = () => {
+      setViewMode('daily');
+      const now = new Date();
+      setViewYear(now.getFullYear());
+      setViewMonth(now.getMonth());
+      setPickerY(now.getFullYear());
+      setMultiMode(false);
+      setSelected(new Set());
+    };
+    window.addEventListener('reset-transactions-view', handleReset);
+    return () => window.removeEventListener('reset-transactions-view', handleReset);
+  }, []);
+
+  const handleScroll = (e) => {
+    if (e.target.scrollTop > 450) {
+      setShowScrollTop(true);
+    } else {
+      setShowScrollTop(false);
+    }
+  };
+
+  const scrollToTop = () => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 
   // Handle back button interception for multi-mode
   React.useEffect(() => {
@@ -637,18 +684,23 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
 
       {/* Transaction list (daily) or monthly list */}
       {viewMode==='monthly' ? (
-        <MonthlyView transactions={transactions} onMonthClick={(y,mi)=>{setViewYear(y);setViewMonth(mi);setViewMode('daily');}}/>
+        <MonthlyView transactions={transactions} year={viewYear} setYear={setViewYear} onMonthClick={(y,mi)=>{setViewYear(y);setViewMonth(mi);setViewMode('daily');}}/>
       ) : (
         <>
           {multiMode && <BulkSelectionBar selected={selected} selTotals={selTotals} allTxns={transactions}
             onDone={()=>{setMultiMode(false);setSelected(new Set());}}
             onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
-          <div className="txn-list">
+          <div ref={scrollRef} className="txn-list" onScroll={handleScroll}>
             {monthTxns.length===0
               ? <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">No transactions</div><div className="empty-desc">{MONTHS_F[viewMonth]} {viewYear}</div></div>
               : <DateGroupedList txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
             }
           </div>
+          {showScrollTop && (
+            <button className="scroll-top-btn" onClick={scrollToTop} aria-label="Scroll to top">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" width="16" height="16"><path d="M18 15l-6-6-6 6"/></svg>
+            </button>
+          )}
         </>
       )}
 
