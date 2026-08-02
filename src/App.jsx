@@ -87,7 +87,6 @@ function AppInner() {
   // ALL hooks must be called unconditionally before any early return
   const [showAdd, setShowAdd]   = useState(false);
   const [addKey,  setAddKey]    = useState(0);
-  const [resetKeys, setResetKeys] = useState({ transactions:0, accounts:0, categories:0, settings:0, dashboard:0 });
   const [backupDue, setBackupDue] = useState(false);
 
   // Process due repeat transactions on app open
@@ -105,7 +104,31 @@ function AppInner() {
     const threshold = schedule === 'daily' ? 1 : schedule === 'weekly' ? 7 : 30;
     if (daysSince >= threshold) setBackupDue(true);
   }, [state.settings?.backupSchedule, state.settings?.lastBackupCheck]);
-  const handleNavTap = (id) => setResetKeys(k => ({ ...k, [id]: (k[id]||0)+1 }));
+
+  const handleNavTap = (id) => {
+    // Find the scrollable elements in the active view
+    const activeEl = document.querySelector('.tab-view.active-tab');
+    let wasScrolled = false;
+    if (activeEl) {
+      const scrollables = activeEl.querySelectorAll('.sub-body, .acct-detail-body, .cat-detail-body, .dash-scrollable-content, .txn-list, .settings-root, .accounts-list');
+      scrollables.forEach(el => {
+        if (el.scrollTop > 10) {
+          wasScrolled = true;
+          el.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      });
+    }
+    // If already at top and inside deep navigation, return to parent view
+    if (!wasScrolled) {
+      if (id === 'transactions') {
+        window.dispatchEvent(new CustomEvent('reset-transactions-view'));
+      }
+      if (backInterceptRef.current) {
+        backInterceptRef.current();
+      }
+    }
+  };
+
   const backInterceptRef = React.useRef(null);
 
   useEffect(() => {
@@ -135,21 +158,27 @@ function AppInner() {
   // Safe to return early here — all hooks have already been called above
   if (state.loading) return <SplashScreen />;
 
-  const screen = (() => {
-    switch (currentView) {
-      case 'transactions': return <Transactions key={resetKeys.transactions} onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef}/>;
-      case 'accounts':     return <Accounts     key={resetKeys.accounts}     backInterceptRef={backInterceptRef}/>;
-      case 'categories':   return <Categories   key={resetKeys.categories}   backInterceptRef={backInterceptRef}/>;
-      case 'analytics':    return <Analytics/>;
-      case 'settings':     return <Settings     key={resetKeys.settings}     backInterceptRef={backInterceptRef}/>;
-      default:             return <Dashboard    key={resetKeys.dashboard}/>;
-    }
-  })();
-
   return (
     <PinLock>
       <Layout onNavTap={handleNavTap}>
-        {screen}
+        <div className={`tab-view ${currentView === 'dashboard' ? 'active-tab' : 'hidden'}`}>
+          <Dashboard onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }}/>
+        </div>
+        <div className={`tab-view ${currentView === 'transactions' ? 'active-tab' : 'hidden'}`}>
+          <Transactions onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef} viewParams={state.viewParams}/>
+        </div>
+        <div className={`tab-view ${currentView === 'accounts' ? 'active-tab' : 'hidden'}`}>
+          <Accounts backInterceptRef={backInterceptRef}/>
+        </div>
+        <div className={`tab-view ${currentView === 'categories' ? 'active-tab' : 'hidden'}`}>
+          <Categories backInterceptRef={backInterceptRef}/>
+        </div>
+        <div className={`tab-view ${currentView === 'analytics' ? 'active-tab' : 'hidden'}`}>
+          <Analytics/>
+        </div>
+        <div className={`tab-view ${currentView === 'settings' ? 'active-tab' : 'hidden'}`}>
+          <Settings backInterceptRef={backInterceptRef}/>
+        </div>
       </Layout>
       {showAdd && <AddTransaction key={addKey} onClose={() => setShowAdd(false)} onSaveAndContinue={() => setAddKey(k => k + 1)} backInterceptRef={backInterceptRef}/>}
       {backupDue && (

@@ -99,66 +99,69 @@ export default function PinLock({ children }) {
     if (next.length === (pin.length || 4)) verify(next);
   };
 
-  if (!enabled || !locked) return children;
-
   const KEYS   = ['1','2','3','4','5','6','7','8','9','','0','⌫'];
   const pinLen = pin.length || 4;
 
   return (
-    <div style={{
-      position:'fixed', inset:0, zIndex:9999,
-      display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-      background:'var(--bg-base)', padding:'24px 32px',
-      fontFamily:'var(--font)',
-    }}>
-      <div style={{fontSize:48, marginBottom:8}}>🔒</div>
-      <div style={{fontSize:26, fontWeight:800, color:'var(--green)', letterSpacing:-1, marginBottom:4}}>FinMan</div>
-      <div style={{fontSize:13, color:'var(--text-muted)', marginBottom:28}}>Enter PIN to continue</div>
+    <>
+      {children}
+      {enabled && locked && (
+        <div style={{
+          position:'fixed', inset:0, zIndex:99999,
+          display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+          background:'var(--bg-base)', padding:'24px 32px',
+          fontFamily:'var(--font)',
+        }}>
+          <div style={{fontSize:48, marginBottom:8}}>🔒</div>
+          <div style={{fontSize:26, fontWeight:800, color:'var(--green)', letterSpacing:-1, marginBottom:4}}>FinMan</div>
+          <div style={{fontSize:13, color:'var(--text-muted)', marginBottom:28}}>Enter PIN to continue</div>
 
-      {/* PIN dots */}
-      <div style={{display:'flex', gap:14, marginBottom:20}}>
-        {Array.from({length:pinLen}, (_, i) => (
-          <div key={i} style={{
-            width:14, height:14, borderRadius:'50%',
-            background: i < entry.length ? 'var(--green)' : 'transparent',
-            border: '2px solid var(--green)',
-            transition: 'background 0.15s',
-          }}/>
-        ))}
-      </div>
+          {/* PIN dots */}
+          <div style={{display:'flex', gap:14, marginBottom:20}}>
+            {Array.from({length:pinLen}, (_, i) => (
+              <div key={i} style={{
+                width:14, height:14, borderRadius:'50%',
+                background: i < entry.length ? 'var(--green)' : 'transparent',
+                border: '2px solid var(--green)',
+                transition: 'background 0.15s',
+              }}/>
+            ))}
+          </div>
 
-      {error && (
-        <div style={{color:'var(--expense)', fontSize:13, fontWeight:600, marginBottom:14, textAlign:'center'}}>
-          {error}
+          {error && (
+            <div style={{color:'var(--expense)', fontSize:13, fontWeight:600, marginBottom:14, textAlign:'center'}}>
+              {error}
+            </div>
+          )}
+
+          {/* Keypad — wider buttons */}
+          <div style={{
+            display:'grid', gridTemplateColumns:'repeat(3, 1fr)',
+            gap:10, width:'100%', maxWidth:320,
+          }}>
+            {KEYS.map((k, i) => {
+              if (k === '') return <span key={i}/>;
+              return (
+                <button key={i}
+                  onClick={() => k === '⌫' ? setEntry(e => e.slice(0, -1)) : tap(k)}
+                  disabled={attempts >= 5}
+                  style={{
+                    height:64, fontSize: k === '⌫' ? 22 : 26,
+                    fontWeight:600, cursor:'pointer',
+                    borderRadius:13,
+                    border:'1.5px solid var(--border)',
+                    background: k === '⌫' ? 'transparent' : 'var(--bg-card)',
+                    color:'var(--text-primary)', fontFamily:'var(--font)',
+                    opacity: attempts >= 5 ? 0.4 : 1,
+                    transition:'all 0.15s',
+                  }}>
+                  {k}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
-
-      {/* Keypad — wider buttons */}
-      <div style={{
-        display:'grid', gridTemplateColumns:'repeat(3, 1fr)',
-        gap:10, width:'100%', maxWidth:320,
-      }}>
-        {KEYS.map((k, i) => {
-          if (k === '') return <span key={i}/>;
-          return (
-            <button key={i}
-              onClick={() => k === '⌫' ? setEntry(e => e.slice(0, -1)) : tap(k)}
-              disabled={attempts >= 5}
-              style={{
-                height:64, fontSize: k === '⌫' ? 22 : 26,
-                fontWeight:600, cursor:'pointer',
-                borderRadius:13,
-                border:'1.5px solid var(--border)',
-                background: k === '⌫' ? 'transparent' : 'var(--bg-card)',
-                color:'var(--text-primary)', fontFamily:'var(--font)',
-                opacity: attempts >= 5 ? 0.4 : 1,
-                transition:'all 0.15s',
-              }}>
-              {k}
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    </>
   );
 }

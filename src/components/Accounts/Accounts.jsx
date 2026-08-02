@@ -63,7 +63,7 @@ export function ccPrevCycle(settlementDate, refDate = new Date()) {
  *
  * Sign convention returned: positive = you owe / you've spent (shown as −)
  */
-function ccBalances(txns, acctName, settlementDate, today = new Date()) {
+export function ccBalances(txns, acctName, settlementDate, today = new Date()) {
   // Determine start of current (open) cycle
   const sd = settlementDate;
   const cy = today.getFullYear(), cm = today.getMonth(), cd = today.getDate();
@@ -724,11 +724,15 @@ export default function Accounts({ backInterceptRef } = {}) {
       const days = ccDaysUntilDue(a, today);
       if (days === null) continue;
       if (days <= 7) {
-        alerts.push({ acct: a, days, due: ccNextDueDate(a, today) });
+        // ONLY alert if there is actual balance payable
+        const { balancePayable } = ccBalances(transactions, a.name, a.settlementDate, today);
+        if (balancePayable > 0) {
+          alerts.push({ acct: a, days, due: ccNextDueDate(a, today) });
+        }
       }
     }
     return alerts;
-  }, [accounts]);
+  }, [accounts, transactions]);
 
   const toggleGroup = (groupName) => {
     setCollapsedGroups(prev => {
@@ -811,7 +815,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       const outCls  = outstanding > 0 ? 'warn' : outstanding < 0 ? 'pos' : '';
 
       const dueDays = ccDaysUntilDue(acctObj, now);
-      const showDueDot = !paidDueAlerts.has(name) && dueDays !== null && dueDays <= 7;
+      const showDueDot = !paidDueAlerts.has(name) && dueDays !== null && dueDays <= 7 && balancePayable > 0;
       return (
         <div key={name} className="acct-row acct-row-cc" onClick={() => setDrill(name)}>
           <div className="acct-row-name">
