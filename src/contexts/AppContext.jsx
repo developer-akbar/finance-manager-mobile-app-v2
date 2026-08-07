@@ -18,11 +18,28 @@ import {
 } from '../database/index.js';
 import { DEFAULT_ACCOUNT_GROUPS, DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES } from '../database/defaults.js';
 import { v4 as uuid } from 'uuid';
+import { parseDate } from '../utils/format.js';
 
 const Ctx = createContext(null);
 export const useApp = () => { const c = useContext(Ctx); if (!c) throw new Error('useApp outside AppProvider'); return c; };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+const sortTransactions = (txns) => {
+  return [...txns].sort((a, b) => {
+    const da = parseDate(a.Date).getTime();
+    const db = parseDate(b.Date).getTime();
+    if (da !== db) return db - da;
+
+    const ta = a.Time || '00:00';
+    const tb = b.Time || '00:00';
+    if (ta !== tb) return tb.localeCompare(ta);
+
+    const ca = a.created_at || '';
+    const cb = b.created_at || '';
+    return cb.localeCompare(ca);
+  });
+};
+
 // Categories in state: { CatName: { type:'Expense'|'Income', subcategories:['sub1',...] } }
 const catsArrToObj = (arr) => {
   const o = {};
@@ -56,9 +73,9 @@ const INIT = {
 
 function reducer(s, a) {
   switch (a.type) {
-    case 'INIT':         return { ...s, ...a.payload, loading: false };
-    case 'ADD_TXN':      return { ...s, transactions: [a.payload, ...s.transactions] };
-    case 'UPD_TXN':      return { ...s, transactions: s.transactions.map(t => t._id === a.payload._id ? a.payload : t) };
+    case 'INIT':         return { ...s, ...a.payload, transactions: sortTransactions(a.payload.transactions), loading: false };
+    case 'ADD_TXN':      return { ...s, transactions: sortTransactions([a.payload, ...s.transactions]) };
+    case 'UPD_TXN':      return { ...s, transactions: sortTransactions(s.transactions.map(t => t._id === a.payload._id ? a.payload : t)) };
     case 'DEL_TXN':      return { ...s, transactions: s.transactions.filter(t => t._id !== a.payload) };
     case 'SET_BUDGETS':  return { ...s, budgets: a.payload };
     case 'SET_IMPORT':   return { ...s, importProgress: a.payload };

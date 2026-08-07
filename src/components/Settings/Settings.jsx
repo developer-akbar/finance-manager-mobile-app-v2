@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, parseDate } from '../../utils/format.js';
 import './Settings.css';
@@ -11,7 +11,7 @@ function ConfirmModal({ isOpen, title, message, onConfirm, onCancel, isWarning =
   return (
     <>
       <div className="dash-popup-overlay" onClick={onCancel} style={{ zIndex: 10000 }} />
-      <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px' }}>
+      <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px calc(var(--safe-bottom) + 20px)' }}>
         <div className="dash-popup-sheet-handle" />
         <div style={{ fontSize: '2.5rem', marginBottom: 12, textAlign: 'center' }}>{isWarning ? '⚠️' : '❓'}</div>
         <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 8, textAlign: 'center' }}>
@@ -1086,7 +1086,7 @@ function DataManager({ onBack }) {
 
       <div className="sub-body">
         {/* Stats */}
-        <div className="dm-stats" style={{ margin: '10px var(--page-px)' }}>
+        <div className="dm-stats" style={{ margin: '10px 0', borderRadius: 0, borderLeft: 'none', borderRight: 'none' }}>
           <div className="dm-stat">
             <div className="dm-stat-v">{txnCount.toLocaleString()}</div>
             <div className="dm-stat-l">Transactions</div>
@@ -1108,8 +1108,8 @@ function DataManager({ onBack }) {
         )}
 
         {importProgress && (
-          <div style={{ margin: '0 var(--page-px) 10px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ margin: '0 0 10px', background: 'var(--bg-card)', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '12px var(--page-px)' }}>
+            <div style={{ display: 'flex', justifycontent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Importing {importProgress.total.toLocaleString()} rows…</span>
               <button className="btn btn-sm btn-danger" onClick={cancelImport}>Cancel</button>
             </div>
@@ -1124,7 +1124,7 @@ function DataManager({ onBack }) {
 
         {/* Import section */}
         <div className="dm-section-hdr">Import</div>
-        <label className={`import-drop ${importProgress ? 'disabled' : ''}`} style={{ margin: '0 var(--page-px) 14px', display: 'block' }}>
+        <label className={`import-drop ${importProgress ? 'disabled' : ''}`} style={{ margin: '0 0 14px', borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '18px var(--page-px)', display: 'block' }}>
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json" style={{ display: 'none' }} onChange={handleFile} disabled={!!importProgress} />
           <div className="import-folder-icon">📂</div>
           <div className="import-drop-title">Choose file</div>
@@ -1133,7 +1133,7 @@ function DataManager({ onBack }) {
 
         {/* Export section */}
         <div className="dm-section-hdr">Export</div>
-        <div className="dm-card" style={{ margin: '0 var(--page-px) 14px' }}>
+        <div className="dm-card" style={{ margin: '0 0 14px', borderRadius: 0, borderLeft: 'none', borderRight: 'none' }}>
           <div className="dm-row" onClick={exportCSV}>
             <div className="dm-row-icon">📊</div>
             <div className="dm-row-content"><div className="dm-row-title">Export CSV</div><div className="dm-row-sub">Transactions only · safe for spreadsheets</div></div>
@@ -1146,7 +1146,7 @@ function DataManager({ onBack }) {
 
         {/* Backup section */}
         <div className="dm-section-hdr">Backup</div>
-        <div className="dm-card" style={{ margin: '0 var(--page-px) 14px' }}>
+        <div className="dm-card" style={{ margin: '0 0 14px', borderRadius: 0, borderLeft: 'none', borderRight: 'none' }}>
           <div className="dm-row" onClick={runBackupNow}>
             <div className="dm-row-icon">📲</div>
             <div className="dm-row-content">
@@ -1217,7 +1217,7 @@ function DataManager({ onBack }) {
 
         {/* Danger Zone */}
         <div className="dm-section-hdr" style={{ color: 'var(--expense)' }}>Danger Zone</div>
-        <div className="dm-card" style={{ margin: '0 var(--page-px) 14px' }}>
+        <div className="dm-card" style={{ margin: '0 0 14px', borderRadius: 0, borderLeft: 'none', borderRight: 'none' }}>
           <div className="dm-row danger-row" onClick={() => setShowDel(true)}>
             <div className="dm-row-icon">🗑️</div>
             <div className="dm-row-content"><div className="dm-row-title" style={{ color: 'var(--expense)' }}>Delete All Transactions &amp; Metadata</div><div className="dm-row-sub">Perform factory reset · deletes all setups</div></div>
@@ -1460,7 +1460,7 @@ function BudgetsManager({ onBack }) {
           const spend = getSpend(b.category, b.period);
           const pct = Math.min(100, b.amount > 0 ? (spend / b.amount) * 100 : 0);
           return (
-            <div key={b.category} className="budget-detail-card" style={{ margin: '0 var(--page-px) 8px' }}>
+            <div key={b.category} className="budget-detail-card" style={{ margin: '0 0 8px' }}>
               <div className="budget-detail-top">
                 <div className="budget-detail-name">{b.category}</div>
                 <div className="budget-detail-period">{b.period}</div>
@@ -1798,6 +1798,15 @@ export default function Settings({ backInterceptRef } = {}) {
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
   }, [screen, backInterceptRef]);
+
+  // Handle double-tap reset for Settings tab
+  useEffect(() => {
+    const handleReset = () => {
+      setScreen(null);
+    };
+    window.addEventListener('reset-settings-view', handleReset);
+    return () => window.removeEventListener('reset-settings-view', handleReset);
+  }, []);
 
 
   if (screen === 'recurring') return <RecurringManager onBack={() => setScreen(null)} />;
