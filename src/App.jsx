@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { AppProvider, useApp } from './contexts/AppContext.jsx';
 import Layout from './components/Layout/Layout.jsx';
 import Dashboard from './components/Dashboard/Dashboard.jsx';
@@ -105,23 +105,48 @@ function AppInner() {
     if (daysSince >= threshold) setBackupDue(true);
   }, [state.settings?.backupSchedule, state.settings?.lastBackupCheck]);
 
+  const [toast, setToast] = useState(null);
+  const toastTimeoutRef = useRef(null);
+  const showToast = useCallback((msg) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast(msg);
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+    }, 2000);
+  }, []);
+
   const handleNavTap = (id) => {
     // Find the scrollable elements in the active view
     const activeEl = document.querySelector('.tab-view.active-tab');
     let wasScrolled = false;
     if (activeEl) {
-      const scrollables = activeEl.querySelectorAll('.sub-body, .acct-detail-body, .cat-detail-body, .dash-scrollable-content, .txn-list, .settings-root, .accounts-list');
-      scrollables.forEach(el => {
-        if (el.scrollTop > 10) {
-          wasScrolled = true;
-          el.scrollTo({ top: 0, behavior: 'smooth' });
-        }
-      });
+      const txnList = activeEl.querySelector('.txn-list');
+      if (id === 'transactions') {
+        wasScrolled = true;
+        window.dispatchEvent(new CustomEvent('transactions-nav-tap'));
+      } else {
+        const scrollables = activeEl.querySelectorAll('.sub-body, .acct-detail-body, .cat-detail-body, .dash-scrollable-content, .settings-root, .accounts-list, .categories-list, .analytics-screen, .txn-monthly-list');
+        scrollables.forEach(el => {
+          if (el.scrollTop > 10) {
+            wasScrolled = true;
+            el.scrollTo({ top: 0, behavior: 'smooth' });
+          }
+        });
+      }
     }
     // If already at top and inside deep navigation, return to parent view
     if (!wasScrolled) {
-      if (id === 'transactions') {
-        window.dispatchEvent(new CustomEvent('reset-transactions-view'));
+      if (id === 'categories') {
+        window.dispatchEvent(new CustomEvent('reset-categories-view'));
+      }
+      if (id === 'accounts') {
+        window.dispatchEvent(new CustomEvent('reset-accounts-view'));
+      }
+      if (id === 'analytics') {
+        window.dispatchEvent(new CustomEvent('reset-analytics-view'));
+      }
+      if (id === 'settings') {
+        window.dispatchEvent(new CustomEvent('reset-settings-view'));
       }
       if (backInterceptRef.current) {
         backInterceptRef.current();
@@ -130,6 +155,7 @@ function AppInner() {
   };
 
   const backInterceptRef = React.useRef(null);
+  const lastBackPressRef = useRef(0);
 
   useEffect(() => {
     const setup = async () => {
@@ -144,8 +170,14 @@ function AppInner() {
           if (backInterceptRef.current) { backInterceptRef.current(); return; }
           // 3. Any top-level tab → go home
           if (currentView !== 'dashboard') { navigate('dashboard'); return; }
-          // 4. Already home → close app
-          App.minimizeApp();
+          // 4. Already home → double press within 2s to close app completely
+          const nowTime = Date.now();
+          if (nowTime - lastBackPressRef.current < 2000) {
+            App.exitApp();
+          } else {
+            lastBackPressRef.current = nowTime;
+            showToast('Press back again to close the app');
+          }
         });
       } catch { /* web */ }
     };
@@ -153,7 +185,7 @@ function AppInner() {
     return () => {
       import('@capacitor/app').then(({ App }) => App.removeAllListeners()).catch(() => {});
     };
-  }, [currentView, showAdd, navigate]);
+  }, [currentView, showAdd, navigate, showToast]);
 
   // Safe to return early here — all hooks have already been called above
   if (state.loading) return <SplashScreen />;
@@ -165,13 +197,13 @@ function AppInner() {
           <Dashboard onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }}/>
         </div>
         <div className={`tab-view ${currentView === 'transactions' ? 'active-tab' : 'hidden'}`}>
-          <Transactions onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef} viewParams={state.viewParams}/>
+          <Transactions isActive={currentView === 'transactions'} onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef} viewParams={state.viewParams}/>
         </div>
         <div className={`tab-view ${currentView === 'accounts' ? 'active-tab' : 'hidden'}`}>
           <Accounts backInterceptRef={backInterceptRef}/>
         </div>
         <div className={`tab-view ${currentView === 'categories' ? 'active-tab' : 'hidden'}`}>
-          <Categories backInterceptRef={backInterceptRef}/>
+          <Categories backInterceptRef={backInterceptRef} viewParams={state.viewParams}/>
         </div>
         <div className={`tab-view ${currentView === 'analytics' ? 'active-tab' : 'hidden'}`}>
           <Analytics/>
@@ -180,7 +212,7 @@ function AppInner() {
           <Settings backInterceptRef={backInterceptRef}/>
         </div>
       </Layout>
-      {showAdd && <AddTransaction key={addKey} onClose={() => setShowAdd(false)} onSaveAndContinue={() => setAddKey(k => k + 1)} backInterceptRef={backInterceptRef}/>}
+      {showAdd && <AddTransaction key={addKey} onClose={() => setShowAdd(false)} onSaveAndContinue={() => {}} backInterceptRef={backInterceptRef}/>}
       {backupDue && (
         <div style={{position:'fixed',bottom:'calc(64px + var(--safe-bottom, 0px) + 8px)',left:12,right:12,background:'var(--bg-card)',border:'1px solid rgba(0,229,160,0.35)',borderRadius:12,padding:'10px 14px',display:'flex',alignItems:'center',gap:10,zIndex:9998,boxShadow:'0 4px 20px rgba(0,0,0,0.4)'}}>
           <span style={{fontSize:'1.2rem'}}>☁️</span>
@@ -190,6 +222,28 @@ function AppInner() {
           </div>
           <button onClick={() => { navigate('settings'); setBackupDue(false); }} style={{background:'var(--accent)',border:'none',borderRadius:8,color:'var(--text-primary)',fontSize:'0.68rem',fontWeight:700,padding:'5px 10px',cursor:'pointer',flexShrink:0}}>Back up</button>
           <button onClick={() => setBackupDue(false)} style={{background:'none',border:'none',color:'var(--text-muted)',fontSize:'1rem',cursor:'pointer',padding:'0 2px',flexShrink:0}}>✕</button>
+        </div>
+      )}
+      {toast && (
+        <div style={{
+          position: 'fixed',
+          bottom: '100px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'rgba(20, 25, 40, 0.95)',
+          backdropFilter: 'blur(10px)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          color: '#fff',
+          padding: '10px 18px',
+          borderRadius: '20px',
+          fontSize: '0.78rem',
+          fontWeight: 600,
+          boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+          zIndex: 99999,
+          pointerEvents: 'none',
+          letterSpacing: '0.3px'
+        }}>
+          {toast}
         </div>
       )}
     </PinLock>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, txnType, txnAmount, calcTotals, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
@@ -325,8 +325,8 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
 }
 
 // ── Main Categories screen ────────────────────────────────────────────────────
-export default function Categories({ backInterceptRef } = {}) {
-  const { state } = useApp();
+export default function Categories({ backInterceptRef, viewParams } = {}) {
+  const { state, clearNavParams } = useApp();
   const { transactions } = state;
   const now = new Date();
 
@@ -339,6 +339,18 @@ export default function Categories({ backInterceptRef } = {}) {
   const [customTo,  setTo]       = useState('');
   const [drill,     setDrill]    = useState(null);
 
+  // Listen to navigation view parameters (e.g. from Dashboard)
+  useEffect(() => {
+    if (viewParams) {
+      if (viewParams.type) setCatType(viewParams.type);
+      if (viewParams.period) setPeriod(viewParams.period);
+      if (viewParams.year !== undefined && viewParams.year !== null) setViewYear(Number(viewParams.year));
+      if (viewParams.month !== undefined && viewParams.month !== null) setViewMonth(Number(viewParams.month));
+      setDrill(null);
+      clearNavParams();
+    }
+  }, [viewParams, clearNavParams]);
+
   // Register Android back intercept when category drill-down is open
   React.useEffect(() => {
     if (!backInterceptRef) return;
@@ -349,6 +361,23 @@ export default function Categories({ backInterceptRef } = {}) {
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
   }, [drill, backInterceptRef]);
+
+  // Handle double-tap reset for Categories tab
+  useEffect(() => {
+    const handleReset = () => {
+      setCatType('Expense');
+      setPeriod('Month');
+      const now = new Date();
+      setViewYear(now.getFullYear());
+      setViewMonth(now.getMonth());
+      setViewFY(currentFY());
+      setFrom('');
+      setTo('');
+      setDrill(null);
+    };
+    window.addEventListener('reset-categories-view', handleReset);
+    return () => window.removeEventListener('reset-categories-view', handleReset);
+  }, []);
 
   const periodTxns = useMemo(() => {
     let txns = transactions;
@@ -425,7 +454,7 @@ export default function Categories({ backInterceptRef } = {}) {
         customFrom={customFrom} setFrom={setFrom} customTo={customTo} setTo={setTo}
         periodLabel={periodLabel}/>
 
-      <div style={{flex:1,overflow:'auto'}}>
+      <div className="categories-list" style={{flex:1,overflow:'auto'}}>
         {catData.length>0&&(
           <div className="cat-pie-wrap">
             <ResponsiveContainer width="100%" height={180}>

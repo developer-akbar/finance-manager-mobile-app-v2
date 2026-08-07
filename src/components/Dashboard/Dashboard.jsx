@@ -474,10 +474,10 @@ export default function Dashboard({ onAddTransaction }) {
         <>
           <div className="dash-section-hdr">
             <span>Top Spending This Month</span>
-            <button className="dash-section-link" onClick={() => navigate('categories')}>Details</button>
+            <button className="dash-section-link" onClick={() => navigate('categories', { type: 'Expense', period: 'Month', year: now.getFullYear(), month: now.getMonth() })}>Details</button>
           </div>
-          <div style={{ padding: '0 var(--page-px) 14px' }}>
-            <div className="dash-year-table" style={{ padding: '4px 12px' }}>
+          <div style={{ padding: '0 0 14px' }}>
+            <div className="dash-year-table" style={{ borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '4px var(--page-px)' }}>
               {topCats.map(([cat, amt], i) => {
                 const maxAmt = topCats[0][1];
                 const pct    = maxAmt > 0 ? (amt / maxAmt) * 100 : 0;
@@ -532,8 +532,8 @@ export default function Dashboard({ onAddTransaction }) {
 
           {/* Yearly Analysis (Restored and Moved) */}
           <div className="dash-section-hdr"><span>Yearly Analysis</span></div>
-          <div style={{ padding: '0 var(--page-px) 14px' }}>
-            <div className="dash-year-table">
+          <div style={{ padding: '0 0 14px' }}>
+            <div className="dash-year-table" style={{ borderLeft: 'none', borderRight: 'none', borderRadius: 0 }}>
               <div className="dash-year-header">
                 <span>Year</span><span>Total Spent</span><span>Monthly Avg</span>
               </div>
@@ -563,7 +563,7 @@ export default function Dashboard({ onAddTransaction }) {
             <span>Budgets</span>
             <button className="dash-section-link" onClick={() => navigate('settings')}>Manage</button>
           </div>
-          <div style={{ padding: '0 var(--page-px)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {budgetProgress.map(b => (
               <div key={b.category} className="budget-detail-card">
                 <div className="budget-detail-top">

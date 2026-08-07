@@ -264,7 +264,11 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
 }
 
 // ── SubcategoryPickerInline — inline chip grid ──────────
-function SubcategoryPickerInline({ items, value, onSelect, onClose }) {
+function SubcategoryPickerInline({ items, recent, value, onSelect, onClose }) {
+  const recentList = (recent || []).filter(i => items.includes(i));
+  const recentSet  = new Set(recentList);
+  const allItems   = items.filter(i => !recentSet.has(i));
+
   const Chip = ({ name }) => (
     <button type="button"
       className={`picker-chip ${value === name ? 'picker-chip-active' : ''}`}
@@ -272,6 +276,7 @@ function SubcategoryPickerInline({ items, value, onSelect, onClose }) {
       {name}{value === name && <span className="picker-chip-check"> ✓</span>}
     </button>
   );
+
   return (
     <div className="picker-sheet-inline">
       <div className="picker-sheet-hdr" style={{position:'sticky',top:0,zIndex:10}}>
@@ -279,13 +284,20 @@ function SubcategoryPickerInline({ items, value, onSelect, onClose }) {
         <button className="picker-sheet-close" onMouseDown={onClose}>✕</button>
       </div>
       <div className="picker-list" style={{paddingBottom:16}}>
+        {recentList.length > 0 && (
+          <>
+            <div className="picker-section-label">Recent</div>
+            <div className="picker-recent-row">{recentList.map(n => <Chip key={n} name={n} />)}</div>
+          </>
+        )}
+        <div className="picker-section-label">{recentList.length > 0 ? 'All' : 'Options'}</div>
         <div className="picker-chip-grid">
           <button type="button"
             className={`picker-chip ${!value ? 'picker-chip-active' : ''}`}
             onMouseDown={e=>{e.preventDefault();onSelect('');onClose();}}>
             None
           </button>
-          {items.map(n => <Chip key={n} name={n} />)}
+          {allItems.map(n => <Chip key={n} name={n} />)}
         </div>
       </div>
     </div>
@@ -372,12 +384,12 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
       label: 'Subcategory',
       value: props.value,
       items: props.items,
-      recent: [],
+      recent: props.recent || [],
       onSelect: (v) => { props.onChange(v); if (props.onAfterSelect) setTimeout(() => props.onAfterSelect(v), 100); },
       exclude: '',
       onReorder: null
     });
-  } } }), [props.items, props.value, props.onChange, props.onAfterSelect, props.setPickerState]);
+  } } }), [props.items, props.value, props.onChange, props.onAfterSelect, props.setPickerState, props.recent]);
   // Always mark key='subcategory' so goNextEmpty knows subcat was explicitly touched (even None)
   if (props.items.length === 0) return (
     <div className="form-group">
@@ -396,7 +408,7 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
             label: 'Subcategory',
             value: props.value,
             items: props.items,
-            recent: [],
+            recent: props.recent || [],
             onSelect: (v) => { props.onChange(v); if (props.onAfterSelect) setTimeout(() => props.onAfterSelect(v), 100); },
             exclude: '',
             onReorder: null
@@ -430,6 +442,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   const subcatRef       = useRef(null);
   const fromRef         = useRef(null);
   const toRef           = useRef(null);
+  const descriptionRef  = useRef(null);
 
   const lastTime = useMemo(() => {
     if (!transactions.length) return nowTimeStr();
@@ -482,7 +495,6 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     if (!el) return;
     el.setAttribute('autocomplete','on'); el.setAttribute('autocorrect','on');
     el.setAttribute('spellcheck','true'); el.setAttribute('autocapitalize','sentences');
-    el.setAttribute('inputmode','text');
   };
 
   // Auto-resize textarea on mount and description changes
@@ -597,6 +609,22 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     return result;
   }, [transactions, form.type]);
 
+  const recentSubs = useMemo(() => {
+    if (!form.category) return [];
+    const seen = new Set(), result = [];
+    for (const t of [...transactions].sort((a,b)=>(b.Date||'').localeCompare(a.Date||''))) {
+      if (t.Category === form.category) {
+        const sub = t.Subcategory || '';
+        if (sub && sub !== 'Default' && !seen.has(sub)) {
+          seen.add(sub);
+          result.push(sub);
+        }
+      }
+      if (result.length >= 5) break;
+    }
+    return result;
+  }, [transactions, form.category]);
+
   const getRecentAndMostUsedNotes = (targetType = form.type) => {
     const isTargetXfer = targetType.toLowerCase().startsWith('transfer');
     const matchingTxns = transactions.filter(t => {
@@ -616,7 +644,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     // 1. Most Used: Sort distinct notes by frequency descending
     const mostUsedNotes = Object.keys(frequencies)
       .sort((a, b) => frequencies[b] - frequencies[a])
-      .slice(0, 2);
+      .slice(0, 6);
 
     // 2. Recent Used: Sort transactions by created_at descending (saved dates)
     const sortedByCreated = [...matchingTxns].sort((a, b) => {
@@ -644,7 +672,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
         seenRecent.add(note);
         recentNotes.push(note);
       }
-      if (recentNotes.length >= 3) break;
+      if (recentNotes.length >= 9) break;
     }
 
     const result = [];
@@ -671,7 +699,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
         if (!n || seen.has(n) || !n.toLowerCase().includes(q)) return false;
         seen.add(n);
         return true;
-      }).slice(0, 6);
+      }).slice(0, 15);
       setNoteSugs(sugs);
     } else {
       setNoteSugs(getRecentAndMostUsedNotes());
@@ -679,6 +707,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   };
 
   const handleNoteFocus = () => {
+    setPickerState(null);
     setNoteFocused(true);
     if (!form.note || !form.note.trim()) {
       setNoteSugs(getRecentAndMostUsedNotes());
@@ -810,7 +839,22 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
           await addTransaction(data);
         }
       }
-      if (shouldContinue&&onSaveAndContinue) onSaveAndContinue(); else {
+      if (shouldContinue) {
+        setForm(p => ({
+          ...p,
+          amount: '',
+          note: '',
+          description: '',
+        }));
+        setRecurringConfig(null);
+        setShowRecurring(false);
+        setErrors({});
+        setSaving(false);
+        setTimeout(() => {
+          amountRef.current?.focus();
+        }, 100);
+        if (onSaveAndContinue) onSaveAndContinue();
+      } else {
         onClose();
       }
     } finally { setSaving(false); }
@@ -894,8 +938,8 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
             <label className="form-label">Date</label>
             <div className="date-time-row">
               <div className="date-time-inputs">
-                <input className={`form-input ${errors.date?'err':''}`} type="date" value={form.date} onChange={e=>set('date',e.target.value)}/>
-                <input className="form-input" type="time" value={form.time} onChange={e=>set('time',e.target.value)}/>
+                <input className={`form-input ${errors.date?'err':''}`} type="date" value={form.date} onChange={e=>set('date',e.target.value)} onFocus={() => setPickerState(null)}/>
+                <input className="form-input" type="time" value={form.time} onChange={e=>set('time',e.target.value)} onFocus={() => setPickerState(null)}/>
               </div>
               {!isEdit && (
                 <button type="button" className="recurring-button" onClick={()=>setShowRecurring(true)}>
@@ -964,6 +1008,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                   active={pickerState && pickerState.type === 'category'} />
                 <SubcatFieldFR setPickerState={setPickerState} ref={subcatRef} value={form.subcategory} items={availSubs}
                   hideLabel
+                  recent={recentSubs}
                   onChange={v=>set('subcategory',v)}
                   onAfterSelect={()=>{ if(!isEdit){ if(!form.amount) setTimeout(()=>amountRef.current?.focus(),120); else setTimeout(()=>noteRef.current?.focus(),120); } }}
                   active={pickerState && pickerState.type === 'subcategory'} />
@@ -981,6 +1026,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                 style={{paddingLeft:24}}
                 type="text" inputMode="decimal" pattern="[0-9]*([.,][0-9]+)?"
                 autoComplete="off" autoCorrect="off" spellCheck="false"
+                onFocus={() => setPickerState(null)}
                 onKeyDown={e=>{
                   const a=['Backspace','Delete','ArrowLeft','ArrowRight','Tab','.',','];
                   if (e.key==='Enter'){e.preventDefault();goNextEmpty({key:'amount',val:form.amount});}
@@ -1001,7 +1047,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                 onChange={e=>handleNoteChange(e.target.value)}
                 onFocus={handleNoteFocus}
                 onBlur={()=>{setNoteFocused(false);setTimeout(()=>setNoteSugs([]),180);}}
-                onKeyDown={e=>{if(e.key==='Enter'&&!isEdit){e.preventDefault();noteRef.current?.blur();}}}
+                onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();descriptionRef.current?.focus();}}}
               />
               {noteFocused&&(
                 <button type="button" onMouseDown={e=>{e.preventDefault();set('note','');setNoteSugs([]);setNoteFocused(false);}}
@@ -1014,7 +1060,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                     const label = isObj ? s.note : s;
                     const icon = isObj ? (s.type === 'most_used' ? '🔥' : '🕒') : null;
                     return (
-                      <div key={label} className="note-sug-item" onMouseDown={()=>{set('note',label);setNoteSugs([]);}} style={{display:'flex',alignItems:'center'}}>
+                      <div key={label} className="note-sug-item" onMouseDown={()=>{set('note',label);setNoteSugs([]);setTimeout(()=>descriptionRef.current?.focus(),150);}} style={{display:'flex',alignItems:'center'}}>
                         {icon && <span className="note-sug-icon" style={{marginRight:8,fontSize:'0.75rem'}}>{icon}</span>}
                         <span className="note-sug-text">{label}</span>
                       </div>
@@ -1027,8 +1073,9 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
 
           <div className="description-section">
             <div className="form-group">
-              <textarea ref={textInputRef} className="form-input" rows={1} value={form.description}
+              <textarea ref={el => { textInputRef(el); descriptionRef.current = el; }} className="form-input" rows={1} value={form.description}
                 autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
+                onFocus={() => setPickerState(null)}
                 onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 220) + 'px'; }}
                 onChange={e=>set('description',e.target.value)} placeholder='Description'/>
             </div>
@@ -1044,34 +1091,34 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
               </button>
             )}
           </div>
-
-          {/* Inline Picker Room */}
-          {pickerState && (
-            <div className="picker-room">
-              {pickerState.type === 'subcategory' ? (
-                <SubcategoryPickerInline
-                  items={pickerState.items}
-                  value={pickerState.value}
-                  onSelect={pickerState.onSelect}
-                  onClose={() => setPickerState(null)}
-                />
-              ) : (
-                <PickerSheetInline
-                  label={pickerState.label}
-                  items={pickerState.items}
-                  recent={pickerState.recent}
-                  value={pickerState.value}
-                  onSelect={pickerState.onSelect}
-                  onClose={() => setPickerState(null)}
-                  exclude={pickerState.exclude}
-                  onReorder={pickerState.onReorder}
-                />
-              )}
-            </div>
-          )}
-
           <div style={{height:16}}/>
         </div>
+
+        {/* Inline Picker Room */}
+        {pickerState && (
+          <div className="picker-room">
+            {pickerState.type === 'subcategory' ? (
+              <SubcategoryPickerInline
+                items={pickerState.items}
+                recent={pickerState.recent}
+                value={pickerState.value}
+                onSelect={pickerState.onSelect}
+                onClose={() => setPickerState(null)}
+              />
+            ) : (
+              <PickerSheetInline
+                label={pickerState.label}
+                items={pickerState.items}
+                recent={pickerState.recent}
+                value={pickerState.value}
+                onSelect={pickerState.onSelect}
+                onClose={() => setPickerState(null)}
+                exclude={pickerState.exclude}
+                onReorder={pickerState.onReorder}
+              />
+            )}
+          </div>
+        )}
       </div>
 
       {/* Inline reorder overlay — keeps AddTransaction mounted */}

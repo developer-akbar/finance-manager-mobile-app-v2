@@ -639,7 +639,7 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
         <div style={{height:80}}/>
       </div>
       {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
-      {showAdd&&<AddTransaction key={addKey} prefillAccount={acctName} onClose={()=>setShowAdd(false)} onSaveAndContinue={() => setAddKey(k => k + 1)} backInterceptRef={backInterceptRef}/>}
+      {showAdd&&<AddTransaction key={addKey} prefillAccount={acctName} onClose={()=>setShowAdd(false)} onSaveAndContinue={() => {}} backInterceptRef={backInterceptRef}/>}
       {copyTxn&&<AddTransaction copyTransaction={copyTxn} onClose={()=>setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})} backInterceptRef={backInterceptRef}/>}
     </div>
   );
@@ -651,6 +651,16 @@ export default function Accounts({ backInterceptRef } = {}) {
   const { accounts, accountGroups, transactions } = state;
   const [drill, setDrill] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+
+  // Handle double-tap reset for Accounts tab
+  useEffect(() => {
+    const handleReset = () => {
+      setDrill(null);
+      setCollapsedGroups(new Set());
+    };
+    window.addEventListener('reset-accounts-view', handleReset);
+    return () => window.removeEventListener('reset-accounts-view', handleReset);
+  }, []);
 
   const PAID_ALERT_STORAGE = 'finman-paid-due-alerts';
   const DISMISS_ALERT_STORAGE = 'finman-dismissed-due-alerts';

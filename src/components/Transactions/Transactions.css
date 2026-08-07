@@ -32,15 +32,15 @@
 }
 
 /* Monthly rows */
-.month-row { display:flex; align-items:center; gap:8px; padding:11px var(--page-px); border-bottom:1px solid var(--border-light); background:var(--bg-card); cursor:pointer; }
+.month-row { display:flex; align-items:center; gap:16px; padding:12px var(--page-px); border-bottom:1px solid var(--border-light); background:var(--bg-card); cursor:pointer; }
 .month-row:active { background:var(--bg-hover); }
 .month-row-empty { opacity:0.4; cursor:default; }
 .month-row-name { flex:1; font-size:0.85rem; font-weight:700; }
 .month-row-none { flex:1; font-size:0.78rem; color:var(--text-muted); }
-.month-row-vals { display:flex; flex-direction:column; gap:1px; align-items:flex-end; min-width:72px; }
+.month-row-vals { display:flex; flex-direction:column; gap:2px; align-items:flex-end; flex:0 0 110px; }
 .month-row-inc { font-size:0.68rem; font-weight:700; color:var(--income);  font-family:var(--font); }
 .month-row-exp { font-size:0.68rem; font-weight:700; color:var(--expense); font-family:var(--font); }
-.month-row-net { font-size:0.78rem; font-weight:800; font-family:var(--font); min-width:60px; text-align:right; }
+.month-row-net { font-size:0.78rem; font-weight:800; font-family:var(--font); flex:0 0 95px; text-align:right; }
 .month-row-net.pos { color:var(--income); }
 .month-row-net.neg { color:var(--expense); }
 
