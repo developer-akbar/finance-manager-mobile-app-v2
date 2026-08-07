@@ -77,6 +77,33 @@ export default function PinLock({ children }) {
     return () => { sub?.remove?.(); };
   }, [enabled]);
 
+  const triggerBiometricUnlock = async () => {
+    try {
+      if (window.Capacitor && window.Capacitor.isNativePlatform?.() && state.settings?.biometricsEnabled === 'true') {
+        const { NativeBiometric } = await import('@capgo/capacitor-native-biometric');
+        const avail = await NativeBiometric.isAvailable();
+        if (avail.isAvailable) {
+          await NativeBiometric.verifyIdentity({
+            reason: 'Unlock FinMan',
+            title: 'Biometric Unlock',
+            subtitle: 'Unlock app',
+            description: 'Scan your fingerprint or face to unlock FinMan',
+          });
+          _sessionUnlocked = true;
+          setLocked(false); setEntry(''); setError(''); setAttempts(0);
+        }
+      }
+    } catch (err) {
+      console.warn('Biometric unlock failed or cancelled:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (locked && enabled && state.settings?.biometricsEnabled === 'true') {
+      triggerBiometricUnlock();
+    }
+  }, [locked, enabled, state.settings?.biometricsEnabled]);
+
   const verify = (e) => {
     if (e === pin) {
       _sessionUnlocked = true;
@@ -99,7 +126,7 @@ export default function PinLock({ children }) {
     if (next.length === (pin.length || 4)) verify(next);
   };
 
-  const KEYS   = ['1','2','3','4','5','6','7','8','9','','0','⌫'];
+  const KEYS   = ['1','2','3','4','5','6','7','8','9', (state.settings?.biometricsEnabled === 'true' ? '🔑' : ''), '0', '⌫'];
   const pinLen = pin.length || 4;
 
   return (
@@ -143,19 +170,34 @@ export default function PinLock({ children }) {
               if (k === '') return <span key={i}/>;
               return (
                 <button key={i}
-                  onClick={() => k === '⌫' ? setEntry(e => e.slice(0, -1)) : tap(k)}
-                  disabled={attempts >= 5}
+                  onClick={() => {
+                    if (k === '⌫') {
+                      setEntry(e => e.slice(0, -1));
+                    } else if (k === '🔑') {
+                      triggerBiometricUnlock();
+                    } else {
+                      tap(k);
+                    }
+                  }}
+                  disabled={attempts >= 5 && k !== '🔑'}
                   style={{
-                    height:64, fontSize: k === '⌫' ? 22 : 26,
+                    height:64, fontSize: k === '⌫' || k === '🔑' ? 22 : 26,
                     fontWeight:600, cursor:'pointer',
                     borderRadius:13,
                     border:'1.5px solid var(--border)',
-                    background: k === '⌫' ? 'transparent' : 'var(--bg-card)',
+                    background: (k === '⌫' || k === '🔑') ? 'transparent' : 'var(--bg-card)',
                     color:'var(--text-primary)', fontFamily:'var(--font)',
-                    opacity: attempts >= 5 ? 0.4 : 1,
+                    opacity: (attempts >= 5 && k !== '🔑') ? 0.4 : 1,
                     transition:'all 0.15s',
                   }}>
-                  {k}
+                  {k === '🔑' ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 28, height: 28, display: 'block', margin: '0 auto', color: 'var(--green)' }}>
+                      <path d="M2 12a10 10 0 0 1 18-6M22 12A10 10 0 0 1 12 22" />
+                      <path d="M6 12a6 6 0 0 1 9-5.2M16.5 10.5A6 6 0 0 1 12 18" />
+                      <path d="M10 12a2 2 0 0 1 2-2M12 14a2 2 0 0 1 0-4" />
+                      <path d="M12 14v3" />
+                    </svg>
+                  ) : k}
                 </button>
               );
             })}

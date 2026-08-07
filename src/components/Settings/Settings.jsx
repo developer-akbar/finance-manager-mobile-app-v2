@@ -1315,7 +1315,58 @@ function ProfileManager({ onBack }) {
   const [msg, setMsg] = useState(null);
   const [showClear, setShowClear] = useState(false);
 
+  const [biometricsAvailable, setBiometricsAvailable] = useState(false);
+  const [biometricsEnabled, setBiometricsEnabled] = useState(state.settings?.biometricsEnabled === 'true');
+
   const hasPin = !!pin;
+
+  useEffect(() => {
+    const checkBiometrics = async () => {
+      try {
+        if (window.Capacitor && window.Capacitor.isNativePlatform?.()) {
+          const { NativeBiometric } = await import('@capgo/capacitor-native-biometric');
+          const result = await NativeBiometric.isAvailable();
+          if (result.isAvailable) {
+            setBiometricsAvailable(true);
+          }
+        }
+      } catch (err) {
+        console.warn('Biometrics check error:', err);
+      }
+    };
+    checkBiometrics();
+  }, []);
+
+  const handleBiometricsToggle = async (checked) => {
+    if (!hasPin && checked) {
+      setMsg({ type: 'error', text: 'Please set a PIN first before enabling Biometrics' });
+      setTimeout(() => setMsg(null), 3000);
+      return;
+    }
+    try {
+      if (checked) {
+        const { NativeBiometric } = await import('@capgo/capacitor-native-biometric');
+        await NativeBiometric.verifyIdentity({
+          reason: 'Enable biometric unlock for FinMan',
+          title: 'Biometric Unlock',
+          subtitle: 'Verify identity',
+          description: 'Scan your fingerprint or face to enable biometric unlock.',
+        });
+        await updateSettings({ biometricsEnabled: 'true' });
+        setBiometricsEnabled(true);
+        setMsg({ type: 'success', text: 'Biometric unlock enabled ✓' });
+      } else {
+        await updateSettings({ biometricsEnabled: 'false' });
+        setBiometricsEnabled(false);
+        setMsg({ type: 'success', text: 'Biometric unlock disabled' });
+      }
+      setTimeout(() => setMsg(null), 2000);
+    } catch (err) {
+      console.error('Biometrics error:', err);
+      setMsg({ type: 'error', text: 'Biometric verification failed' });
+      setTimeout(() => setMsg(null), 3000);
+    }
+  };
 
   const saveProfile = async () => {
     await updateSettings({ profileName: name.trim(), name: name.trim() });
@@ -1391,6 +1442,29 @@ function ProfileManager({ onBack }) {
           </>
         )}
       </div>
+      
+      {/* Biometrics */}
+      {window.Capacitor && window.Capacitor.isNativePlatform?.() && (
+        <>
+          <div className="settings-group-label">Biometric Lock</div>
+          <div className="settings-card" style={{ padding: '14px var(--page-px)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ flex: 1, marginRight: 16 }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>Biometric Unlock</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  {!biometricsAvailable 
+                    ? '⚠️ Biometric hardware not available or enrolled on this device.'
+                    : 'Use fingerprint or face recognition to unlock FinMan.'}
+                </div>
+              </div>
+              <label className="toggle-switch" style={{ opacity: biometricsAvailable ? 1 : 0.4, pointerEvents: biometricsAvailable ? 'auto' : 'none' }}>
+                <input type="checkbox" checked={biometricsEnabled} onChange={e => handleBiometricsToggle(e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+          </div>
+        </>
+      )}
 
       {showClear && (
         <>

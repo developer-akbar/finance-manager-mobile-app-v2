@@ -439,7 +439,7 @@ export function AppProvider({ children }) {
       dispatch({ type:'SET_RECURRING', payload: rules });
     }
     // Persist simple key-value settings (profileName, pin, pinIdleSeconds, etc.)
-    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight'];
+    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight', 'biometricsEnabled'];
     const changed = {};
     for (const key of settingsKeys) {
       if (data[key] !== undefined) {
