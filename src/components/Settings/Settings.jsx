@@ -3,6 +3,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, parseDate } from '../../utils/format.js';
 import ReportGenerator from '../Reports/ReportGenerator.jsx';
 import WarrantyLocker from '../Accounts/WarrantyLocker.jsx';
+import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import { encryptBackupData, decryptBackupData } from '../../utils/cryptoBackup.js';
 import './Settings.css';
 
@@ -2235,6 +2236,7 @@ export default function Settings({ backInterceptRef } = {}) {
   if (screen === 'recurring') return <RecurringManager onBack={() => setScreen(null)} />;
   if (screen === 'data') return <DataManager onBack={() => setScreen(null)} />;
   if (screen === 'tags') return <TagsManager onBack={() => setScreen(null)} />;
+  if (screen === 'groups') return <GroupSplitManager onBack={() => setScreen(null)} backInterceptRef={backInterceptRef} />;
   if (screen === 'warranty') return <WarrantyLocker onBack={() => setScreen(null)} backInterceptRef={backInterceptRef} />;
   if (screen === 'accounts') return <AccountsManager onBack={() => setScreen(null)} />;
   if (screen === 'categories') return <CategoriesManager onBack={() => setScreen(null)} />;
@@ -2287,6 +2289,11 @@ export default function Settings({ backInterceptRef } = {}) {
       {/* Manage */}
       <div className="settings-group-label">Manage</div>
       <div className="settings-card">
+        <div className="settings-row" onClick={() => setScreen('groups')}>
+          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>👥</div>
+          <div className="settings-row-content"><div className="settings-row-title">Group Splits &amp; Trips</div><div className="settings-row-sub">Splitwise-style trip expenses, debt simplification &amp; slips</div></div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+        </div>
         <div className="settings-row" onClick={() => setScreen('warranty')}>
           <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>🛡️</div>
           <div className="settings-row-content"><div className="settings-row-title">Warranty &amp; Receipts</div><div className="settings-row-sub">Track gadget warranty expiries and bill photos</div></div>
