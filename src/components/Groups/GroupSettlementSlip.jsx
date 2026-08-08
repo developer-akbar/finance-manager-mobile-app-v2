@@ -38,7 +38,7 @@ export default function GroupSettlementSlip({ group, balances, onClose }) {
             padding: '6px 12px',
             borderRadius: 12,
             background: 'var(--accent)',
-            color: '#000',
+            color: 'var(--text-secondary)',
             fontWeight: 800,
             fontSize: '0.75rem',
             border: 'none',

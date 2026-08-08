@@ -9,6 +9,7 @@ export default function GroupDetail({ group, onUpdateGroup, onDeleteGroup, onBac
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [showSlip, setShowSlip] = useState(false);
   const [settleModal, setSettleModal] = useState(null); // { fromId, toId, amount }
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberUpi, setNewMemberUpi] = useState('');
   const [showAddMember, setShowAddMember] = useState(false);
@@ -27,7 +28,9 @@ export default function GroupDetail({ group, onUpdateGroup, onDeleteGroup, onBac
   // Register Android back button
   React.useEffect(() => {
     if (!backInterceptRef) return;
-    if (showSlip) {
+    if (showDeleteConfirm) {
+      backInterceptRef.current = () => setShowDeleteConfirm(false);
+    } else if (showSlip) {
       backInterceptRef.current = () => setShowSlip(false);
     } else if (showAddExpense) {
       backInterceptRef.current = () => setShowAddExpense(false);
@@ -37,7 +40,7 @@ export default function GroupDetail({ group, onUpdateGroup, onDeleteGroup, onBac
       backInterceptRef.current = onBack;
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
-  }, [showSlip, showAddExpense, settleModal, onBack, backInterceptRef]);
+  }, [showDeleteConfirm, showSlip, showAddExpense, settleModal, onBack, backInterceptRef]);
 
   const handleAddExpense = (expense) => {
     const updated = {
@@ -108,24 +111,45 @@ export default function GroupDetail({ group, onUpdateGroup, onDeleteGroup, onBac
           </div>
           <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{members.length} members · {expenses.length} expenses</div>
         </div>
-        <button
-          onClick={() => setShowSlip(true)}
-          style={{
-            padding: '6px 10px',
-            borderRadius: 12,
-            background: 'var(--bg-card2)',
-            color: 'var(--accent)',
-            border: '1px solid var(--border)',
-            fontSize: '0.72rem',
-            fontWeight: 700,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4
-          }}
-        >
-          <span>📄</span> Slip
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            onClick={() => setShowSlip(true)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 12,
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              border: '1px solid var(--border)',
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4
+            }}
+          >
+            <span>📄</span> Slip
+          </button>
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 12,
+              background: 'rgba(255, 77, 106, 0.12)',
+              color: 'var(--expense)',
+              border: '1px solid rgba(255, 77, 106, 0.25)',
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4
+            }}
+            title="Delete Group"
+          >
+            <span>🗑️</span>
+          </button>
+        </div>
       </div>
 
       <div className="sub-body" style={{ paddingBottom: 'calc(var(--safe-bottom) + 80px)' }}>
@@ -386,6 +410,24 @@ export default function GroupDetail({ group, onUpdateGroup, onDeleteGroup, onBac
                 </div>
               ))}
             </div>
+
+            {/* Danger Zone */}
+            <div style={{ marginTop: 24 }}>
+              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--expense)', textTransform: 'uppercase', marginBottom: 8 }}>
+                Danger Zone
+              </div>
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                style={{
+                  width: '100%', padding: '12px 14px', borderRadius: 12,
+                  background: 'rgba(255, 77, 106, 0.12)', border: '1px solid rgba(255, 77, 106, 0.3)',
+                  color: 'var(--expense)', fontWeight: 800, fontSize: '0.85rem', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
+                }}
+              >
+                <span>🗑️</span> Delete This Group
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -408,6 +450,38 @@ export default function GroupDetail({ group, onUpdateGroup, onDeleteGroup, onBac
           <span>➕</span> Add Shared Expense
         </button>
       </div>
+
+      {/* Delete Group Confirmation Modal */}
+      {showDeleteConfirm && (
+        <>
+          <div className="overlay" onClick={() => setShowDeleteConfirm(false)} />
+          <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+            <div className="sheet-handle" />
+            <div style={{ fontSize: '2rem', textAlign: 'center', marginBottom: 8 }}>🗑️</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 800, textAlign: 'center', marginBottom: 6 }}>
+              Delete "{group.name}"?
+            </div>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.5, marginBottom: 20 }}>
+              This will permanently delete this group along with all its {expenses.length} shared expenses and settlement records. This action cannot be undone.
+            </div>
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-ghost btn-full" onClick={() => setShowDeleteConfirm(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger btn-full"
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  onDeleteGroup();
+                }}
+              >
+                Yes, Delete Group
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Settle Up Bottom Sheet Modal */}
       {settleModal && (
