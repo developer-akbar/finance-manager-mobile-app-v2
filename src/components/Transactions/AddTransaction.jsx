@@ -204,11 +204,36 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
 function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exclude='', onReorder }) {
   const [query, setQuery] = React.useState('');
   const inputRef = React.useRef(null);
+  const listRef = React.useRef(null);
+  const targetRef = React.useRef(null);
+
+  const scrollToContent = () => {
+    const list = listRef.current;
+    const target = targetRef.current;
+    if (list && target) {
+      list.scrollTop = target.offsetTop;
+    }
+  };
+
+  React.useLayoutEffect(() => {
+    scrollToContent();
+  }, []);
+
+  React.useEffect(() => {
+    scrollToContent();
+    const id1 = requestAnimationFrame(scrollToContent);
+    const id2 = setTimeout(scrollToContent, 30);
+    const id3 = setTimeout(scrollToContent, 80);
+    return () => {
+      cancelAnimationFrame(id1);
+      clearTimeout(id2);
+      clearTimeout(id3);
+    };
+  }, []);
 
   const q = query.trim().toLowerCase();
   const recentList = recent.filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
-  const recentSet  = new Set(recentList);
-  const allItems   = items.filter(i => i !== exclude && !recentSet.has(i) && (!q || i.toLowerCase().includes(q)));
+  const allItems   = items.filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
   const noResults  = recentList.length === 0 && allItems.length === 0;
 
   const Chip = ({ name }) => (
@@ -230,23 +255,26 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
         )}
         <button className="picker-sheet-close" onMouseDown={onClose}>✕</button>
       </div>
-      <div className="picker-search-wrap" style={{marginTop:'8px'}}>
-        <span className="picker-search-icon">🔍</span>
-        <input ref={inputRef} className="picker-search-input"
-          placeholder={`Search ${label.toLowerCase()}…`}
-          value={query} onChange={e => setQuery(e.target.value)} />
-        {query && <button className="picker-search-clear" onMouseDown={e=>{e.preventDefault();setQuery('');}}>✕</button>}
-      </div>
-      <div className="picker-list">
+      <div className="picker-list" ref={listRef} style={{ position: 'relative' }}>
+        <div className="picker-search-wrap">
+          <span className="picker-search-icon">🔍</span>
+          <input ref={inputRef} className="picker-search-input"
+            placeholder={`Search ${label.toLowerCase()}…`}
+            value={query} onChange={e => {
+              setQuery(e.target.value);
+              if (listRef.current) listRef.current.scrollTop = 0;
+            }} />
+          {query && <button className="picker-search-clear" onMouseDown={e=>{e.preventDefault();setQuery('');}}>✕</button>}
+        </div>
         {recentList.length > 0 && (
           <>
             <div className="picker-section-label">Recent</div>
-            <div className="picker-recent-row">{recentList.map(n => <Chip key={n} name={n} />)}</div>
+            <div ref={targetRef} className="picker-recent-row">{recentList.map(n => <Chip key={n} name={n} />)}</div>
           </>
         )}
         {allItems.length > 0 && (
           <>
-            <div className="picker-chip-grid">{allItems.map(n => <Chip key={n} name={n} />)}</div>
+            <div ref={recentList.length === 0 ? targetRef : null} className="picker-chip-grid">{allItems.map(n => <Chip key={n} name={n} />)}</div>
           </>
         )}
         {noResults && <div className="picker-empty">No results for "{query}"</div>}
@@ -258,8 +286,7 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
 // ── SubcategoryPickerInline — inline chip grid ──────────
 function SubcategoryPickerInline({ items, recent, value, onSelect, onClose }) {
   const recentList = (recent || []).filter(i => items.includes(i));
-  const recentSet  = new Set(recentList);
-  const allItems   = items.filter(i => !recentSet.has(i));
+  const allItems   = items;
 
   const Chip = ({ name }) => (
     <button type="button"

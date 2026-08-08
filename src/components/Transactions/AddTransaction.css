@@ -58,14 +58,19 @@
 /* Inline picker */
 .picker-room {
   border-top: 1px solid var(--border);
-  min-height: 30dvh;
+  min-height: 32dvh;
   max-height: 50dvh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .picker-sheet-inline {
   display: flex;
   flex-direction: column;
+  height: 100%;
+  flex: 1;
+  overflow: hidden;
 }
 
 .picker-sheet-inline .picker-sheet-hdr {
@@ -154,7 +159,7 @@
   display: none;
 }
 
-/* All — 3-column chip grid with spacing */
+/* All — 3-column chip grid */
 .picker-chip-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -201,12 +206,14 @@
   flex-shrink: 0;
 }
 
-/* Recent chips — pill shape with gap */
+/* Recent chips — pill shape with text width */
 .picker-recent-row .picker-chip {
+  flex: 0 0 auto;
   border-radius: var(--r-full);
   padding: 8px 14px;
   min-height: 29px;
-  flex-shrink: 0;
+  width: auto;
+  max-width: fit-content;
 }
 
 /* Reorder hint link */
