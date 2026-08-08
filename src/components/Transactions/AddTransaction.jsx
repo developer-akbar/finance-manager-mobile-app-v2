@@ -733,6 +733,76 @@ export default function AddTransaction({
     return Array.from(seen).slice(0, 15);
   }, [transactions]);
 
+  const handlePasteAndParseSMS = async (directText = '') => {
+    let textToParse = directText;
+    if (!textToParse) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          textToParse = await navigator.clipboard.readText();
+        }
+      } catch { /* clipboard read blocked */ }
+    }
+    if (!textToParse) {
+      setSmsModal(true);
+      return;
+    }
+    const parsed = parseBankSMS(textToParse, accountList, categories);
+    if (parsed) {
+      setForm(p => ({
+        ...p,
+        amount: parsed.amount || p.amount,
+        type: parsed.type || p.type,
+        account: parsed.account || p.account,
+        category: parsed.category || p.category,
+        note: parsed.note || p.note,
+        date: parsed.date || p.date,
+        time: parsed.time || p.time,
+      }));
+      setSmsFeedback(`⚡ Pre-filled ₹${parsed.amount} (${parsed.type}) from SMS!`);
+      setTimeout(() => setSmsFeedback(''), 4000);
+      setSmsModal(false);
+      setSmsInputText('');
+    } else {
+      setSmsFeedback('Could not detect financial transaction in text.');
+      setTimeout(() => setSmsFeedback(''), 4000);
+    }
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1200;
+        const MAX_HEIGHT = 1200;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+        set('receipt_image', dataUrl);
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
   const getRecentAndMostUsedNotes = (targetType = form.type) => {
     const isTargetXfer = targetType.toLowerCase().startsWith('transfer');
     const matchingTxns = transactions.filter(t => {
