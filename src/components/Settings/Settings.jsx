@@ -145,6 +145,7 @@ export function AccountsManager({ onBack }) {
   const [editAcctType, setEditAcctType] = useState('');
   const [editSettleDay, setEditSettleDay] = useState('');
   const [editPayDays, setEditPayDays] = useState('');
+  const [editCardLast4, setEditCardLast4] = useState('');
   const [editErrors, setEditErrors] = useState({});
   const [tabMode, setTabMode] = useState('list'); // 'list' | 'kanban'
   const [saving, setSaving] = useState(false);
