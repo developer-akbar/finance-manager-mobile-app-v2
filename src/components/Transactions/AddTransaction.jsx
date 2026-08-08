@@ -7,6 +7,8 @@ import {
   buildInstalmentSchedule, computeNextRepeatDate,
   buildInstalmentNote, stripInstalmentSuffix,
 } from '../../database/recurring.js';
+import { parseBankSMS } from '../../utils/smsParser.js';
+import ReceiptViewer from '../Common/ReceiptViewer.jsx';
 
 const TYPES = [
   { id:'Income',       label:'Income',   cls:'income'   },
@@ -492,7 +494,11 @@ export default function AddTransaction({
         account:rt.startsWith('Transfer')?'':(t.Account||''),fromAccount:rt.startsWith('Transfer')?(t.Account||t.FromAccount||''):'',
         toAccount:rt.startsWith('Transfer')?(t.ToAccount||''):'',category:t.Category||'',
         subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:cleanNote,description:t.Description||'',
-        tags:t.Tags||t.tags||''};
+        tags:t.Tags||t.tags||'',
+        receipt_image: t.receipt_image || '',
+        warranty_expiry: t.warranty_expiry || '',
+        serial_no: t.serial_no || ''
+      };
     }
     if (isCopy) {
       const t=copyTransaction, rt=t['Income/Expense']||'Expense';
@@ -500,7 +506,11 @@ export default function AddTransaction({
         account:rt.startsWith('Transfer')?'':(t.Account||''),fromAccount:rt.startsWith('Transfer')?(t.Account||t.FromAccount||''):'',
         toAccount:rt.startsWith('Transfer')?(t.ToAccount||''):'',category:t.Category||'',
         subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:t.Note||'',description:t.Description||'',
-        tags:t.Tags||t.tags||''};
+        tags:t.Tags||t.tags||'',
+        receipt_image: t.receipt_image || '',
+        warranty_expiry: t.warranty_expiry || '',
+        serial_no: t.serial_no || ''
+      };
     }
     return {
       type: prefillType || 'Expense',
@@ -514,7 +524,10 @@ export default function AddTransaction({
       subcategory: '',
       note: prefillNote || '',
       description: '',
-      tags: prefillTags || ''
+      tags: prefillTags || '',
+      receipt_image: '',
+      warranty_expiry: '',
+      serial_no: ''
     };
   });
 
@@ -524,6 +537,14 @@ export default function AddTransaction({
   const [noteFocused, setNoteFocused] = useState(false);
   const formRefLatest = useRef(form);
   formRefLatest.current = form;
+
+  // SMS / UPI Parser State
+  const [smsModal, setSmsModal]       = useState(false);
+  const [smsInputText, setSmsInputText] = useState('');
+  const [smsFeedback, setSmsFeedback] = useState('');
+  const [viewingReceipt, setViewingReceipt] = useState(false);
+  const fileInputRef = useRef(null);
+
   // Recurring
   const [showRecurring, setShowRecurring] = useState(false);
   const [recurringConfig, setRecurringConfig] = useState(null); // {type, totalDays?, scheduleMode, frequency?}
@@ -957,6 +978,9 @@ export default function AddTransaction({
           // Preserve recurring_rule_id so instalment link is never lost
           recurring_rule_id: editTransaction?.recurring_rule_id || '',
           Tags: combinedTags,
+          receipt_image: form.receipt_image || '',
+          warranty_expiry: form.warranty_expiry || '',
+          serial_no: form.serial_no || '',
         };
         if (isEdit && onSaveInstalment) {
           // Instalment edit: update this transaction (with its own suffix), bulk-update siblings
@@ -1033,9 +1057,41 @@ export default function AddTransaction({
     <>
       <div className="fullscreen-modal" data-type={form.type}>
         <div className="add-hdr">
-          <div className="add-title">{form.type==='Transfer-Out' ? 'Transfer' : form.type || (isEdit ? 'Edit' : 'Add')}</div>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <div className="add-title">{form.type==='Transfer-Out' ? 'Transfer' : form.type || (isEdit ? 'Edit' : 'Add')}</div>
+            {!isEdit && (
+              <button
+                type="button"
+                onClick={() => handlePasteAndParseSMS()}
+                style={{
+                  background: 'rgba(0, 229, 160, 0.15)',
+                  border: '1px solid var(--accent)',
+                  color: 'var(--accent)',
+                  borderRadius: 12,
+                  padding: '3px 8px',
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3
+                }}
+              >
+                ⚡ Paste SMS / UPI
+              </button>
+            )}
+          </div>
           <button className="add-close" onClick={onClose}>✕</button>
         </div>
+        {smsFeedback && (
+          <div style={{
+            background: smsFeedback.includes('Pre-filled') ? 'rgba(0,229,160,0.15)' : 'rgba(255,77,106,0.15)',
+            color: smsFeedback.includes('Pre-filled') ? 'var(--income)' : 'var(--expense)',
+            fontSize: '0.72rem', fontWeight: 700, padding: '4px 14px', textAlign: 'center'
+          }}>
+            {smsFeedback}
+          </div>
+        )}
         <div className="type-tabs">
           {TYPES.map(tp=>(
             <button key={tp.id} className={`type-tab ${tp.cls} ${form.type===tp.id?'active':''}`} onClick={() => {
@@ -1485,6 +1541,91 @@ export default function AddTransaction({
             </div>
           </div>
 
+          {/* Receipt & Warranty Section */}
+          <div style={{
+            background: 'var(--bg-card2)', borderRadius: 12, border: '1px solid var(--border)',
+            padding: 12, display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                🧾 Receipt &amp; 🛡️ Warranty (Optional)
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: 'none' }}
+                onChange={handleImageUpload}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  background: 'rgba(0, 229, 160, 0.15)', border: '1px solid var(--accent)',
+                  color: 'var(--accent)', padding: '4px 10px', borderRadius: 8, fontSize: '0.7rem',
+                  fontWeight: 700, cursor: 'pointer'
+                }}
+              >
+                {form.receipt_image ? '📷 Replace Bill' : '📷 Attach Bill'}
+              </button>
+            </div>
+
+            {/* Receipt Preview if uploaded */}
+            {form.receipt_image && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-base)', padding: 6, borderRadius: 8 }}>
+                <img
+                  src={form.receipt_image}
+                  alt="Receipt Preview"
+                  onClick={() => setViewingReceipt(true)}
+                  style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, cursor: 'pointer' }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--income)' }}>Bill Photo Attached ✓</div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', cursor: 'pointer' }} onClick={() => setViewingReceipt(true)}>
+                    Tap image to zoom
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => set('receipt_image', '')}
+                  style={{ background: 'none', border: 'none', color: 'var(--expense)', fontSize: '0.75rem', cursor: 'pointer', padding: 4 }}
+                >
+                  ✕ Remove
+                </button>
+              </div>
+            )}
+
+            {/* Warranty Expiry Date & Serial No */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div>
+                <label style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 2 }}>
+                  Warranty Expiry
+                </label>
+                <input
+                  type="date"
+                  className="form-input"
+                  style={{ fontSize: '0.75rem', padding: '4px 6px' }}
+                  value={form.warranty_expiry}
+                  onChange={e => set('warranty_expiry', e.target.value)}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 2 }}>
+                  Invoice / Serial No.
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ fontSize: '0.75rem', padding: '4px 6px' }}
+                  placeholder="e.g. INV-9281"
+                  value={form.serial_no}
+                  onChange={e => set('serial_no', e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="form-actions" style={{display:'flex',gap:'10px'}}>
             <button className="btn btn-primary btn-lg" style={{flex:2}} onClick={()=>handleSave(false)} disabled={saving}>
               {saving?'Saving…':isEdit?'Update':(isCopy?'Copy':'Save')}
@@ -1534,6 +1675,45 @@ export default function AddTransaction({
           startDate={form.date}
           onClose={()=>setShowRecurring(false)}
           onSave={cfg=>{setRecurringConfig(cfg);setShowRecurring(false);}}
+        />
+      )}
+
+      {/* SMS Paste & Parse Sheet */}
+      {smsModal && (
+        <>
+          <div className="overlay" onClick={() => setSmsModal(false)} />
+          <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+            <div className="sheet-handle" />
+            <div style={{ fontSize: '1rem', fontWeight: 800, marginBottom: 4 }}>
+              ⚡ Paste Bank SMS or UPI Alert
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 12 }}>
+              Paste any transaction notification from HDFC, SBI, ICICI, Axis, PayTM, GPay, etc. to auto-fill amount, type, account, and merchant.
+            </div>
+            <textarea
+              className="form-input"
+              style={{ minHeight: 80, fontSize: '0.82rem', marginBottom: 14, background: 'var(--bg-card2)', borderRadius: 8, padding: 10 }}
+              placeholder="e.g. Rs 450.00 debited from A/c ending 1234 on 08-Aug at Swiggy via UPI..."
+              value={smsInputText}
+              onChange={e => setSmsInputText(e.target.value)}
+            />
+            <button
+              className="btn btn-primary btn-full"
+              disabled={!smsInputText.trim()}
+              onClick={() => handlePasteAndParseSMS(smsInputText)}
+            >
+              Parse &amp; Auto-Fill Form
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Receipt Fullscreen Zoom Viewer */}
+      {viewingReceipt && form.receipt_image && (
+        <ReceiptViewer
+          receiptUrl={form.receipt_image}
+          title={form.note || form.category || 'Receipt Bill'}
+          onClose={() => setViewingReceipt(false)}
         />
       )}
     </>
