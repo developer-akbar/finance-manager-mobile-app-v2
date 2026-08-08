@@ -6,6 +6,7 @@ import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
 import DebtTracker from './DebtTracker.jsx';
 import CardOptimizer from './CardOptimizer.jsx';
+import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Accounts.css';
@@ -655,6 +656,7 @@ export default function Accounts({ backInterceptRef } = {}) {
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
   const [showDebtTracker, setShowDebtTracker] = useState(false);
   const [showOptimizer,   setShowOptimizer]   = useState(false);
+  const [showGroups,      setShowGroups]      = useState(false);
   const [settlePrefill, setSettlePrefill] = useState(null);
 
   // Handle double-tap reset for Accounts tab
@@ -663,6 +665,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       setDrill(null);
       setShowDebtTracker(false);
       setShowOptimizer(false);
+      setShowGroups(false);
       setSettlePrefill(null);
       setCollapsedGroups(new Set());
     };
@@ -675,6 +678,8 @@ export default function Accounts({ backInterceptRef } = {}) {
     if (!backInterceptRef) return;
     if (settlePrefill) {
       backInterceptRef.current = () => setSettlePrefill(null);
+    } else if (showGroups) {
+      backInterceptRef.current = () => setShowGroups(false);
     } else if (showOptimizer) {
       backInterceptRef.current = () => setShowOptimizer(false);
     } else if (showDebtTracker) {
@@ -685,7 +690,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       backInterceptRef.current = null;
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
-  }, [settlePrefill, showOptimizer, showDebtTracker, drill, backInterceptRef]);
+  }, [settlePrefill, showGroups, showOptimizer, showDebtTracker, drill, backInterceptRef]);
 
   const PAID_ALERT_STORAGE = 'finman-paid-due-alerts';
   const DISMISS_ALERT_STORAGE = 'finman-dismissed-due-alerts';
@@ -844,6 +849,10 @@ export default function Accounts({ backInterceptRef } = {}) {
     return { groups, ungrouped };
   }, [uniqueAccounts, uniqueAccountGroups]);
 
+  if (showGroups) {
+    return <GroupSplitManager onBack={() => setShowGroups(false)} backInterceptRef={backInterceptRef} />;
+  }
+
   if (showOptimizer) {
     return <CardOptimizer onBack={() => setShowOptimizer(false)} backInterceptRef={backInterceptRef} />;
   }
@@ -949,20 +958,38 @@ export default function Accounts({ backInterceptRef } = {}) {
         <div style={{ flex: 1 }}>
           <div className="page-hdr-title">Accounts</div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <button
-            onClick={() => setShowOptimizer(true)}
+            onClick={() => setShowGroups(true)}
             style={{
-              padding: '6px 10px',
+              padding: '6px 9px',
               borderRadius: 14,
-              fontSize: '0.72rem',
+              fontSize: '0.7rem',
               fontWeight: 700,
               border: '1px solid var(--border)',
               background: 'var(--bg-card2)',
               color: 'var(--accent)',
               display: 'flex',
               alignItems: 'center',
-              gap: 4,
+              gap: 3,
+              cursor: 'pointer',
+            }}
+          >
+            <span>👥</span> Group Splits
+          </button>
+          <button
+            onClick={() => setShowOptimizer(true)}
+            style={{
+              padding: '6px 9px',
+              borderRadius: 14,
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
               cursor: 'pointer',
             }}
           >
@@ -971,16 +998,16 @@ export default function Accounts({ backInterceptRef } = {}) {
           <button
             onClick={() => setShowDebtTracker(true)}
             style={{
-              padding: '6px 10px',
+              padding: '6px 9px',
               borderRadius: 14,
-              fontSize: '0.72rem',
+              fontSize: '0.7rem',
               fontWeight: 700,
               border: '1px solid var(--border)',
               background: 'var(--bg-card2)',
               color: 'var(--accent)',
               display: 'flex',
               alignItems: 'center',
-              gap: 4,
+              gap: 3,
               cursor: 'pointer',
             }}
           >
