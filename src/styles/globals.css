@@ -130,17 +130,17 @@ body { font-family:var(--font); background:var(--bg-base); color:var(--text-prim
 .nav-btn.active span { color:var(--green); }
 .nav-btn.active::before { content:''; position:absolute; top:-1px; left:50%; transform:translateX(-50%); width:20px; height:2px; background:var(--green); border-radius:2px; }
 
-/* Floating FAB on Trans screen */
+/* Floating FAB on Trans & Home screens */
 .trans-fab {
   position:absolute;
   bottom:14px; left:14px;
-  width:52px; height:52px; border-radius:50%;
+  width:58px; height:58px; border-radius:50%;
   background:var(--green); border:none; cursor:pointer;
   display:flex; align-items:center; justify-content:center;
   box-shadow:var(--shadow-green); transition:var(--transition-spring); z-index:30;
 }
 .trans-fab:active { transform:scale(0.88); }
-.trans-fab svg { width:22px; height:22px; stroke:#0a0f1e; }
+.trans-fab svg { width:26px; height:26px; stroke:#0a0f1e; }
 
 /* ── PAGE HEADER ── */
 .page-hdr {
