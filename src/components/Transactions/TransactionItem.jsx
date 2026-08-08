@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage } from '../../utils/format.js';
 import AddTransaction from './AddTransaction.jsx';
+import ReceiptViewer from '../Common/ReceiptViewer.jsx';
 import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
@@ -112,7 +113,11 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
         <div className={`txn-dot txn-dot-${cls}`}/>
         {/* Content */}
         <div className="txn-mid">
-          <div className="txn-note-l">{label}</div>
+          <div className="txn-note-l">
+            {label}
+            {t.receipt_image && <span style={{ marginLeft: 6, fontSize: '0.72rem' }}>🧾</span>}
+            {t.warranty_expiry && <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>🛡️</span>}
+          </div>
           <div className="txn-sub-l">
             {t.Time && <span className="txn-time-tag txn-time-first">{formatTime(t.Time)}</span>}
             {showDate && t.Date && <span className="txn-time-tag" style={{color:'var(--text-muted)'}}>{formatDate(t.Date,'short')}</span>}
@@ -148,6 +153,7 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
   const [showDelete,     setShowDelete]     = useState(false);
   const [showCopyPicker, setShowCopyPicker] = useState(false);
   const [showDebug,      setShowDebug]      = useState(false);
+  const [viewingReceipt, setViewingReceipt] = useState(false);
 
   const type   = txnType(t);
   const amount = txnAmount(t);
@@ -253,7 +259,54 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
           {t.Note        && <DPRow label="Note"        value={t.Note}/>}
           {t.Description && <DPRow label="Description" value={t.Description}/>}
           {t.Tags        && <DPRow label="Tags"        value={t.Tags}/>}
+          {t.serial_no   && <DPRow label="Invoice/SN"   value={t.serial_no}/>}
+          {t.warranty_expiry && (
+            <DPRow
+              label="Warranty"
+              value={`Until ${t.warranty_expiry} ${new Date(t.warranty_expiry) < new Date() ? '(Expired)' : '(Active)'}`}
+            />
+          )}
         </div>
+
+        {/* Receipt Attachment Preview inside Detail Sheet */}
+        {t.receipt_image && (
+          <div style={{
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            borderRadius: 12, padding: 10, marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <img
+                src={t.receipt_image}
+                alt="Receipt"
+                onClick={() => setViewingReceipt(true)}
+                style={{ width: 42, height: 42, objectFit: 'cover', borderRadius: 6, cursor: 'pointer', border: '1px solid var(--border)' }}
+              />
+              <div>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700 }}>🧾 Attached Receipt</div>
+                <div style={{ fontSize: '0.65rem', color: 'var(--accent)', cursor: 'pointer' }} onClick={() => setViewingReceipt(true)}>
+                  Tap to view / download
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setViewingReceipt(true)}
+              style={{
+                background: 'rgba(0, 229, 160, 0.15)', border: '1px solid var(--accent)',
+                color: 'var(--accent)', padding: '4px 10px', borderRadius: 8, fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer'
+              }}
+            >
+              Zoom Bill
+            </button>
+          </div>
+        )}
+
+        {viewingReceipt && t.receipt_image && (
+          <ReceiptViewer
+            receiptUrl={t.receipt_image}
+            title={t.Note || t.Category || 'Receipt Bill'}
+            onClose={() => setViewingReceipt(false)}
+          />
+        )}
 
         {/* Debug Metadata Panel */}
         {showDebug && (

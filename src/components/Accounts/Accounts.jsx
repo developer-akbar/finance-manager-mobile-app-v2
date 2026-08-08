@@ -5,6 +5,7 @@ import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount,
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
 import DebtTracker from './DebtTracker.jsx';
+import CardOptimizer from './CardOptimizer.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Accounts.css';
@@ -653,6 +654,7 @@ export default function Accounts({ backInterceptRef } = {}) {
   const [drill, setDrill] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
   const [showDebtTracker, setShowDebtTracker] = useState(false);
+  const [showOptimizer,   setShowOptimizer]   = useState(false);
   const [settlePrefill, setSettlePrefill] = useState(null);
 
   // Handle double-tap reset for Accounts tab
@@ -660,6 +662,7 @@ export default function Accounts({ backInterceptRef } = {}) {
     const handleReset = () => {
       setDrill(null);
       setShowDebtTracker(false);
+      setShowOptimizer(false);
       setSettlePrefill(null);
       setCollapsedGroups(new Set());
     };
@@ -672,6 +675,8 @@ export default function Accounts({ backInterceptRef } = {}) {
     if (!backInterceptRef) return;
     if (settlePrefill) {
       backInterceptRef.current = () => setSettlePrefill(null);
+    } else if (showOptimizer) {
+      backInterceptRef.current = () => setShowOptimizer(false);
     } else if (showDebtTracker) {
       backInterceptRef.current = () => setShowDebtTracker(false);
     } else if (drill) {
@@ -680,7 +685,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       backInterceptRef.current = null;
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
-  }, [settlePrefill, showDebtTracker, drill, backInterceptRef]);
+  }, [settlePrefill, showOptimizer, showDebtTracker, drill, backInterceptRef]);
 
   const PAID_ALERT_STORAGE = 'finman-paid-due-alerts';
   const DISMISS_ALERT_STORAGE = 'finman-dismissed-due-alerts';
@@ -839,6 +844,10 @@ export default function Accounts({ backInterceptRef } = {}) {
     return { groups, ungrouped };
   }, [uniqueAccounts, uniqueAccountGroups]);
 
+  if (showOptimizer) {
+    return <CardOptimizer onBack={() => setShowOptimizer(false)} backInterceptRef={backInterceptRef} />;
+  }
+
   if (showDebtTracker) {
     return (
       <>
@@ -940,24 +949,44 @@ export default function Accounts({ backInterceptRef } = {}) {
         <div style={{ flex: 1 }}>
           <div className="page-hdr-title">Accounts</div>
         </div>
-        <button
-          onClick={() => setShowDebtTracker(true)}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 14,
-            fontSize: '0.75rem',
-            fontWeight: 700,
-            border: '1px solid var(--border)',
-            background: 'var(--bg-card2)',
-            color: 'var(--accent)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            cursor: 'pointer',
-          }}
-        >
-          <span>🤝</span> Debt &amp; Lending
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => setShowOptimizer(true)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 14,
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              cursor: 'pointer',
+            }}
+          >
+            <span>💳</span> Card Perks
+          </button>
+          <button
+            onClick={() => setShowDebtTracker(true)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 14,
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              cursor: 'pointer',
+            }}
+          >
+            <span>🤝</span> Debt Tracker
+          </button>
+        </div>
       </div>
 
       {/* Assets / Liabilities strip */}

@@ -2,6 +2,8 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, parseDate } from '../../utils/format.js';
 import ReportGenerator from '../Reports/ReportGenerator.jsx';
+import WarrantyLocker from '../Accounts/WarrantyLocker.jsx';
+import { encryptBackupData, decryptBackupData } from '../../utils/cryptoBackup.js';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -1102,6 +1104,11 @@ function DataManager({ onBack }) {
   const [analysis, setAnalysis] = useState(null);   // { total, fileDupeCount, dbDupeCount }
   const [analysing, setAnalysing] = useState(false);
 
+  // Encrypted Backup & Restore State
+  const [cryptoModal, setCryptoModal] = useState(null); // null | { mode: 'export' } | { mode: 'import', rawText, fileName }
+  const [cryptoPin, setCryptoPin]     = useState('');
+  const [cryptoErr, setCryptoErr]     = useState('');
+
   // Stats
   const txnCount = transactions.length;
   const yearsSet = txnCount > 0 ? new Set(transactions.map(t => parseDate(t.Date).getFullYear())) : new Set();
@@ -1119,9 +1126,33 @@ function DataManager({ onBack }) {
     if (!file) return;
     setStatus(null);
     const name = file.name.toLowerCase();
+
+    // Check for encrypted FinMan backup (.finman or JSON with finman_encrypted_backup)
+    if (name.endsWith('.finman')) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target.result;
+        setCryptoModal({ mode: 'import', rawText: text, fileName: file.name });
+        setCryptoPin('');
+        setCryptoErr('');
+      };
+      reader.readAsText(file);
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
+
     try {
       const { parseFile } = await import('../../utils/xlsParser.js');
       const parsed = await parseFile(file);
+
+      // Check if plain JSON file is actually an encrypted backup
+      if (parsed && typeof parsed === 'object' && parsed.finman_encrypted_backup) {
+        setCryptoModal({ mode: 'import', rawText: JSON.stringify(parsed), fileName: file.name });
+        setCryptoPin('');
+        setCryptoErr('');
+        if (fileRef.current) fileRef.current.value = '';
+        return;
+      }
 
       // ── Full FinMan backup JSON ─────────────────────────────────────────
       // Detect by _finman_backup flag. These files contain both transactions
@@ -1279,6 +1310,58 @@ function DataManager({ onBack }) {
     await saveFile(JSON.stringify(backup, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
   };
 
+  const handleCryptoExport = async () => {
+    if (!cryptoPin || cryptoPin.length < 4) {
+      setCryptoErr('Please enter at least 4 digits/characters for encryption');
+      return;
+    }
+    try {
+      const payload = buildBackupPayload();
+      const encryptedJson = await encryptBackupData(payload, cryptoPin);
+      const filename = `finman_encrypted_${new Date().toISOString().split('T')[0]}.finman`;
+      await saveFile(encryptedJson, filename, 'application/octet-stream');
+      setStatus({ type: 'success', msg: `✓ Encrypted backup saved — ${filename}` });
+      setCryptoModal(null);
+      setCryptoPin('');
+      setCryptoErr('');
+    } catch (err) {
+      setCryptoErr(err.message);
+    }
+  };
+
+  const handleCryptoImport = async () => {
+    if (!cryptoPin) {
+      setCryptoErr('Please enter the password/PIN to decrypt');
+      return;
+    }
+    try {
+      const decryptedPayload = await decryptBackupData(cryptoModal.rawText, cryptoPin);
+      if (decryptedPayload && decryptedPayload._finman_backup) {
+        const backup = decryptedPayload;
+        const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
+        await updateSettings({
+          accounts: Array.isArray(backup.accounts) ? backup.accounts : undefined,
+          accountGroups: Array.isArray(backup.accountGroups) ? backup.accountGroups : (Array.isArray(backup.account_groups) ? backup.account_groups : (Array.isArray(backup.groups) ? backup.groups : undefined)),
+          accountMapping: Array.isArray(backup.accountMapping) ? backup.accountMapping : undefined,
+          categories: backup.categories && typeof backup.categories === 'object' ? backup.categories : undefined,
+          recurringRules: Array.isArray(backup.recurringRules) ? backup.recurringRules : (Array.isArray(backup.recurring_rules) ? backup.recurring_rules : (Array.isArray(backup.recurrings) ? backup.recurrings : undefined)),
+          budgets: Array.isArray(backup.budgets) ? backup.budgets : (Array.isArray(backup.budget) ? backup.budget : undefined),
+        });
+        setPending(txnRows);
+        setPendingNm(cryptoModal.fileName);
+        setIsBackup(true);
+        setShowMode(true);
+        setCryptoModal(null);
+        setCryptoPin('');
+        setCryptoErr('');
+      } else {
+        setCryptoErr('Decrypted data is not a valid FinMan backup.');
+      }
+    } catch (err) {
+      setCryptoErr(err.message);
+    }
+  };
+
   const pct = importProgress ? Math.round((importProgress.processed / importProgress.total) * 100) : 0;
 
   if (showReportGenerator) {
@@ -1333,10 +1416,10 @@ function DataManager({ onBack }) {
         {/* Import section */}
         <div className="dm-section-hdr">Import</div>
         <label className={`import-drop ${importProgress ? 'disabled' : ''}`} style={{ margin: '0 0 14px', borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '18px var(--page-px)', display: 'block' }}>
-          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json" style={{ display: 'none' }} onChange={handleFile} disabled={!!importProgress} />
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json,.finman" style={{ display: 'none' }} onChange={handleFile} disabled={!!importProgress} />
           <div className="import-folder-icon">📂</div>
           <div className="import-drop-title">Choose file</div>
-          <div className="import-drop-sub">CSV / XLS — transactions only · JSON — full backup incl. accounts &amp; categories</div>
+          <div className="import-drop-sub">CSV / XLS / JSON / 🔒 .finman encrypted backup</div>
         </label>
 
         {/* Export section */}
@@ -1349,13 +1432,17 @@ function DataManager({ onBack }) {
               <div className="dm-row-sub">Date ranges, FY filters, category breakdown &amp; statements</div>
             </div>
           </div>
-          <div className="dm-row" onClick={exportCSV}>
-            <div className="dm-row-icon">📊</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export All CSV</div><div className="dm-row-sub">Transactions only · safe for spreadsheets</div></div>
+          <div className="dm-row" onClick={() => { setCryptoModal({ mode: 'export' }); setCryptoPin(''); setCryptoErr(''); }}>
+            <div className="dm-row-icon">🔒</div>
+            <div className="dm-row-content"><div className="dm-row-title">Export Encrypted Backup (.finman)</div><div className="dm-row-sub">AES-256 zero-knowledge backup protected by your PIN</div></div>
           </div>
           <div className="dm-row" onClick={exportJSON}>
             <div className="dm-row-icon">🗃️</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export Full Backup (JSON)</div><div className="dm-row-sub">Transactions + accounts, groups, categories · re-importable</div></div>
+            <div className="dm-row-content"><div className="dm-row-title">Export Plain Backup (JSON)</div><div className="dm-row-sub">Transactions + accounts, groups, categories · re-importable</div></div>
+          </div>
+          <div className="dm-row" onClick={exportCSV}>
+            <div className="dm-row-icon">📊</div>
+            <div className="dm-row-content"><div className="dm-row-title">Export All CSV</div><div className="dm-row-sub">Transactions only · safe for spreadsheets</div></div>
           </div>
         </div>
 
@@ -1426,6 +1513,53 @@ function DataManager({ onBack }) {
                 </div>
               ))}
               <button className="btn btn-ghost btn-full" style={{ marginTop: 12 }} onClick={() => setShowBackupSheet(false)}>Cancel</button>
+            </div>
+          </>
+        )}
+
+        {/* Encrypted Export/Import PIN Modal */}
+        {cryptoModal && (
+          <>
+            <div className="overlay" onClick={() => setCryptoModal(null)} />
+            <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+              <div className="sheet-handle" />
+              <div style={{ fontSize: '1.2rem', textAlign: 'center', marginBottom: 6 }}>
+                {cryptoModal.mode === 'export' ? '🔒 Encrypt Backup' : '🔓 Decrypt & Restore Backup'}
+              </div>
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, textAlign: 'center', marginBottom: 4 }}>
+                {cryptoModal.mode === 'export' ? 'Create AES-256 Protected Backup' : `Decrypt ${cryptoModal.fileName || 'Backup'}`}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginBottom: 14 }}>
+                {cryptoModal.mode === 'export'
+                  ? 'Set a 4+ digit PIN or password. You will need this key whenever restoring on any device.'
+                  : 'Enter the PIN or password used when this backup was encrypted.'}
+              </div>
+
+              {cryptoErr && (
+                <div style={{ background: 'rgba(255, 77, 106, 0.15)', color: 'var(--expense)', padding: '6px 12px', borderRadius: 8, fontSize: '0.75rem', fontWeight: 700, marginBottom: 12, textAlign: 'center' }}>
+                  {cryptoErr}
+                </div>
+              )}
+
+              <input
+                type="password"
+                className="form-input"
+                autoFocus
+                placeholder="Enter PIN or Password"
+                value={cryptoPin}
+                onChange={e => { setCryptoPin(e.target.value); setCryptoErr(''); }}
+                style={{ fontSize: '1.1rem', textAlign: 'center', letterSpacing: 3, marginBottom: 16, background: 'var(--bg-card2)', borderRadius: 10, padding: '10px' }}
+              />
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost btn-full" onClick={() => setCryptoModal(null)}>Cancel</button>
+                <button
+                  className="btn btn-primary btn-full"
+                  onClick={cryptoModal.mode === 'export' ? handleCryptoExport : handleCryptoImport}
+                >
+                  {cryptoModal.mode === 'export' ? '🔒 Save Encrypted' : '🔓 Unlock & Import'}
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -2101,6 +2235,7 @@ export default function Settings({ backInterceptRef } = {}) {
   if (screen === 'recurring') return <RecurringManager onBack={() => setScreen(null)} />;
   if (screen === 'data') return <DataManager onBack={() => setScreen(null)} />;
   if (screen === 'tags') return <TagsManager onBack={() => setScreen(null)} />;
+  if (screen === 'warranty') return <WarrantyLocker onBack={() => setScreen(null)} backInterceptRef={backInterceptRef} />;
   if (screen === 'accounts') return <AccountsManager onBack={() => setScreen(null)} />;
   if (screen === 'categories') return <CategoriesManager onBack={() => setScreen(null)} />;
   if (screen === 'budgets') return <BudgetsManager onBack={() => setScreen(null)} />;
@@ -2144,7 +2279,7 @@ export default function Settings({ backInterceptRef } = {}) {
       <div className="settings-card">
         <div className="settings-row" onClick={() => setScreen('data')}>
           <div className="settings-row-icon" style={{ background: 'rgba(77,159,255,0.15)' }}>📊</div>
-          <div className="settings-row-content"><div className="settings-row-title">Data Management</div><div className="settings-row-sub">{txnCount.toLocaleString()} transactions</div></div>
+          <div className="settings-row-content"><div className="settings-row-title">Data Management</div><div className="settings-row-sub">{txnCount.toLocaleString()} transactions · Encrypted Backups</div></div>
           <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
         </div>
       </div>
@@ -2152,6 +2287,11 @@ export default function Settings({ backInterceptRef } = {}) {
       {/* Manage */}
       <div className="settings-group-label">Manage</div>
       <div className="settings-card">
+        <div className="settings-row" onClick={() => setScreen('warranty')}>
+          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>🛡️</div>
+          <div className="settings-row-content"><div className="settings-row-title">Warranty &amp; Receipts</div><div className="settings-row-sub">Track gadget warranty expiries and bill photos</div></div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+        </div>
         <div className="settings-row" onClick={() => setScreen('recurring')}>
           <div className="settings-row-icon" style={{ background: 'rgba(99,179,237,0.15)' }}>🔁</div>
           <div className="settings-row-content">

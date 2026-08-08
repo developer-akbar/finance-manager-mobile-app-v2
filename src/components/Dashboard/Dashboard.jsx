@@ -4,6 +4,7 @@ import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount 
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { ccBalances, isCreditCard, ccDaysUntilDue, ccNextDueDate } from '../Accounts/Accounts.jsx';
 import CashFlowForecast from '../Forecast/CashFlowForecast.jsx';
+import { parseBankSMS } from '../../utils/smsParser.js';
 import './Dashboard.css';
 
 const MONTHS     = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -41,6 +42,30 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   const [popupMsg, setPopupMsg] = useState(''); // Custom detail sheet popup
   const [showAllYears, setShowAllYears] = useState(false);
   const [showForecast, setShowForecast] = useState(false);
+  const [detectedSmsTxn, setDetectedSmsTxn] = useState(null);
+
+  // Auto-detect SMS / UPI transaction copied to clipboard
+  useEffect(() => {
+    const checkClipboard = async () => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          const text = await navigator.clipboard.readText();
+          if (text && text.length > 15 && text.length < 500) {
+            const parsed = parseBankSMS(text, state.accounts || [], state.categories || {});
+            if (parsed && parsed.amount) {
+              const lastDismissed = sessionStorage.getItem('finman_dismissed_sms');
+              if (lastDismissed !== text) {
+                setDetectedSmsTxn({ ...parsed, rawText: text });
+              }
+            }
+          }
+        }
+      } catch { /* clipboard read blocked or empty */ }
+    };
+    checkClipboard();
+    window.addEventListener('focus', checkClipboard);
+    return () => window.removeEventListener('focus', checkClipboard);
+  }, [state.accounts, state.categories]);
 
   // Handle Home tab tap to reset sub-views
   useEffect(() => {
@@ -400,6 +425,60 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           </button>
         </div>
       </div>
+
+      {/* ── SMS / UPI Clipboard Detection Banner ── */}
+      {detectedSmsTxn && (
+        <div style={{
+          margin: '10px var(--page-px) 0',
+          padding: '10px 14px',
+          background: 'linear-gradient(135deg, rgba(0,229,160,0.16), rgba(77,159,255,0.12))',
+          border: '1px solid var(--accent)',
+          borderRadius: 14,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 10
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 4 }}>
+              ⚡ SMS / UPI Alert Detected
+            </div>
+            <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              ₹{detectedSmsTxn.amount} ({detectedSmsTxn.type}) {detectedSmsTxn.note ? `· ${detectedSmsTxn.note}` : ''}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+            <button
+              className="btn btn-primary"
+              style={{ padding: '5px 12px', fontSize: '0.72rem', fontWeight: 700, borderRadius: 10 }}
+              onClick={() => {
+                onAddTransaction?.({
+                  prefillAmount: detectedSmsTxn.amount,
+                  prefillType: detectedSmsTxn.type,
+                  prefillAccount: detectedSmsTxn.account,
+                  prefillCategory: detectedSmsTxn.category,
+                  prefillNote: detectedSmsTxn.note,
+                  prefillDate: detectedSmsTxn.date,
+                  prefillTime: detectedSmsTxn.time,
+                });
+                sessionStorage.setItem('finman_dismissed_sms', detectedSmsTxn.rawText);
+                setDetectedSmsTxn(null);
+              }}
+            >
+              + Record
+            </button>
+            <button
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.85rem', padding: '4px 6px', cursor: 'pointer' }}
+              onClick={() => {
+                sessionStorage.setItem('finman_dismissed_sms', detectedSmsTxn.rawText);
+                setDetectedSmsTxn(null);
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Credit Card Due Alerts Banner ── */}
       {dueAlerts.length > 0 && (
