@@ -234,12 +234,13 @@ const applySchema = async (db) => {
   try { await db.run(`ALTER TABLE transactions ADD COLUMN recurring_rule_id TEXT DEFAULT ''`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN tags TEXT DEFAULT ''`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN split_group_id TEXT DEFAULT ''`); } catch {}
-  await db.execute(`CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,group_name TEXT DEFAULT '',sort_order INTEGER DEFAULT 0,created_at TEXT,acct_type TEXT DEFAULT '',settlement_date INTEGER DEFAULT 0,payment_due_days INTEGER DEFAULT 0,is_asset INTEGER DEFAULT 1);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,group_name TEXT DEFAULT '',sort_order INTEGER DEFAULT 0,created_at TEXT,acct_type TEXT DEFAULT '',settlement_date INTEGER DEFAULT 0,payment_due_days INTEGER DEFAULT 0,is_asset INTEGER DEFAULT 1,card_last4 TEXT DEFAULT '');`);
   try { await db.execute(`ALTER TABLE accounts ADD COLUMN acct_type TEXT DEFAULT '';`); } catch {}
   try { await db.execute(`ALTER TABLE accounts ADD COLUMN settlement_date INTEGER DEFAULT 0;`); } catch {}
   try { await db.execute(`ALTER TABLE accounts ADD COLUMN payment_due_days INTEGER DEFAULT 0;`); } catch {}
   try { await db.execute(`ALTER TABLE accounts ADD COLUMN is_asset INTEGER DEFAULT 1;`); } catch {}
   try { await db.execute(`ALTER TABLE accounts ADD COLUMN card_last4 TEXT DEFAULT '';`); } catch {}
+  try { await db.run(`ALTER TABLE accounts ADD COLUMN card_last4 TEXT DEFAULT ''`); } catch {}
   await db.execute(`CREATE TABLE IF NOT EXISTS account_groups (id TEXT PRIMARY KEY,name TEXT NOT NULL,sort_order INTEGER DEFAULT 0);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS account_mapping (id TEXT PRIMARY KEY,source_name TEXT,account_name TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY,name TEXT NOT NULL,type TEXT DEFAULT 'Expense',sort_order INTEGER DEFAULT 0);`);
