@@ -1568,13 +1568,13 @@ export default function AddTransaction({
             </div>
           </div>
 
-          {/* Tags */}
-          <div className="form-group" style={{ marginBottom: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <label className="form-label" style={{ margin: 0 }}>Tags</label>
-              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Type #tag or tap below</span>
+          {/* Tags (Header with label above, tags below full width) */}
+          <div className="tags-section" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14, width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <label className="form-label" style={{ margin: 0, fontWeight: 700 }}>Tags</label>
+              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Type #tag or tap below</span>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, width: '100%' }}>
               {allAvailableTags.map(tag => {
                 const currentTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
                 const isSelected = currentTags.includes(tag.toLowerCase()) ||
@@ -1593,15 +1593,15 @@ export default function AddTransaction({
                       set('tags', nextTags.join(', '));
                     }}
                     style={{
-                      padding: '4px 10px',
+                      padding: '5px 12px',
                       borderRadius: 14,
-                      fontSize: '0.72rem',
-                      fontWeight: isSelected ? 700 : 500,
+                      fontSize: '0.74rem',
+                      fontWeight: isSelected ? 800 : 500,
                       border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
-                      background: isSelected ? 'rgba(0, 229, 160, 0.12)' : 'var(--bg-card2)',
+                      background: isSelected ? 'rgba(0, 229, 160, 0.15)' : 'var(--bg-card2)',
                       color: isSelected ? 'var(--accent)' : 'var(--text-muted)',
                       cursor: 'pointer',
-                      transition: 'all 0.12s',
+                      transition: 'all 0.12s ease',
                     }}
                   >
                     {tag}
