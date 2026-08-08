@@ -285,8 +285,6 @@ export function AccountsManager({ onBack }) {
 
   const startEdit = (i) => {
     const a = accounts[i];
-    // If acctType is explicitly set (even ''), respect it — don't override with name detection
-    // acctType === undefined/null means old account before feature: suggest from name
     const hasExplicitType = a.acctType !== undefined && a.acctType !== null;
     const inferredType = hasExplicitType ? a.acctType : (looksLikeCC(a.name) ? 'Credit Card' : '');
     setEditIdx(i);
@@ -295,6 +293,7 @@ export function AccountsManager({ onBack }) {
     setEditAcctType(inferredType);
     setEditSettleDay(a.settlementDate ? String(a.settlementDate) : '');
     setEditPayDays(a.paymentDueDays ? String(a.paymentDueDays) : '');
+    setEditCardLast4(a.cardLast4 || a.card_last4 || '');
     setEditErrors({});
   };
 
@@ -313,6 +312,10 @@ export function AccountsManager({ onBack }) {
     if (Object.keys(errs).length) { setEditErrors(errs); return; }
     setEditErrors({});
     const old = accounts[editIdx].name;
+
+    const rawDigits = (editCardLast4 || '').replace(/\D/g, '');
+    const cleanLast4 = rawDigits.length >= 4 ? rawDigits.slice(-4) : rawDigits;
+
     const upd = accounts.map((a, i) => i === editIdx ? {
       ...a,
       name: editName.trim(),
@@ -510,6 +513,20 @@ export function AccountsManager({ onBack }) {
                   </div>
                 </div>
               )}
+              <div className="form-group" style={{ marginBottom: 12 }}>
+                <label className="form-label">Card / Account Last 4 Digits <span className="form-label-hint">(for SMS &amp; UPI auto-detection)</span></label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="e.g. 9009"
+                  maxLength={19}
+                  value={editCardLast4}
+                  onChange={e => setEditCardLast4(e.target.value)}
+                />
+                <div className="form-hint">
+                  {editCardLast4 ? `Masked preview: •••• ${(editCardLast4.replace(/\D/g, '').slice(-4)) || editCardLast4}` : 'Helps auto-identify this account when parsing SMS or UPI alerts.'}
+                </div>
+              </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn btn-ghost btn-sm" onClick={() => setEditIdx(null)}>Cancel</button>
                 <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
@@ -536,7 +553,14 @@ export function AccountsManager({ onBack }) {
                       <div className="mgr-list-row mgr-list-row-indented">
                         <span className="mgr-drag-handle">⠿</span>
                         <div className="mgr-list-content" style={{ flex: 1 }}>
-                          <div className="mgr-list-name">{a.name}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div className="mgr-list-name">{a.name}</div>
+                            {a.cardLast4 && (
+                              <span style={{ fontSize: '0.62rem', background: 'var(--bg-card2)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 6, color: 'var(--accent)', fontWeight: 700 }}>
+                                •••• {a.cardLast4}
+                              </span>
+                            )}
+                          </div>
                           {a.acctType === 'Credit Card' && (
                             <div style={{ fontSize: '0.63rem', color: 'var(--accent)', fontWeight: 700 }}>
                               💳 Credit Card{a.settlementDate ? ` · settles ${a.settlementDate}th` : ''}

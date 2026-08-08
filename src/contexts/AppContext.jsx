@@ -57,10 +57,11 @@ const catsObjToArr = (obj) =>
 
 const normalizeAccounts = (raw) =>
   (raw || []).map(a => typeof a === 'string'
-    ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, isAsset: true }
+    ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, isAsset: true, cardLast4: '' }
     : { name: a.name || '', group: a.group || a.group_name || '', icon: '💳',
         acctType: a.acctType || '', settlementDate: a.settlementDate ? Number(a.settlementDate) : 0, paymentDueDays: a.paymentDueDays ? Number(a.paymentDueDays) : 0,
-        isAsset: a.isAsset !== undefined ? a.isAsset : true });
+        isAsset: a.isAsset !== undefined ? a.isAsset : true,
+        cardLast4: a.cardLast4 || a.card_last4 || '' });
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
 const INIT = {

@@ -19,6 +19,7 @@ export const getAccounts = async () => {
       settlementDate:  a.settlement_date  ? Number(a.settlement_date)  : 0,
       paymentDueDays:  a.payment_due_days ? Number(a.payment_due_days) : 0,
       isAsset,
+      cardLast4:       a.card_last4 || a.cardLast4 || '',
     };
   });
 };
@@ -46,9 +47,10 @@ export const replaceAccounts = async (list) => {
     const settlementDate = a.settlementDate ? Number(a.settlementDate) : 0;
     const paymentDueDays = a.paymentDueDays ? Number(a.paymentDueDays) : 0;
     const isAsset        = a.isAsset !== undefined ? (a.isAsset ? 1 : 0) : (['credit card', 'credit', 'loan', 'emi', 'borrow', 'pay later', 'installments'].some(k => (grp || acctType || name).toLowerCase().includes(k)) ? 0 : 1);
+    const cardLast4      = (a.cardLast4 || a.card_last4 || '').trim();
     set.push({
-      statement: 'INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days,is_asset) VALUES (?,?,?,?,?,?,?,?,?)',
-      values: [a.id || uuid(), name, grp, i, now, acctType, settlementDate, paymentDueDays, isAsset]
+      statement: 'INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days,is_asset,card_last4) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      values: [a.id || uuid(), name, grp, i, now, acctType, settlementDate, paymentDueDays, isAsset, cardLast4]
     });
   }
 
