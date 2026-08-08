@@ -21,10 +21,11 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const sign     = type === 'income' ? '+' : type === 'expense' ? '−' : '';
   const isTransfer = baseType === 'transfer';
   const label    = isTransfer
-    ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`
+    ? (t.Note || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`)
     : (t.Note || t.Category || '—');
   const subLabel = !isTransfer ? (t.Category || '') : '';
   const hasAccount = !isTransfer && t.Account;
+  const xferAccountLabel = isTransfer && t.Note ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}` : '';
 
   const closeDetail = () => {
     if (showEdit) {
@@ -118,6 +119,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
             {subLabel && <span className="txn-cat-tag">{subLabel}</span>}
             {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && <span className="txn-cat-tag">{t.Subcategory}</span>}
             {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
+            {xferAccountLabel && <span className="txn-time-tag">{xferAccountLabel}</span>}
           </div>
         </div>
         {/* Amount + running balance */}
