@@ -139,7 +139,7 @@ export function AccountsManager({ onBack }) {
   const [groups, setGroups] = useState(() => state.accountGroups || []);
   const [newAcct, setNewAcct] = useState('');
   const [newGrp, setNewGrp] = useState('');
-  const [editIdx, setEditIdx] = useState(null);
+  const [editingAcct, setEditingAcct] = useState(null);
   const [editName, setEditName] = useState('');
   const [editGrp, setEditGrp] = useState('');
   const [editAcctType, setEditAcctType] = useState('');
@@ -291,11 +291,11 @@ export function AccountsManager({ onBack }) {
   // Only suggest CC if name contains 'credit' — never trigger on 'card', 'cc' alone
   const looksLikeCC = (name) => /\bcredit\b/i.test(name);
 
-  const startEdit = (i) => {
-    const a = accounts[i];
+  const startEdit = (a) => {
+    if (!a) return;
     const hasExplicitType = a.acctType !== undefined && a.acctType !== null;
     const inferredType = hasExplicitType ? a.acctType : (looksLikeCC(a.name) ? 'Credit Card' : '');
-    setEditIdx(i);
+    setEditingAcct(a.name);
     setEditName(a.name);
     setEditGrp(a.group || '');
     setEditAcctType(inferredType);
@@ -306,7 +306,7 @@ export function AccountsManager({ onBack }) {
   };
 
   const saveEdit = async () => {
-    if (!editName.trim()) return;
+    if (!editName.trim() || !editingAcct) return;
     const errs = {};
     const isCC = editAcctType === 'Credit Card';
     if (isCC) {
@@ -319,21 +319,23 @@ export function AccountsManager({ onBack }) {
     }
     if (Object.keys(errs).length) { setEditErrors(errs); return; }
     setEditErrors({});
-    const old = accounts[editIdx].name;
+    const oldName = editingAcct;
 
     const rawDigits = (editCardLast4 || '').replace(/\D/g, '');
     const cleanLast4 = rawDigits.length >= 4 ? rawDigits.slice(-4) : rawDigits;
 
-    const upd = accounts.map((a, i) => i === editIdx ? {
+    const upd = accounts.map(a => a.name === oldName ? {
       ...a,
       name: editName.trim(),
       group: editGrp,
       acctType: isCC ? 'Credit Card' : '',
       settlementDate: isCC ? parseInt(editSettleDay, 10) : 0,
       paymentDueDays: isCC ? parseInt(editPayDays, 10) : 0,
+      cardLast4: cleanLast4,
     } : a);
-    setAccounts(upd); setEditIdx(null);
-    if (old !== editName.trim()) await renameAccount(old, editName.trim());
+    setAccounts(upd);
+    setEditingAcct(null);
+    if (oldName !== editName.trim()) await renameAccount(oldName, editName.trim());
     await save(upd);
   };
 
@@ -572,7 +574,7 @@ export function AccountsManager({ onBack }) {
 
               {/* Action Buttons */}
               <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setEditIdx(null)}>Cancel</button>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setEditingAcct(null)}>Cancel</button>
                 <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveEdit}>Save</button>
               </div>
             </div>
@@ -599,9 +601,9 @@ export function AccountsManager({ onBack }) {
                         <div className="mgr-list-content" style={{ flex: 1 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <div className="mgr-list-name">{a.name}</div>
-                            {a.cardLast4 && (
+                            {(a.cardLast4 || a.card_last4) && (
                               <span style={{ fontSize: '0.62rem', background: 'var(--bg-card2)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 6, color: 'var(--accent)', fontWeight: 700 }}>
-                                •••• {a.cardLast4}
+                                •••• {a.cardLast4 || a.card_last4}
                               </span>
                             )}
                           </div>
@@ -611,10 +613,10 @@ export function AccountsManager({ onBack }) {
                             </div>
                           )}
                         </div>
-                        <button className="mgr-edit-btn" onClick={() => editIdx === i ? setEditIdx(null) : startEdit(i)}>✏️</button>
+                        <button className="mgr-edit-btn" onClick={() => editingAcct === a.name ? setEditingAcct(null) : startEdit(a)}>✏️</button>
                         <button className="mgr-del-btn" onClick={() => removeAccount(a.name)}>✕</button>
                       </div>
-                      {editIdx === i && renderEditPanel(i)}
+                      {editingAcct === a.name && renderEditPanel(i)}
                     </div>
                   ))}
                 </div>
