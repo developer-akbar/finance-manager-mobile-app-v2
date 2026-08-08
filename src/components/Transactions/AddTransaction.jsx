@@ -204,14 +204,6 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
 function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exclude='', onReorder }) {
   const [query, setQuery] = React.useState('');
   const inputRef = React.useRef(null);
-  const recentRef = React.useRef(null);
-
-  React.useEffect(() => {
-    // Scroll to recent row on open
-    if (recentRef.current) {
-      recentRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }, []);
 
   const q = query.trim().toLowerCase();
   const recentList = recent.filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
@@ -248,7 +240,7 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
       <div className="picker-list">
         {recentList.length > 0 && (
           <>
-            <div ref={recentRef} className="picker-section-label">Recent</div>
+            <div className="picker-section-label">Recent</div>
             <div className="picker-recent-row">{recentList.map(n => <Chip key={n} name={n} />)}</div>
           </>
         )}
@@ -721,7 +713,6 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     if (isTransfer){
       if (!form.fromAccount) e.fromAccount='Select from account';
       if (!form.toAccount)   e.toAccount='Select to account';
-      if (form.fromAccount&&form.fromAccount===form.toAccount) e.toAccount='Must differ from From';
     } else {
       if (!form.account)  e.account='Select account';
       if (!form.category) e.category='Select category';

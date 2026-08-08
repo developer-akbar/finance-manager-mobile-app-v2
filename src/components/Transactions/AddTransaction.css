@@ -71,9 +71,9 @@
 .picker-sheet-inline .picker-sheet-hdr {
   position: sticky;
   top: 0;
-  background: var(--text-muted);
+  background: var(--bg-card2);
   z-index: 5;
-  padding: 8px 10px;
+  padding: 8px var(--page-px);
   border-bottom: 1px solid var(--border);
 }
 
@@ -135,10 +135,10 @@
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  padding: 8px var(--page-px) 4px;
+  padding: 10px var(--page-px) 4px;
 }
 
-/* Recent — horizontal wrapping chip row */
+/* Recent — horizontal wrapping chip row with top breathing room */
 .picker-recent-row {
   display: flex;
   flex-wrap: wrap;
@@ -146,7 +146,8 @@
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  padding: 6px var(--page-px);
+  padding: 8px var(--page-px);
+  margin-top: 2px;
 }
 
 .picker-recent-row::-webkit-scrollbar {
@@ -179,7 +180,7 @@
   transition: background 0.12s, border-color 0.12s;
   line-height: 1.2;
   text-wrap: auto;
-  min-height: 52px;
+  min-height: 56px;
   box-sizing: border-box;
 }
 
@@ -203,8 +204,8 @@
 /* Recent chips — pill shape with gap */
 .picker-recent-row .picker-chip {
   border-radius: var(--r-full);
-  padding: 7px 14px;
-  min-height: 25px;
+  padding: 8px 14px;
+  min-height: 29px;
   flex-shrink: 0;
 }
 
