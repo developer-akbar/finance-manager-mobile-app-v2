@@ -66,6 +66,7 @@ export default function GroupSplitManager({ onBack, backInterceptRef, onRecordFi
 
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [groupToDelete, setGroupToDelete] = useState(null);
 
   // New Group Form State
   const [newGroupName, setNewGroupName] = useState('');
@@ -83,13 +84,15 @@ export default function GroupSplitManager({ onBack, backInterceptRef, onRecordFi
     if (!backInterceptRef) return;
     if (activeGroupId) {
       // GroupDetail will handle sub-views
+    } else if (groupToDelete) {
+      backInterceptRef.current = () => setGroupToDelete(null);
     } else if (showCreateModal) {
       backInterceptRef.current = () => setShowCreateModal(false);
     } else {
       backInterceptRef.current = onBack;
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
-  }, [activeGroupId, showCreateModal, onBack, backInterceptRef]);
+  }, [activeGroupId, groupToDelete, showCreateModal, onBack, backInterceptRef]);
 
   const activeGroup = useMemo(() => {
     return groups.find(g => g.id === activeGroupId) || null;
@@ -100,10 +103,9 @@ export default function GroupSplitManager({ onBack, backInterceptRef, onRecordFi
   };
 
   const handleDeleteGroup = (groupId) => {
-    if (window.confirm('Delete this shared group and all its expenses?')) {
-      setGroups(prev => prev.filter(g => g.id !== groupId));
-      setActiveGroupId(null);
-    }
+    setGroups(prev => prev.filter(g => g.id !== groupId));
+    if (activeGroupId === groupId) setActiveGroupId(null);
+    setGroupToDelete(null);
   };
 
   const handleCreateGroup = () => {
@@ -152,20 +154,20 @@ export default function GroupSplitManager({ onBack, backInterceptRef, onRecordFi
   return (
     <div className="sub-screen">
       {/* Header */}
-      <div className="page-hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="page-hdr" style={{ display: 'flex', alignItems: 'center' }}>
         <button className="back-btn" onClick={onBack}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16">
             <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
         </button>
-        <div className="page-hdr-title">👥 Group Splits &amp; Trips</div>
+        <div className="page-hdr-title" style={{ flex: '1' }}>👥 Group Splits &amp; Trips</div>
         <button
           onClick={() => setShowCreateModal(true)}
           style={{
             padding: '6px 12px',
             borderRadius: 12,
             background: 'var(--accent)',
-            color: '#000',
+            color: 'var(--blue)',
             fontWeight: 800,
             fontSize: '0.75rem',
             border: 'none',
@@ -222,16 +224,33 @@ export default function GroupSplitManager({ onBack, backInterceptRef, onRecordFi
                     </div>
                   </div>
 
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{
-                      fontSize: '0.85rem', fontWeight: 900,
-                      color: youNet > 0 ? 'var(--income)' : youNet < 0 ? 'var(--expense)' : 'var(--text-muted)'
-                    }}>
-                      {youNet > 0 ? `+${formatINR(youNet)}` : youNet < 0 ? `−${formatINR(Math.abs(youNet))}` : 'Settled'}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{
+                        fontSize: '0.85rem', fontWeight: 900,
+                        color: youNet > 0 ? 'var(--income)' : youNet < 0 ? 'var(--expense)' : 'var(--text-muted)'
+                      }}>
+                        {youNet > 0 ? `+${formatINR(youNet)}` : youNet < 0 ? `−${formatINR(Math.abs(youNet))}` : 'Settled'}
+                      </div>
+                      <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
+                        {youNet > 0 ? 'You get back' : youNet < 0 ? 'You owe' : 'All clear'}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
-                      {youNet > 0 ? 'You get back' : youNet < 0 ? 'You owe' : 'All clear'}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setGroupToDelete(grp);
+                      }}
+                      style={{
+                        background: 'none', border: 'none', color: 'var(--text-muted)',
+                        fontSize: '1rem', padding: '6px', cursor: 'pointer', borderRadius: 8,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center'
+                      }}
+                      title="Delete Group"
+                    >
+                      🗑️
+                    </button>
                   </div>
                 </div>
               );
@@ -329,6 +348,35 @@ export default function GroupSplitManager({ onBack, backInterceptRef, onRecordFi
                 onClick={handleCreateGroup}
               >
                 Create Group
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Delete Group Confirmation Modal */}
+      {groupToDelete && (
+        <>
+          <div className="overlay" onClick={() => setGroupToDelete(null)} />
+          <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+            <div className="sheet-handle" />
+            <div style={{ fontSize: '2rem', textAlign: 'center', marginBottom: 8 }}>🗑️</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 800, textAlign: 'center', marginBottom: 6 }}>
+              Delete "{groupToDelete.name}"?
+            </div>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.5, marginBottom: 20 }}>
+              This will permanently delete this group along with all its {(groupToDelete.expenses || []).length} shared expenses and settlement records. This action cannot be undone.
+            </div>
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-ghost btn-full" onClick={() => setGroupToDelete(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger btn-full"
+                onClick={() => handleDeleteGroup(groupToDelete.id)}
+              >
+                Yes, Delete Group
               </button>
             </div>
           </div>
