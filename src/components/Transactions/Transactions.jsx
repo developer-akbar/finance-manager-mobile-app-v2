@@ -319,7 +319,15 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       if (selAccts.size > 0 && !selAccts.has(t.Account) && !selAccts.has(t.FromAccount) && !selAccts.has(t.ToAccount)) return false;
       if (selCats.size > 0 && !selCats.has(t.Category)) return false;
       if (!q) return true;
-      return [t.Note, t.Category, t.Account, t.Subcategory, t.Description, t.FromAccount, t.ToAccount]
+      if (q.startsWith('#')) {
+        const cleanTag = q.replace(/^#/, '');
+        const tagList = (t.Tags || '').split(',').map(x => x.trim().toLowerCase().replace(/^#/, ''));
+        if (tagList.includes(cleanTag)) return true;
+        const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const hashRegex = new RegExp(`(^|\\s)#${escapeRegex(cleanTag)}(\\b|\\s|$)`, 'i');
+        return hashRegex.test(t.Note || '') || hashRegex.test(t.Description || '');
+      }
+      return [t.Note, t.Category, t.Account, t.Subcategory, t.Description, t.FromAccount, t.ToAccount, t.Tags]
         .some(f => f && f.toLowerCase().includes(q));
     }).sort((a, b) => parseDate(b.Date) - parseDate(a.Date));
   }, [transactions, debouncedQ, selPeriod, periodRange, selAccts, selCats, customFrom, customTo, hasQuery]);
@@ -345,6 +353,23 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     }
     return { inc, exp, xfr };
   }, [results, selected]);
+
+  const allAvailableTags = useMemo(() => {
+    const seen = new Set();
+    for (const t of transactions) {
+      if (t.Tags) {
+        t.Tags.split(',').forEach(tag => {
+          const clean = tag.trim().toLowerCase();
+          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+      const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
+      if (matches) matches.forEach(m => seen.add(m.toLowerCase()));
+    }
+    const defaults = ['#tax', '#personal', '#family', '#trip', '#impulse', '#work', '#medical'];
+    defaults.forEach(d => seen.add(d));
+    return Array.from(seen).slice(0, 16);
+  }, [transactions]);
 
   const stripInstalment = (note) => {
     // Strip installment suffixes like "(5/12)", "(2/6)" from note suggestions
@@ -443,10 +468,37 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       {/* Results */}
       <div className="search-list">
         {!hasQuery ? (
-          <div className="empty-state">
+          <div className="empty-state" style={{ padding: '24px 16px' }}>
             <div className="empty-icon">🔍</div>
             <div className="empty-title">Search transactions</div>
-            <div className="empty-desc">Type a note, category, or account</div>
+            <div className="empty-desc" style={{ marginBottom: 18 }}>Type a note, category, account, or tap a tag</div>
+            {allAvailableTags.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', maxWidth: 360, margin: '0 auto' }}>
+                {allAvailableTags.map(tag => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      setQuery(tag);
+                      triggerSearch(tag);
+                    }}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: 18,
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: '1px solid var(--border)',
+                      background: 'var(--bg-card2)',
+                      color: 'var(--accent)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : results.length === 0 ? (
           <div className="empty-state"><div className="empty-icon">😶</div><div className="empty-title">No results</div></div>
@@ -747,11 +799,6 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
               : <DateGroupedList isActive={isActive} txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
             }
           </div>
-          {showScrollTop && (
-            <button className="scroll-top-btn" onClick={scrollToTop} aria-label="Scroll to top">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" width="16" height="16"><path d="M18 15l-6-6-6 6"/></svg>
-            </button>
-          )}
         </>
       )}
 

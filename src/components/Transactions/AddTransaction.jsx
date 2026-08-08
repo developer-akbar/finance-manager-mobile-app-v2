@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { inputToStorage, toInputDate, nowTimeStr } from '../../utils/format.js';
 import './AddTransaction.css';
@@ -441,7 +441,12 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
 });
 
 // ── Main AddTransaction ────────────────────────────────────────────────────
-export default function AddTransaction({ onClose, onSaveAndContinue=null, editTransaction=null, copyTransaction=null, prefillDate=null, prefillAccount=null, prefillCategory=null, backInterceptRef=null, onSaveInstalment=null }) {
+export default function AddTransaction({
+  onClose, onSaveAndContinue=null, editTransaction=null, copyTransaction=null,
+  prefillDate=null, prefillAccount=null, prefillCategory=null,
+  prefillType=null, prefillFromAccount=null, prefillToAccount=null, prefillAmount=null, prefillNote=null, prefillTags=null,
+  backInterceptRef=null, onSaveInstalment=null
+}) {
   const { state, navigate, addTransaction, updateTransaction, createRecurringRule } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
@@ -486,18 +491,31 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
       return {type:rt,amount:String(t.INR||t.Amount||''),date:toInputDate(t.Date)||todayVal(),time:t.Time||lastTime,
         account:rt.startsWith('Transfer')?'':(t.Account||''),fromAccount:rt.startsWith('Transfer')?(t.Account||t.FromAccount||''):'',
         toAccount:rt.startsWith('Transfer')?(t.ToAccount||''):'',category:t.Category||'',
-        subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:cleanNote,description:t.Description||''};
+        subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:cleanNote,description:t.Description||'',
+        tags:t.Tags||t.tags||''};
     }
     if (isCopy) {
       const t=copyTransaction, rt=t['Income/Expense']||'Expense';
       return {type:rt,amount:String(t.INR||t.Amount||''),date:toInputDate(t.Date)||todayVal(),time:t.Time||nowTimeStr(),
         account:rt.startsWith('Transfer')?'':(t.Account||''),fromAccount:rt.startsWith('Transfer')?(t.Account||t.FromAccount||''):'',
         toAccount:rt.startsWith('Transfer')?(t.ToAccount||''):'',category:t.Category||'',
-        subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:t.Note||'',description:t.Description||''};
+        subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:t.Note||'',description:t.Description||'',
+        tags:t.Tags||t.tags||''};
     }
-    return {type:'Expense',amount:'',date:prefillDate?(toInputDate(prefillDate)||todayVal()):todayVal(),
-      time:prefillDate&&lastTimeForDate?lastTimeForDate:nowTimeStr(),
-      account:prefillAccount||'',fromAccount:'',toAccount:'',category:prefillCategory||'',subcategory:'',note:'',description:''};
+    return {
+      type: prefillType || 'Expense',
+      amount: prefillAmount ? String(prefillAmount) : '',
+      date: prefillDate ? (toInputDate(prefillDate) || todayVal()) : todayVal(),
+      time: prefillDate && lastTimeForDate ? lastTimeForDate : nowTimeStr(),
+      account: prefillAccount || '',
+      fromAccount: prefillFromAccount || '',
+      toAccount: prefillToAccount || '',
+      category: prefillCategory || '',
+      subcategory: '',
+      note: prefillNote || '',
+      description: '',
+      tags: prefillTags || ''
+    };
   });
 
   const [errors,      setErrors]      = useState({});
@@ -509,6 +527,24 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   // Recurring
   const [showRecurring, setShowRecurring] = useState(false);
   const [recurringConfig, setRecurringConfig] = useState(null); // {type, totalDays?, scheduleMode, frequency?}
+
+  // Split Transaction state
+  const [isSplit, setIsSplit] = useState(false);
+  const [splits, setSplits] = useState([
+    { id: 's1', category: '', subcategory: '', amount: '', note: '' },
+    { id: 's2', category: '', subcategory: '', amount: '', note: '' },
+  ]);
+  const [splitNoteFocusedIdx, setSplitNoteFocusedIdx] = useState(null);
+  const [splitNoteSugs, setSplitNoteSugs] = useState([]);
+
+  const allocatedSplitSum = useMemo(() => {
+    return splits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+  }, [splits]);
+
+  const splitRemaining = useMemo(() => {
+    const total = parseFloat(form.amount) || 0;
+    return Math.round((total - allocatedSplitSum) * 100) / 100;
+  }, [form.amount, allocatedSplitSum]);
 
   const textInputRef = (el) => {
     if (!el) return;
@@ -605,6 +641,21 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     (categories?.[form.category]?.subcategories||[]).filter(s=>s&&s!=='Default').sort(),
     [categories, form.category]);
 
+  const getRecentSubsForCategory = useCallback((cat) => {
+    if (!cat) return [];
+    const seen = new Set(), result = [];
+    for (const t of [...transactions].sort((a, b) => (b.Date || '').localeCompare(a.Date || ''))) {
+      if (t.Category === cat && t.Subcategory && t.Subcategory !== 'Default') {
+        if (!seen.has(t.Subcategory)) {
+          seen.add(t.Subcategory);
+          result.push(t.Subcategory);
+        }
+      }
+      if (result.length >= 4) break;
+    }
+    return result;
+  }, [transactions]);
+
   const recentAccounts = useMemo(() => {
     const seen=new Set(),result=[];
     for (const t of [...transactions].sort((a,b)=>(b.Date||'').localeCompare(a.Date||''))) {
@@ -643,6 +694,23 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     }
     return result;
   }, [transactions, form.category]);
+
+  const allAvailableTags = useMemo(() => {
+    const seen = new Set();
+    for (const t of transactions) {
+      if (t.Tags) {
+        t.Tags.split(',').forEach(tag => {
+          const clean = tag.trim().toLowerCase();
+          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+      const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
+      if (matches) matches.forEach(m => seen.add(m.toLowerCase()));
+    }
+    const defaults = ['#tax', '#personal', '#family', '#trip', '#impulse', '#work', '#medical'];
+    defaults.forEach(d => seen.add(d));
+    return Array.from(seen).slice(0, 15);
+  }, [transactions]);
 
   const getRecentAndMostUsedNotes = (targetType = form.type) => {
     const isTargetXfer = targetType.toLowerCase().startsWith('transfer');
@@ -735,11 +803,21 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
 
   const validate = () => {
     const e={};
-    if (!form.amount||isNaN(parseFloat(form.amount))||parseFloat(form.amount)<0) e.amount='Enter a valid amount';
+    if (form.amount === '' || form.amount === undefined || isNaN(parseFloat(form.amount))) e.amount='Enter a valid amount';
     if (!form.date) e.date='Required';
     if (isTransfer){
       if (!form.fromAccount) e.fromAccount='Select from account';
       if (!form.toAccount)   e.toAccount='Select to account';
+    } else if (isSplit) {
+      if (!form.account)  e.account='Select account';
+      if (form.amount && !isNaN(parseFloat(form.amount)) && Math.abs(splitRemaining) >= 0.01) {
+        e.splits = `Allocated sum (₹${allocatedSplitSum}) must match entered total (₹${form.amount})`;
+      }
+      for (let i = 0; i < splits.length; i++) {
+        if (!splits[i].category) e.splits = `Select category for split part ${i+1}`;
+        if (splits[i].amount === '' || isNaN(parseFloat(splits[i].amount))) e.splits = `Enter valid amount for split part ${i+1}`;
+        if (!splits[i].note || !splits[i].note.trim()) e.splits = `Enter note for split part ${i+1}`;
+      }
     } else {
       if (!form.account)  e.account='Select account';
       if (!form.category) e.category='Select category';
@@ -752,7 +830,37 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     setSaving(true);
     try {
       const baseNote = form.note || '';
-      const totalAmount = parseFloat(form.amount) || 0;
+      const totalAmount = isSplit && allocatedSplitSum > 0 ? allocatedSplitSum : (parseFloat(form.amount) || 0);
+
+      // Extract hashtags from Note & Description and combine with manual tags
+      const noteAndDesc = `${baseNote} ${form.description || ''}`;
+      const extractedHashtags = (noteAndDesc.match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g) || []).map(t => t.toLowerCase());
+      const manualTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean).map(t => t.startsWith('#') ? t : `#${t}`);
+      const combinedTags = Array.from(new Set([...manualTags, ...extractedHashtags])).join(', ');
+
+      if (isSplit && !isTransfer && !isEdit) {
+        const splitGroupId = 'split-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        for (const s of splits) {
+          const splitAmt = parseFloat(s.amount) || 0;
+          await addTransaction({
+            Date: inputToStorage(form.date),
+            Time: form.time || '',
+            Account: form.account,
+            Category: s.category,
+            Subcategory: s.subcategory || 'Default',
+            Note: s.note.trim(),
+            Description: form.description || '',
+            INR: splitAmt,
+            Amount: String(splitAmt),
+            Currency: 'INR',
+            'Income/Expense': form.type,
+            Tags: combinedTags,
+            split_group_id: splitGroupId,
+          });
+        }
+        onClose();
+        return;
+      }
 
       if (!isEdit && recurringConfig) {
         // form.date is YYYY-MM-DD (HTML date input format)
@@ -794,6 +902,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
               INR: inst.amount, Amount: String(inst.amount),
               Currency: 'INR', 'Income/Expense': form.type,
               recurring_rule_id: saved.id,
+              Tags: combinedTags,
             });
           }
         } else if (recurringConfig.type === 'repeat') {
@@ -823,6 +932,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
             INR: totalAmount, Amount: form.amount,
             Currency: 'INR', 'Income/Expense': form.type,
             recurring_rule_id: saved.id,
+            Tags: combinedTags,
           });
         }
       } else {
@@ -846,6 +956,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
           Currency:'INR','Income/Expense':form.type,
           // Preserve recurring_rule_id so instalment link is never lost
           recurring_rule_id: editTransaction?.recurring_rule_id || '',
+          Tags: combinedTags,
         };
         if (isEdit && onSaveInstalment) {
           // Instalment edit: update this transaction (with its own suffix), bulk-update siblings
@@ -863,6 +974,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
           amount: '',
           note: '',
           description: '',
+          tags: '',
         }));
         setRecurringConfig(null);
         setShowRecurring(false);
@@ -1008,8 +1120,8 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
               active={pickerState && pickerState.type === 'account'} />
           )}
 
-          {/* Row 3: Category + Subcategory */}
-          {!isTransfer && (
+          {/* Row 3: Category + Subcategory (hidden when isSplit) */}
+          {!isTransfer && !isSplit && (
             <div className="form-group category-subcat-group">
               <label className="form-label">Category</label>
               <div className="category-subcat-wrap">
@@ -1034,60 +1146,291 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
             </div>
           )}
 
-          {/* Row 4: Amount */}
+          {/* Row 4: Amount + Split Toggle button next to input */}
           <div className="form-group">
             <label className="form-label">Amount</label>
-            <div style={{position:'relative',display:'flex',alignItems:'center'}}>
-              <span style={{position:'absolute',left:10,fontSize:'0.9rem',color:'var(--text-muted)',pointerEvents:'none',zIndex:1}}>₹</span>
-              <input ref={amountRef}
-                className={`form-input ${errors.amount?'err':''}`}
-                style={{paddingLeft:24}}
-                type="text" inputMode="decimal" pattern="[0-9]*([.,][0-9]+)?"
-                autoComplete="off" autoCorrect="off" spellCheck="false"
-                onFocus={() => setPickerState(null)}
-                onKeyDown={e=>{
-                  const a=['Backspace','Delete','ArrowLeft','ArrowRight','Tab','.',','];
-                  if (e.key==='Enter'){e.preventDefault();goNextEmpty({key:'amount',val:form.amount});}
-                  else if (!a.includes(e.key)&&!/^[0-9]$/.test(e.key)) e.preventDefault();
-                }}
-                value={form.amount} onChange={e=>set('amount',e.target.value)}/>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
+                <span style={{ position: 'absolute', left: 10, fontSize: '0.9rem', color: 'var(--text-muted)', pointerEvents: 'none', zIndex: 1 }}>₹</span>
+                <input ref={amountRef}
+                  className={`form-input ${errors.amount?'err':''}`}
+                  style={{ paddingLeft: 24 }}
+                  type="text" inputMode="decimal" pattern="^-?[0-9]*([.,][0-9]+)?"
+                  autoComplete="off" autoCorrect="off" spellCheck="false"
+                  placeholder="0"
+                  onFocus={() => setPickerState(null)}
+                  value={form.amount} onChange={e=>set('amount',e.target.value)}/>
+              </div>
+              {!isTransfer && !isEdit && (
+                <button
+                  type="button"
+                  onClick={() => setIsSplit(v => !v)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 12,
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    border: `1.5px solid ${isSplit ? 'var(--accent)' : 'var(--border)'}`,
+                    background: isSplit ? 'rgba(0, 229, 160, 0.12)' : 'var(--bg-card)',
+                    color: isSplit ? 'var(--accent)' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                  }}
+                >
+                  ⚡ {isSplit ? 'Split Active' : 'Split'}
+                </button>
+              )}
             </div>
             {errors.amount && <div className="field-error">{errors.amount}</div>}
           </div>
 
-          {/* Row 5: Note */}
-          <div className="form-group">
-            <label className="form-label">Note</label>
-            <div style={{position:'relative', flex: 1}}>
-              <input ref={el=>{textInputRef(el);noteRef.current=el;}} className="form-input" type="text" value={form.note}
-                style={{paddingRight:(form.note||noteFocused)?'30px':undefined}}
-                autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
-                onChange={e=>handleNoteChange(e.target.value)}
-                onFocus={handleNoteFocus}
-                onBlur={()=>{setNoteFocused(false);setTimeout(()=>setNoteSugs([]),180);}}
-                onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();descriptionRef.current?.focus();}}}
-              />
-              {noteFocused&&(
-                <button type="button" onMouseDown={e=>{e.preventDefault();set('note','');setNoteSugs([]);setNoteFocused(false);}}
-                  style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:'0.8rem',lineHeight:1,padding:'4px',borderRadius:'50%',zIndex:1}}>✕</button>
-              )}
-              {noteSugs.length>0&&(
-                <div className="note-sug-list">
-                  {noteSugs.map(s => {
-                    const isObj = typeof s === 'object';
-                    const label = isObj ? s.note : s;
-                    const icon = isObj ? (s.type === 'most_used' ? '🔥' : '🕒') : null;
-                    return (
-                      <div key={label} className="note-sug-item" onMouseDown={()=>{set('note',label);setNoteSugs([]);setTimeout(()=>descriptionRef.current?.focus(),150);}} style={{display:'flex',alignItems:'center'}}>
-                        {icon && <span className="note-sug-icon" style={{marginRight:8,fontSize:'0.75rem'}}>{icon}</span>}
-                        <span className="note-sug-text">{label}</span>
-                      </div>
-                    );
-                  })}
+          {/* Split Allocation Section */}
+          {isSplit && !isTransfer && (
+            <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 14, padding: 12, marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 800 }}>⚡ Split Breakdown</span>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: splitRemaining === 0 ? 'var(--income)' : 'var(--expense)' }}>
+                  {splitRemaining === 0 ? '✓ Fully Balanced' : `Remaining: ₹${splitRemaining}`}
+                </span>
+              </div>
+              {errors.splits && <div className="field-error" style={{ marginBottom: 10 }}>{errors.splits}</div>}
+
+              {splits.map((s, idx) => (
+                <div key={s.id} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 10, marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>SPLIT #{idx + 1}</span>
+                    {splits.length > 2 && (
+                      <button
+                        type="button"
+                        onClick={() => setSplits(prev => prev.filter((_, i) => i !== idx))}
+                        style={{ background: 'none', border: 'none', color: 'var(--expense)', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700 }}
+                      >
+                        Remove ✕
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Category & Subcategory chip selectors */}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      type="button"
+                      onClick={() => setPickerState({
+                        type: `split-cat-${idx}`,
+                        label: `Select Category (Split #${idx+1})`,
+                        value: s.category,
+                        items: availCats,
+                        recent: recentCats,
+                        onSelect: (v) => {
+                          const freshSubs = (categories?.[v]?.subcategories || []).filter(sub => sub && sub !== 'Default');
+                          const recSubs = getRecentSubsForCategory(v);
+                          setSplits(prev => prev.map((item, i) => i === idx ? { ...item, category: v, subcategory: '' } : item));
+                          if (freshSubs.length > 0) {
+                            setTimeout(() => {
+                              setPickerState({
+                                type: `split-sub-${idx}`,
+                                label: `Select Subcategory for ${v}`,
+                                value: '',
+                                items: freshSubs,
+                                recent: recSubs,
+                                onSelect: (subVal) => {
+                                  setSplits(prev => prev.map((item, i) => i === idx ? { ...item, subcategory: subVal } : item));
+                                  setPickerState(null);
+                                }
+                              });
+                            }, 50);
+                          } else {
+                            setPickerState(null);
+                          }
+                        }
+                      })}
+                      style={{
+                        flex: 1, padding: '8px 10px', borderRadius: 10, background: 'var(--bg-base)',
+                        border: `1px solid ${!s.category && errors.splits ? 'var(--expense)' : 'var(--border)'}`,
+                        color: s.category ? 'var(--text-primary)' : 'var(--text-muted)',
+                        fontSize: '0.78rem', fontWeight: 700, textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                      }}
+                    >
+                      <span>{s.category || 'Select Category'}</span>
+                      <span style={{ fontSize: '0.65rem' }}>▼</span>
+                    </button>
+
+                    {s.category && (categories?.[s.category]?.subcategories || []).filter(sub => sub && sub !== 'Default').length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const freshSubs = (categories?.[s.category]?.subcategories || []).filter(sub => sub && sub !== 'Default');
+                          const recSubs = getRecentSubsForCategory(s.category);
+                          setPickerState({
+                            type: `split-sub-${idx}`,
+                            label: `Select Subcategory for ${s.category}`,
+                            value: s.subcategory,
+                            items: freshSubs,
+                            recent: recSubs,
+                            onSelect: (v) => {
+                              setSplits(prev => prev.map((item, i) => i === idx ? { ...item, subcategory: v } : item));
+                              setPickerState(null);
+                            }
+                          });
+                        }}
+                        style={{
+                          flex: 1, padding: '8px 10px', borderRadius: 10, background: 'var(--bg-base)',
+                          border: '1px solid var(--border)',
+                          color: s.subcategory ? 'var(--text-primary)' : 'var(--text-muted)',
+                          fontSize: '0.78rem', fontWeight: 700, textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                        }}
+                      >
+                        <span>{s.subcategory || 'Subcategory'}</span>
+                        <span style={{ fontSize: '0.65rem' }}>▼</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Amount & Note in split row */}
+                  <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
+                    <div style={{ position: 'relative', width: '38%' }}>
+                      <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>₹</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="Amount"
+                        className="form-input"
+                        style={{ paddingLeft: 22, fontSize: '0.8rem', padding: '6px 8px 6px 20px' }}
+                        value={s.amount}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setSplits(prev => {
+                            const next = prev.map((item, i) => i === idx ? { ...item, amount: val } : item);
+                            const total = next.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+                            set('amount', String(total));
+                            return next;
+                          });
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ position: 'relative', flex: 1 }}>
+                      <input
+                        type="text"
+                        placeholder="Note (e.g. Vegetables)"
+                        className="form-input"
+                        style={{ width: '100%', fontSize: '0.8rem', padding: '6px 10px' }}
+                        value={s.note}
+                        onFocus={() => {
+                          setSplitNoteFocusedIdx(idx);
+                          setSplitNoteSugs(getRecentAndMostUsedNotes(form.type, s.category));
+                        }}
+                        onBlur={() => {
+                          setTimeout(() => {
+                            setSplitNoteFocusedIdx(null);
+                            setSplitNoteSugs([]);
+                          }, 200);
+                        }}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setSplits(prev => prev.map((item, i) => i === idx ? { ...item, note: val } : item));
+                          setSplitNoteSugs(getRecentAndMostUsedNotes(form.type, s.category).filter(n => {
+                            const noteStr = typeof n === 'object' ? n.note : n;
+                            return noteStr.toLowerCase().includes(val.toLowerCase());
+                          }));
+                        }}
+                      />
+                      {splitNoteFocusedIdx === idx && splitNoteSugs.length > 0 && (
+                        <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 10, maxHeight: 150, overflowY: 'auto' }}>
+                          {splitNoteSugs.map(item => {
+                            const isObj = typeof item === 'object';
+                            const label = isObj ? item.note : item;
+                            const icon = isObj ? (item.type === 'most_used' ? '🔥' : '🕒') : null;
+                            return (
+                              <div
+                                key={label}
+                                className="note-sug-item"
+                                onMouseDown={() => {
+                                  setSplits(prev => prev.map((part, i) => i === idx ? { ...part, note: label } : part));
+                                  setSplitNoteFocusedIdx(null);
+                                  setSplitNoteSugs([]);
+                                }}
+                                style={{ display: 'flex', alignItems: 'center', fontSize: '0.78rem', padding: '6px 10px' }}
+                              >
+                                {icon && <span style={{ marginRight: 6, fontSize: '0.7rem' }}>{icon}</span>}
+                                <span>{label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              )}
+              ))}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setSplits(prev => [...prev, { id: 's' + (prev.length + 1), category: '', subcategory: '', amount: '', note: '' }])}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  + Add Split Part
+                </button>
+                {splitRemaining > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSplits(prev => {
+                        const next = [...prev];
+                        const last = next[next.length - 1];
+                        if (last && (!last.amount || parseFloat(last.amount) === 0)) {
+                          last.amount = String(splitRemaining);
+                        } else {
+                          next.push({ id: 's' + (next.length + 1), category: '', subcategory: '', amount: String(splitRemaining), note: '' });
+                        }
+                        return next;
+                      });
+                    }}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '0.74rem', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Auto-Fill Remaining (₹{splitRemaining})
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Row 5: Note (hidden when isSplit) */}
+          {!isSplit && (
+            <div className="form-group">
+              <label className="form-label">Note</label>
+              <div style={{position:'relative', flex: 1}}>
+                <input ref={el=>{textInputRef(el);noteRef.current=el;}} className="form-input" type="text" value={form.note}
+                  style={{paddingRight:(form.note||noteFocused)?'30px':undefined}}
+                  autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
+                  onChange={e=>handleNoteChange(e.target.value)}
+                  onFocus={handleNoteFocus}
+                  onBlur={()=>{setNoteFocused(false);setTimeout(()=>setNoteSugs([]),180);}}
+                  onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();descriptionRef.current?.focus();}}}
+                />
+                {noteFocused&&(
+                  <button type="button" onMouseDown={e=>{e.preventDefault();set('note','');setNoteSugs([]);setNoteFocused(false);}}
+                    style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:'0.8rem',lineHeight:1,padding:'4px',borderRadius:'50%',zIndex:1}}>✕</button>
+                )}
+                {noteSugs.length>0&&(
+                  <div className="note-sug-list">
+                    {noteSugs.map(s => {
+                      const isObj = typeof s === 'object';
+                      const label = isObj ? s.note : s;
+                      const icon = isObj ? (s.type === 'most_used' ? '🔥' : '🕒') : null;
+                      return (
+                        <div key={label} className="note-sug-item" onMouseDown={()=>{set('note',label);setNoteSugs([]);setTimeout(()=>descriptionRef.current?.focus(),150);}} style={{display:'flex',alignItems:'center'}}>
+                          {icon && <span className="note-sug-icon" style={{marginRight:8,fontSize:'0.75rem'}}>{icon}</span>}
+                          <span className="note-sug-text">{label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="description-section">
             <div className="form-group">
@@ -1096,6 +1439,49 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                 onFocus={() => setPickerState(null)}
                 onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 220) + 'px'; }}
                 onChange={e=>set('description',e.target.value)} placeholder='Description'/>
+            </div>
+          </div>
+
+          {/* Tags */}
+          <div className="form-group" style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <label className="form-label" style={{ margin: 0 }}>Tags</label>
+              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Type #tag or tap below</span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {allAvailableTags.map(tag => {
+                const currentTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+                const isSelected = currentTags.includes(tag.toLowerCase()) ||
+                  ((form.note || '') + ' ' + (form.description || '')).toLowerCase().includes(tag.toLowerCase());
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      let nextTags;
+                      if (isSelected) {
+                        nextTags = currentTags.filter(t => t !== tag.toLowerCase());
+                      } else {
+                        nextTags = [...currentTags, tag.toLowerCase()];
+                      }
+                      set('tags', nextTags.join(', '));
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 14,
+                      fontSize: '0.72rem',
+                      fontWeight: isSelected ? 700 : 500,
+                      border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
+                      background: isSelected ? 'rgba(0, 229, 160, 0.12)' : 'var(--bg-card2)',
+                      color: isSelected ? 'var(--accent)' : 'var(--text-muted)',
+                      cursor: 'pointer',
+                      transition: 'all 0.12s',
+                    }}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

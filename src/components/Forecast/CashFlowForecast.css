@@ -1,0 +1,112 @@
+.forecast-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  overflow-y: auto;
+  padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 24px);
+}
+
+.forecast-body {
+  padding: 14px var(--page-px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.forecast-banner {
+  background: linear-gradient(135deg, rgba(0, 229, 160, 0.15), rgba(77, 159, 255, 0.1));
+  border: 1px solid rgba(0, 229, 160, 0.3);
+  border-radius: var(--r-xl, 16px);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.forecast-banner-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.forecast-banner-val {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: var(--text-primary);
+}
+
+.forecast-banner-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px;
+}
+
+.cal-hdr-day {
+  text-align: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+.cal-cell {
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.12s;
+}
+.cal-cell.today {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.cal-cell.selected {
+  background: var(--bg-card2);
+  border: 1px solid var(--accent);
+}
+.cal-cell.other-month {
+  opacity: 0.25;
+}
+
+.cal-dot-row {
+  display: flex;
+  gap: 2px;
+  position: absolute;
+  bottom: 3px;
+}
+.cal-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+.cal-dot.exp { background: var(--expense); }
+.cal-dot.inc { background: var(--income); }
+.cal-dot.due { background: #f0a500; }
+
+.forecast-due-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}

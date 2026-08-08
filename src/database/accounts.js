@@ -1,18 +1,26 @@
 import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
 
-// Always return {id, name, group, icon} — app expects "group" not "group_name"
+// Always return {id, name, group, icon, isAsset} — app expects "group" not "group_name"
 export const getAccounts = async () => {
   const r = await getDB().query('SELECT * FROM accounts ORDER BY sort_order,name');
-  return (r.values || []).map(a => ({
-    id:              a.id,
-    name:            a.name        || '',
-    group:           a.group_name  || '',   // DB col = group_name, app field = group
-    icon:            '💳',
-    acctType:        a.acct_type   || '',
-    settlementDate:  a.settlement_date  ? Number(a.settlement_date)  : 0,
-    paymentDueDays:  a.payment_due_days ? Number(a.payment_due_days) : 0,
-  }));
+  return (r.values || []).map(a => {
+    const isLiabilityName = ['credit card', 'credit', 'loan', 'emi', 'borrow', 'pay later', 'installments'].some(k => (a.group_name || a.acct_type || a.name || '').toLowerCase().includes(k));
+    const isAsset = a.is_asset !== undefined && a.is_asset !== null
+      ? (Number(a.is_asset) === 1)
+      : !isLiabilityName;
+
+    return {
+      id:              a.id,
+      name:            a.name        || '',
+      group:           a.group_name  || '',   // DB col = group_name, app field = group
+      icon:            '💳',
+      acctType:        a.acct_type   || '',
+      settlementDate:  a.settlement_date  ? Number(a.settlement_date)  : 0,
+      paymentDueDays:  a.payment_due_days ? Number(a.payment_due_days) : 0,
+      isAsset,
+    };
+  });
 };
 
 export const replaceAccounts = async (list) => {
@@ -37,9 +45,10 @@ export const replaceAccounts = async (list) => {
     const acctType       = a.acctType       || '';
     const settlementDate = a.settlementDate ? Number(a.settlementDate) : 0;
     const paymentDueDays = a.paymentDueDays ? Number(a.paymentDueDays) : 0;
+    const isAsset        = a.isAsset !== undefined ? (a.isAsset ? 1 : 0) : (['credit card', 'credit', 'loan', 'emi', 'borrow', 'pay later', 'installments'].some(k => (grp || acctType || name).toLowerCase().includes(k)) ? 0 : 1);
     set.push({
-      statement: 'INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days) VALUES (?,?,?,?,?,?,?,?)',
-      values: [a.id || uuid(), name, grp, i, now, acctType, settlementDate, paymentDueDays]
+      statement: 'INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days,is_asset) VALUES (?,?,?,?,?,?,?,?,?)',
+      values: [a.id || uuid(), name, grp, i, now, acctType, settlementDate, paymentDueDays, isAsset]
     });
   }
 

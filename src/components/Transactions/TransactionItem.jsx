@@ -252,6 +252,7 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
           </>}
           {t.Note        && <DPRow label="Note"        value={t.Note}/>}
           {t.Description && <DPRow label="Description" value={t.Description}/>}
+          {t.Tags        && <DPRow label="Tags"        value={t.Tags}/>}
         </div>
 
         {/* Debug Metadata Panel */}

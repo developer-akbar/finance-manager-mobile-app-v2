@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount } from '../../utils/format.js';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { ccBalances, isCreditCard, ccDaysUntilDue, ccNextDueDate } from '../Accounts/Accounts.jsx';
+import CashFlowForecast from '../Forecast/CashFlowForecast.jsx';
 import './Dashboard.css';
 
 const MONTHS     = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -31,7 +32,7 @@ const TIPS = [
 ];
 const todayTip = TIPS[now.getDate() % TIPS.length];
 
-export default function Dashboard({ onAddTransaction }) {
+export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   const { state, navigate } = useApp();
   const { transactions, budgets, settings } = state;
 
@@ -39,6 +40,18 @@ export default function Dashboard({ onAddTransaction }) {
   const [chartView, setChartView] = useState('networth'); // 'networth' or 'overview'
   const [popupMsg, setPopupMsg] = useState(''); // Custom detail sheet popup
   const [showAllYears, setShowAllYears] = useState(false);
+  const [showForecast, setShowForecast] = useState(false);
+
+  // Handle Home tab tap to reset sub-views
+  useEffect(() => {
+    const handleReset = () => {
+      setShowForecast(false);
+      setShowAllYears(false);
+      setPopupMsg('');
+    };
+    window.addEventListener('reset-dashboard-view', handleReset);
+    return () => window.removeEventListener('reset-dashboard-view', handleReset);
+  }, []);
 
   const hour     = now.getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -75,8 +88,26 @@ export default function Dashboard({ onAddTransaction }) {
   }, [transactions]);
 
   const netWorth = useMemo(() => Object.values(acctBalances).reduce((s,v)=>s+v,0), [acctBalances]);
-  const assets      = useMemo(() => Object.values(acctBalances).filter(v=>v>0).reduce((s,v)=>s+v,0), [acctBalances]);
-  const liabilities = useMemo(() => Object.values(acctBalances).filter(v=>v<0).reduce((s,v)=>s+Math.abs(v),0), [acctBalances]);
+  const assets = useMemo(() => {
+    const acctList = state.accounts || [];
+    return Object.entries(acctBalances).reduce((sum, [name, val]) => {
+      const a = acctList.find(acc => (acc.name || acc) === name);
+      const isAsset = a?.isAsset !== undefined ? a.isAsset : !['credit card', 'credit', 'loan', 'emi', 'borrow', 'pay later', 'installments'].some(k => name.toLowerCase().includes(k));
+      if (isAsset && val > 0) return sum + val;
+      return sum;
+    }, 0);
+  }, [acctBalances, state.accounts]);
+
+  const liabilities = useMemo(() => {
+    const acctList = state.accounts || [];
+    return Object.entries(acctBalances).reduce((sum, [name, val]) => {
+      const a = acctList.find(acc => (acc.name || acc) === name);
+      const isAsset = a?.isAsset !== undefined ? a.isAsset : !['credit card', 'credit', 'loan', 'emi', 'borrow', 'pay later', 'installments'].some(k => name.toLowerCase().includes(k));
+      if (!isAsset) return sum + Math.abs(val);
+      if (isAsset && val < 0) return sum + Math.abs(val); // overdraft
+      return sum;
+    }, 0);
+  }, [acctBalances, state.accounts]);
 
   // ── This-month txns ─────────────────────────────────────────────────────────
   const monthTxns = useMemo(() =>
@@ -319,13 +350,55 @@ export default function Dashboard({ onAddTransaction }) {
     };
   }, [transactions]);
 
+  if (showForecast) {
+    return <CashFlowForecast onBack={() => setShowForecast(false)} backInterceptRef={backInterceptRef} />;
+  }
+
   return (
     <div className="dash-screen">
       <div className="dash-scrollable-content">
 
-      {/* ── Greeting ── */}
-      <div className="dash-greeting">
+      {/* ── Greeting & Actions ── */}
+      <div className="dash-greeting" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="dash-hello">{greeting}{name ? `, ${name}` : ' 👋'}</div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            onClick={() => navigate('analytics')}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 14,
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--text-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              cursor: 'pointer',
+            }}
+          >
+            <span>📊</span> Analytics
+          </button>
+          <button
+            onClick={() => setShowForecast(true)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 14,
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              cursor: 'pointer',
+            }}
+          >
+            <span>📈</span> Cash Flow
+          </button>
+        </div>
       </div>
 
       {/* ── Credit Card Due Alerts Banner ── */}
