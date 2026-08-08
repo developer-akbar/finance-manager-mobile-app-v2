@@ -1,91 +1,503 @@
-.accounts-screen { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
-.accounts-list   { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:12px; }
-.acct-group-header { display:flex; align-items:center; padding:6px var(--page-px); background:var(--gold-bg); border-bottom:1px solid var(--border); font-size:0.7rem; font-weight:800; color:var(--gold); letter-spacing:0.3px; gap:10px; }
-.acct-group-label { flex:1; }
-.acct-group-bal { width:100px; text-align:right; font-family:var(--font); font-size:0.78rem; font-weight:800; flex-shrink:0; }
-.acct-group-arrow-spacer { width:21px; flex-shrink:0; }/* name text (11px arrow + 10px gap) */
-.acct-group-bal.pos { color:var(--income); }
-.acct-group-bal.neg { color:var(--expense); }
-.acct-row { display:flex; align-items:center; gap:10px; padding:11px var(--page-px); border-bottom:1px solid var(--border-light); background:var(--bg-card); cursor:pointer; transition:background 0.12s; }
-.acct-row:active { background:var(--bg-hover); }
-.acct-row-name { flex:1; font-size:0.85rem; font-weight:var(--fw-data); color:var(--text-primary); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.acct-row-bal   { font-size:0.78rem; font-family:var(--font); font-weight:var(--fw-data); text-align:right; width:100px; flex-shrink:0; }
-.acct-row-bal.pos { color:var(--income); }
-.acct-row-bal.neg { color:var(--expense); }
-.acct-detail-screen { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
-.acct-detail-body   { flex:1; overflow-y:auto; }
+.accounts-screen {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.accounts-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.acct-group-header {
+    display: flex;
+    align-items: center;
+    padding: 6px var(--page-px);
+    background: var(--gold-bg);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.7rem;
+    font-weight: 800;
+    color: var(--gold);
+    letter-spacing: 0.3px;
+    gap: 10px;
+}
+
+.acct-group-label {
+    flex: 1;
+}
+
+.acct-group-bal {
+    width: 100px;
+    text-align: right;
+    font-family: var(--font);
+    font-size: 0.78rem;
+    font-weight: 800;
+    flex-shrink: 0;
+}
+
+.acct-group-arrow-spacer {
+    width: 21px;
+    flex-shrink: 0;
+}
+
+/* name text (11px arrow + 10px gap) */
+.acct-group-bal.pos {
+    color: var(--income);
+}
+
+.acct-group-bal.neg {
+    color: var(--expense);
+}
+
+.acct-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 13px var(--page-px);
+    border-bottom: 1px solid var(--border-light);
+    background: var(--bg-card);
+    cursor: pointer;
+    transition: background 0.12s;
+}
+
+.acct-row:active {
+    background: var(--bg-hover);
+}
+
+.acct-row-name {
+    flex: 1;
+    font-size: 0.85rem;
+    font-weight: var(--fw-data);
+    color: var(--text-primary);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.acct-row-bal {
+    font-size: 0.78rem;
+    font-family: var(--font);
+    font-weight: var(--fw-data);
+    text-align: right;
+    width: 100px;
+    flex-shrink: 0;
+}
+
+.acct-row-bal.pos {
+    color: var(--income);
+}
+
+.acct-row-bal.neg {
+    color: var(--expense);
+}
+
+.acct-detail-screen {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.acct-detail-body {
+    flex: 1;
+    overflow-y: auto;
+}
 
 /* Banking summary row — prominent 4-column strip */
-.acct-banking-row { display:flex; align-items:stretch; background:var(--bg-card); border-top:2px solid var(--border); border-bottom:2px solid var(--border); flex-shrink:0; }
-.acct-banking-item { flex:1; text-align:center; padding:12px 4px; min-width:0; }
-.acct-banking-l { font-size:0.6rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:6px; }
-.acct-banking-v { font-size:0.82rem; font-weight:var(--fw-data); font-family:var(--font); color:var(--text-primary); word-break:break-word; line-height:1.2; }
-.acct-banking-v.income  { color:var(--income); }
-.acct-banking-v.expense { color:var(--expense); }
-.acct-banking-div { width:1px; background:var(--border); flex-shrink:0; margin:8px 0; }
+.acct-banking-row {
+    display: flex;
+    align-items: stretch;
+    background: var(--bg-card);
+    border-top: 2px solid var(--border);
+    border-bottom: 2px solid var(--border);
+    flex-shrink: 0;
+}
+
+.acct-banking-item {
+    flex: 1;
+    text-align: center;
+    padding: 12px 4px;
+    min-width: 0;
+}
+
+.acct-banking-l {
+    font-size: 0.6rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 6px;
+}
+
+.acct-banking-v {
+    font-size: 0.82rem;
+    font-weight: var(--fw-data);
+    font-family: var(--font);
+    color: var(--text-primary);
+    word-break: break-word;
+    line-height: 1.2;
+}
+
+.acct-banking-v.income {
+    color: var(--income);
+}
+
+.acct-banking-v.expense {
+    color: var(--expense);
+}
+
+.acct-banking-div {
+    width: 1px;
+    background: var(--border);
+    flex-shrink: 0;
+    margin: 8px 0;
+}
 
 /* Opening / Net / Closing strip */
-.acct-ob-strip { display:flex; align-items:stretch; background:var(--bg-card); border-bottom:1px solid var(--border); flex-shrink:0; padding:0 var(--page-px); }
-.acct-ob-item { flex:1; text-align:center; padding:8px 4px; }
-.acct-ob-l { font-size:0.56rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px; }
-.acct-ob-v { font-size:0.78rem; font-weight:var(--fw-data); font-family:var(--font); }
-.acct-ob-v.pos { color:var(--income); }
-.acct-ob-v.neg { color:var(--expense); }
-.acct-ob-div { width:1px; background:var(--border); flex-shrink:0; margin:8px 0; }
-.add-fab-sm { width:32px; height:32px; border-radius:50%; background:var(--green); border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-left:8px; color:#000; transition:var(--transition); }
-.add-fab-sm:active { transform:scale(0.9); }
+.acct-ob-strip {
+    display: flex;
+    align-items: stretch;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    padding: 0 var(--page-px);
+}
+
+.acct-ob-item {
+    flex: 1;
+    text-align: center;
+    padding: 8px 4px;
+}
+
+.acct-ob-l {
+    font-size: 0.56rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 3px;
+}
+
+.acct-ob-v {
+    font-size: 0.78rem;
+    font-weight: var(--fw-data);
+    font-family: var(--font);
+}
+
+.acct-ob-v.pos {
+    color: var(--income);
+}
+
+.acct-ob-v.neg {
+    color: var(--expense);
+}
+
+.acct-ob-div {
+    width: 1px;
+    background: var(--border);
+    flex-shrink: 0;
+    margin: 8px 0;
+}
+
+.add-fab-sm {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--green);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-left: 8px;
+    color: #000;
+    transition: var(--transition);
+}
+
+.add-fab-sm:active {
+    transform: scale(0.9);
+}
 
 /* ── Credit Card account row — flat, like regular rows but with two amount cols ── */
-.acct-row-cc { display:flex; align-items:center; gap:6px; padding:11px var(--page-px); border-bottom:1px solid var(--border-light); background:var(--bg-card); cursor:pointer; transition:background 0.12s; }
-.acct-row-cc:active { background:var(--bg-hover); }
-.acct-row-cc .acct-row-name { flex:1; }
-.acct-row-cc-amounts { display:flex; align-items:center; gap:0; flex-shrink:0; }
-.acct-row-cc-col  { width:90px; text-align:right; }
-.acct-row-cc-val  { font-size:0.78rem; font-weight:var(--fw-data); font-family:var(--font); color:var(--text-primary); }
-.acct-row-cc-val.neg  { color:var(--expense); }
-.acct-row-cc-val.warn { color:#f5a623; }
-.acct-row-cc-val.pos  { color:var(--income); }
+.acct-row-cc {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 11px var(--page-px);
+    border-bottom: 1px solid var(--border-light);
+    background: var(--bg-card);
+    cursor: pointer;
+    transition: background 0.12s;
+}
+
+.acct-row-cc:active {
+    background: var(--bg-hover);
+}
+
+.acct-row-cc .acct-row-name {
+    flex: 1;
+}
+
+.acct-row-cc-amounts {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-shrink: 0;
+}
+
+.acct-row-cc-col {
+    width: 90px;
+    text-align: right;
+}
+
+.acct-row-cc-val {
+    font-size: 0.78rem;
+    font-weight: var(--fw-data);
+    font-family: var(--font);
+    color: var(--text-primary);
+}
+
+.acct-row-cc-val.neg {
+    color: var(--expense);
+}
+
+.acct-row-cc-val.warn {
+    color: #f5a623;
+}
+
+.acct-row-cc-val.pos {
+    color: var(--income);
+}
 
 /* Column label header row shown above CC rows in an all-CC group */
-.acct-cc-col-header { display:flex; align-items:flex-start; padding:6px var(--page-px) 8px; background:var(--bg-card2); border-bottom:1px solid var(--border-light); gap:0; }
-.acct-cc-col-lbl { font-size:0.60rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; white-space:nowrap; }
+.acct-cc-col-header {
+    display: flex;
+    align-items: flex-start;
+    padding: 6px var(--page-px) 8px;
+    background: var(--bg-card2);
+    border-bottom: 1px solid var(--border-light);
+    gap: 0;
+}
+
+.acct-cc-col-lbl {
+    font-size: 0.60rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+}
 
 /* CC group header with two-column totals */
-.acct-group-header-cc { flex-wrap:nowrap; gap:6px; }
-.acct-group-cc-totals { display:flex; align-items:center; flex-shrink:0; }
-.acct-group-cc-divider { width:1px; height:20px; background:rgba(255,255,255,0.15); margin:0 6px; flex-shrink:0; }
-.acct-group-cc-col { width:90px; text-align:right; }
-.acct-group-cc-lbl { font-size:0.55rem; font-weight:700; color:var(--gold); opacity:0.7; text-transform:uppercase; letter-spacing:0.3px; margin-bottom:1px; }
-.acct-group-cc-val { font-size:0.78rem; font-weight:var(--fw-data); font-family:var(--font); color:var(--gold); }
-.acct-group-cc-val.neg  { color:var(--expense); }
-.acct-group-cc-val.warn { color:#f5a623; }
-.acct-group-cc-val.pos  { color:var(--income); }
+.acct-group-header-cc {
+    flex-wrap: nowrap;
+    gap: 6px;
+}
+
+.acct-group-cc-totals {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.acct-group-cc-divider {
+    width: 1px;
+    height: 20px;
+    background: rgba(255, 255, 255, 0.15);
+    margin: 0 6px;
+    flex-shrink: 0;
+}
+
+.acct-group-cc-col {
+    width: 90px;
+    text-align: right;
+}
+
+.acct-group-cc-lbl {
+    font-size: 0.55rem;
+    font-weight: 700;
+    color: var(--gold);
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 1px;
+}
+
+.acct-group-cc-val {
+    font-size: 0.78rem;
+    font-weight: var(--fw-data);
+    font-family: var(--font);
+    color: var(--gold);
+}
+
+.acct-group-cc-val.neg {
+    color: var(--expense);
+}
+
+.acct-group-cc-val.warn {
+    color: #f5a623;
+}
+
+.acct-group-cc-val.pos {
+    color: var(--income);
+}
 
 /* ── CC cycle info strip in drill-down ──────────────────────────────────── */
-.cc-cycle-info-strip { display:flex; align-items:center; padding:6px var(--page-px); background:rgba(0,229,160,0.07); border-bottom:1px solid rgba(0,229,160,0.15); font-size:0.7rem; color:var(--text-muted); gap:6px; }
-.cc-cycle-info-strip strong { color:var(--accent); }
-.cc-cycle-badge { display:inline-block; font-size:0.58rem; font-weight:700; color:var(--accent); background:rgba(0,229,160,0.15); border-radius:4px; padding:1px 5px; margin-left:6px; text-transform:uppercase; letter-spacing:0.3px; vertical-align:middle; }
+.cc-cycle-info-strip {
+    display: flex;
+    align-items: center;
+    padding: 6px var(--page-px);
+    background: rgba(0, 229, 160, 0.07);
+    border-bottom: 1px solid rgba(0, 229, 160, 0.15);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    gap: 6px;
+}
+
+.cc-cycle-info-strip strong {
+    color: var(--accent);
+}
+
+.cc-cycle-badge {
+    display: inline-block;
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: var(--accent);
+    background: rgba(0, 229, 160, 0.15);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    vertical-align: middle;
+}
 
 
 /* ── CC Due Date Alert Banner ────────────────────────────────────────────── */
-.cc-due-banner { display:flex; align-items:flex-start; gap:10px; margin:6px var(--page-px) 2px; padding:10px 12px; border-radius:12px; border:1px solid; }
-.cc-due-banner.warning  { background:rgba(255,180,0,0.08); border-color:rgba(255,180,0,0.35); }
-.cc-due-banner.urgent   { background:rgba(255,120,0,0.10); border-color:rgba(255,120,0,0.45); }
-.cc-due-banner.overdue  { background:rgba(255,77,106,0.10); border-color:rgba(255,77,106,0.45); }
-.cc-due-banner-icon  { font-size:1.1rem; flex-shrink:0; margin-top:1px; }
-.cc-due-banner-body  { flex:1; min-width:0; }
-.cc-due-banner-title { font-size:0.78rem; font-weight:700; color:var(--text-primary); }
-.cc-due-banner-label { color:var(--gold); }
-.cc-due-banner.urgent  .cc-due-banner-label { color:#ff7800; }
-.cc-due-banner.overdue .cc-due-banner-label { color:var(--expense); }
-.cc-due-banner-sub   { font-size:0.68rem; color:var(--text-muted); margin-top:2px; }
-.cc-due-banner-actions { display:flex; align-items:center; gap:8px; margin-left:8px; }
-.cc-due-banner-chip { background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.2); color:var(--text-muted); border-radius:12px; padding:2px 8px; font-size:0.7rem; font-weight:700; cursor:pointer; }
-.cc-due-banner-chip:hover { background:rgba(255,255,255,0.2); }
-.cc-due-banner-dismiss { display:none; }
+.cc-due-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 6px var(--page-px) 2px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid;
+}
+
+.cc-due-banner.warning {
+    background: rgba(255, 180, 0, 0.08);
+    border-color: rgba(255, 180, 0, 0.35);
+}
+
+.cc-due-banner.urgent {
+    background: rgba(255, 120, 0, 0.10);
+    border-color: rgba(255, 120, 0, 0.45);
+}
+
+.cc-due-banner.overdue {
+    background: rgba(255, 77, 106, 0.10);
+    border-color: rgba(255, 77, 106, 0.45);
+}
+
+.cc-due-banner-icon {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.cc-due-banner-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.cc-due-banner-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.cc-due-banner-label {
+    color: var(--gold);
+}
+
+.cc-due-banner.urgent .cc-due-banner-label {
+    color: #ff7800;
+}
+
+.cc-due-banner.overdue .cc-due-banner-label {
+    color: var(--expense);
+}
+
+.cc-due-banner-sub {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.cc-due-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 8px;
+}
+
+.cc-due-banner-chip {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--text-muted);
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.cc-due-banner-chip:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.cc-due-banner-dismiss {
+    display: none;
+}
 
 /* ── CC Due Date Dot on account row ─────────────────────────────────────── */
-.cc-due-dot { display:inline-flex; align-items:center; justify-content:center; min-width:16px; height:16px; border-radius:8px; font-size:0.58rem; font-weight:800; padding:0 4px; margin-left:6px; vertical-align:middle; flex-shrink:0; }
-.cc-due-dot.warn    { background:rgba(255,180,0,0.20); color:#f5a623; border:1px solid rgba(255,180,0,0.4); }
-.cc-due-dot.urgent  { background:rgba(255,120,0,0.20); color:#ff7800; border:1px solid rgba(255,120,0,0.5); }
-.cc-due-dot.overdue { background:rgba(255,77,106,0.20); color:var(--expense); border:1px solid rgba(255,77,106,0.5); }
+.cc-due-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    font-size: 0.58rem;
+    font-weight: 800;
+    padding: 0 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
+.cc-due-dot.warn {
+    background: rgba(255, 180, 0, 0.20);
+    color: #f5a623;
+    border: 1px solid rgba(255, 180, 0, 0.4);
+}
+
+.cc-due-dot.urgent {
+    background: rgba(255, 120, 0, 0.20);
+    color: #ff7800;
+    border: 1px solid rgba(255, 120, 0, 0.5);
+}
+
+.cc-due-dot.overdue {
+    background: rgba(255, 77, 106, 0.20);
+    color: var(--expense);
+    border: 1px solid rgba(255, 77, 106, 0.5);
+}

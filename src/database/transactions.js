@@ -11,6 +11,8 @@ export const rowToTxn = (r) => ({
   Currency: r.currency || 'INR', 'Income/Expense': r.type || 'Expense',
   created_at: r.created_at, updated_at: r.updated_at,
   recurring_rule_id: r.recurring_rule_id || '',
+  Tags: r.tags || '',
+  split_group_id: r.split_group_id || '',
 });
 
 export const getTransactions = async (filters = {}) => {
@@ -23,10 +25,25 @@ export const getTransactions = async (filters = {}) => {
   }
   if (filters.category) { sql += ' AND category=?'; vals.push(filters.category); }
   if (filters.type)     { sql += ' AND type=?';     vals.push(filters.type); }
+  if (filters.tag) {
+    sql += ' AND (tags LIKE ? OR note LIKE ? OR description LIKE ?)';
+    const t = `%${filters.tag}%`;
+    vals.push(t, t, t);
+  }
   if (filters.search) {
-    sql += ' AND (note LIKE ? OR category LIKE ? OR account LIKE ? OR description LIKE ? OR from_account LIKE ? OR to_account LIKE ?)';
-    const q = `%${filters.search}%`;
-    vals.push(q, q, q, q, q, q);
+    const rawQ = filters.search.trim();
+    if (rawQ.startsWith('#')) {
+      const cleanTag = rawQ.replace(/^#/, '');
+      sql += ' AND (tags LIKE ? OR note LIKE ? OR description LIKE ?)';
+      const t1 = `%#${cleanTag}%`;
+      const t2 = `%#${cleanTag}%`;
+      const t3 = `%#${cleanTag}%`;
+      vals.push(t1, t2, t3);
+    } else {
+      sql += ' AND (note LIKE ? OR category LIKE ? OR account LIKE ? OR description LIKE ? OR from_account LIKE ? OR to_account LIKE ? OR tags LIKE ?)';
+      const q = `%${rawQ}%`;
+      vals.push(q, q, q, q, q, q, q);
+    }
   }
   sql += ' ORDER BY date DESC, time DESC, created_at DESC';
   if (filters.limit) { sql += ' LIMIT ?'; vals.push(filters.limit); }
@@ -39,14 +56,14 @@ export const addTransaction = async (data) => {
   const id  = data.ID || data._id || uuid();
   const now = new Date().toISOString();
   await db.run(
-    `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [id, data.Date||'', data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
      data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
      parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
      data.Currency||'INR', data['Income/Expense']||'Expense', now, now,
-     data.recurring_rule_id||'']
+     data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'']
   );
-  return rowToTxn({ id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'', category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'', inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR', type:data['Income/Expense']||'Expense', created_at:now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'' });
+  return rowToTxn({ id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'', category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'', inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR', type:data['Income/Expense']||'Expense', created_at:now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'', tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'' });
 };
 
 export const updateTransaction = async (id, data) => {
@@ -62,14 +79,14 @@ export const updateTransaction = async (id, data) => {
     console.error('updateTransaction: failed to fetch existing created_at:', e);
   }
   await db.run(
-    `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=? WHERE id=?`,
+    `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=?,tags=?,split_group_id=? WHERE id=?`,
     [data.Date, data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
      data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
      parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
      data.Currency||'INR', data['Income/Expense']||'Expense', now,
-     data.recurring_rule_id||'', id]
+     data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'', id]
   );
-  return rowToTxn({ id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'', category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'', inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR', type:data['Income/Expense']||'Expense', created_at:existingCreatedAt, updated_at:now, recurring_rule_id:data.recurring_rule_id||'' });
+  return rowToTxn({ id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'', category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'', inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR', type:data['Income/Expense']||'Expense', created_at:existingCreatedAt, updated_at:now, recurring_rule_id:data.recurring_rule_id||'', tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'' });
 };
 
 export const deleteTransaction    = async (id) => { await getDB().run('DELETE FROM transactions WHERE id=?', [id]); };

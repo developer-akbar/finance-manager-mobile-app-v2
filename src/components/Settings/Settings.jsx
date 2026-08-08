@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, parseDate } from '../../utils/format.js';
+import ReportGenerator from '../Reports/ReportGenerator.jsx';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -876,12 +877,217 @@ export function CategoriesManager({ onBack }) {
 }
 
 // ─────────────────────────────────────────────
+// Tags Manager
+// ─────────────────────────────────────────────
+function TagsManager({ onBack }) {
+  const { state, updateTransaction } = useApp();
+  const { transactions } = state;
+  const [editingTag, setEditingTag] = useState(null); // { oldName, newName }
+  const [confirmDelete, setConfirmDelete] = useState(null); // tag name
+
+  // Aggregate all tags and their transaction counts
+  const tagList = useMemo(() => {
+    const map = {};
+    for (const t of transactions) {
+      const tags = [];
+      if (t.Tags) {
+        t.Tags.split(',').forEach(tag => {
+          const clean = tag.trim().toLowerCase();
+          if (clean) tags.push(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+      const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
+      if (matches) matches.forEach(m => tags.push(m.toLowerCase()));
+
+      const unique = Array.from(new Set(tags));
+      for (const tag of unique) {
+        map[tag] = (map[tag] || 0) + 1;
+      }
+    }
+    return Object.entries(map).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  }, [transactions]);
+
+  const handleRename = async () => {
+    if (!editingTag || !editingTag.newName.trim()) return;
+    const rawOld = editingTag.oldName.toLowerCase();
+    const oldHash = rawOld.startsWith('#') ? rawOld : `#${rawOld}`;
+    const oldClean = rawOld.replace(/^#/, '');
+
+    const rawNew = editingTag.newName.trim().toLowerCase();
+    const newHash = rawNew.startsWith('#') ? rawNew : `#${rawNew}`;
+    const newClean = rawNew.replace(/^#/, '');
+
+    const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regexOldHash = new RegExp(`(^|\\s)${escapeRegex(oldHash)}(\\b|\\s|$)`, 'gi');
+
+    for (const t of transactions) {
+      let changed = false;
+      let curTags = (t.Tags || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      if (curTags.some(x => x === oldHash || x === oldClean)) {
+        curTags = curTags.map(x => (x === oldHash || x === oldClean) ? newHash : x);
+        changed = true;
+      }
+      let curNote = t.Note || '';
+      if (curNote.toLowerCase().includes(oldHash)) {
+        curNote = curNote.replace(regexOldHash, `$1${newHash}$2`).trim();
+        changed = true;
+      }
+      let curDesc = t.Description || '';
+      if (curDesc.toLowerCase().includes(oldHash)) {
+        curDesc = curDesc.replace(regexOldHash, `$1${newHash}$2`).trim();
+        changed = true;
+      }
+      if (changed) {
+        const id = t._id || t.id;
+        await updateTransaction(id, {
+          ...t,
+          Tags: Array.from(new Set(curTags)).join(', '),
+          Note: curNote,
+          Description: curDesc,
+        });
+      }
+    }
+    setEditingTag(null);
+  };
+
+  const handleDelete = async (tagToDelete) => {
+    const rawTag = tagToDelete.toLowerCase();
+    const withHash = rawTag.startsWith('#') ? rawTag : `#${rawTag}`;
+    const noHash = rawTag.replace(/^#/, '');
+
+    const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const hashRegex = new RegExp(`(^|\\s)${escapeRegex(withHash)}(\\b|\\s|$)`, 'gi');
+
+    for (const t of transactions) {
+      let changed = false;
+      let curTags = (t.Tags || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      if (curTags.some(x => x === withHash || x === noHash)) {
+        curTags = curTags.filter(x => x !== withHash && x !== noHash);
+        changed = true;
+      }
+      let curNote = t.Note || '';
+      if (curNote.toLowerCase().includes(withHash)) {
+        curNote = curNote.replace(hashRegex, '$1$2').trim();
+        changed = true;
+      }
+      let curDesc = t.Description || '';
+      if (curDesc.toLowerCase().includes(withHash)) {
+        curDesc = curDesc.replace(hashRegex, '$1$2').trim();
+        changed = true;
+      }
+      if (changed) {
+        const id = t._id || t.id;
+        await updateTransaction(id, {
+          ...t,
+          Tags: curTags.join(', '),
+          Note: curNote,
+          Description: curDesc,
+        });
+      }
+    }
+    setConfirmDelete(null);
+  };
+
+  return (
+    <div className="sub-screen">
+      <div className="page-hdr">
+        <button className="back-btn" onClick={onBack}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+        </button>
+        <div className="page-hdr-title">Tags &amp; Hashtags</div>
+      </div>
+
+      <div className="sub-body">
+        <div style={{ padding: '0 var(--page-px) 12px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+          Tags allow cross-cutting tracking across multiple categories (e.g. #trip, #tax, #medical).
+        </div>
+
+        <div className="settings-card" style={{ margin: '0 var(--page-px) 14px' }}>
+          {tagList.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+              No hashtags found yet. Add #tag in any transaction note or tag field.
+            </div>
+          ) : (
+            tagList.map(tag => (
+              <div key={tag.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid var(--border-light)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontWeight: 800, color: 'var(--accent)', fontSize: '0.88rem' }}>{tag.name}</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'var(--bg-card2)', padding: '2px 6px', borderRadius: 6 }}>
+                    {tag.count} txn{tag.count > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => setEditingTag({ oldName: tag.name, newName: tag.name })}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete(tag.name)}
+                    style={{ background: 'none', border: 'none', color: 'var(--expense)', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Rename Modal */}
+        {editingTag && (
+          <>
+            <div className="overlay" onClick={() => setEditingTag(null)} />
+            <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+              <div className="sheet-handle" />
+              <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 8 }}>Rename Tag {editingTag.oldName}</div>
+              <input
+                className="form-input"
+                style={{ marginBottom: 12 }}
+                value={editingTag.newName}
+                onChange={e => setEditingTag(p => ({ ...p, newName: e.target.value }))}
+                placeholder="New tag name (e.g. #vacation)"
+                autoFocus
+              />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost btn-full" onClick={() => setEditingTag(null)}>Cancel</button>
+                <button className="btn btn-primary btn-full" onClick={handleRename}>Save &amp; Update All</button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Confirm Delete Modal */}
+        {confirmDelete && (
+          <>
+            <div className="overlay" onClick={() => setConfirmDelete(null)} />
+            <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+              <div className="sheet-handle" />
+              <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 6 }}>Delete tag {confirmDelete}?</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 14 }}>
+                This will remove the tag from all associated transactions. The transactions themselves will NOT be deleted.
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost btn-full" onClick={() => setConfirmDelete(null)}>Cancel</button>
+                <button className="btn btn-danger btn-full" onClick={() => handleDelete(confirmDelete)}>Delete Tag</button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // Data Manager
 // ─────────────────────────────────────────────
 function DataManager({ onBack }) {
   const { state, importData, cancelImport, clearAllData, cleanupAccounts, analyseImport, updateSettings, modifyRecurringRule, removeRecurringRule } = useApp();
   const { transactions, accounts, accountGroups, accountMapping, categories, budgets, importProgress, recurringRules } = state;
   const fileRef = useRef(null);
+  const [showReportGenerator, setShowReportGenerator] = useState(false);
   const [status, setStatus] = useState(null);
   const [showMode, setShowMode] = useState(false);
   const [pendingRows, setPending] = useState(null);
@@ -1075,6 +1281,10 @@ function DataManager({ onBack }) {
 
   const pct = importProgress ? Math.round((importProgress.processed / importProgress.total) * 100) : 0;
 
+  if (showReportGenerator) {
+    return <ReportGenerator onBack={() => setShowReportGenerator(false)} />;
+  }
+
   return (
     <div className="sub-screen">
       <div className="page-hdr">
@@ -1101,22 +1311,20 @@ function DataManager({ onBack }) {
           </div>
         </div>
 
+        {/* Status banner */}
         {status && (
-          <div className={`dm-alert ${status.type}`} style={{ margin: '0 var(--page-px) 10px' }}>
+          <div className={`dm-status ${status.type}`}>
             {status.msg}
           </div>
         )}
 
+        {/* Progress bar */}
         {importProgress && (
-          <div style={{ margin: '0 0 10px', background: 'var(--bg-card)', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '12px var(--page-px)' }}>
-            <div style={{ display: 'flex', justifycontent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Importing {importProgress.total.toLocaleString()} rows…</span>
-              <button className="btn btn-sm btn-danger" onClick={cancelImport}>Cancel</button>
+          <div className="dm-progress-wrap">
+            <div className="dm-progress-bar">
+              <div className="dm-progress-fill" style={{ width: `${pct}%` }} />
             </div>
-            <div className="progress-track">
-              <div className="progress-fill" style={{ width: `${pct}%`, background: 'var(--green)' }} />
-            </div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 5 }}>
+            <div className="dm-progress-txt">
               {importProgress.processed.toLocaleString()} / {importProgress.total.toLocaleString()} ({pct}%)
             </div>
           </div>
@@ -1132,11 +1340,18 @@ function DataManager({ onBack }) {
         </label>
 
         {/* Export section */}
-        <div className="dm-section-hdr">Export</div>
+        <div className="dm-section-hdr">Export &amp; Reports</div>
         <div className="dm-card" style={{ margin: '0 0 14px', borderRadius: 0, borderLeft: 'none', borderRight: 'none' }}>
+          <div className="dm-row" onClick={() => setShowReportGenerator(true)}>
+            <div className="dm-row-icon">📑</div>
+            <div className="dm-row-content">
+              <div className="dm-row-title">Custom Report &amp; Statement (Excel / CSV)</div>
+              <div className="dm-row-sub">Date ranges, FY filters, category breakdown &amp; statements</div>
+            </div>
+          </div>
           <div className="dm-row" onClick={exportCSV}>
             <div className="dm-row-icon">📊</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export CSV</div><div className="dm-row-sub">Transactions only · safe for spreadsheets</div></div>
+            <div className="dm-row-content"><div className="dm-row-title">Export All CSV</div><div className="dm-row-sub">Transactions only · safe for spreadsheets</div></div>
           </div>
           <div className="dm-row" onClick={exportJSON}>
             <div className="dm-row-icon">🗃️</div>
@@ -1885,6 +2100,7 @@ export default function Settings({ backInterceptRef } = {}) {
 
   if (screen === 'recurring') return <RecurringManager onBack={() => setScreen(null)} />;
   if (screen === 'data') return <DataManager onBack={() => setScreen(null)} />;
+  if (screen === 'tags') return <TagsManager onBack={() => setScreen(null)} />;
   if (screen === 'accounts') return <AccountsManager onBack={() => setScreen(null)} />;
   if (screen === 'categories') return <CategoriesManager onBack={() => setScreen(null)} />;
   if (screen === 'budgets') return <BudgetsManager onBack={() => setScreen(null)} />;
@@ -1942,6 +2158,11 @@ export default function Settings({ backInterceptRef } = {}) {
             <div className="settings-row-title">Recurring</div>
             <div className="settings-row-sub">{(state.recurringRules || []).filter(r => r.rule_type === 'repeat' && r.status === 'active').length} active repeat rules</div>
           </div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+        </div>
+        <div className="settings-row" onClick={() => setScreen('tags')}>
+          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>#️⃣</div>
+          <div className="settings-row-content"><div className="settings-row-title">Tags &amp; Hashtags</div><div className="settings-row-sub">Manage, rename, and clean cross-cutting tags</div></div>
           <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
         </div>
         <div className="settings-row" onClick={() => setScreen('accounts')}>

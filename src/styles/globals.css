@@ -77,6 +77,7 @@
   --font:      'Sora', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
   --nav-height:  56px;
+  --nav-h:       56px;
   --header-h:    50px;
   --safe-top:    env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
