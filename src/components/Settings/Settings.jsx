@@ -135,7 +135,7 @@ function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, onReorder,
 // ─────────────────────────────────────────────
 export function AccountsManager({ onBack }) {
   const { state, updateSettings, renameAccount, deleteAccountTransactions } = useApp();
-  const [accounts, setAccounts] = useState(() => (state.accounts || []).map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0 } : a));
+  const [accounts, setAccounts] = useState(() => (state.accounts || []).map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, cardLast4: '' } : { ...a, cardLast4: a.cardLast4 || a.card_last4 || '' }));
   const [groups, setGroups] = useState(() => state.accountGroups || []);
   const [newAcct, setNewAcct] = useState('');
   const [newGrp, setNewGrp] = useState('');
@@ -155,6 +155,13 @@ export function AccountsManager({ onBack }) {
   const [editGrpName, setEditGrpName] = useState('');
   const dragIdx = useRef(null);
   const grpDragIdx = useRef(null);
+
+  // Sync when state.accounts updates
+  useEffect(() => {
+    if (state.accounts) {
+      setAccounts(state.accounts.map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, cardLast4: '' } : { ...a, cardLast4: a.cardLast4 || a.card_last4 || '' }));
+    }
+  }, [state.accounts]);
 
   const uniqueGroups = useMemo(() => [...new Set(groups)], [groups]);
   const uniqueAccounts = useMemo(() => {
@@ -415,18 +422,23 @@ export function AccountsManager({ onBack }) {
         {/* Tab toggle */}
         <div className="mgr-tabs" style={{ padding: '0 var(--page-px) 8px', display: 'flex', gap: 6 }}>
           <button className={`mgr-tab-btn ${tabMode === 'list' ? 'active' : ''}`} onClick={() => setTabMode('list')}>List</button>
-          <button className={`mgr-tab-btn ${tabMode === 'kanban' ? 'active' : ''}`} onClick={() => setTabMode('kanban')}>Kanban</button>
+          <button className={`mgr-tab-btn ${tabMode === 'kanban' ? 'active' : ''}`} onClick={() => setTabMode('kanban')}>Board</button>
         </div>
 
         {tabMode === 'kanban' ? (
-          <Kanban
-            columns={uniqueGroups}
-            items={uniqueAccounts}
-            getItemGroup={a => a.group || ''}
-            getItemLabel={a => a.name}
+          <AccountKanbanBoard
+            accounts={accounts}
+            groups={groups}
             onMove={handleKanbanMove}
             onReorder={handleKanbanReorder}
-            unassignedLabel="Ungrouped"
+            onAddGroup={() => {
+              const name = window.prompt('New group name:');
+              if (name && name.trim() && !groups.includes(name.trim())) {
+                const g = [...groups, name.trim()];
+                setGroups(g);
+                save(accounts, g);
+              }
+            }}
           />
         ) : (() => {
           // Build grouped sections preserving flat indices for drag/edit/delete
@@ -440,40 +452,59 @@ export function AccountsManager({ onBack }) {
 
           const renderEditPanel = (i) => (
             <div className="mgr-edit-panel">
-              <div className="mgr-edit-label">Edit Account</div>
-              <div className="form-group" style={{ marginBottom: 8 }}>
-                <label className="form-label">Name</label>
-                <input className="form-input" value={editName} onChange={e => setEditName(e.target.value)} spellCheck="true" autoCapitalize="sentences" />
-                <div className="mgr-edit-warn">⚠ Renaming updates all transactions</div>
+              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Edit Account
               </div>
-              <div className="form-group" style={{ marginBottom: 8 }}>
-                <label className="form-label">Group</label>
-                <select className="form-input" value={editGrp} onChange={e => setEditGrp(e.target.value)}>
-                  <option value="">No group</option>
-                  {uniqueGroups.map(g => <option key={g}>{g}</option>)}
-                </select>
+
+              {/* Name */}
+              <div className="mgr-edit-field">
+                <label className="mgr-edit-field-label">Account Name</label>
+                <input
+                  className="form-input"
+                  value={editName}
+                  onChange={e => setEditName(e.target.value)}
+                  spellCheck="true"
+                  autoCapitalize="sentences"
+                  placeholder="e.g. HDFC Credit, Amazon Pay ICICI"
+                />
+                <div className="mgr-edit-field-warn">⚠ Renaming updates all associated transactions</div>
               </div>
-              <div className="form-group" style={{ marginBottom: 8 }}>
-                <label className="form-label">Account Type</label>
-                <select className="form-input" value={editAcctType} onChange={e => { setEditAcctType(e.target.value); setEditErrors({}); }}>
-                  <option value="">Regular</option>
-                  <option value="Credit Card">💳 Credit Card</option>
-                </select>
+
+              {/* Group & Type in 2 columns */}
+              <div className="mgr-edit-grid-2">
+                <div className="mgr-edit-field">
+                  <label className="mgr-edit-field-label">Group</label>
+                  <select className="form-input" value={editGrp} onChange={e => setEditGrp(e.target.value)}>
+                    <option value="">No group</option>
+                    {uniqueGroups.map(g => <option key={g}>{g}</option>)}
+                  </select>
+                </div>
+                <div className="mgr-edit-field">
+                  <label className="mgr-edit-field-label">Account Type</label>
+                  <select className="form-input" value={editAcctType} onChange={e => { setEditAcctType(e.target.value); setEditErrors({}); }}>
+                    <option value="">Regular</option>
+                    <option value="Credit Card">💳 Credit Card</option>
+                  </select>
+                </div>
               </div>
+
+              {/* Credit Card Settings */}
               {editAcctType === 'Credit Card' && (
-                <div className="cc-config-panel">
+                <div className="cc-config-panel" style={{ margin: '4px 0 0' }}>
                   <div className="cc-config-title">💳 Credit Card Settings</div>
-                  <div className="form-group" style={{ marginBottom: 8 }}>
-                    <label className="form-label">Statement / Settlement Date <span className="form-label-hint">(day of month bill closes)</span></label>
-                    <input
-                      className={`form-input${editErrors.settlementDate ? ' input-error' : ''}`}
-                      type="number" inputMode="numeric" min="1" max="28"
-                      placeholder="e.g. 18"
-                      value={editSettleDay}
-                      onChange={e => { setEditSettleDay(e.target.value); setEditErrors(p => ({ ...p, settlementDate: '' })); }}
-                    />
-                    {editErrors.settlementDate && <div className="form-error">{editErrors.settlementDate}</div>}
-                    <div className="form-hint">
+                  <div className="mgr-edit-grid-2">
+                    <div className="mgr-edit-field">
+                      <label className="mgr-edit-field-label">
+                        Statement Date <span className="form-label-hint">(day bill closes)</span>
+                      </label>
+                      <input
+                        className={`form-input${editErrors.settlementDate ? ' input-error' : ''}`}
+                        type="number" inputMode="numeric" min="1" max="28"
+                        placeholder="e.g. 18"
+                        value={editSettleDay}
+                        onChange={e => { setEditSettleDay(e.target.value); setEditErrors(p => ({ ...p, settlementDate: '' })); }}
+                      />
+                      {editErrors.settlementDate && <div className="form-error">{editErrors.settlementDate}</div>}
                       {editSettleDay && !editErrors.settlementDate && (() => {
                         const sd = parseInt(editSettleDay, 10);
                         if (sd >= 1 && sd <= 28) {
@@ -482,23 +513,24 @@ export function AccountsManager({ onBack }) {
                           if (cd >= sd) { cycleStart = new Date(cy, cm, sd); cycleEnd = new Date(cy, cm + 1, sd - 1); }
                           else { cycleStart = new Date(cy, cm - 1, sd); cycleEnd = new Date(cy, cm, sd - 1); }
                           const fmt = d => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-                          return <span>Current billing cycle: <strong>{fmt(cycleStart)} – {fmt(cycleEnd)}</strong></span>;
+                          return <div className="mgr-edit-field-hint">Billing: <strong>{fmt(cycleStart)} – {fmt(cycleEnd)}</strong></div>;
                         }
                         return null;
                       })()}
                     </div>
-                  </div>
-                  <div className="form-group" style={{ marginBottom: 8 }}>
-                    <label className="form-label">Payment Due Days <span className="form-label-hint">(days after statement date)</span></label>
-                    <input
-                      className={`form-input${editErrors.paymentDueDays ? ' input-error' : ''}`}
-                      type="number" inputMode="numeric" min="1" max="30"
-                      placeholder="e.g. 18"
-                      value={editPayDays}
-                      onChange={e => { setEditPayDays(e.target.value); setEditErrors(p => ({ ...p, paymentDueDays: '' })); }}
-                    />
-                    {editErrors.paymentDueDays && <div className="form-error">{editErrors.paymentDueDays}</div>}
-                    <div className="form-hint">
+
+                    <div className="mgr-edit-field">
+                      <label className="mgr-edit-field-label">
+                        Payment Due Days <span className="form-label-hint">(after statement)</span>
+                      </label>
+                      <input
+                        className={`form-input${editErrors.paymentDueDays ? ' input-error' : ''}`}
+                        type="number" inputMode="numeric" min="1" max="30"
+                        placeholder="e.g. 19"
+                        value={editPayDays}
+                        onChange={e => { setEditPayDays(e.target.value); setEditErrors(p => ({ ...p, paymentDueDays: '' })); }}
+                      />
+                      {editErrors.paymentDueDays && <div className="form-error">{editErrors.paymentDueDays}</div>}
                       {editSettleDay && editPayDays && !editErrors.settlementDate && !editErrors.paymentDueDays && (() => {
                         const sd = parseInt(editSettleDay, 10), pd = parseInt(editPayDays, 10);
                         if (sd >= 1 && sd <= 28 && pd >= 1 && pd <= 30) {
@@ -506,7 +538,7 @@ export function AccountsManager({ onBack }) {
                           let stmtDate;
                           if (cd >= sd) stmtDate = new Date(cy, cm, sd); else stmtDate = new Date(cy, cm - 1, sd);
                           const dueDate = new Date(stmtDate); dueDate.setDate(dueDate.getDate() + pd);
-                          return <span>Last due date: <strong>{dueDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong></span>;
+                          return <div className="mgr-edit-field-hint">Due: <strong>{dueDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong></div>;
                         }
                         return null;
                       })()}
@@ -514,8 +546,12 @@ export function AccountsManager({ onBack }) {
                   </div>
                 </div>
               )}
-              <div className="form-group" style={{ marginBottom: 12 }}>
-                <label className="form-label">Card / Account Last 4 Digits <span className="form-label-hint">(for SMS &amp; UPI auto-detection)</span></label>
+
+              {/* Card / Account Last 4 Digits */}
+              <div className="mgr-edit-field">
+                <label className="mgr-edit-field-label">
+                  Card / Account Last 4 Digits
+                </label>
                 <input
                   className="form-input"
                   type="text"
@@ -524,13 +560,20 @@ export function AccountsManager({ onBack }) {
                   value={editCardLast4}
                   onChange={e => setEditCardLast4(e.target.value)}
                 />
-                <div className="form-hint">
-                  {editCardLast4 ? `Masked preview: •••• ${(editCardLast4.replace(/\D/g, '').slice(-4)) || editCardLast4}` : 'Helps auto-identify this account when parsing SMS or UPI alerts.'}
+                <div className="mgr-edit-field-hint" style={{ marginTop: 2 }}>
+                  {editCardLast4 && (
+                    <span style={{ color: 'var(--accent)', fontWeight: 700, marginRight: 6 }}>
+                      Masked preview: •••• {(editCardLast4.replace(/\D/g, '').slice(-4)) || editCardLast4} ·
+                    </span>
+                  )}
+                  Helps auto-identify this account when parsing SMS or UPI alerts.
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-ghost btn-sm" onClick={() => setEditIdx(null)}>Cancel</button>
-                <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setEditIdx(null)}>Cancel</button>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveEdit}>Save</button>
               </div>
             </div>
           );

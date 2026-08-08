@@ -60,6 +60,48 @@
 .form-error { font-size:0.68rem; color:var(--expense); margin-top:3px; font-weight:600; }
 .input-error { border-color:var(--expense) !important; }
 
+/* ── Account Edit Form ────────────────────────────────────────────────────── */
+.mgr-edit-panel {
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 14px var(--page-px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mgr-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+.mgr-edit-field-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mgr-edit-field-hint {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+.mgr-edit-field-warn {
+  font-size: 0.68rem;
+  color: var(--gold);
+  margin-top: 2px;
+  font-weight: 600;
+}
+.mgr-edit-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
 /* ── Grouped account list ─────────────────────────────────────────────────── */
 .mgr-acct-group-header { display:flex; align-items:center; justify-content:space-between; padding:6px var(--page-px); background:var(--gold-bg); border-top:1px solid var(--border); border-bottom:1px solid var(--border); font-size:0.7rem; font-weight:800; color:var(--gold); letter-spacing:0.3px; }
 .mgr-acct-group-count  { font-size:0.65rem; font-weight:700; color:var(--text-muted); background:var(--bg-card2); border-radius:10px; padding:1px 7px; }
