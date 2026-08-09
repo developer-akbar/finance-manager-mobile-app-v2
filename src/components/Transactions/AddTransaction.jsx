@@ -5,7 +5,7 @@ import './AddTransaction.css';
 import { AccountsManager, CategoriesManager } from '../Settings/Settings.jsx';
 import {
   buildInstalmentSchedule, computeNextRepeatDate,
-  buildInstalmentNote, stripInstalmentSuffix,
+  buildInstalmentNote, stripInstalmentSuffix, parseInstalmentInfo,
 } from '../../database/recurring.js';
 import { parseBankSMS } from '../../utils/smsParser.js';
 import ReceiptViewer from '../Common/ReceiptViewer.jsx';
@@ -489,7 +489,7 @@ export default function AddTransaction({
     if (isEdit) {
       const t=editTransaction, rt=t['Income/Expense']||'Expense';
       // Strip (x/x) instalment suffix from Note so user sees clean note in edit form
-      const cleanNote = (t.Note||'').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
+      const cleanNote = stripInstalmentSuffix(t.Note);
       return {type:rt,amount:String(t.INR||t.Amount||''),date:toInputDate(t.Date)||todayVal(),time:t.Time||lastTime,
         account:rt.startsWith('Transfer')?'':(t.Account||''),fromAccount:rt.startsWith('Transfer')?(t.Account||t.FromAccount||''):'',
         toAccount:rt.startsWith('Transfer')?(t.ToAccount||''):'',category:t.Category||'',
@@ -1038,32 +1038,31 @@ export default function AddTransaction({
         }
       } else {
         // Normal single transaction or instalment edit
-        const partMatch = (editTransaction?.Note || '').match(/\((\d+\/\d+)\)\s*$/);
-        const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!partMatch);
-        const thisNote = isInstalmentEdit && partMatch
-          ? `${baseNote} (${partMatch[1]})`.trim()
+        const instInfo = parseInstalmentInfo(editTransaction?.Note);
+        const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!instInfo);
+        const thisNote = isInstalmentEdit && instInfo
+          ? `${baseNote} (${instInfo.part}/${instInfo.total})`.trim()
           : baseNote;
-        const data={
-          Date:inputToStorage(form.date),Time:form.time||'',
-          Account:isTransfer?form.fromAccount:form.account,
-          FromAccount:isTransfer?form.fromAccount:'',ToAccount:isTransfer?form.toAccount:'',
-          Category:isTransfer?'Transfer':form.category,
-          Subcategory:form.subcategory||'Default',
-          Note:thisNote,Description:form.description||'',
-          INR:totalAmount,Amount:form.amount,
-          Currency:'INR','Income/Expense':form.type,
+        const data = {
+          Date: inputToStorage(form.date), Time: form.time || '',
+          Account: isTransfer ? form.fromAccount : form.account,
+          FromAccount: isTransfer ? form.fromAccount : '', ToAccount: isTransfer ? form.toAccount : '',
+          Category: isTransfer ? 'Transfer' : form.category,
+          Subcategory: form.subcategory || 'Default',
+          Note: thisNote, Description: form.description || '',
+          INR: totalAmount, Amount: form.amount,
+          Currency: 'INR', 'Income/Expense': form.type,
           // Preserve recurring_rule_id so instalment link is never lost
           recurring_rule_id: editTransaction?.recurring_rule_id || '',
           Tags: combinedTags,
           receipt_image: form.receipt_image || '',
           warranty_expiry: form.warranty_expiry || '',
           serial_no: form.serial_no || '',
+          _id: editTransaction?._id,
         };
         if (isInstalmentEdit) {
-          // Instalment edit: update this transaction, and bulk-update all siblings across the series (preserving their individual amounts & dates)
-          await updateTransaction(editTransaction._id, data);
+          // Bulk update the entire series (including this transaction) in a single atomic call
           await updateInstalmentSiblings(editTransaction.recurring_rule_id, data, editTransaction);
-          if (onSaveInstalment) await onSaveInstalment(data);
         } else if (isEdit) {
           await updateTransaction(editTransaction._id, data);
         } else {

@@ -2,7 +2,7 @@ import React, { createContext, useContext, useReducer, useEffect, useRef, useCal
 import {
   getAllRecurringRules, saveRecurringRule, updateRecurringRule, deleteRecurringRule,
   getActiveRecurringRules, buildInstalmentSchedule, computeNextRepeatDate,
-  buildInstalmentNote,
+  buildInstalmentNote, parseInstalmentInfo,
 } from '../database/recurring.js';
 import {
   getTransactions, addTransaction as dbAdd, updateTransaction as dbUpdate,
@@ -191,54 +191,53 @@ export function AppProvider({ children }) {
   // Edit Note, Description, Tags, Category, Subcategory, Account, etc. across all instalments in series.
   // Individual Dates and Amounts are preserved per instalment!
   const updateInstalmentSiblings = async (ruleId, updatedTxn, originalTxn = null) => {
-    // Fetch fresh transactions from DB to avoid stale state
+    // Fetch fresh transactions from DB
     const freshTxns = await getTransactions();
-    let allTxns = [];
-    if (ruleId) {
-      allTxns = freshTxns.filter(t => t.recurring_rule_id === ruleId);
+    
+    // Parse instalment info from either originalTxn note or updatedTxn note
+    const origInfo = parseInstalmentInfo(originalTxn?.Note) || parseInstalmentInfo(updatedTxn?.Note);
+    const matchedMap = new Map();
+
+    // 1. Match by recurring_rule_id if available
+    const targetRuleId = ruleId || originalTxn?.recurring_rule_id || updatedTxn?.recurring_rule_id;
+    if (targetRuleId) {
+      freshTxns.filter(t => t.recurring_rule_id === targetRuleId).forEach(t => matchedMap.set(t._id || t.ID || t.id, t));
     }
-    // Fallback: match by instalment pattern if ruleId is empty or not found
-    if (!allTxns.length && (originalTxn?.Note || updatedTxn?.Note)) {
-      const origNote = originalTxn?.Note || '';
-      const origMatch = origNote.match(/\((\d+)\/(\d+)\)\s*$/);
-      if (origMatch) {
-        const totalParts = origMatch[2];
-        const oldBase = origNote.replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
-        allTxns = freshTxns.filter(t => {
-          const m = (t.Note || '').match(/\((\d+)\/(\d+)\)\s*$/);
-          if (!m || m[2] !== totalParts) return false;
-          const base = (t.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
-          return base === oldBase;
-        });
-      }
+
+    // 2. Match by instalment series pattern (base note + total instalments count)
+    if (origInfo) {
+      const origBaseLower = origInfo.base.toLowerCase();
+      freshTxns.forEach(t => {
+        const info = parseInstalmentInfo(t.Note);
+        if (info && info.total === origInfo.total && info.base.toLowerCase() === origBaseLower) {
+          matchedMap.set(t._id || t.ID || t.id, t);
+        }
+      });
     }
-    if (!allTxns.length && updatedTxn?.Note) {
-      const updNote = updatedTxn.Note || '';
-      const updMatch = updNote.match(/\((\d+)\/(\d+)\)\s*$/);
-      if (updMatch) {
-        const totalParts = updMatch[2];
-        const updBase = updNote.replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
-        allTxns = freshTxns.filter(t => {
-          const m = (t.Note || '').match(/\((\d+)\/(\d+)\)\s*$/);
-          if (!m || m[2] !== totalParts) return false;
-          const base = (t.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
-          return base === updBase;
-        });
-      }
+
+    // 3. Ensure the current transaction itself is included in matchedMap
+    const currentId = updatedTxn?._id || updatedTxn?.ID || originalTxn?._id || originalTxn?.ID;
+    if (currentId && !matchedMap.has(currentId)) {
+      const selfTxn = freshTxns.find(t => (t._id || t.ID || t.id) === currentId);
+      if (selfTxn) matchedMap.set(currentId, selfTxn);
     }
+
+    const allTxns = Array.from(matchedMap.values());
     if (!allTxns.length) return;
 
-    // baseNote is already stripped of (x/x) — re-apply each sibling's own part number
-    const baseNote = (updatedTxn.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
+    // Determine the new base note (without instalment suffix)
+    const newInfo = parseInstalmentInfo(updatedTxn?.Note);
+    const newBaseNote = newInfo ? newInfo.base : (updatedTxn?.Note || '').replace(/[\(\[]\s*\d+\s*(?:\/|of)\s*\d+\s*[\)\]]\s*$/i, '').trim();
 
-    // Fast parallel batch updates across all instalments
+    // Fast parallel batch updates across all siblings
     await Promise.all(allTxns.map(async sibling => {
-      // Re-apply the original (x/x) suffix from this sibling's note
-      const partMatch = (sibling.Note || '').match(/\((\d+\/\d+)\)\s*$/);
-      const suffix = partMatch ? ` (${partMatch[1]})` : '';
-      const newNote = suffix ? `${baseNote}${suffix}` : baseNote;
-      const isTheEditedItem = (updatedTxn._id && (sibling._id === updatedTxn._id || sibling.ID === updatedTxn._id)) ||
-                              (originalTxn?._id && (sibling._id === originalTxn._id || sibling.ID === originalTxn._id));
+      const sibId = sibling._id || sibling.ID || sibling.id;
+      const isTheEditedItem = (currentId && sibId === currentId);
+
+      const sibInfo = parseInstalmentInfo(sibling.Note);
+      const partNum = sibInfo ? sibInfo.part : (origInfo ? origInfo.part : 1);
+      const totalNum = sibInfo ? sibInfo.total : (origInfo ? origInfo.total : allTxns.length);
+      const newNote = `${newBaseNote} (${partNum}/${totalNum})`;
 
       const updated = {
         ...sibling,
@@ -258,22 +257,25 @@ export function AppProvider({ children }) {
         receipt_image:    updatedTxn.receipt_image !== undefined ? updatedTxn.receipt_image : (sibling.receipt_image || ''),
         warranty_expiry:  updatedTxn.warranty_expiry !== undefined ? updatedTxn.warranty_expiry : (sibling.warranty_expiry || ''),
         serial_no:        updatedTxn.serial_no !== undefined ? updatedTxn.serial_no : (sibling.serial_no || ''),
-        // Date is preserved per instalment
+        recurring_rule_id: targetRuleId || sibling.recurring_rule_id || '',
+        // Date is preserved per instalment (only updated if edited item specifically changed date)
+        Date:             isTheEditedItem && updatedTxn.Date ? updatedTxn.Date : sibling.Date,
+        Time:             isTheEditedItem && updatedTxn.Time ? updatedTxn.Time : (sibling.Time || ''),
       };
-      await dbUpdate(sibling._id || sibling.ID || sibling.id, updated);
+      await dbUpdate(sibId, updated);
       return updated;
     }));
 
-    if (ruleId) {
+    if (targetRuleId) {
       const totalAmount = allTxns.reduce((sum, s) => {
-        const isEdited = (updatedTxn._id && (s._id === updatedTxn._id || s.ID === updatedTxn._id)) ||
-                         (originalTxn?._id && (s._id === originalTxn._id || s.ID === originalTxn._id));
+        const sibId = s._id || s.ID || s.id;
+        const isEdited = (currentId && sibId === currentId);
         const amt = isEdited ? (Number(updatedTxn.INR) || Number(updatedTxn.Amount) || 0) : (Number(s.INR) || 0);
         return sum + amt;
       }, 0);
       try {
-        await updateRecurringRule(ruleId, {
-          base_note:    baseNote,
+        await updateRecurringRule(targetRuleId, {
+          base_note:    newBaseNote,
           category:     updatedTxn.Category,
           subcategory:  updatedTxn.Subcategory || '',
           account:      updatedTxn.Account,
