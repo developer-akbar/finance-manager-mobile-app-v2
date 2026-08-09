@@ -231,7 +231,8 @@ export function AppProvider({ children }) {
     // baseNote is already stripped of (x/x) — re-apply each sibling's own part number
     const baseNote = (updatedTxn.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
 
-    for (const sibling of allTxns) {
+    // Fast parallel batch updates across all instalments
+    await Promise.all(allTxns.map(async sibling => {
       // Re-apply the original (x/x) suffix from this sibling's note
       const partMatch = (sibling.Note || '').match(/\((\d+\/\d+)\)\s*$/);
       const suffix = partMatch ? ` (${partMatch[1]})` : '';
@@ -260,8 +261,8 @@ export function AppProvider({ children }) {
         // Date is preserved per instalment
       };
       await dbUpdate(sibling._id || sibling.ID || sibling.id, updated);
-      dispatch({ type: 'UPD_TXN', payload: { ...updated, _id: sibling._id || sibling.ID || sibling.id } });
-    }
+      return updated;
+    }));
 
     if (ruleId) {
       const totalAmount = allTxns.reduce((sum, s) => {
@@ -282,6 +283,8 @@ export function AppProvider({ children }) {
         console.warn('updateRecurringRule error:', err);
       }
     }
+
+    await load();
   };
 
   // Update amount on one instalment and adjust rule total_amount
