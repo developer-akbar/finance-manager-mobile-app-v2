@@ -231,6 +231,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   const [customTo,  setTo]        = useState('');
   const [selected,  setSelected]  = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
+  const [copyTxn,   setCopyTxn]   = useState(null);
 
   // Advanced Search Scope & Multi-Filter Query Builder
   const [scopeNotes, setScopeNotes] = useState(true);
@@ -569,7 +570,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
             backInterceptRef={backInterceptRef}
             onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
             onTap={multiMode ? () => toggleSel(t) : undefined}
-            onCopy={onCopy}/>
+            onCopy={txn => setCopyTxn({ ...txn, _id: undefined })}/>
         ))}
         <div style={{height: 80}}/>
       </div>
@@ -739,6 +740,15 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
             </div>
           </div>
         </>
+      )}
+
+      {copyTxn && (
+        <AddTransaction
+          copyTransaction={copyTxn}
+          onClose={() => setCopyTxn(null)}
+          onSaveAndContinue={() => setCopyTxn({ ...copyTxn, _id: undefined })}
+          backInterceptRef={backInterceptRef}
+        />
       )}
     </div>
   );

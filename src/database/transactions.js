@@ -67,17 +67,8 @@ export const addTransaction = async (data) => {
 };
 
 export const updateTransaction = async (id, data) => {
-  const db  = getDB();
+  const db = getDB();
   const now = new Date().toISOString();
-  let existingCreatedAt = now;
-  try {
-    const existing = await db.query('SELECT created_at FROM transactions WHERE id=?', [id]);
-    if (existing.values?.[0]?.created_at) {
-      existingCreatedAt = existing.values[0].created_at;
-    }
-  } catch (e) {
-    console.error('updateTransaction: failed to fetch existing created_at:', e);
-  }
   await db.run(
     `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=?,tags=?,split_group_id=? WHERE id=?`,
     [data.Date, data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
@@ -86,7 +77,19 @@ export const updateTransaction = async (id, data) => {
      data.Currency||'INR', data['Income/Expense']||'Expense', now,
      data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'', id]
   );
-  return rowToTxn({ id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'', category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'', inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR', type:data['Income/Expense']||'Expense', created_at:existingCreatedAt, updated_at:now, recurring_rule_id:data.recurring_rule_id||'', tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'' });
+  return {
+    _id: id, ID: id,
+    Date: data.Date || '', Time: data.Time || '',
+    Account: data.Account || '', FromAccount: data.FromAccount || '', ToAccount: data.ToAccount || '',
+    Category: data.Category || '', Subcategory: data.Subcategory || '',
+    Note: data.Note || '', Description: data.Description || '',
+    INR: parseFloat(data.INR || data.Amount || 0), Amount: String(data.Amount || data.INR || '0'),
+    Currency: data.Currency || 'INR', 'Income/Expense': data['Income/Expense'] || 'Expense',
+    created_at: data.created_at || now, updated_at: now,
+    recurring_rule_id: data.recurring_rule_id || '',
+    Tags: data.Tags || data.tags || '',
+    split_group_id: data.split_group_id || '',
+  };
 };
 
 export const deleteTransaction    = async (id) => { await getDB().run('DELETE FROM transactions WHERE id=?', [id]); };
