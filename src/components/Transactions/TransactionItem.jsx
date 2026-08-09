@@ -190,14 +190,6 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
       editTransaction={t}
       onClose={onClose}
       backInterceptRef={backInterceptRef}
-      onSaveInstalment={isInstalment ? async (updatedData) => {
-        // Non-amount fields → apply to all siblings
-        await updateInstalmentSiblings(ruleId, updatedData);
-        // If amount changed → update rule total
-        const oldAmt = txnAmount(t);
-        const newAmt = parseFloat(updatedData.INR) || 0;
-        if (newAmt !== oldAmt) await updateInstalmentAmount(ruleId, oldAmt, newAmt);
-      } : null}
     />
   );
 

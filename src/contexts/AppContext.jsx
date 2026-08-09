@@ -199,16 +199,30 @@ export function AppProvider({ children }) {
     }
     // Fallback: match by instalment pattern if ruleId is empty or not found
     if (!allTxns.length && (originalTxn?.Note || updatedTxn?.Note)) {
-      const refNote = originalTxn?.Note || updatedTxn?.Note || '';
-      const partMatch = refNote.match(/\((\d+)\/(\d+)\)\s*$/);
-      if (partMatch) {
-        const totalParts = partMatch[2];
-        const oldBase = refNote.replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
+      const origNote = originalTxn?.Note || '';
+      const origMatch = origNote.match(/\((\d+)\/(\d+)\)\s*$/);
+      if (origMatch) {
+        const totalParts = origMatch[2];
+        const oldBase = origNote.replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
         allTxns = freshTxns.filter(t => {
           const m = (t.Note || '').match(/\((\d+)\/(\d+)\)\s*$/);
           if (!m || m[2] !== totalParts) return false;
           const base = (t.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
           return base === oldBase;
+        });
+      }
+    }
+    if (!allTxns.length && updatedTxn?.Note) {
+      const updNote = updatedTxn.Note || '';
+      const updMatch = updNote.match(/\((\d+)\/(\d+)\)\s*$/);
+      if (updMatch) {
+        const totalParts = updMatch[2];
+        const updBase = updNote.replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
+        allTxns = freshTxns.filter(t => {
+          const m = (t.Note || '').match(/\((\d+)\/(\d+)\)\s*$/);
+          if (!m || m[2] !== totalParts) return false;
+          const base = (t.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
+          return base === updBase;
         });
       }
     }
@@ -222,7 +236,8 @@ export function AppProvider({ children }) {
       const partMatch = (sibling.Note || '').match(/\((\d+\/\d+)\)\s*$/);
       const suffix = partMatch ? ` (${partMatch[1]})` : '';
       const newNote = suffix ? `${baseNote}${suffix}` : baseNote;
-      const isTheEditedItem = (updatedTxn._id && sibling._id === updatedTxn._id) || (originalTxn?._id && sibling._id === originalTxn._id);
+      const isTheEditedItem = (updatedTxn._id && (sibling._id === updatedTxn._id || sibling.ID === updatedTxn._id)) ||
+                              (originalTxn?._id && (sibling._id === originalTxn._id || sibling.ID === originalTxn._id));
 
       const updated = {
         ...sibling,
@@ -244,23 +259,28 @@ export function AppProvider({ children }) {
         serial_no:        updatedTxn.serial_no !== undefined ? updatedTxn.serial_no : (sibling.serial_no || ''),
         // Date is preserved per instalment
       };
-      await dbUpdate(sibling._id, updated);
-      dispatch({ type: 'UPD_TXN', payload: { ...updated, _id: sibling._id } });
+      await dbUpdate(sibling._id || sibling.ID || sibling.id, updated);
+      dispatch({ type: 'UPD_TXN', payload: { ...updated, _id: sibling._id || sibling.ID || sibling.id } });
     }
 
     if (ruleId) {
       const totalAmount = allTxns.reduce((sum, s) => {
-        const isEdited = (updatedTxn._id && s._id === updatedTxn._id) || (originalTxn?._id && s._id === originalTxn._id);
+        const isEdited = (updatedTxn._id && (s._id === updatedTxn._id || s.ID === updatedTxn._id)) ||
+                         (originalTxn?._id && (s._id === originalTxn._id || s.ID === originalTxn._id));
         const amt = isEdited ? (Number(updatedTxn.INR) || Number(updatedTxn.Amount) || 0) : (Number(s.INR) || 0);
         return sum + amt;
       }, 0);
-      await updateRecurringRule(ruleId, {
-        base_note:    baseNote,
-        category:     updatedTxn.Category,
-        subcategory:  updatedTxn.Subcategory || '',
-        account:      updatedTxn.Account,
-        total_amount: totalAmount,
-      });
+      try {
+        await updateRecurringRule(ruleId, {
+          base_note:    baseNote,
+          category:     updatedTxn.Category,
+          subcategory:  updatedTxn.Subcategory || '',
+          account:      updatedTxn.Account,
+          total_amount: totalAmount,
+        });
+      } catch (err) {
+        console.warn('updateRecurringRule error:', err);
+      }
     }
   };
 
