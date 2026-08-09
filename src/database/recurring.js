@@ -199,10 +199,24 @@ export const computeNextRepeatDate = (currentDate, frequency, schedule_mode) => 
 };
 
 // ── Note helpers ──────────────────────────────────────────────────────────
+/** Parse instalment info from note: "Home needs (3/13)", "Home needs(3/13)", "Home needs ( 3 of 13 )" */
+export const parseInstalmentInfo = (note) => {
+  if (!note || typeof note !== 'string') return null;
+  const m = note.match(/[\(\[]\s*(\d+)\s*(?:\/|of)\s*(\d+)\s*[\)\]]\s*$/i);
+  if (!m) return null;
+  const part = parseInt(m[1], 10);
+  const total = parseInt(m[2], 10);
+  if (isNaN(part) || isNaN(total) || total < 2 || part > total) return null;
+  const base = note.replace(/[\(\[]\s*\d+\s*(?:\/|of)\s*\d+\s*[\)\]]\s*$/i, '').trim();
+  return { part, total, base, suffix: `(${part}/${total})` };
+};
+
 /** Strip instalment suffix like " (2/4)" from a note for autocomplete */
-export const stripInstalmentSuffix = (note) =>
-  (note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
+export const stripInstalmentSuffix = (note) => {
+  const info = parseInstalmentInfo(note);
+  return info ? info.base : (note || '').replace(/\s*[\(\[]\s*\d+\s*(?:\/|of)\s*\d+\s*[\)\]]\s*$/i, '').trim();
+};
 
 /** Build instalment note: "Test (2/4)" */
 export const buildInstalmentNote = (baseNote, part, total) =>
-  `${baseNote} (${part}/${total})`;
+  `${(baseNote || '').trim()} (${part}/${total})`;
