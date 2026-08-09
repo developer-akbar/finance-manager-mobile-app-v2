@@ -415,10 +415,20 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
       if (matches) matches.forEach(m => seen.add(m.toLowerCase()));
     }
+    try {
+      const custom = JSON.parse(state.settings?.customTags || '[]');
+      if (Array.isArray(custom)) {
+        custom.forEach(ct => {
+          const clean = String(ct).trim().toLowerCase();
+          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+    } catch {}
+
     const defaults = ['#tax', '#personal', '#family', '#trip', '#impulse', '#work', '#medical'];
     defaults.forEach(d => seen.add(d));
-    return Array.from(seen).slice(0, 16);
-  }, [transactions]);
+    return Array.from(seen).slice(0, 25);
+  }, [transactions, state.settings?.customTags]);
 
   const stripInstalment = (note) => {
     // Strip installment suffixes like "(5/12)", "(2/6)" from note suggestions

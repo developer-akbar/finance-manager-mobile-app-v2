@@ -54,8 +54,17 @@ export default function ReportGenerator({ onBack }) {
       const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
       if (matches) matches.forEach(m => seen.add(m.toLowerCase()));
     }
+    try {
+      const custom = JSON.parse(state.settings?.customTags || '[]');
+      if (Array.isArray(custom)) {
+        custom.forEach(ct => {
+          const clean = String(ct).trim().toLowerCase();
+          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+    } catch {}
     return Array.from(seen).sort();
-  }, [transactions]);
+  }, [transactions, state.settings?.customTags]);
 
   // Handle preset selection
   const applyPreset = (p) => {

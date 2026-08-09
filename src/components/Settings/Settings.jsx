@@ -953,14 +953,33 @@ export function CategoriesManager({ onBack }) {
 // Tags Manager
 // ─────────────────────────────────────────────
 function TagsManager({ onBack }) {
-  const { state, updateTransaction } = useApp();
+  const { state, updateTransaction, updateSettings } = useApp();
   const { transactions } = state;
+  const [newTagInput, setNewTagInput] = useState('');
   const [editingTag, setEditingTag] = useState(null); // { oldName, newName }
   const [confirmDelete, setConfirmDelete] = useState(null); // tag name
+
+  const customTagsList = useMemo(() => {
+    try {
+      const parsed = JSON.parse(state.settings?.customTags || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [state.settings?.customTags]);
 
   // Aggregate all tags and their transaction counts
   const tagList = useMemo(() => {
     const map = {};
+    // Populate all custom tags created by user with initial 0 count
+    for (const ct of customTagsList) {
+      const clean = String(ct).trim().toLowerCase();
+      if (clean) {
+        const withHash = clean.startsWith('#') ? clean : `#${clean}`;
+        map[withHash] = 0;
+      }
+    }
+    // Count occurrences from transactions
     for (const t of transactions) {
       const tags = [];
       if (t.Tags) {
@@ -977,8 +996,22 @@ function TagsManager({ onBack }) {
         map[tag] = (map[tag] || 0) + 1;
       }
     }
-    return Object.entries(map).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
-  }, [transactions]);
+    return Object.entries(map).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [transactions, customTagsList]);
+
+  const handleAddNewTag = async () => {
+    const trimmed = (newTagInput || '').trim();
+    if (!trimmed) return;
+    const clean = trimmed.toLowerCase().replace(/\s+/g, '_');
+    const tagWithHash = clean.startsWith('#') ? clean : `#${clean}`;
+
+    const currentCustom = [...customTagsList];
+    if (!currentCustom.includes(tagWithHash)) {
+      currentCustom.push(tagWithHash);
+      await updateSettings({ customTags: JSON.stringify(currentCustom) });
+    }
+    setNewTagInput('');
+  };
 
   const handleRename = async () => {
     if (!editingTag || !editingTag.newName.trim()) return;
@@ -1020,6 +1053,12 @@ function TagsManager({ onBack }) {
         });
       }
     }
+
+    if (customTagsList.includes(oldHash)) {
+      const nextCustom = customTagsList.map(t => t === oldHash ? newHash : t);
+      await updateSettings({ customTags: JSON.stringify(nextCustom) });
+    }
+
     setEditingTag(null);
   };
 
@@ -1058,6 +1097,12 @@ function TagsManager({ onBack }) {
         });
       }
     }
+
+    if (customTagsList.includes(withHash)) {
+      const nextCustom = customTagsList.filter(t => t !== withHash);
+      await updateSettings({ customTags: JSON.stringify(nextCustom) });
+    }
+
     setConfirmDelete(null);
   };
 
@@ -1075,10 +1120,27 @@ function TagsManager({ onBack }) {
           Tags allow cross-cutting tracking across multiple categories (e.g. #trip, #tax, #medical).
         </div>
 
+        {/* Add Tag Row */}
+        <div style={{ display: 'flex', gap: 8, padding: '0 var(--page-px) 14px' }}>
+          <input
+            className="form-input"
+            style={{ flex: 1 }}
+            placeholder="Add new tag (e.g. #trip, #medical, grocery)"
+            value={newTagInput}
+            onChange={e => setNewTagInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleAddNewTag(); }}
+            spellCheck="true"
+            autoCapitalize="none"
+          />
+          <button className="btn btn-primary btn-sm" onClick={handleAddNewTag}>
+            + Add Tag
+          </button>
+        </div>
+
         <div className="settings-card" style={{ margin: '0 var(--page-px) 14px' }}>
           {tagList.length === 0 ? (
             <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-              No hashtags found yet. Add #tag in any transaction note or tag field.
+              No hashtags found yet. Type above to add a new tag or use #tag in any transaction.
             </div>
           ) : (
             tagList.map(tag => (
@@ -1086,7 +1148,7 @@ function TagsManager({ onBack }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontWeight: 800, color: 'var(--accent)', fontSize: '0.88rem' }}>{tag.name}</span>
                   <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'var(--bg-card2)', padding: '2px 6px', borderRadius: 6 }}>
-                    {tag.count} txn{tag.count > 1 ? 's' : ''}
+                    {tag.count} txn{tag.count !== 1 ? 's' : ''}
                   </span>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
