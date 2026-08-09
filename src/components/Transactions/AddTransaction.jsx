@@ -449,7 +449,7 @@ export default function AddTransaction({
   prefillType=null, prefillFromAccount=null, prefillToAccount=null, prefillAmount=null, prefillNote=null, prefillTags=null,
   backInterceptRef=null, onSaveInstalment=null
 }) {
-  const { state, navigate, addTransaction, updateTransaction, createRecurringRule } = useApp();
+  const { state, navigate, addTransaction, updateTransaction, createRecurringRule, updateInstalmentSiblings } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
   const isCopy = !!copyTransaction;
@@ -728,10 +728,20 @@ export default function AddTransaction({
       const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
       if (matches) matches.forEach(m => seen.add(m.toLowerCase()));
     }
+    try {
+      const custom = JSON.parse(state.settings?.customTags || '[]');
+      if (Array.isArray(custom)) {
+        custom.forEach(ct => {
+          const clean = String(ct).trim().toLowerCase();
+          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+    } catch {}
+
     const defaults = ['#tax', '#personal', '#family', '#trip', '#impulse', '#work', '#medical'];
     defaults.forEach(d => seen.add(d));
-    return Array.from(seen).slice(0, 15);
-  }, [transactions]);
+    return Array.from(seen).slice(0, 25);
+  }, [transactions, state.settings?.customTags]);
 
   const handlePasteAndParseSMS = async (directText = '') => {
     let textToParse = directText;
@@ -1052,10 +1062,11 @@ export default function AddTransaction({
           warranty_expiry: form.warranty_expiry || '',
           serial_no: form.serial_no || '',
         };
-        if (isEdit && onSaveInstalment) {
-          // Instalment edit: update this transaction (with its own suffix), bulk-update siblings
+        if (isEdit && editTransaction?.recurring_rule_id) {
+          // Instalment edit: update this transaction (with its own note suffix), bulk-update all siblings across the series
           await updateTransaction(editTransaction._id, data);
-          await onSaveInstalment(data);
+          await updateInstalmentSiblings(editTransaction.recurring_rule_id, data);
+          if (onSaveInstalment) await onSaveInstalment(data);
         } else if (isEdit) {
           await updateTransaction(editTransaction._id, data);
         } else {

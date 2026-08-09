@@ -188,39 +188,54 @@ export function AppProvider({ children }) {
   const deleteTransaction = async (id)   => { await dbDelete(id); dispatch({ type:'DEL_TXN', payload:id }); };
 
   // ── Instalment bulk operations ─────────────────────────────────────────
-  // Edit non-Amount fields on all instalment transactions sharing the same rule
+  // Edit non-Date fields (Amount, Category, Subcategory, Account, Tags, Note, Description, etc.) on all instalment transactions
   const updateInstalmentSiblings = async (ruleId, updatedTxn) => {
     if (!ruleId) return;
     // Fetch fresh transactions from DB to avoid stale state
     const freshTxns = await getTransactions();
     const allTxns = freshTxns.filter(t => t.recurring_rule_id === ruleId);
-    // baseNote is already stripped of (x/x) — the edit form strips it before saving
+    if (!allTxns.length) return;
+
+    // baseNote is already stripped of (x/x) — re-apply each sibling's own part number
     const baseNote = (updatedTxn.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
+    const newAmount = updatedTxn.INR !== undefined ? Number(updatedTxn.INR) : (updatedTxn.Amount !== undefined ? Number(updatedTxn.Amount) : null);
+
     for (const sibling of allTxns) {
       // Re-apply the original (x/x) suffix from this sibling's note
       const partMatch = (sibling.Note || '').match(/\((\d+\/\d+)\)\s*$/);
       const suffix = partMatch ? ` (${partMatch[1]})` : '';
-      const newNote = suffix ? baseNote + suffix : baseNote;
+      const newNote = suffix ? `${baseNote} ${suffix}`.replace(/\s+/g, ' ') : baseNote;
       const updated = {
         ...sibling,
-        Account:     updatedTxn.Account     || sibling.Account,
-        FromAccount: updatedTxn.FromAccount || sibling.FromAccount || '',
-        ToAccount:   updatedTxn.ToAccount   || sibling.ToAccount   || '',
-        Category:    updatedTxn.Category    || sibling.Category,
-        Subcategory: updatedTxn.Subcategory || 'Default',
-        Note:        newNote,
-        Description: updatedTxn.Description !== undefined ? updatedTxn.Description : (sibling.Description || ''),
-        // Keep original Date, Time, INR, Amount per instalment
+        Account:          updatedTxn.Account !== undefined ? updatedTxn.Account : sibling.Account,
+        FromAccount:      updatedTxn.FromAccount !== undefined ? updatedTxn.FromAccount : (sibling.FromAccount || ''),
+        ToAccount:        updatedTxn.ToAccount !== undefined ? updatedTxn.ToAccount : (sibling.ToAccount || ''),
+        Category:         updatedTxn.Category !== undefined ? updatedTxn.Category : sibling.Category,
+        Subcategory:      updatedTxn.Subcategory !== undefined ? updatedTxn.Subcategory : (sibling.Subcategory || 'Default'),
+        Note:             newNote,
+        Description:      updatedTxn.Description !== undefined ? updatedTxn.Description : (sibling.Description || ''),
+        INR:              newAmount !== null ? newAmount : sibling.INR,
+        Amount:           newAmount !== null ? String(newAmount) : sibling.Amount,
+        Currency:         updatedTxn.Currency || sibling.Currency || 'INR',
+        'Income/Expense': updatedTxn['Income/Expense'] || sibling['Income/Expense'] || sibling.type || 'Expense',
+        Tags:             updatedTxn.Tags !== undefined ? updatedTxn.Tags : (sibling.Tags || ''),
+        receipt_image:    updatedTxn.receipt_image !== undefined ? updatedTxn.receipt_image : (sibling.receipt_image || ''),
+        warranty_expiry:  updatedTxn.warranty_expiry !== undefined ? updatedTxn.warranty_expiry : (sibling.warranty_expiry || ''),
+        serial_no:        updatedTxn.serial_no !== undefined ? updatedTxn.serial_no : (sibling.serial_no || ''),
+        // Preserve each instalment's individual Date (due date) and Time
       };
       await dbUpdate(sibling._id, updated);
-      dispatch({ type:'UPD_TXN', payload:{...updated, _id: sibling._id} });
+      dispatch({ type: 'UPD_TXN', payload: { ...updated, _id: sibling._id } });
     }
+
     // Update rule metadata
     await updateRecurringRule(ruleId, {
-      base_note:   baseNote,
-      category:    updatedTxn.Category,
-      subcategory: updatedTxn.Subcategory || '',
-      account:     updatedTxn.Account,
+      base_note:       baseNote,
+      category:        updatedTxn.Category,
+      subcategory:     updatedTxn.Subcategory || '',
+      account:         updatedTxn.Account,
+      amount_per_part: newAmount !== null ? newAmount : undefined,
+      total_amount:    newAmount !== null ? newAmount * allTxns.length : undefined,
     });
   };
 
@@ -440,8 +455,8 @@ export function AppProvider({ children }) {
       const rules = await getAllRecurringRules();
       dispatch({ type:'SET_RECURRING', payload: rules });
     }
-    // Persist simple key-value settings (profileName, pin, pinIdleSeconds, etc.)
-    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight', 'biometricsEnabled'];
+    // Persist simple key-value settings (profileName, pin, pinIdleSeconds, customTags, etc.)
+    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight', 'biometricsEnabled', 'customTags'];
     const changed = {};
     for (const key of settingsKeys) {
       if (data[key] !== undefined) {
