@@ -135,23 +135,34 @@ export const buildInstalmentSchedule = (rule) => {
     }
   }
 
-  // Compute amounts (proportional for start_of_month, equal for on_day)
+  // Compute amounts: divide total_amount into equal base parts and append remaining denominator to the last month
   const total = segments.length;
   let amounts;
 
-  if (schedule_mode === 'start_of_month') {
-    amounts = segments.map(s => {
+  const isIntegerAmount = Math.round(total_amount) === total_amount;
+  if (schedule_mode === 'start_of_month' && sd !== 1) {
+    // If starting mid-month and using start_of_month, calculate days-weighted base
+    amounts = segments.map((s, idx) => {
+      if (idx === total - 1) return 0; // calculated below as remainder
       const days = (s.segEnd - s.segStart) / (1000 * 60 * 60 * 24) + 1;
-      return Math.round((days / total_days) * total_amount);
+      return isIntegerAmount
+        ? Math.floor((days / total_days) * total_amount)
+        : Math.floor(((days / total_days) * total_amount) * 100) / 100;
     });
+    const subtotal = amounts.slice(0, total - 1).reduce((a, b) => a + b, 0);
+    amounts[total - 1] = isIntegerAmount ? (total_amount - subtotal) : Math.round((total_amount - subtotal) * 100) / 100;
   } else {
-    const base = Math.floor(total_amount / total);
-    amounts = new Array(total).fill(base);
+    // Standard equal division: first (N-1) months get base, last month gets base + remainder
+    const base = isIntegerAmount
+      ? Math.floor(total_amount / total)
+      : Math.floor((total_amount / total) * 100) / 100;
+    amounts = new Array(total - 1).fill(base);
+    const subtotal = base * (total - 1);
+    const lastAmount = isIntegerAmount
+      ? (total_amount - subtotal)
+      : Math.round((total_amount - subtotal) * 100) / 100;
+    amounts.push(lastAmount);
   }
-
-  // Fix rounding difference on last segment
-  const diff = total_amount - amounts.reduce((a, b) => a + b, 0);
-  if (amounts.length > 0) amounts[amounts.length - 1] += diff;
 
   return segments.map((s, i) => ({
     date: fmtDate(s.segStart),

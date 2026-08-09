@@ -1037,14 +1037,11 @@ export default function AddTransaction({
           });
         }
       } else {
-        // Normal single transaction
-        // For instalment edits: keep recurring_rule_id and re-apply (x/x) suffix to THIS transaction
-        const thisNote = isEdit && onSaveInstalment
-          ? (() => {
-              // Re-apply the original (x/x) suffix from the transaction being edited
-              const m = (editTransaction.Note||'').match(/\s*\(\d+\/\d+\)\s*$/);
-              return m ? baseNote + m[0].trimStart() : baseNote;
-            })()
+        // Normal single transaction or instalment edit
+        const partMatch = (editTransaction?.Note || '').match(/\((\d+\/\d+)\)\s*$/);
+        const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!partMatch);
+        const thisNote = isInstalmentEdit && partMatch
+          ? `${baseNote} (${partMatch[1]})`.trim()
           : baseNote;
         const data={
           Date:inputToStorage(form.date),Time:form.time||'',
@@ -1062,10 +1059,10 @@ export default function AddTransaction({
           warranty_expiry: form.warranty_expiry || '',
           serial_no: form.serial_no || '',
         };
-        if (isEdit && editTransaction?.recurring_rule_id) {
-          // Instalment edit: update this transaction (with its own note suffix), bulk-update all siblings across the series
+        if (isInstalmentEdit) {
+          // Instalment edit: update this transaction, and bulk-update all siblings across the series (preserving their individual amounts & dates)
           await updateTransaction(editTransaction._id, data);
-          await updateInstalmentSiblings(editTransaction.recurring_rule_id, data);
+          await updateInstalmentSiblings(editTransaction.recurring_rule_id, data, editTransaction);
           if (onSaveInstalment) await onSaveInstalment(data);
         } else if (isEdit) {
           await updateTransaction(editTransaction._id, data);
