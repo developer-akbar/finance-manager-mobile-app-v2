@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useCallback } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { inputToStorage, toInputDate, nowTimeStr } from '../../utils/format.js';
+import { inputToStorage, toInputDate, nowTimeStr, formatINR } from '../../utils/format.js';
 import './AddTransaction.css';
 import { AccountsManager, CategoriesManager } from '../Settings/Settings.jsx';
 import {
@@ -662,6 +662,62 @@ export default function AddTransaction({
     (categories?.[form.category]?.subcategories||[]).filter(s=>s&&s!=='Default').sort(),
     [categories, form.category]);
 
+  const instInfo = useMemo(() => isEdit ? parseInstalmentInfo(editTransaction?.Note) : null, [isEdit, editTransaction]);
+  const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!instInfo);
+
+  const instalmentStats = useMemo(() => {
+    if (!isInstalmentEdit) return null;
+    const allTxns = state.transactions || [];
+    const ruleId = editTransaction?.recurring_rule_id;
+    let siblings = [];
+    if (ruleId) {
+      siblings = allTxns.filter(txn => txn.recurring_rule_id === ruleId);
+    }
+    if (instInfo) {
+      const origBaseLower = instInfo.base.toLowerCase();
+      const noteSiblings = allTxns.filter(txn => {
+        const info = parseInstalmentInfo(txn.Note);
+        return info && info.total === instInfo.total && info.base.toLowerCase() === origBaseLower;
+      });
+      const sibMap = new Map();
+      siblings.forEach(s => sibMap.set(s._id || s.ID || s.id, s));
+      noteSiblings.forEach(s => sibMap.set(s._id || s.ID || s.id, s));
+      siblings = Array.from(sibMap.values());
+    }
+    if (!siblings.length) siblings = [editTransaction];
+
+    const currentPart = instInfo ? instInfo.part : 1;
+    const totalParts = instInfo ? instInfo.total : (ruleId ? (state.recurringRules || []).find(r => r.id === ruleId)?.total_parts || siblings.length : siblings.length);
+
+    // Current edited amount from the input field
+    const editedAmount = parseFloat(form.amount) || 0;
+
+    let totalAmount = 0;
+    let completedAmount = 0;
+
+    for (const s of siblings) {
+      const sId = s._id || s.ID || s.id;
+      const isThisOne = (sId === (editTransaction?._id || editTransaction?.ID));
+      const sInfo = parseInstalmentInfo(s.Note);
+      const sPart = sInfo ? sInfo.part : (isThisOne ? currentPart : 1);
+      const sAmt = isThisOne ? editedAmount : (parseFloat(s.INR) || parseFloat(s.Amount) || 0);
+
+      totalAmount += sAmt;
+      if (sPart <= currentPart) {
+        completedAmount += sAmt;
+      }
+    }
+
+    const balanceRemaining = Math.max(0, totalAmount - completedAmount);
+
+    return {
+      part: currentPart,
+      totalParts,
+      totalAmount,
+      balanceRemaining,
+    };
+  }, [isInstalmentEdit, editTransaction, instInfo, state.transactions, state.recurringRules, form.amount]);
+
   const getRecentSubsForCategory = useCallback((cat) => {
     if (!cat) return [];
     const seen = new Set(), result = [];
@@ -1316,6 +1372,22 @@ export default function AddTransaction({
               )}
             </div>
             {errors.amount && <div className="field-error">{errors.amount}</div>}
+            {isInstalmentEdit && instalmentStats && (
+              <div style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 10,
+                marginTop: 6,
+                fontSize: '0.74rem',
+                fontWeight: 600,
+                color: 'var(--text-muted)',
+              }}>
+                <span>Balance: <strong style={{ color: '#ffb74d' }}>{formatINR(instalmentStats.balanceRemaining)}</strong></span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span>Total: <strong style={{ color: 'var(--accent)' }}>{formatINR(instalmentStats.totalAmount)}</strong></span>
+              </div>
+            )}
           </div>
 
           {/* Split Allocation Section */}
