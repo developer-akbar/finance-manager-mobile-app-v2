@@ -210,6 +210,7 @@ function MonthlyView({ transactions, year, setYear, onMonthClick }) {
 
 // ── Search view ───────────────────────────────────────────────────────────────
 function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy }) {
+  const { state } = useApp();
   const textInputRef = (el) => {
     if (!el) return;
     el.setAttribute('autocomplete', 'on');
@@ -768,14 +769,18 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
   // Sync year and view from dashboard clicks
   useEffect(() => {
     if (viewParams) {
-      if (viewParams.year !== undefined && viewParams.year !== null) {
-        setViewYear(Number(viewParams.year));
-      }
-      if (viewParams.month !== undefined && viewParams.month !== null) {
-        setViewMonth(Number(viewParams.month));
-        setViewMode('daily');
-      } else if (viewParams.year !== undefined && viewParams.year !== null) {
-        setViewMode('monthly');
+      if (viewParams.mode === 'search') {
+        setViewMode('search');
+      } else {
+        if (viewParams.year !== undefined && viewParams.year !== null) {
+          setViewYear(Number(viewParams.year));
+        }
+        if (viewParams.month !== undefined && viewParams.month !== null) {
+          setViewMonth(Number(viewParams.month));
+          setViewMode('daily');
+        } else if (viewParams.year !== undefined && viewParams.year !== null) {
+          setViewMode('monthly');
+        }
       }
       clearNavParams();
     }

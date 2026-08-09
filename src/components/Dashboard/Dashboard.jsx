@@ -388,6 +388,25 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
         <div className="dash-hello">{greeting}{name ? `, ${name}` : ' 👋'}</div>
         <div style={{ display: 'flex', gap: 6 }}>
           <button
+            onClick={() => navigate('transactions', { mode: 'search' })}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 14,
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--text-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              cursor: 'pointer',
+            }}
+            title="Search Transactions"
+          >
+            <span>🔍</span> Search
+          </button>
+          <button
             onClick={() => navigate('analytics')}
             style={{
               padding: '6px 10px',

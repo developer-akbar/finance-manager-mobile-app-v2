@@ -188,23 +188,42 @@ export function AppProvider({ children }) {
   const deleteTransaction = async (id)   => { await dbDelete(id); dispatch({ type:'DEL_TXN', payload:id }); };
 
   // ── Instalment bulk operations ─────────────────────────────────────────
-  // Edit non-Date fields (Amount, Category, Subcategory, Account, Tags, Note, Description, etc.) on all instalment transactions
-  const updateInstalmentSiblings = async (ruleId, updatedTxn) => {
-    if (!ruleId) return;
+  // Edit Note, Description, Tags, Category, Subcategory, Account, etc. across all instalments in series.
+  // Individual Dates and Amounts are preserved per instalment!
+  const updateInstalmentSiblings = async (ruleId, updatedTxn, originalTxn = null) => {
     // Fetch fresh transactions from DB to avoid stale state
     const freshTxns = await getTransactions();
-    const allTxns = freshTxns.filter(t => t.recurring_rule_id === ruleId);
+    let allTxns = [];
+    if (ruleId) {
+      allTxns = freshTxns.filter(t => t.recurring_rule_id === ruleId);
+    }
+    // Fallback: match by instalment pattern if ruleId is empty or not found
+    if (!allTxns.length && (originalTxn?.Note || updatedTxn?.Note)) {
+      const refNote = originalTxn?.Note || updatedTxn?.Note || '';
+      const partMatch = refNote.match(/\((\d+)\/(\d+)\)\s*$/);
+      if (partMatch) {
+        const totalParts = partMatch[2];
+        const oldBase = refNote.replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
+        allTxns = freshTxns.filter(t => {
+          const m = (t.Note || '').match(/\((\d+)\/(\d+)\)\s*$/);
+          if (!m || m[2] !== totalParts) return false;
+          const base = (t.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim().toLowerCase();
+          return base === oldBase;
+        });
+      }
+    }
     if (!allTxns.length) return;
 
     // baseNote is already stripped of (x/x) — re-apply each sibling's own part number
     const baseNote = (updatedTxn.Note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
-    const newAmount = updatedTxn.INR !== undefined ? Number(updatedTxn.INR) : (updatedTxn.Amount !== undefined ? Number(updatedTxn.Amount) : null);
 
     for (const sibling of allTxns) {
       // Re-apply the original (x/x) suffix from this sibling's note
       const partMatch = (sibling.Note || '').match(/\((\d+\/\d+)\)\s*$/);
       const suffix = partMatch ? ` (${partMatch[1]})` : '';
-      const newNote = suffix ? `${baseNote} ${suffix}`.replace(/\s+/g, ' ') : baseNote;
+      const newNote = suffix ? `${baseNote}${suffix}` : baseNote;
+      const isTheEditedItem = (updatedTxn._id && sibling._id === updatedTxn._id) || (originalTxn?._id && sibling._id === originalTxn._id);
+
       const updated = {
         ...sibling,
         Account:          updatedTxn.Account !== undefined ? updatedTxn.Account : sibling.Account,
@@ -214,29 +233,35 @@ export function AppProvider({ children }) {
         Subcategory:      updatedTxn.Subcategory !== undefined ? updatedTxn.Subcategory : (sibling.Subcategory || 'Default'),
         Note:             newNote,
         Description:      updatedTxn.Description !== undefined ? updatedTxn.Description : (sibling.Description || ''),
-        INR:              newAmount !== null ? newAmount : sibling.INR,
-        Amount:           newAmount !== null ? String(newAmount) : sibling.Amount,
+        // Keep each sibling's own INR and Amount (only the edited item receives its new amount)
+        INR:              isTheEditedItem && updatedTxn.INR !== undefined ? Number(updatedTxn.INR) : sibling.INR,
+        Amount:           isTheEditedItem && updatedTxn.Amount !== undefined ? String(updatedTxn.Amount) : sibling.Amount,
         Currency:         updatedTxn.Currency || sibling.Currency || 'INR',
         'Income/Expense': updatedTxn['Income/Expense'] || sibling['Income/Expense'] || sibling.type || 'Expense',
         Tags:             updatedTxn.Tags !== undefined ? updatedTxn.Tags : (sibling.Tags || ''),
         receipt_image:    updatedTxn.receipt_image !== undefined ? updatedTxn.receipt_image : (sibling.receipt_image || ''),
         warranty_expiry:  updatedTxn.warranty_expiry !== undefined ? updatedTxn.warranty_expiry : (sibling.warranty_expiry || ''),
         serial_no:        updatedTxn.serial_no !== undefined ? updatedTxn.serial_no : (sibling.serial_no || ''),
-        // Preserve each instalment's individual Date (due date) and Time
+        // Date is preserved per instalment
       };
       await dbUpdate(sibling._id, updated);
       dispatch({ type: 'UPD_TXN', payload: { ...updated, _id: sibling._id } });
     }
 
-    // Update rule metadata
-    await updateRecurringRule(ruleId, {
-      base_note:       baseNote,
-      category:        updatedTxn.Category,
-      subcategory:     updatedTxn.Subcategory || '',
-      account:         updatedTxn.Account,
-      amount_per_part: newAmount !== null ? newAmount : undefined,
-      total_amount:    newAmount !== null ? newAmount * allTxns.length : undefined,
-    });
+    if (ruleId) {
+      const totalAmount = allTxns.reduce((sum, s) => {
+        const isEdited = (updatedTxn._id && s._id === updatedTxn._id) || (originalTxn?._id && s._id === originalTxn._id);
+        const amt = isEdited ? (Number(updatedTxn.INR) || Number(updatedTxn.Amount) || 0) : (Number(s.INR) || 0);
+        return sum + amt;
+      }, 0);
+      await updateRecurringRule(ruleId, {
+        base_note:    baseNote,
+        category:     updatedTxn.Category,
+        subcategory:  updatedTxn.Subcategory || '',
+        account:      updatedTxn.Account,
+        total_amount: totalAmount,
+      });
+    }
   };
 
   // Update amount on one instalment and adjust rule total_amount
