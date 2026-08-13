@@ -13,6 +13,9 @@ export const rowToTxn = (r) => ({
   recurring_rule_id: r.recurring_rule_id || '',
   Tags: r.tags || '',
   split_group_id: r.split_group_id || '',
+  receipt_image: r.receipt_image || '',
+  warranty_expiry: r.warranty_expiry || '',
+  serial_no: r.serial_no || '',
 });
 
 export const getTransactions = async (filters = {}) => {
@@ -56,26 +59,35 @@ export const addTransaction = async (data) => {
   const id  = data.ID || data._id || uuid();
   const now = new Date().toISOString();
   await db.run(
-    `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [id, data.Date||'', data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
      data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
      parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
      data.Currency||'INR', data['Income/Expense']||'Expense', now, now,
-     data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'']
+     data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'',
+     data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'']
   );
-  return rowToTxn({ id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'', category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'', inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR', type:data['Income/Expense']||'Expense', created_at:now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'', tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'' });
+  return rowToTxn({
+    id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'',
+    category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'',
+    inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR',
+    type:data['Income/Expense']||'Expense', created_at:now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'',
+    tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'',
+    receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||''
+  });
 };
 
 export const updateTransaction = async (id, data) => {
   const db = getDB();
   const now = new Date().toISOString();
   await db.run(
-    `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=?,tags=?,split_group_id=? WHERE id=?`,
+    `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=?,tags=?,split_group_id=?,receipt_image=?,warranty_expiry=?,serial_no=? WHERE id=?`,
     [data.Date, data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
      data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
      parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
      data.Currency||'INR', data['Income/Expense']||'Expense', now,
-     data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'', id]
+     data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'',
+     data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'', id]
   );
   return {
     _id: id, ID: id,
@@ -89,6 +101,9 @@ export const updateTransaction = async (id, data) => {
     recurring_rule_id: data.recurring_rule_id || '',
     Tags: data.Tags || data.tags || '',
     split_group_id: data.split_group_id || '',
+    receipt_image: data.receipt_image || '',
+    warranty_expiry: data.warranty_expiry || '',
+    serial_no: data.serial_no || '',
   };
 };
 
@@ -293,21 +308,27 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
 
     items.push({
       id,
-      date:         dateVal,
-      time:         String(r.Time || r.time || '').trim(),
-      account:      acctName,
-      from_account: acctName,   // same as account; kept for query/filter compatibility
-      to_account:   toAcctName,
-      category:     categoryVal,
-      subcategory:  subcategoryVal,
-      note:         String(r.Note || r.note || '').trim(),
-      description:  String(r.Description || r.description || '').trim(),
-      inr:          parseFloat(r.INR || r.Amount || r.inr || r.amount || 0),
-      amount:       String(r.Amount || r.INR || r.amount || r.inr || '0').trim(),
-      currency:     String(r.Currency || r.currency || 'INR').trim(),
-      type:         typeStr,
-      created_at:   now,
-      updated_at:   now,
+      date:              dateVal,
+      time:              String(r.Time || r.time || '').trim(),
+      account:           acctName,
+      from_account:      acctName,   // same as account; kept for query/filter compatibility
+      to_account:        toAcctName,
+      category:          categoryVal,
+      subcategory:       subcategoryVal,
+      note:              String(r.Note || r.note || '').trim(),
+      description:       String(r.Description || r.description || '').trim(),
+      inr:               parseFloat(r.INR || r.Amount || r.inr || r.amount || 0),
+      amount:            String(r.Amount || r.INR || r.amount || r.inr || '0').trim(),
+      currency:          String(r.Currency || r.currency || 'INR').trim(),
+      type:              typeStr,
+      created_at:        r.created_at || r['Created At'] || r.Created_At || r.CreatedAt || now,
+      updated_at:        r.updated_at || r['Last Modified At'] || r.updated_at || r.UpdatedAt || r.Updated_At || now,
+      recurring_rule_id: String(r.recurring_rule_id || '').trim(),
+      tags:              String(r.Tags || r.tags || '').trim(),
+      split_group_id:    String(r.split_group_id || '').trim(),
+      receipt_image:     String(r.receipt_image || '').trim(),
+      warranty_expiry:   String(r.warranty_expiry || '').trim(),
+      serial_no:         String(r.serial_no || '').trim(),
     });
   }
 
@@ -318,10 +339,12 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     skipped += res.skipped;
   } else if (typeof db.executeSet === 'function') {
     const set = items.map(obj => ({
-      statement: `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      statement: `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       values: [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
                obj.category, obj.subcategory, obj.note, obj.description,
-               obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at]
+               obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
+               obj.recurring_rule_id, obj.tags, obj.split_group_id,
+               obj.receipt_image, obj.warranty_expiry, obj.serial_no]
     }));
     try {
       const res = await db.executeSet(set);
@@ -333,10 +356,12 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
       for (const obj of items) {
         try {
           const res = await db.run(
-            `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
              obj.category, obj.subcategory, obj.note, obj.description,
-             obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at]
+             obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
+             obj.recurring_rule_id, obj.tags, obj.split_group_id,
+             obj.receipt_image, obj.warranty_expiry, obj.serial_no]
           );
           if (res.changes?.changes > 0) imported++; else skipped++;
         } catch { skipped++; }
@@ -346,10 +371,12 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     for (const obj of items) {
       try {
         const res = await db.run(
-          `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
            obj.category, obj.subcategory, obj.note, obj.description,
-           obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at]
+           obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
+           obj.recurring_rule_id, obj.tags, obj.split_group_id,
+           obj.receipt_image, obj.warranty_expiry, obj.serial_no]
         );
         if (res.changes?.changes > 0) imported++; else skipped++;
       } catch { skipped++; }

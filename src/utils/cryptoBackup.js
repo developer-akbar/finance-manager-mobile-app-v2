@@ -15,6 +15,29 @@ function ab2str(buf) {
   return dec.decode(buf);
 }
 
+// Safe chunked conversion from Uint8Array to base64 (avoids Maximum call stack size exceeded)
+function bytesToBase64(bytes) {
+  let binary = '';
+  const len = bytes.byteLength;
+  const chunkSize = 8192;
+  for (let i = 0; i < len; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
+}
+
+// Safe conversion from base64 to Uint8Array
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 // Derive AES-256 key from PIN/password + salt using PBKDF2
 async function deriveKey(password, salt) {
   const keyMaterial = await crypto.subtle.importKey(
@@ -69,9 +92,9 @@ export async function encryptBackupData(dataObj, password) {
   const backupPackage = {
     finman_encrypted_backup: true,
     version: 1,
-    salt: btoa(String.fromCharCode(...salt)),
-    iv: btoa(String.fromCharCode(...iv)),
-    data: btoa(String.fromCharCode(...new Uint8Array(encryptedBuf))),
+    salt: bytesToBase64(salt),
+    iv: bytesToBase64(iv),
+    data: bytesToBase64(new Uint8Array(encryptedBuf)),
     created_at: new Date().toISOString(),
   };
 
@@ -97,9 +120,9 @@ export async function decryptBackupData(backupJsonString, password) {
     throw new Error('Unrecognized or corrupted FinMan encrypted backup file');
   }
 
-  const salt = new Uint8Array(atob(pkg.salt).split('').map(c => c.charCodeAt(0)));
-  const iv = new Uint8Array(atob(pkg.iv).split('').map(c => c.charCodeAt(0)));
-  const ciphertext = new Uint8Array(atob(pkg.data).split('').map(c => c.charCodeAt(0)));
+  const salt = base64ToBytes(pkg.salt);
+  const iv = base64ToBytes(pkg.iv);
+  const ciphertext = base64ToBytes(pkg.data);
 
   const key = await deriveKey(password.trim(), salt);
 

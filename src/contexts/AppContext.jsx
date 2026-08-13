@@ -48,19 +48,26 @@ const catsArrToObj = (arr) => {
   }
   return o;
 };
-const catsObjToArr = (obj) =>
-  Object.entries(obj || {}).map(([name, d], i) => ({
-    name, type: d.type || 'Expense',
+const catsObjToArr = (obj) => {
+  if (Array.isArray(obj)) return obj;
+  return Object.entries(obj || {}).map(([name, d], i) => ({
+    name,
+    type: d.type || 'Expense',
     sortOrder: d.sortOrder !== undefined ? d.sortOrder : i,
-    subcategories: (d.subcategories || []).map((s, si) => ({ name: s, sortOrder: si })),
+    subcategories: Array.from(d.subcategories || d.subs || []).map((s, si) =>
+      typeof s === 'string' ? { name: s, sortOrder: si } : { name: s.name || '', sortOrder: s.sortOrder !== undefined ? s.sortOrder : si }
+    ),
   }));
+};
 
 const normalizeAccounts = (raw) =>
   (raw || []).map(a => typeof a === 'string'
     ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, isAsset: true, cardLast4: '' }
     : { name: a.name || '', group: a.group || a.group_name || '', icon: '💳',
-        acctType: a.acctType || '', settlementDate: a.settlementDate ? Number(a.settlementDate) : 0, paymentDueDays: a.paymentDueDays ? Number(a.paymentDueDays) : 0,
-        isAsset: a.isAsset !== undefined ? a.isAsset : true,
+        acctType: a.acctType || a.acct_type || '',
+        settlementDate: (a.settlementDate !== undefined ? Number(a.settlementDate) : (a.settlement_date !== undefined ? Number(a.settlement_date) : 0)) || 0,
+        paymentDueDays: (a.paymentDueDays !== undefined ? Number(a.paymentDueDays) : (a.payment_due_days !== undefined ? Number(a.payment_due_days) : 0)) || 0,
+        isAsset: a.isAsset !== undefined ? a.isAsset : (a.is_asset !== undefined ? Number(a.is_asset) === 1 : true),
         cardLast4: a.cardLast4 || a.card_last4 || '' });
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
@@ -193,43 +200,96 @@ export function AppProvider({ children }) {
   const updateInstalmentSiblings = async (ruleId, updatedTxn, originalTxn = null) => {
     // Fetch fresh transactions from DB
     const freshTxns = await getTransactions();
-    
-    // Parse instalment info from either originalTxn note or updatedTxn note
-    const origInfo = parseInstalmentInfo(originalTxn?.Note) || parseInstalmentInfo(updatedTxn?.Note);
-    const matchedMap = new Map();
+    const targetTxn = originalTxn || updatedTxn;
+    if (!targetTxn) return;
 
-    // 1. Match by recurring_rule_id if available
-    const targetRuleId = ruleId || originalTxn?.recurring_rule_id || updatedTxn?.recurring_rule_id;
-    if (targetRuleId) {
-      freshTxns.filter(t => t.recurring_rule_id === targetRuleId).forEach(t => matchedMap.set(t._id || t.ID || t.id, t));
-    }
-
-    // 2. Match by instalment series pattern (base note + total instalments count)
-    if (origInfo) {
-      const origBaseLower = origInfo.base.toLowerCase();
-      freshTxns.forEach(t => {
-        const info = parseInstalmentInfo(t.Note);
-        if (info && info.total === origInfo.total && info.base.toLowerCase() === origBaseLower) {
-          matchedMap.set(t._id || t.ID || t.id, t);
-        }
-      });
-    }
-
-    // 3. Ensure the current transaction itself is included in matchedMap
     const currentId = updatedTxn?._id || updatedTxn?.ID || originalTxn?._id || originalTxn?.ID;
-    if (currentId && !matchedMap.has(currentId)) {
-      const selfTxn = freshTxns.find(t => (t._id || t.ID || t.id) === currentId);
-      if (selfTxn) matchedMap.set(currentId, selfTxn);
+    const origInfo = parseInstalmentInfo(originalTxn?.Note) || parseInstalmentInfo(updatedTxn?.Note);
+    const targetRuleId = ruleId || originalTxn?.recurring_rule_id || updatedTxn?.recurring_rule_id;
+    const totalParts = origInfo ? origInfo.total : 1;
+    const currentPart = origInfo ? origInfo.part : 1;
+    const targetAmt = parseFloat(targetTxn.INR) || parseFloat(targetTxn.Amount) || 0;
+    const targetDesc = (targetTxn.Description || '').trim().toLowerCase();
+    const targetAcct = (targetTxn.Account || targetTxn.FromAccount || '').trim().toLowerCase();
+    const targetCat = (targetTxn.Category || '').trim().toLowerCase();
+    const targetBase = origInfo ? origInfo.base.toLowerCase() : '';
+
+    let candidates = [];
+    if (targetRuleId) {
+      candidates = freshTxns.filter(t => t.recurring_rule_id === targetRuleId);
     }
 
-    const allTxns = Array.from(matchedMap.values());
+    // If candidates from ruleId don't cover the full series, match by note pattern + description / account / amount
+    if (candidates.length < totalParts && origInfo) {
+      const noteCandidates = freshTxns.filter(t => {
+        const info = parseInstalmentInfo(t.Note);
+        if (!info || info.total !== totalParts) return false;
+
+        // Check match by Description (if description is present and has text)
+        if (targetDesc && targetDesc.length > 3) {
+          const tDesc = (t.Description || '').trim().toLowerCase();
+          if (tDesc === targetDesc) return true;
+        }
+
+        // Check match by base note + Category + Account + Amount similarity
+        if (targetBase && info.base.toLowerCase() === targetBase) {
+          if (targetCat && t.Category && t.Category.trim().toLowerCase() !== targetCat) return false;
+          if (targetAcct && t.Account && (t.Account || t.FromAccount || '').trim().toLowerCase() !== targetAcct) return false;
+          const tAmt = parseFloat(t.INR) || parseFloat(t.Amount) || 0;
+          if (targetAmt > 0 && Math.abs(tAmt - targetAmt) > Math.max(15, targetAmt * 0.35)) return false;
+          return true;
+        }
+
+        return false;
+      });
+
+      const candMap = new Map();
+      candidates.forEach(c => candMap.set(c._id || c.ID || c.id, c));
+      noteCandidates.forEach(c => candMap.set(c._id || c.ID || c.id, c));
+      candidates = Array.from(candMap.values());
+    }
+
+    if (!candidates.length) candidates = [targetTxn];
+
+    // Pick at most ONE best sibling per part number (1..totalParts)
+    const targetDateObj = parseDate(targetTxn.Date);
+    const bestSiblingsByPart = new Map();
+
+    for (const c of candidates) {
+      const cInfo = parseInstalmentInfo(c.Note);
+      const p = cInfo ? cInfo.part : 1;
+      if (p < 1 || p > totalParts) continue;
+
+      const isSelf = (c._id && c._id === targetTxn._id) || (c.ID && c.ID === targetTxn.ID) || (currentId && (c._id === currentId || c.ID === currentId));
+      if (isSelf) {
+        bestSiblingsByPart.set(p, c);
+        continue;
+      }
+
+      if (!bestSiblingsByPart.has(p)) {
+        bestSiblingsByPart.set(p, c);
+      } else {
+        const expectedMonthDiff = p - currentPart;
+        const expectedDate = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth() + expectedMonthDiff, targetDateObj.getDate());
+        const cDate = parseDate(c.Date);
+        const existingDate = parseDate(bestSiblingsByPart.get(p).Date);
+        const curDiff = Math.abs(existingDate.getTime() - expectedDate.getTime());
+        const newDiff = Math.abs(cDate.getTime() - expectedDate.getTime());
+        if (newDiff < curDiff) {
+          bestSiblingsByPart.set(p, c);
+        }
+      }
+    }
+
+    bestSiblingsByPart.set(currentPart, targetTxn);
+    const allTxns = Array.from(bestSiblingsByPart.values());
     if (!allTxns.length) return;
 
     // Determine the new base note (without instalment suffix)
     const newInfo = parseInstalmentInfo(updatedTxn?.Note);
     const newBaseNote = newInfo ? newInfo.base : (updatedTxn?.Note || '').replace(/[\(\[]\s*\d+\s*(?:\/|of)\s*\d+\s*[\)\]]\s*$/i, '').trim();
 
-    // Fast parallel batch updates across all siblings
+    // Fast parallel batch updates across all isolated siblings
     await Promise.all(allTxns.map(async sibling => {
       const sibId = sibling._id || sibling.ID || sibling.id;
       const isTheEditedItem = (currentId && sibId === currentId);
@@ -347,44 +407,78 @@ export function AppProvider({ children }) {
     }
   };
 
-  const importData = async (rows, mode = 'override', isBackup = false) => {
-    const dbCount = mode === 'override' ? 0 : await getTransactionCount();
+  const importData = async (rows, mode = 'override', backupData = null) => {
+    const isOverride = (mode === 'override');
+    const dbCount = isOverride ? 0 : await getTransactionCount();
     const isFirstImport = dbCount === 0;
     cancelRef.current = false;
     const total = rows.length;
     dispatch({ type:'SET_IMPORT', payload:{ processed:0, total, startTime:Date.now() } });
 
-    if (mode === 'override') await deleteAllTransactions();
-
-    // Import in batches so UI stays responsive
-    let imported = 0, skipped = 0;
-    const BATCH = 500;
-    for (let i = 0; i < total; i += BATCH) {
-      if (cancelRef.current) {
-        dispatch({ type:'SET_IMPORT', payload:null });
-        await load();
-        return { imported, skipped, cancelled:true };
-      }
-      const res = await bulkImport(rows.slice(i, i + BATCH), { firstImport: isFirstImport });
-      imported += res.imported; skipped += res.skipped;
-      dispatch({ type:'SET_IMPORT', payload:{ processed:Math.min(i+BATCH,total), total, startTime:Date.now() } });
-      await new Promise(r => setTimeout(r, 0)); // yield to UI
+    if (isOverride) {
+      await deleteAllTransactions();
     }
 
-    if (isBackup) {
+    // 1. Full FinMan Backup (.finman or JSON backup)
+    if (backupData) {
+      if (isOverride) {
+        // OVERRIDE: Replace all accounts, groups, mapping, categories, budgets, recurring rules exclusively from backup
+        await replaceAccounts(normalizeAccounts(backupData.accounts || []));
+        const rawGroups = backupData.accountGroups || backupData.account_groups || backupData.groups || [];
+        await replaceAccountGroups(rawGroups.map((g, i) => typeof g === 'string' ? { id: uuid(), name: g, sort_order: i } : g));
+        await replaceAccountMapping(backupData.accountMapping || []);
+        await replaceCategories(catsObjToArr(backupData.categories || {}));
+        await replaceBudgets(backupData.budgets || backupData.budget || []);
+
+        const db = getDB();
+        await db.run('DELETE FROM recurring_rules');
+        const rules = backupData.recurringRules || backupData.recurring_rules || backupData.recurrings || [];
+        for (const rule of rules) { await saveRecurringRule(rule); }
+
+        const tagVal = backupData.customTags || backupData.savedTags || '';
+        if (tagVal) await setSetting('customTags', String(tagVal));
+      } else {
+        // MERGE: Merge backup settings with existing ones
+        await updateSettings({
+          accounts: Array.isArray(backupData.accounts) ? backupData.accounts : undefined,
+          accountGroups: Array.isArray(backupData.accountGroups) ? backupData.accountGroups : undefined,
+          accountMapping: Array.isArray(backupData.accountMapping) ? backupData.accountMapping : undefined,
+          categories: backupData.categories && typeof backupData.categories === 'object' ? backupData.categories : undefined,
+          recurringRules: Array.isArray(backupData.recurringRules) ? backupData.recurringRules : undefined,
+          budgets: Array.isArray(backupData.budgets) ? backupData.budgets : undefined,
+          customTags: backupData.customTags || backupData.savedTags || undefined,
+        });
+      }
+
+      // Import transactions in batches
+      let imported = 0, skipped = 0;
+      const BATCH = 500;
+      for (let i = 0; i < total; i += BATCH) {
+        if (cancelRef.current) {
+          dispatch({ type:'SET_IMPORT', payload:null });
+          await load();
+          return { imported, skipped, cancelled:true };
+        }
+        const res = await bulkImport(rows.slice(i, i + BATCH), { firstImport: isFirstImport });
+        imported += res.imported; skipped += res.skipped;
+        dispatch({ type:'SET_IMPORT', payload:{ processed:Math.min(i+BATCH,total), total, startTime:Date.now() } });
+        await new Promise(r => setTimeout(r, 0));
+      }
+
       dispatch({ type:'SET_IMPORT', payload:null });
       await load();
       return { imported, skipped, cancelled:false };
     }
 
-    // Auto-extract accounts & categories from imported rows.
-    // Supports both Money Manager XLS and FinMan CSV/JSON export formats.
-    const acctSet = new Set(), catMap = {};
+    // 2. Transactions-only file (CSV / XLS)
+    // Extract accounts, groups, mapping, categories, and tags from CSV rows
+    const acctMap = new Map();
+    const catMap = {};
+    const groupSet = new Set();
+    const groupOrderMap = new Map();
+    const tagSet = new Set();
     const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(s);
-    // UUID pattern — category/account names that look like UUIDs are corruption
-    // artefacts from previous bad imports and must never be stored.
     const looksLikeUUID = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
-    // Reserved words that must never become account or category names
     const RESERVED_ACCT = new Set(['INR','USD','GBP','EUR','Transfer','Transfer-Out','Transfer-In']);
     const RESERVED_CAT  = new Set(['Transfer','Transfer-Out','Transfer-In','Income','Expense']);
 
@@ -396,71 +490,149 @@ export function AppProvider({ children }) {
       const rawSub  = String(r.Subcategory || r.subcategory || '').trim();
       const sub     = rawSub.toLowerCase() === 'default' ? '' : rawSub;
 
-      // Source account — guard against numeric/UUID/reserved values
+      // Extract account info
       const rawAcct  = String(r.Account || r.account || '').trim();
       const realAcct = looksNumeric(rawAcct)
         ? String(r.FromAccount || r.from_account || '').trim() || rawAcct
         : rawAcct;
 
-      if (realAcct && !RESERVED_ACCT.has(realAcct) && !looksNumeric(realAcct) && !looksLikeUUID(realAcct))
-        acctSet.add(realAcct);
+      const acctGroup = String(r.AccountGroup || r.account_group || r.Group || '').trim();
+      const acctType = String(r.AccountType || r.account_type || '').trim();
+      const cardLast4 = String(r.CardLast4 || r.card_last4 || r.AccountCardLast4 || '').trim();
+      const settleRaw = r.SettlementDate ?? r.settlement_date ?? r.AccountSettlementDate ?? r.account_settlement_date;
+      const settlementDate = (settleRaw !== undefined && settleRaw !== '') ? parseInt(settleRaw) : 0;
+      const payDaysRaw = r.PaymentDueDays ?? r.payment_due_days ?? r.AccountPaymentDueDays ?? r.account_payment_due_days;
+      const paymentDueDays = (payDaysRaw !== undefined && payDaysRaw !== '') ? parseInt(payDaysRaw) : 0;
+      const isAsset = (acctType === 'credit_card' || ['credit card', 'credit', 'loan', 'emi', 'borrow', 'pay later', 'installments'].some(k => (acctGroup || acctType || realAcct).toLowerCase().includes(k))) ? false : true;
+      const acctOrdRaw = r.AccountOrder ?? r.account_order ?? r.FromAccountOrder ?? r.from_account_order;
+      const acctOrd = (acctOrdRaw !== undefined && acctOrdRaw !== '') ? parseInt(acctOrdRaw) : undefined;
+      const grpOrdRaw = r.AccountGroupOrder ?? r.account_group_order;
+      const grpOrd = (grpOrdRaw !== undefined && grpOrdRaw !== '') ? parseInt(grpOrdRaw) : undefined;
+
+      if (realAcct && !RESERVED_ACCT.has(realAcct) && !looksNumeric(realAcct) && !looksLikeUUID(realAcct)) {
+        if (!acctMap.has(realAcct)) {
+          acctMap.set(realAcct, { name: realAcct, group: acctGroup, icon: '💳', acctType, cardLast4, settlementDate, paymentDueDays, isAsset, sortOrder: acctOrd });
+        } else {
+          const existing = acctMap.get(realAcct);
+          if (acctGroup && !existing.group) existing.group = acctGroup;
+          if (acctType && !existing.acctType) existing.acctType = acctType;
+          if (cardLast4 && !existing.cardLast4) existing.cardLast4 = cardLast4;
+          if (settlementDate && !existing.settlementDate) existing.settlementDate = settlementDate;
+          if (paymentDueDays && !existing.paymentDueDays) existing.paymentDueDays = paymentDueDays;
+          if (acctOrd !== undefined && existing.sortOrder === undefined) existing.sortOrder = acctOrd;
+        }
+        if (acctGroup) {
+          groupSet.add(acctGroup);
+          if (grpOrd !== undefined && !groupOrderMap.has(acctGroup)) {
+            groupOrderMap.set(acctGroup, grpOrd);
+          }
+        }
+      }
 
       if (isXfer) {
-        // Destination account: prefer explicit ToAccount (FinMan export),
-        // fall back to Category (Money Manager format).
-        const destAcct = (rawTo && !RESERVED_ACCT.has(rawTo) && !looksNumeric(rawTo))
-          ? rawTo
-          : rawCat;
-        if (destAcct && !RESERVED_ACCT.has(destAcct) && !looksNumeric(destAcct) && !looksLikeUUID(destAcct))
-          acctSet.add(destAcct);
+        const destAcct = (rawTo && !RESERVED_ACCT.has(rawTo) && !looksNumeric(rawTo)) ? rawTo : rawCat;
+        const toGroup = String(r.ToAccountGroup || r.to_account_group || '').trim();
+        const toOrdRaw = r.ToAccountOrder ?? r.to_account_order;
+        const toOrd = (toOrdRaw !== undefined && toOrdRaw !== '') ? parseInt(toOrdRaw) : undefined;
+        if (destAcct && !RESERVED_ACCT.has(destAcct) && !looksNumeric(destAcct) && !looksLikeUUID(destAcct)) {
+          if (!acctMap.has(destAcct)) {
+            acctMap.set(destAcct, { name: destAcct, group: toGroup, icon: '💳', acctType: '', cardLast4: '', settlementDate: 0, paymentDueDays: 0, isAsset: true, sortOrder: toOrd });
+          } else {
+            const existing = acctMap.get(destAcct);
+            if (toGroup && !existing.group) existing.group = toGroup;
+            if (toOrd !== undefined && existing.sortOrder === undefined) existing.sortOrder = toOrd;
+          }
+          if (toGroup) groupSet.add(toGroup);
+        }
       } else {
-        // For Expense/Income: Category = expense category (never add to accounts)
-        // Also skip UUID-looking names and reserved words.
         if (rawCat && !RESERVED_CAT.has(rawCat) && !looksLikeUUID(rawCat)) {
           const catType = typeRaw === 'Income' ? 'Income' : 'Expense';
           if (!catMap[rawCat]) catMap[rawCat] = { type: catType, subs: new Set() };
           if (sub && !looksLikeUUID(sub)) catMap[rawCat].subs.add(sub);
         }
       }
-    }
 
-    // Build account list from imported rows
-    const newAcctNames = [...acctSet].filter(n => n);
-    const existAccts = normalizeAccounts(await getAccounts());
-    const existNames = new Set(existAccts.map(a => a.name));
-    const brandNew   = newAcctNames.filter(n => !existNames.has(n)).map(name => ({ name, group:'', icon:'💳', acctType:'', settlementDate:0, paymentDueDays:0 }));
-    await replaceAccounts([...existAccts, ...brandNew]);
-
-    // Merge with existing categories — case-insensitive dedup.
-    // Build a lookup: lowercase name → canonical (Title Case preferred) name already in DB.
-    const existCatsArr = await getCategories();
-    const existCatsObj = catsArrToObj(existCatsArr);
-    // Remove any UUID-named categories that leaked in from previous bad imports
-    for (const key of Object.keys(existCatsObj)) {
-      if (looksLikeUUID(key)) delete existCatsObj[key];
-    }
-    // Build case-insensitive map: lowercase → existing canonical key
-    const existCatLC = {};
-    for (const key of Object.keys(existCatsObj)) existCatLC[key.toLowerCase()] = key;
-
-    for (const [cat, d] of Object.entries(catMap)) {
-      // Find existing key case-insensitively; prefer the one already in DB
-      const canonical = existCatLC[cat.toLowerCase()] || cat;
-      if (!existCatsObj[canonical]) {
-        existCatsObj[canonical] = { type: d.type, subcategories: [...d.subs] };
-        existCatLC[canonical.toLowerCase()] = canonical;
-      } else {
-        const sc = new Set(existCatsObj[canonical].subcategories);
-        d.subs.forEach(s => sc.add(s));
-        existCatsObj[canonical].subcategories = [...sc];
-        if (d.type !== existCatsObj[canonical].type && d.type === 'Income')
-          existCatsObj[canonical].type = 'Income';
+      // Collect tags from Tags column or Note
+      const rawTags = String(r.Tags || r.tags || '').trim();
+      if (rawTags) {
+        rawTags.split(/[\s,]+/).forEach(tg => {
+          const clean = tg.trim();
+          if (clean) tagSet.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+      const rawNote = String(r.Note || r.note || '').trim();
+      if (rawNote) {
+        const noteTags = rawNote.match(/#[A-Za-z0-9_]+/g);
+        if (noteTags) noteTags.forEach(tg => tagSet.add(tg.trim()));
       }
     }
-    await replaceCategories(catsObjToArr(existCatsObj));
+
+    const newAcctsList = Array.from(acctMap.values());
+    newAcctsList.sort((a, b) => {
+      const ordA = (a.sortOrder !== undefined && !isNaN(a.sortOrder)) ? a.sortOrder : 999999;
+      const ordB = (b.sortOrder !== undefined && !isNaN(b.sortOrder)) ? b.sortOrder : 999999;
+      return ordA - ordB;
+    });
+
+    const newCatsArr = catsObjToArr(catMap);
+    const newGroupsList = Array.from(groupSet).filter(Boolean).map((name, i) => {
+      const ord = groupOrderMap.get(name) !== undefined ? groupOrderMap.get(name) : i;
+      return { id: uuid(), name, sort_order: ord };
+    });
+    newGroupsList.sort((a, b) => (a.sort_order ?? 999999) - (b.sort_order ?? 999999));
+
+    if (isOverride) {
+      // OVERRIDE: Delete all existing/default accounts and categories, replacing exclusively with the file's items
+      await replaceAccounts(newAcctsList);
+      await replaceCategories(newCatsArr);
+      await replaceAccountGroups(newGroupsList);
+      if (tagSet.size > 0) {
+        const tagStr = Array.from(tagSet).join(', ');
+        await setSetting('customTags', tagStr);
+      }
+    } else {
+      // MERGE: Merge with existing accounts, categories, and groups
+      const existAccts = normalizeAccounts(await getAccounts());
+      const existNames = new Set(existAccts.map(a => a.name));
+      const brandNew = newAcctsList.filter(a => !existNames.has(a.name));
+      await replaceAccounts([...existAccts, ...brandNew]);
+
+      const existGroups = await getAccountGroups();
+      const existGroupNames = new Set(existGroups.map(g => g.name));
+      const brandNewGroups = newGroupsList.filter(g => !existGroupNames.has(g.name));
+      await replaceAccountGroups([...existGroups, ...brandNewGroups]);
+
+      const existCatsArr = await getCategories();
+      const existCatsObj = catsArrToObj(existCatsArr);
+      for (const [cat, d] of Object.entries(catMap)) {
+        if (!existCatsObj[cat]) {
+          existCatsObj[cat] = { type: d.type, subcategories: [...d.subs] };
+        } else {
+          const sc = new Set(existCatsObj[cat].subcategories);
+          d.subs.forEach(s => sc.add(s));
+          existCatsObj[cat].subcategories = [...sc];
+        }
+      }
+      await replaceCategories(catsObjToArr(existCatsObj));
+    }
+
+    // Bulk insert transactions in batches
+    let imported = 0, skipped = 0;
+    const BATCH = 500;
+    for (let i = 0; i < total; i += BATCH) {
+      if (cancelRef.current) {
+        dispatch({ type:'SET_IMPORT', payload:null });
+        await load();
+        return { imported, skipped, cancelled:true };
+      }
+      const res = await bulkImport(rows.slice(i, i + BATCH), { firstImport: isFirstImport });
+      imported += res.imported; skipped += res.skipped;
+      dispatch({ type:'SET_IMPORT', payload:{ processed:Math.min(i+BATCH,total), total, startTime:Date.now() } });
+      await new Promise(r => setTimeout(r, 0));
+    }
 
     dispatch({ type:'SET_IMPORT', payload:null });
-    await load(); // Reload all data from DB into state
+    await load();
     return { imported, skipped, cancelled:false };
   };
 

@@ -220,3 +220,140 @@ export const stripInstalmentSuffix = (note) => {
 /** Build instalment note: "Test (2/4)" */
 export const buildInstalmentNote = (baseNote, part, total) =>
   `${(baseNote || '').trim()} (${part}/${total})`;
+
+const parseTxnDate = (raw) => {
+  if (!raw) return new Date();
+  if (raw instanceof Date) return raw;
+  const s = String(raw).trim();
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmy) return new Date(+dmy[3], +dmy[2] - 1, +dmy[1]);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const d = new Date(s + 'T00:00:00'); if (!isNaN(d)) return d;
+  }
+  const d = new Date(s); return isNaN(d) ? new Date() : d;
+};
+
+/**
+ * Calculate accurate Total & Remaining Balance for an instalment transaction
+ * by identifying its unique sibling series in the transaction history.
+ */
+export const getInstalmentSeriesStats = (targetTxn, allTxns = [], currentEditedAmount = null) => {
+  if (!targetTxn) return null;
+  const instInfo = parseInstalmentInfo(targetTxn.Note);
+  const ruleId = targetTxn.recurring_rule_id;
+  if (!instInfo && !ruleId) return null;
+
+  const currentPart = instInfo ? instInfo.part : 1;
+  const totalParts = instInfo ? instInfo.total : 1;
+  const targetAmt = (currentEditedAmount !== null && !isNaN(currentEditedAmount) && currentEditedAmount !== '')
+    ? Number(currentEditedAmount)
+    : (parseFloat(targetTxn.INR) || parseFloat(targetTxn.Amount) || 0);
+
+  const targetDateObj = parseTxnDate(targetTxn.Date);
+  const targetDesc = (targetTxn.Description || '').trim().toLowerCase();
+  const targetAcct = (targetTxn.Account || targetTxn.FromAccount || '').trim().toLowerCase();
+  const targetCat = (targetTxn.Category || '').trim().toLowerCase();
+  const targetBase = instInfo ? instInfo.base.toLowerCase() : '';
+
+  // 1. Collect candidate siblings
+  let candidates = [];
+  if (ruleId) {
+    candidates = allTxns.filter(t => t.recurring_rule_id === ruleId);
+  }
+
+  // 2. Search all transactions for matching siblings in the series
+  const noteCandidates = allTxns.filter(t => {
+    const info = parseInstalmentInfo(t.Note);
+    if (!info || info.total !== totalParts) return false;
+
+    // Check match by Description (if description is present and has text)
+    if (targetDesc && targetDesc.length > 3) {
+      const tDesc = (t.Description || '').trim().toLowerCase();
+      if (tDesc === targetDesc) return true;
+    }
+
+    // Check match by base note + Category + Account + Amount similarity
+    if (targetBase && info.base.toLowerCase() === targetBase) {
+      if (targetCat && t.Category && t.Category.trim().toLowerCase() !== targetCat) return false;
+      if (targetAcct && t.Account && (t.Account || t.FromAccount || '').trim().toLowerCase() !== targetAcct) return false;
+      const tAmt = parseFloat(t.INR) || parseFloat(t.Amount) || 0;
+      if (targetAmt > 0 && Math.abs(tAmt - targetAmt) > Math.max(15, targetAmt * 0.35)) return false;
+      return true;
+    }
+
+    return false;
+  });
+
+  const candMap = new Map();
+  candidates.forEach(c => candMap.set(c._id || c.ID || c.id, c));
+  noteCandidates.forEach(c => candMap.set(c._id || c.ID || c.id, c));
+  candidates = Array.from(candMap.values());
+
+  if (!candidates.length) candidates = [targetTxn];
+
+  // 3. Match exactly one transaction per part number (1..totalParts)
+  const bestSiblingsByPart = new Map();
+
+  for (const c of candidates) {
+    const cInfo = parseInstalmentInfo(c.Note);
+    const p = cInfo ? cInfo.part : 1;
+    if (p < 1 || p > totalParts) continue;
+
+    const isSelf = (c._id && c._id === targetTxn._id) || (c.ID && c.ID === targetTxn.ID);
+    if (isSelf) {
+      bestSiblingsByPart.set(p, c);
+      continue;
+    }
+
+    if (!bestSiblingsByPart.has(p)) {
+      bestSiblingsByPart.set(p, c);
+    } else {
+      const expectedMonthDiff = p - currentPart;
+      const expectedDate = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth() + expectedMonthDiff, targetDateObj.getDate());
+      const cDate = parseTxnDate(c.Date);
+      const existingDate = parseTxnDate(bestSiblingsByPart.get(p).Date);
+      const curDiff = Math.abs(existingDate.getTime() - expectedDate.getTime());
+      const newDiff = Math.abs(cDate.getTime() - expectedDate.getTime());
+      if (newDiff < curDiff) {
+        bestSiblingsByPart.set(p, c);
+      }
+    }
+  }
+
+  bestSiblingsByPart.set(currentPart, targetTxn);
+
+  // 4. Sum accurate Total & Balance from the unique series (with targetAmt fallback for any missing part)
+  let totalAmount = 0;
+  let completedAmount = 0;
+
+  for (let p = 1; p <= totalParts; p++) {
+    const s = bestSiblingsByPart.get(p);
+    let amt = 0;
+    if (s) {
+      const isCurrentItem = (s._id && s._id === targetTxn._id) || (s.ID && s.ID === targetTxn.ID) || (p === currentPart);
+      if (isCurrentItem && currentEditedAmount !== null && !isNaN(currentEditedAmount) && currentEditedAmount !== '') {
+        amt = Number(currentEditedAmount);
+      } else {
+        amt = parseFloat(s.INR) || parseFloat(s.Amount) || 0;
+      }
+    } else {
+      // If a part is not found in database, default to this instalment's amount
+      amt = targetAmt;
+    }
+
+    totalAmount += amt;
+    if (p <= currentPart) {
+      completedAmount += amt;
+    }
+  }
+
+  const balanceRemaining = Math.max(0, totalAmount - completedAmount);
+
+  return {
+    part: currentPart,
+    totalParts,
+    totalAmount,
+    balanceRemaining,
+    completedAmount,
+  };
+};
