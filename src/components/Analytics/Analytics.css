@@ -2,49 +2,49 @@
 
 .analytics-periods { padding:12px var(--page-px) 0; }
 .period-tabs { display:flex; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); padding:3px; }
-.period-tab { flex:1; padding:8px 6px; border-radius:var(--r-sm); border:none; background:none; font-size:13px; font-weight:600; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); }
+.period-tab { flex:1; padding:8px 6px; border-radius:var(--r-sm); border:none; background:none; font-size:var(--fs-base); font-weight:600; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); }
 .period-tab.active { background:var(--green); color:#0a0f1e; }
 
 .period-picker-row { display:flex; align-items:center; justify-content:center; gap:16px; padding:10px var(--page-px); }
-.pp-arrow { width:36px; height:36px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); color:var(--text-primary); font-size:20px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
-.pp-label { font-size:15px; font-weight:700; color:var(--text-primary); min-width:160px; text-align:center; }
+.pp-arrow { width:36px; height:36px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); color:var(--text-primary); font-size:var(--fs-3xl); cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.pp-label { font-size:var(--fs-xl); font-weight:700; color:var(--text-primary); min-width:160px; text-align:center; }
 
 .an-summary { display:flex; gap:10px; padding:10px var(--page-px) 12px; }
 .an-sum-card { flex:1; padding:12px var(--card-p); border-radius:var(--r-lg); border:1px solid var(--border); display:flex; flex-direction:column; gap:3px; }
 .an-sum-card.income  { background:var(--income-bg);  border-color:rgba(0,229,160,0.2); }
 .an-sum-card.expense { background:var(--expense-bg); border-color:rgba(255,77,106,0.2); }
 .an-sum-card.savings { background:var(--blue-bg);    border-color:rgba(77,159,255,0.2); }
-.an-sum-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; opacity:0.7; }
-.an-sum-val   { font-size:17px; font-weight:800; font-family:var(--font); }
-.an-sum-avg   { font-size:10px; opacity:0.65; font-family:var(--font); }
+.an-sum-label { font-size:var(--fs-xs); font-weight:700; text-transform:uppercase; letter-spacing:0.6px; opacity:0.7; }
+.an-sum-val   { font-size:var(--fs-2xl); font-weight:800; font-family:var(--font); }
+.an-sum-avg   { font-size:var(--fs-xs); opacity:0.65; font-family:var(--font); }
 .an-sum-card.income  .an-sum-label, .an-sum-card.income  .an-sum-val, .an-sum-card.income  .an-sum-avg { color:var(--income); }
 .an-sum-card.expense .an-sum-label, .an-sum-card.expense .an-sum-val, .an-sum-card.expense .an-sum-avg { color:var(--expense); }
 .an-sum-card.savings .an-sum-label, .an-sum-card.savings .an-sum-val, .an-sum-card.savings .an-sum-avg { color:var(--blue); }
 
 .an-card { margin:0 var(--page-px) 12px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-xl); padding:var(--card-p); }
 .an-card-hdr  { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
-.an-card-title{ font-size:14px; font-weight:700; color:var(--text-primary); margin-bottom:12px; }
+.an-card-title{ font-size:var(--fs-lg); font-weight:700; color:var(--text-primary); margin-bottom:12px; }
 .view-toggle  { display:flex; background:var(--bg-input); border-radius:var(--r-sm); padding:2px; }
-.view-toggle button { padding:5px 11px; border-radius:6px; border:none; background:none; font-size:12px; font-weight:600; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); }
+.view-toggle button { padding:5px 11px; border-radius:6px; border:none; background:none; font-size:var(--fs-md); font-weight:600; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); }
 .view-toggle button.active { background:var(--bg-card2); color:var(--text-primary); }
 
 .cat-donut-row { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
 .cat-legend    { flex:1; display:flex; flex-direction:column; gap:7px; }
 .cat-legend-row{ display:flex; align-items:center; gap:7px; }
 .cat-legend-dot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
-.cat-legend-name{ flex:1; font-size:11px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.cat-legend-pct { font-size:11px; font-weight:700; font-family:var(--font); }
+.cat-legend-name{ flex:1; font-size:var(--fs-sm); color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cat-legend-pct { font-size:var(--fs-sm); font-weight:700; font-family:var(--font); }
 
 .cat-bar-list { display:flex; flex-direction:column; gap:10px; border-top:1px solid var(--border); padding-top:12px; }
 .cat-bar-row  { display:flex; align-items:flex-start; gap:10px; }
-.cat-bar-icon { width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0; }
+.cat-bar-icon { width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:var(--fs-xl); flex-shrink:0; }
 .cat-bar-info { flex:1; }
 .cat-bar-name-row{ display:flex; justify-content:space-between; align-items:center; }
-.cat-bar-name { font-size:13px; font-weight:600; color:var(--text-primary); }
-.cat-bar-amt  { font-size:13px; font-weight:700; font-family:var(--font); }
-.cat-bar-avg  { font-size:11px; color:var(--text-muted); margin-top:1px; font-family:var(--font); }
+.cat-bar-name { font-size:var(--fs-base); font-weight:600; color:var(--text-primary); }
+.cat-bar-amt  { font-size:var(--fs-base); font-weight:700; font-family:var(--font); }
+.cat-bar-avg  { font-size:var(--fs-sm); color:var(--text-muted); margin-top:1px; font-family:var(--font); }
 
 .an-acct-row { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--border); }
 .an-acct-row:last-child { border-bottom:none; }
-.an-acct-name { font-size:13px; font-weight:600; }
-.an-acct-vals { display:flex; gap:10px; font-size:12px; font-family:var(--font); font-weight:600; }
+.an-acct-name { font-size:var(--fs-base); font-weight:600; }
+.an-acct-vals { display:flex; gap:10px; font-size:var(--fs-md); font-family:var(--font); font-weight:600; }
