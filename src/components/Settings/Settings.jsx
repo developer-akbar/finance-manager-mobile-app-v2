@@ -1228,6 +1228,7 @@ function DataManager({ onBack }) {
   const [pendingRows, setPending] = useState(null);
   const [pendingName, setPendingNm] = useState('');
   const [pendingIsBackup, setIsBackup] = useState(false);
+  const [pendingBackup, setPendingBackup] = useState(null);
   const [backupSchedule, setBackupSchedule] = useState(() => state.settings?.backupSchedule || 'off');
   const [backupHistory, setBackupHistory] = useState(() => {
     try { return JSON.parse(state.settings?.backupHistory || '[]'); } catch { return []; }
@@ -1293,23 +1294,10 @@ function DataManager({ onBack }) {
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed._finman_backup) {
         const backup = parsed;
         const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
-        // Restore settings first so accounts/categories are ready before transactions
-        await updateSettings({
-          accounts: Array.isArray(backup.accounts) ? backup.accounts : undefined,
-          accountGroups: Array.isArray(backup.accountGroups) ? backup.accountGroups : (Array.isArray(backup.account_groups) ? backup.account_groups : (Array.isArray(backup.groups) ? backup.groups : undefined)),
-          accountMapping: Array.isArray(backup.accountMapping) ? backup.accountMapping : undefined,
-          categories: backup.categories && typeof backup.categories === 'object' ? backup.categories : undefined,
-          recurringRules: Array.isArray(backup.recurringRules) ? backup.recurringRules : (Array.isArray(backup.recurring_rules) ? backup.recurring_rules : (Array.isArray(backup.recurrings) ? backup.recurrings : undefined)),
-          budgets: Array.isArray(backup.budgets) ? backup.budgets : (Array.isArray(backup.budget) ? backup.budget : undefined),
-        });
-        if (txnRows.length === 0) {
-          setStatus({ type: 'success', msg: '✓ Settings restored. No transactions in backup.' });
-          if (fileRef.current) fileRef.current.value = '';
-          return;
-        }
         setPending(txnRows);
         setPendingNm(file.name);
         setIsBackup(true);
+        setPendingBackup(backup);
         setShowMode(true);
         if (fileRef.current) fileRef.current.value = '';
         return;
@@ -1334,6 +1322,7 @@ function DataManager({ onBack }) {
       setPending(rows);
       setPendingNm(file.name);
       setIsBackup(false);
+      setPendingBackup(null);
       setShowMode(true);
     } catch (err) {
       setStatus({ type: 'error', msg: `Parse error: ${err.message}` });
@@ -1343,12 +1332,13 @@ function DataManager({ onBack }) {
 
   const doImport = async (mode) => {
     setShowMode(false);
-    const result = await importData(pendingRows, mode, pendingIsBackup);
+    const result = await importData(pendingRows, mode, pendingBackup);
     setStatus(result.cancelled
       ? { type: 'error', msg: 'Import cancelled.' }
       : { type: 'success', msg: `✓ Imported ${result.imported.toLocaleString()} transactions${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''}.` }
     );
     setPending(null);
+    setPendingBackup(null);
   };
 
   // ── Capacitor-aware file save (no @capacitor/share — avoids Android 14 crash) ──
@@ -1357,7 +1347,7 @@ function DataManager({ onBack }) {
 
   const buildBackupPayload = () => ({
     _finman_backup: true,
-    version: '2.2.1.4',
+    version: '2.3.0',
     exportedAt: new Date().toISOString(),
     transactions,
     accounts: accounts || [],
@@ -1366,6 +1356,7 @@ function DataManager({ onBack }) {
     categories: categories || {},
     budgets: budgets || [],
     recurringRules: recurringRules || [],
+    customTags: state.settings?.customTags || '',
   });
 
   const runBackupNow = async () => {
@@ -1431,10 +1422,43 @@ function DataManager({ onBack }) {
   };
 
   const exportCSV = async () => {
-    const hdrs = ['Date', 'Time', 'Account', 'FromAccount', 'ToAccount', 'Category', 'Subcategory', 'Note', 'Description', 'INR', 'Amount', 'Currency', 'Income/Expense', 'ID'];
+    const hdrs = [
+      'Date', 'Time', 'Account', 'AccountGroup', 'AccountType', 'CardLast4', 'SettlementDate', 'PaymentDueDays', 'AccountOrder', 'AccountGroupOrder',
+      'FromAccount', 'FromAccountGroup', 'FromAccountOrder', 'ToAccount', 'ToAccountGroup', 'ToAccountOrder',
+      'Category', 'Subcategory', 'Note', 'Description',
+      'INR', 'Amount', 'Currency', 'Income/Expense',
+      'Tags', 'recurring_rule_id', 'warranty_expiry', 'serial_no', 'receipt_image', 'created_at', 'updated_at', 'ID'
+    ];
     // RFC 4180: quote any field containing comma, double-quote, newline or carriage-return
     const esc = v => { const s = String(v ?? ''); return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const rows = [hdrs.join(','), ...transactions.map(t => hdrs.map(h => esc(t[h])).join(','))];
+    const rows = [
+      hdrs.join(','),
+      ...transactions.map(t => {
+        const acctIdx = (accounts || []).findIndex(a => a.name === t.Account);
+        const acctObj = acctIdx !== -1 ? accounts[acctIdx] : null;
+        const fromAcctIdx = (accounts || []).findIndex(a => a.name === (t.FromAccount || t.Account));
+        const fromAcctObj = fromAcctIdx !== -1 ? accounts[fromAcctIdx] : null;
+        const toAcctIdx = (accounts || []).findIndex(a => a.name === t.ToAccount);
+        const toAcctObj = toAcctIdx !== -1 ? accounts[toAcctIdx] : null;
+        const grpIdx = (accountGroups || []).findIndex(g => (typeof g === 'string' ? g : g.name) === (acctObj?.group || ''));
+
+        return hdrs.map(h => {
+          if (h === 'AccountGroup') return esc(acctObj?.group || '');
+          if (h === 'AccountType') return esc(acctObj?.acctType || '');
+          if (h === 'CardLast4') return esc(acctObj?.cardLast4 || '');
+          if (h === 'SettlementDate') return esc(acctObj?.settlementDate || '');
+          if (h === 'PaymentDueDays') return esc(acctObj?.paymentDueDays || '');
+          if (h === 'AccountOrder') return esc(acctIdx !== -1 ? acctIdx : '');
+          if (h === 'AccountGroupOrder') return esc(grpIdx !== -1 ? grpIdx : '');
+          if (h === 'FromAccountGroup') return esc(fromAcctObj?.group || '');
+          if (h === 'FromAccountOrder') return esc(fromAcctIdx !== -1 ? fromAcctIdx : '');
+          if (h === 'ToAccountGroup') return esc(toAcctObj?.group || '');
+          if (h === 'ToAccountOrder') return esc(toAcctIdx !== -1 ? toAcctIdx : '');
+          if (h === 'Tags') return esc(t.Tags || t.tags || '');
+          return esc(t[h] ?? '');
+        }).join(',');
+      })
+    ];
     await saveFile('\ufeff' + rows.join('\n'), `finman_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv;charset=utf-8;');
   };
 
@@ -1472,17 +1496,10 @@ function DataManager({ onBack }) {
       if (decryptedPayload && decryptedPayload._finman_backup) {
         const backup = decryptedPayload;
         const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
-        await updateSettings({
-          accounts: Array.isArray(backup.accounts) ? backup.accounts : undefined,
-          accountGroups: Array.isArray(backup.accountGroups) ? backup.accountGroups : (Array.isArray(backup.account_groups) ? backup.account_groups : (Array.isArray(backup.groups) ? backup.groups : undefined)),
-          accountMapping: Array.isArray(backup.accountMapping) ? backup.accountMapping : undefined,
-          categories: backup.categories && typeof backup.categories === 'object' ? backup.categories : undefined,
-          recurringRules: Array.isArray(backup.recurringRules) ? backup.recurringRules : (Array.isArray(backup.recurring_rules) ? backup.recurring_rules : (Array.isArray(backup.recurrings) ? backup.recurrings : undefined)),
-          budgets: Array.isArray(backup.budgets) ? backup.budgets : (Array.isArray(backup.budget) ? backup.budget : undefined),
-        });
         setPending(txnRows);
         setPendingNm(cryptoModal.fileName);
         setIsBackup(true);
+        setPendingBackup(backup);
         setShowMode(true);
         setCryptoModal(null);
         setCryptoPin('');

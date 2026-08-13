@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage } from '../../utils/format.js';
-import { parseInstalmentInfo } from '../../database/recurring.js';
+import { parseInstalmentInfo, getInstalmentSeriesStats } from '../../database/recurring.js';
 import AddTransaction from './AddTransaction.jsx';
 import ReceiptViewer from '../Common/ReceiptViewer.jsx';
 import './TransactionItem.css';
@@ -173,49 +173,8 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
   // Compute instalment series stats (Total amount, Remaining Balance)
   const instalmentStats = React.useMemo(() => {
     if (!isInstalment) return null;
-    const allTxns = state.transactions || [];
-    let siblings = [];
-    if (ruleId) {
-      siblings = allTxns.filter(txn => txn.recurring_rule_id === ruleId);
-    }
-    if (instInfo) {
-      const origBaseLower = instInfo.base.toLowerCase();
-      const noteSiblings = allTxns.filter(txn => {
-        const info = parseInstalmentInfo(txn.Note);
-        return info && info.total === instInfo.total && info.base.toLowerCase() === origBaseLower;
-      });
-      const sibMap = new Map();
-      siblings.forEach(s => sibMap.set(s._id || s.ID || s.id, s));
-      noteSiblings.forEach(s => sibMap.set(s._id || s.ID || s.id, s));
-      siblings = Array.from(sibMap.values());
-    }
-    if (!siblings.length) siblings = [t];
-
-    const currentPart = instInfo ? instInfo.part : 1;
-    const totalParts = instInfo ? instInfo.total : (ruleEntry?.total_parts || siblings.length);
-
-    let totalAmount = ruleEntry?.total_amount;
-    if (!totalAmount || totalAmount <= 0) {
-      totalAmount = siblings.reduce((sum, s) => sum + (parseFloat(s.INR) || parseFloat(s.Amount) || 0), 0);
-    }
-
-    let completedAmount = 0;
-    for (const s of siblings) {
-      const sInfo = parseInstalmentInfo(s.Note);
-      const sPart = sInfo ? sInfo.part : 1;
-      if (sPart <= currentPart) {
-        completedAmount += (parseFloat(s.INR) || parseFloat(s.Amount) || 0);
-      }
-    }
-    const balanceRemaining = Math.max(0, totalAmount - completedAmount);
-
-    return {
-      part: currentPart,
-      totalParts,
-      totalAmount,
-      balanceRemaining,
-    };
-  }, [isInstalment, ruleId, instInfo, ruleEntry, state.transactions, t]);
+    return getInstalmentSeriesStats(t, state.transactions);
+  }, [isInstalment, t, state.transactions]);
 
   const handleCopyWithToday = () => {
     const now = new Date();
