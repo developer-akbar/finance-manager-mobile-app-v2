@@ -4,6 +4,9 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
+import DebtTracker from './DebtTracker.jsx';
+import CardOptimizer from './CardOptimizer.jsx';
+import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Accounts.css';
@@ -651,16 +654,43 @@ export default function Accounts({ backInterceptRef } = {}) {
   const { accounts, accountGroups, transactions } = state;
   const [drill, setDrill] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+  const [showDebtTracker, setShowDebtTracker] = useState(false);
+  const [showOptimizer,   setShowOptimizer]   = useState(false);
+  const [showGroups,      setShowGroups]      = useState(false);
+  const [settlePrefill, setSettlePrefill] = useState(null);
 
   // Handle double-tap reset for Accounts tab
   useEffect(() => {
     const handleReset = () => {
       setDrill(null);
+      setShowDebtTracker(false);
+      setShowOptimizer(false);
+      setShowGroups(false);
+      setSettlePrefill(null);
       setCollapsedGroups(new Set());
     };
     window.addEventListener('reset-accounts-view', handleReset);
     return () => window.removeEventListener('reset-accounts-view', handleReset);
   }, []);
+
+  // Back button interception for Accounts sub-screens
+  useEffect(() => {
+    if (!backInterceptRef) return;
+    if (settlePrefill) {
+      backInterceptRef.current = () => setSettlePrefill(null);
+    } else if (showGroups) {
+      backInterceptRef.current = () => setShowGroups(false);
+    } else if (showOptimizer) {
+      backInterceptRef.current = () => setShowOptimizer(false);
+    } else if (showDebtTracker) {
+      backInterceptRef.current = () => setShowDebtTracker(false);
+    } else if (drill) {
+      backInterceptRef.current = () => setDrill(null);
+    } else {
+      backInterceptRef.current = null;
+    }
+    return () => { if (backInterceptRef) backInterceptRef.current = null; };
+  }, [settlePrefill, showGroups, showOptimizer, showDebtTracker, drill, backInterceptRef]);
 
   const PAID_ALERT_STORAGE = 'finman-paid-due-alerts';
   const DISMISS_ALERT_STORAGE = 'finman-dismissed-due-alerts';
@@ -756,23 +786,41 @@ export default function Accounts({ backInterceptRef } = {}) {
     });
   };
 
-  // Register Android back intercept when drill-down is open
+  // Register Android back intercept when drill-down or debt tracker is open
   useEffect(() => {
     if (!backInterceptRef) return;
-    if (drill) {
+    if (showDebtTracker) {
+      backInterceptRef.current = () => setShowDebtTracker(false);
+    } else if (drill) {
       backInterceptRef.current = () => setDrill(null);
     } else {
       backInterceptRef.current = null;
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
-  }, [drill, backInterceptRef]);
+  }, [showDebtTracker, drill, backInterceptRef]);
 
 
   const acctBalances = useMemo(() => buildBalanceMap(transactions), [transactions]);
 
   const netWorth = useMemo(() => Object.values(acctBalances).reduce((s,v)=>s+v,0), [acctBalances]);
-  const assets      = useMemo(() => Object.values(acctBalances).filter(v=>v>0).reduce((s,v)=>s+v,0), [acctBalances]);
-  const liabilities = useMemo(() => Object.values(acctBalances).filter(v=>v<0).reduce((s,v)=>s+Math.abs(v),0), [acctBalances]);
+  const assets = useMemo(() => {
+    return Object.entries(acctBalances).reduce((sum, [name, val]) => {
+      const a = accounts.find(acc => (acc.name || acc) === name);
+      const isAsset = a?.isAsset !== undefined ? a.isAsset : !['credit card', 'credit', 'loan', 'emi', 'borrow', 'pay later', 'installments'].some(k => name.toLowerCase().includes(k));
+      if (isAsset && val > 0) return sum + val;
+      return sum;
+    }, 0);
+  }, [acctBalances, accounts]);
+
+  const liabilities = useMemo(() => {
+    return Object.entries(acctBalances).reduce((sum, [name, val]) => {
+      const a = accounts.find(acc => (acc.name || acc) === name);
+      const isAsset = a?.isAsset !== undefined ? a.isAsset : !['credit card', 'credit', 'loan', 'emi', 'borrow', 'pay later', 'installments'].some(k => name.toLowerCase().includes(k));
+      if (!isAsset) return sum + Math.abs(val);
+      if (isAsset && val < 0) return sum + Math.abs(val); // overdraft
+      return sum;
+    }, 0);
+  }, [acctBalances, accounts]);
 
   const uniqueAccountGroups = useMemo(() => [...new Set(accountGroups)], [accountGroups]);
   const uniqueAccounts = useMemo(() => {
@@ -800,6 +848,48 @@ export default function Accounts({ backInterceptRef } = {}) {
     }
     return { groups, ungrouped };
   }, [uniqueAccounts, uniqueAccountGroups]);
+
+  if (showGroups) {
+    return <GroupSplitManager onBack={() => setShowGroups(false)} backInterceptRef={backInterceptRef} />;
+  }
+
+  if (showOptimizer) {
+    return <CardOptimizer onBack={() => setShowOptimizer(false)} backInterceptRef={backInterceptRef} />;
+  }
+
+  if (showDebtTracker) {
+    return (
+      <>
+        <DebtTracker
+          onBack={() => setShowDebtTracker(false)}
+          backInterceptRef={backInterceptRef}
+          onSettle={({ name, amount, type }) => {
+            const firstSavings = (accounts || []).find(a => !['credit card', 'credit', 'lend', 'borrow'].some(k => (a.name || a).toLowerCase().includes(k))) || 'Cash';
+            const bankName = typeof firstSavings === 'object' ? firstSavings.name : firstSavings;
+            setSettlePrefill({
+              type: 'Transfer',
+              fromAccount: type === 'receive' ? 'Lend' : bankName,
+              toAccount: type === 'receive' ? bankName : 'Borrow',
+              amount: String(amount),
+              note: type === 'receive' ? `From ${name}` : `To ${name}`,
+            });
+          }}
+        />
+        {settlePrefill && (
+          <AddTransaction
+            prefillType={settlePrefill.type}
+            prefillFromAccount={settlePrefill.fromAccount}
+            prefillToAccount={settlePrefill.toAccount}
+            prefillAmount={settlePrefill.amount}
+            prefillNote={settlePrefill.note}
+            onClose={() => setSettlePrefill(null)}
+            onSaveAndContinue={() => setSettlePrefill(null)}
+            backInterceptRef={backInterceptRef}
+          />
+        )}
+      </>
+    );
+  }
 
   if (drill) {
     const drillAcct = (uniqueAccounts||[]).find(a => (a.name||a) === drill);
@@ -864,9 +954,65 @@ export default function Accounts({ backInterceptRef } = {}) {
 
   return (
     <div className="accounts-screen">
-      <div className="page-hdr">
-        <div style={{flex:1}}>
+      <div className="page-hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ flex: 1 }}>
           <div className="page-hdr-title">Accounts</div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setShowGroups(true)}
+            style={{
+              padding: '6px 9px',
+              borderRadius: 14,
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              cursor: 'pointer',
+            }}
+          >
+            <span>👥</span> Group Splits
+          </button>
+          <button
+            onClick={() => setShowOptimizer(true)}
+            style={{
+              padding: '6px 9px',
+              borderRadius: 14,
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              cursor: 'pointer',
+            }}
+          >
+            <span>💳</span> Card Perks
+          </button>
+          <button
+            onClick={() => setShowDebtTracker(true)}
+            style={{
+              padding: '6px 9px',
+              borderRadius: 14,
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              cursor: 'pointer',
+            }}
+          >
+            <span>🤝</span> Debt Tracker
+          </button>
         </div>
       </div>
 

@@ -56,7 +56,7 @@
 .search-input-wrap { flex:1; display:flex; align-items:center; gap:7px; background:var(--bg-card); border:1.5px solid var(--border); border-radius:var(--r-md); padding:8px 10px; position:relative; }
 .search-input { flex:1; background:none; border:none; outline:none; font-size:0.84rem; font-family:var(--font); color:var(--text-primary); }
 .search-input::placeholder { color:var(--text-muted); }
-.search-clear { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:13px; }
+.search-clear { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:var(--fs-base); }
 .filter-btn { width:36px; height:36px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; position:relative; }
 .filter-btn svg { stroke:var(--text-secondary); }
 .filter-active-dot { position:absolute; top:6px; right:6px; width:6px; height:6px; background:var(--green); border-radius:50%; }

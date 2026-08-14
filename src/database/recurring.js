@@ -135,23 +135,34 @@ export const buildInstalmentSchedule = (rule) => {
     }
   }
 
-  // Compute amounts (proportional for start_of_month, equal for on_day)
+  // Compute amounts: divide total_amount into equal base parts and append remaining denominator to the last month
   const total = segments.length;
   let amounts;
 
-  if (schedule_mode === 'start_of_month') {
-    amounts = segments.map(s => {
+  const isIntegerAmount = Math.round(total_amount) === total_amount;
+  if (schedule_mode === 'start_of_month' && sd !== 1) {
+    // If starting mid-month and using start_of_month, calculate days-weighted base
+    amounts = segments.map((s, idx) => {
+      if (idx === total - 1) return 0; // calculated below as remainder
       const days = (s.segEnd - s.segStart) / (1000 * 60 * 60 * 24) + 1;
-      return Math.round((days / total_days) * total_amount);
+      return isIntegerAmount
+        ? Math.floor((days / total_days) * total_amount)
+        : Math.floor(((days / total_days) * total_amount) * 100) / 100;
     });
+    const subtotal = amounts.slice(0, total - 1).reduce((a, b) => a + b, 0);
+    amounts[total - 1] = isIntegerAmount ? (total_amount - subtotal) : Math.round((total_amount - subtotal) * 100) / 100;
   } else {
-    const base = Math.floor(total_amount / total);
-    amounts = new Array(total).fill(base);
+    // Standard equal division: first (N-1) months get base, last month gets base + remainder
+    const base = isIntegerAmount
+      ? Math.floor(total_amount / total)
+      : Math.floor((total_amount / total) * 100) / 100;
+    amounts = new Array(total - 1).fill(base);
+    const subtotal = base * (total - 1);
+    const lastAmount = isIntegerAmount
+      ? (total_amount - subtotal)
+      : Math.round((total_amount - subtotal) * 100) / 100;
+    amounts.push(lastAmount);
   }
-
-  // Fix rounding difference on last segment
-  const diff = total_amount - amounts.reduce((a, b) => a + b, 0);
-  if (amounts.length > 0) amounts[amounts.length - 1] += diff;
 
   return segments.map((s, i) => ({
     date: fmtDate(s.segStart),
@@ -188,10 +199,161 @@ export const computeNextRepeatDate = (currentDate, frequency, schedule_mode) => 
 };
 
 // ── Note helpers ──────────────────────────────────────────────────────────
+/** Parse instalment info from note: "Home needs (3/13)", "Home needs(3/13)", "Home needs ( 3 of 13 )" */
+export const parseInstalmentInfo = (note) => {
+  if (!note || typeof note !== 'string') return null;
+  const m = note.match(/[\(\[]\s*(\d+)\s*(?:\/|of)\s*(\d+)\s*[\)\]]\s*$/i);
+  if (!m) return null;
+  const part = parseInt(m[1], 10);
+  const total = parseInt(m[2], 10);
+  if (isNaN(part) || isNaN(total) || total < 2 || part > total) return null;
+  const base = note.replace(/[\(\[]\s*\d+\s*(?:\/|of)\s*\d+\s*[\)\]]\s*$/i, '').trim();
+  return { part, total, base, suffix: `(${part}/${total})` };
+};
+
 /** Strip instalment suffix like " (2/4)" from a note for autocomplete */
-export const stripInstalmentSuffix = (note) =>
-  (note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
+export const stripInstalmentSuffix = (note) => {
+  const info = parseInstalmentInfo(note);
+  return info ? info.base : (note || '').replace(/\s*[\(\[]\s*\d+\s*(?:\/|of)\s*\d+\s*[\)\]]\s*$/i, '').trim();
+};
 
 /** Build instalment note: "Test (2/4)" */
 export const buildInstalmentNote = (baseNote, part, total) =>
-  `${baseNote} (${part}/${total})`;
+  `${(baseNote || '').trim()} (${part}/${total})`;
+
+const parseTxnDate = (raw) => {
+  if (!raw) return new Date();
+  if (raw instanceof Date) return raw;
+  const s = String(raw).trim();
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmy) return new Date(+dmy[3], +dmy[2] - 1, +dmy[1]);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const d = new Date(s + 'T00:00:00'); if (!isNaN(d)) return d;
+  }
+  const d = new Date(s); return isNaN(d) ? new Date() : d;
+};
+
+/**
+ * Calculate accurate Total & Remaining Balance for an instalment transaction
+ * by identifying its unique sibling series in the transaction history.
+ */
+export const getInstalmentSeriesStats = (targetTxn, allTxns = [], currentEditedAmount = null) => {
+  if (!targetTxn) return null;
+  const instInfo = parseInstalmentInfo(targetTxn.Note);
+  const ruleId = targetTxn.recurring_rule_id;
+  if (!instInfo && !ruleId) return null;
+
+  const currentPart = instInfo ? instInfo.part : 1;
+  const totalParts = instInfo ? instInfo.total : 1;
+  const targetAmt = (currentEditedAmount !== null && !isNaN(currentEditedAmount) && currentEditedAmount !== '')
+    ? Number(currentEditedAmount)
+    : (parseFloat(targetTxn.INR) || parseFloat(targetTxn.Amount) || 0);
+
+  const targetDateObj = parseTxnDate(targetTxn.Date);
+  const targetDesc = (targetTxn.Description || '').trim().toLowerCase();
+  const targetAcct = (targetTxn.Account || targetTxn.FromAccount || '').trim().toLowerCase();
+  const targetCat = (targetTxn.Category || '').trim().toLowerCase();
+  const targetBase = instInfo ? instInfo.base.toLowerCase() : '';
+
+  // 1. Collect candidate siblings
+  let candidates = [];
+  if (ruleId) {
+    candidates = allTxns.filter(t => t.recurring_rule_id === ruleId);
+  }
+
+  // 2. Search all transactions for matching siblings in the series
+  const noteCandidates = allTxns.filter(t => {
+    const info = parseInstalmentInfo(t.Note);
+    if (!info || info.total !== totalParts) return false;
+
+    // Check match by Description (if description is present and has text)
+    if (targetDesc && targetDesc.length > 3) {
+      const tDesc = (t.Description || '').trim().toLowerCase();
+      if (tDesc === targetDesc) return true;
+    }
+
+    // Check match by base note + Category + Account + Amount similarity
+    if (targetBase && info.base.toLowerCase() === targetBase) {
+      if (targetCat && t.Category && t.Category.trim().toLowerCase() !== targetCat) return false;
+      if (targetAcct && t.Account && (t.Account || t.FromAccount || '').trim().toLowerCase() !== targetAcct) return false;
+      const tAmt = parseFloat(t.INR) || parseFloat(t.Amount) || 0;
+      if (targetAmt > 0 && Math.abs(tAmt - targetAmt) > Math.max(15, targetAmt * 0.35)) return false;
+      return true;
+    }
+
+    return false;
+  });
+
+  const candMap = new Map();
+  candidates.forEach(c => candMap.set(c._id || c.ID || c.id, c));
+  noteCandidates.forEach(c => candMap.set(c._id || c.ID || c.id, c));
+  candidates = Array.from(candMap.values());
+
+  if (!candidates.length) candidates = [targetTxn];
+
+  // 3. Match exactly one transaction per part number (1..totalParts)
+  const bestSiblingsByPart = new Map();
+
+  for (const c of candidates) {
+    const cInfo = parseInstalmentInfo(c.Note);
+    const p = cInfo ? cInfo.part : 1;
+    if (p < 1 || p > totalParts) continue;
+
+    const isSelf = (c._id && c._id === targetTxn._id) || (c.ID && c.ID === targetTxn.ID);
+    if (isSelf) {
+      bestSiblingsByPart.set(p, c);
+      continue;
+    }
+
+    if (!bestSiblingsByPart.has(p)) {
+      bestSiblingsByPart.set(p, c);
+    } else {
+      const expectedMonthDiff = p - currentPart;
+      const expectedDate = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth() + expectedMonthDiff, targetDateObj.getDate());
+      const cDate = parseTxnDate(c.Date);
+      const existingDate = parseTxnDate(bestSiblingsByPart.get(p).Date);
+      const curDiff = Math.abs(existingDate.getTime() - expectedDate.getTime());
+      const newDiff = Math.abs(cDate.getTime() - expectedDate.getTime());
+      if (newDiff < curDiff) {
+        bestSiblingsByPart.set(p, c);
+      }
+    }
+  }
+
+  bestSiblingsByPart.set(currentPart, targetTxn);
+
+  // 4. Sum accurate Total & Balance from the unique series (with targetAmt fallback for any missing part)
+  let totalAmount = 0;
+  let completedAmount = 0;
+
+  for (let p = 1; p <= totalParts; p++) {
+    const s = bestSiblingsByPart.get(p);
+    let amt = 0;
+    if (s) {
+      const isCurrentItem = (s._id && s._id === targetTxn._id) || (s.ID && s.ID === targetTxn.ID) || (p === currentPart);
+      if (isCurrentItem && currentEditedAmount !== null && !isNaN(currentEditedAmount) && currentEditedAmount !== '') {
+        amt = Number(currentEditedAmount);
+      } else {
+        amt = parseFloat(s.INR) || parseFloat(s.Amount) || 0;
+      }
+    } else {
+      // If a part is not found in database, default to this instalment's amount
+      amt = targetAmt;
+    }
+
+    totalAmount += amt;
+    if (p <= currentPart) {
+      completedAmount += amt;
+    }
+  }
+
+  const balanceRemaining = Math.max(0, totalAmount - completedAmount);
+
+  return {
+    part: currentPart,
+    totalParts,
+    totalAmount,
+    balanceRemaining,
+    completedAmount,
+  };
+};

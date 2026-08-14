@@ -210,6 +210,7 @@ function MonthlyView({ transactions, year, setYear, onMonthClick }) {
 
 // ── Search view ───────────────────────────────────────────────────────────────
 function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy }) {
+  const { state } = useApp();
   const textInputRef = (el) => {
     if (!el) return;
     el.setAttribute('autocomplete', 'on');
@@ -230,6 +231,17 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   const [customTo,  setTo]        = useState('');
   const [selected,  setSelected]  = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
+  const [copyTxn,   setCopyTxn]   = useState(null);
+
+  // Advanced Search Scope & Multi-Filter Query Builder
+  const [scopeNotes, setScopeNotes] = useState(true);
+  const [scopeDesc, setScopeDesc]   = useState(true);
+  const [scopeTags, setScopeTags]   = useState(true);
+  const [minAmount, setMinAmount]   = useState('');
+  const [maxAmount, setMaxAmount]   = useState('');
+  const [txnTypeFilter, setTxnTypeFilter] = useState('All'); // 'All' | 'Expense' | 'Income' | 'Transfer'
+  const [onlyWarranty, setOnlyWarranty]   = useState(false);
+
   const now = new Date();
   const multiModePrevHandler = React.useRef(null);
   const multiModeHandler = React.useRef(null);
@@ -304,25 +316,72 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     return '';
   }, [periodRange, selPeriod]);
 
-  const hasQuery = debouncedQ.trim().length > 0 || selAccts.size > 0 || selCats.size > 0 || selPeriod !== 'All';
+  const hasQuery = debouncedQ.trim().length > 0 || selAccts.size > 0 || selCats.size > 0 || selPeriod !== 'All' || minAmount || maxAmount || txnTypeFilter !== 'All' || onlyWarranty;
 
   const results = useMemo(() => {
     if (!hasQuery) return [];
     const q = debouncedQ.trim().toLowerCase();
+    const minA = parseFloat(minAmount);
+    const maxA = parseFloat(maxAmount);
+
     return transactions.filter(t => {
       const d = parseDate(t.Date);
+      const amt = parseFloat(t.INR || t.Amount || 0);
+
+      // Period filter
       if (periodRange) {
         if (d < periodRange.start || d > periodRange.end) return false;
       } else if (selPeriod === 'Custom' && customFrom && customTo) {
         if (d < new Date(customFrom) || d > new Date(customTo + 'T23:59:59')) return false;
       }
+
+      // Amount filter
+      if (!isNaN(minA) && amt < minA) return false;
+      if (!isNaN(maxA) && amt > maxA) return false;
+
+      // Type filter
+      const tp = (t['Income/Expense'] || 'Expense').toLowerCase();
+      if (txnTypeFilter === 'Expense' && tp !== 'expense') return false;
+      if (txnTypeFilter === 'Income' && tp !== 'income') return false;
+      if (txnTypeFilter === 'Transfer' && !tp.startsWith('transfer')) return false;
+
+      // Warranty / Receipt filter
+      if (onlyWarranty && !t.warranty_expiry && !t.receipt_image && !t.serial_no) return false;
+
+      // Account & Category filter
       if (selAccts.size > 0 && !selAccts.has(t.Account) && !selAccts.has(t.FromAccount) && !selAccts.has(t.ToAccount)) return false;
       if (selCats.size > 0 && !selCats.has(t.Category)) return false;
+
       if (!q) return true;
-      return [t.Note, t.Category, t.Account, t.Subcategory, t.Description, t.FromAccount, t.ToAccount]
-        .some(f => f && f.toLowerCase().includes(q));
+
+      // Scoped text matching
+      if (q.startsWith('#')) {
+        const cleanTag = q.replace(/^#/, '');
+        const tagList = (t.Tags || '').split(',').map(x => x.trim().toLowerCase().replace(/^#/, ''));
+        if (scopeTags && tagList.includes(cleanTag)) return true;
+
+        const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const hashRegex = new RegExp(`(^|\\s)#${escapeRegex(cleanTag)}(\\b|\\s|$)`, 'i');
+        if (scopeNotes && hashRegex.test(t.Note || '')) return true;
+        if (scopeDesc && hashRegex.test(t.Description || '')) return true;
+        if (scopeTags && hashRegex.test(t.Tags || '')) return true;
+        return false;
+      }
+
+      // Standard text search with scope flags
+      const matches = [];
+      if (scopeNotes && t.Note && t.Note.toLowerCase().includes(q)) matches.push(true);
+      if (scopeDesc && t.Description && t.Description.toLowerCase().includes(q)) matches.push(true);
+      if (scopeTags && t.Tags && t.Tags.toLowerCase().includes(q)) matches.push(true);
+      if (t.Category && t.Category.toLowerCase().includes(q)) matches.push(true);
+      if (t.Subcategory && t.Subcategory.toLowerCase().includes(q)) matches.push(true);
+      if (t.Account && t.Account.toLowerCase().includes(q)) matches.push(true);
+      if (t.FromAccount && t.FromAccount.toLowerCase().includes(q)) matches.push(true);
+      if (t.ToAccount && t.ToAccount.toLowerCase().includes(q)) matches.push(true);
+
+      return matches.length > 0;
     }).sort((a, b) => parseDate(b.Date) - parseDate(a.Date));
-  }, [transactions, debouncedQ, selPeriod, periodRange, selAccts, selCats, customFrom, customTo, hasQuery]);
+  }, [transactions, debouncedQ, selPeriod, periodRange, selAccts, selCats, customFrom, customTo, minAmount, maxAmount, txnTypeFilter, onlyWarranty, scopeNotes, scopeDesc, scopeTags, hasQuery]);
 
   const totals = useMemo(() => {
     let inc = 0, exp = 0, xfr = 0;
@@ -345,6 +404,33 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     }
     return { inc, exp, xfr };
   }, [results, selected]);
+
+  const allAvailableTags = useMemo(() => {
+    const seen = new Set();
+    for (const t of transactions) {
+      if (t.Tags) {
+        t.Tags.split(',').forEach(tag => {
+          const clean = tag.trim().toLowerCase();
+          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+      const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
+      if (matches) matches.forEach(m => seen.add(m.toLowerCase()));
+    }
+    try {
+      const custom = JSON.parse(state.settings?.customTags || '[]');
+      if (Array.isArray(custom)) {
+        custom.forEach(ct => {
+          const clean = String(ct).trim().toLowerCase();
+          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+    } catch {}
+
+    const defaults = ['#tax', '#personal', '#family', '#trip', '#impulse', '#work', '#medical'];
+    defaults.forEach(d => seen.add(d));
+    return Array.from(seen).slice(0, 25);
+  }, [transactions, state.settings?.customTags]);
 
   const stripInstalment = (note) => {
     // Strip installment suffixes like "(5/12)", "(2/6)" from note suggestions
@@ -443,10 +529,37 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       {/* Results */}
       <div className="search-list">
         {!hasQuery ? (
-          <div className="empty-state">
+          <div className="empty-state" style={{ padding: '24px 16px' }}>
             <div className="empty-icon">🔍</div>
             <div className="empty-title">Search transactions</div>
-            <div className="empty-desc">Type a note, category, or account</div>
+            <div className="empty-desc" style={{ marginBottom: 18 }}>Type a note, category, account, or tap a tag</div>
+            {allAvailableTags.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', maxWidth: 360, margin: '0 auto' }}>
+                {allAvailableTags.map(tag => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      setQuery(tag);
+                      triggerSearch(tag);
+                    }}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: 18,
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      border: '1px solid var(--border)',
+                      background: 'var(--bg-card2)',
+                      color: 'var(--accent)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : results.length === 0 ? (
           <div className="empty-state"><div className="empty-icon">😶</div><div className="empty-title">No results</div></div>
@@ -457,7 +570,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
             backInterceptRef={backInterceptRef}
             onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
             onTap={multiMode ? () => toggleSel(t) : undefined}
-            onCopy={onCopy}/>
+            onCopy={txn => setCopyTxn({ ...txn, _id: undefined })}/>
         ))}
         <div style={{height: 80}}/>
       </div>
@@ -469,11 +582,95 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
           <div className="bottom-sheet" style={{maxHeight:'92dvh',display:'flex',flexDirection:'column',padding:'0 0 calc(var(--safe-bottom)+12px)'}}>
             <div className="sheet-handle" style={{marginTop:14}}/>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'0 var(--page-px) 10px',borderBottom:'1px solid var(--border)'}}>
-              <div style={{fontWeight:800,fontSize:'0.9rem'}}>Filters</div>
-              <button className="btn btn-ghost btn-sm" onClick={() => { setSelAccts(new Set()); setSelCats(new Set()); setSelPeriod('All'); setPeriodOffset(0); setShowFilter(false); }}>Clear all</button>
+              <div style={{fontWeight:800,fontSize:'0.9rem'}}>Search &amp; Filter Options</div>
+              <button className="btn btn-ghost btn-sm" onClick={() => {
+                setSelAccts(new Set()); setSelCats(new Set()); setSelPeriod('All'); setPeriodOffset(0);
+                setMinAmount(''); setMaxAmount(''); setTxnTypeFilter('All'); setOnlyWarranty(false);
+                setScopeNotes(true); setScopeDesc(true); setScopeTags(true);
+                setShowFilter(false);
+              }}>Clear all</button>
             </div>
-            <div style={{overflow:'auto',flex:1,padding:'10px var(--page-px)'}}>
-              <div className="filter-section">
+            <div style={{overflow:'auto',flex:1,padding:'10px var(--page-px)',display:'flex',flexDirection:'column',gap:14}}>
+              
+              {/* Search Target Scope Checkboxes */}
+              <div className="filter-section" style={{marginBottom:0}}>
+                <div className="filter-section-label">Search Query In (Target Scope)</div>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                  <div className="filter-check-row" style={{background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8}} onClick={() => setScopeNotes(p => !p)}>
+                    <div className={`filter-check-box ${scopeNotes ? 'checked' : ''}`}>{scopeNotes && '✓'}</div>
+                    <div className="filter-check-label">Notes</div>
+                  </div>
+                  <div className="filter-check-row" style={{background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8}} onClick={() => setScopeDesc(p => !p)}>
+                    <div className={`filter-check-box ${scopeDesc ? 'checked' : ''}`}>{scopeDesc && '✓'}</div>
+                    <div className="filter-check-label">Description</div>
+                  </div>
+                  <div className="filter-check-row" style={{background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8}} onClick={() => setScopeTags(p => !p)}>
+                    <div className={`filter-check-box ${scopeTags ? 'checked' : ''}`}>{scopeTags && '✓'}</div>
+                    <div className="filter-check-label">#Tags</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Amount Range Filter */}
+              <div className="filter-section" style={{marginBottom:0}}>
+                <div className="filter-section-label">Amount Range (₹)</div>
+                <div style={{display:'flex',gap:8}}>
+                  <input
+                    type="number"
+                    className="form-input"
+                    placeholder="Min ₹ (e.g. 1000)"
+                    value={minAmount}
+                    onChange={e => setMinAmount(e.target.value)}
+                    style={{flex:1,background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8,border:'1px solid var(--border)'}}
+                  />
+                  <input
+                    type="number"
+                    className="form-input"
+                    placeholder="Max ₹ (e.g. 50000)"
+                    value={maxAmount}
+                    onChange={e => setMaxAmount(e.target.value)}
+                    style={{flex:1,background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8,border:'1px solid var(--border)'}}
+                  />
+                </div>
+              </div>
+
+              {/* Transaction Type Filter */}
+              <div className="filter-section" style={{marginBottom:0}}>
+                <div className="filter-section-label">Transaction Type</div>
+                <div style={{display:'flex',gap:6}}>
+                  {['All', 'Expense', 'Income', 'Transfer'].map(t => (
+                    <button
+                      key={t}
+                      className={`chip ${txnTypeFilter === t ? 'active' : ''}`}
+                      onClick={() => setTxnTypeFilter(t)}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Quick Presets & Warranty Toggle */}
+              <div className="filter-section" style={{marginBottom:0}}>
+                <div className="filter-section-label">Special Filters</div>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                  <button
+                    className={`chip ${minAmount === '5000' ? 'active' : ''}`}
+                    onClick={() => { setMinAmount(minAmount === '5000' ? '' : '5000'); }}
+                  >
+                    💎 High Value (&gt; ₹5,000)
+                  </button>
+                  <button
+                    className={`chip ${onlyWarranty ? 'active' : ''}`}
+                    onClick={() => setOnlyWarranty(p => !p)}
+                  >
+                    🛡️ Has Receipt / Warranty
+                  </button>
+                </div>
+              </div>
+
+              {/* Period Filter */}
+              <div className="filter-section" style={{marginBottom:0}}>
                 <div className="filter-section-label">Period</div>
                 <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                   {PERIODS.map(p => <button key={p} className={`chip ${selPeriod === p ? 'active' : ''}`} onClick={() => handlePeriodChange(p)}>{p}</button>)}
@@ -485,8 +682,10 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
                   </div>
                 )}
               </div>
+
+              {/* Accounts Filter */}
               {allAcctNames.length > 0 && (
-                <div className="filter-section">
+                <div className="filter-section" style={{marginBottom:0}}>
                   <div className="filter-section-label">Accounts</div>
                   <div className="filter-checkbox-list">
                     {allAcctNames.map(a => (
@@ -498,11 +697,13 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
                   </div>
                 </div>
               )}
+
+              {/* Categories Filter */}
               {allCatNames.length > 0 && (() => {
                 const expenseCats = allCatNames.filter(c => (categories?.[c]?.type || 'Expense') === 'Expense');
                 const incomeCats  = allCatNames.filter(c => (categories?.[c]?.type || 'Expense') === 'Income');
                 return (
-                  <div className="filter-section">
+                  <div className="filter-section" style={{marginBottom:0}}>
                     <div className="filter-section-label">Categories</div>
                     {expenseCats.length > 0 && (
                       <>
@@ -535,10 +736,19 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
               })()}
             </div>
             <div style={{padding:'10px var(--page-px) 0'}}>
-              <button className="btn btn-primary btn-full" onClick={() => setShowFilter(false)}>Apply</button>
+              <button className="btn btn-primary btn-full" onClick={() => setShowFilter(false)}>Apply Filters</button>
             </div>
           </div>
         </>
+      )}
+
+      {copyTxn && (
+        <AddTransaction
+          copyTransaction={copyTxn}
+          onClose={() => setCopyTxn(null)}
+          onSaveAndContinue={() => setCopyTxn({ ...copyTxn, _id: undefined })}
+          backInterceptRef={backInterceptRef}
+        />
       )}
     </div>
   );
@@ -569,14 +779,18 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
   // Sync year and view from dashboard clicks
   useEffect(() => {
     if (viewParams) {
-      if (viewParams.year !== undefined && viewParams.year !== null) {
-        setViewYear(Number(viewParams.year));
-      }
-      if (viewParams.month !== undefined && viewParams.month !== null) {
-        setViewMonth(Number(viewParams.month));
-        setViewMode('daily');
-      } else if (viewParams.year !== undefined && viewParams.year !== null) {
-        setViewMode('monthly');
+      if (viewParams.mode === 'search') {
+        setViewMode('search');
+      } else {
+        if (viewParams.year !== undefined && viewParams.year !== null) {
+          setViewYear(Number(viewParams.year));
+        }
+        if (viewParams.month !== undefined && viewParams.month !== null) {
+          setViewMonth(Number(viewParams.month));
+          setViewMode('daily');
+        } else if (viewParams.year !== undefined && viewParams.year !== null) {
+          setViewMode('monthly');
+        }
       }
       clearNavParams();
     }
@@ -747,11 +961,6 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
               : <DateGroupedList isActive={isActive} txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
             }
           </div>
-          {showScrollTop && (
-            <button className="scroll-top-btn" onClick={scrollToTop} aria-label="Scroll to top">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" width="16" height="16"><path d="M18 15l-6-6-6 6"/></svg>
-            </button>
-          )}
         </>
       )}
 

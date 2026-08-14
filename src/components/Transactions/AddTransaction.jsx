@@ -1,22 +1,24 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { inputToStorage, toInputDate, nowTimeStr } from '../../utils/format.js';
+import { inputToStorage, toInputDate, nowTimeStr, formatINR } from '../../utils/format.js';
 import './AddTransaction.css';
 import { AccountsManager, CategoriesManager } from '../Settings/Settings.jsx';
 import {
   buildInstalmentSchedule, computeNextRepeatDate,
-  buildInstalmentNote, stripInstalmentSuffix,
+  buildInstalmentNote, stripInstalmentSuffix, parseInstalmentInfo, getInstalmentSeriesStats,
 } from '../../database/recurring.js';
+import { parseBankSMS } from '../../utils/smsParser.js';
+import ReceiptViewer from '../Common/ReceiptViewer.jsx';
 
 const TYPES = [
-  { id:'Income',       label:'Income',   cls:'income'   },
-  { id:'Expense',      label:'Expense',  cls:'expense'  },
-  { id:'Transfer-Out', label:'Transfer', cls:'transfer' },
+  { id: 'Income', label: 'Income', cls: 'income' },
+  { id: 'Expense', label: 'Expense', cls: 'expense' },
+  { id: 'Transfer-Out', label: 'Transfer', cls: 'transfer' },
 ];
 
 const todayVal = () => {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
 // ── ReorderOverlay — shows AccountsManager or CategoriesManager inline ────
@@ -25,8 +27,8 @@ function ReorderOverlay({ screen, onClose }) {
   // Use fullscreen-modal class so safe-area top/bottom padding applies correctly
   // and the sub-screen layout matches what AccountsManager/CategoriesManager expect
   return (
-    <div className="fullscreen-modal" style={{zIndex:300,overflowY:'auto',paddingLeft:0,paddingRight:0}}>
-      {screen === 'accounts'   && <AccountsManager   onBack={onClose} />}
+    <div className="fullscreen-modal" style={{ zIndex: 300, overflowY: 'auto', paddingLeft: 0, paddingRight: 0 }}>
+      {screen === 'accounts' && <AccountsManager onBack={onClose} />}
       {screen === 'categories' && <CategoriesManager onBack={onClose} />}
     </div>
   );
@@ -35,23 +37,23 @@ function ReorderOverlay({ screen, onClose }) {
 
 // ── RecurringSheet — Instalment / Repeat picker ────────────────────────────
 const REPEAT_OPTIONS = [
-  { id:'daily',       label:'Daily',         icon:'📅' },
-  { id:'weekly',      label:'Weekly',        icon:'🗓' },
-  { id:'fortnightly', label:'Every 2 weeks', icon:'🗓' },
-  { id:'monthly',     label:'Monthly',       icon:'📆' },
-  { id:'3months',     label:'Every 3 months',icon:'📆' },
-  { id:'6months',     label:'Every 6 months',icon:'📆' },
-  { id:'annually',    label:'Annually',      icon:'🎯' },
+  { id: 'daily', label: 'Daily', icon: '📅' },
+  { id: 'weekly', label: 'Weekly', icon: '🗓' },
+  { id: 'fortnightly', label: 'Every 2 weeks', icon: '🗓' },
+  { id: 'monthly', label: 'Monthly', icon: '📆' },
+  { id: '3months', label: 'Every 3 months', icon: '📆' },
+  { id: '6months', label: 'Every 6 months', icon: '📆' },
+  { id: 'annually', label: 'Annually', icon: '🎯' },
 ];
 
 function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
-  const [mode, setMode]           = React.useState(null);           // null | 'instalment' | 'repeat'
+  const [mode, setMode] = React.useState(null);           // null | 'instalment' | 'repeat'
   const [scheduleMode, setSchedule] = React.useState('start_of_month'); // default: start of month
-  const [days, setDays]           = React.useState('');             // instalment days
-  const [months, setMonths]       = React.useState('');             // instalment months (alt input)
+  const [days, setDays] = React.useState('');             // instalment days
+  const [months, setMonths] = React.useState('');             // instalment months (alt input)
   const [inputMode, setInputMode] = React.useState('months');       // 'months' | 'days'
   const [repeatFreq, setRepeatFreq] = React.useState('monthly');
-  const [step, setStep]           = React.useState(1);              // 1=type, 2=details, 3=schedule
+  const [step, setStep] = React.useState(1);              // 1=type, 2=details, 3=schedule
 
   const handleInstSave = () => {
     const totalDays = inputMode === 'months'
@@ -69,53 +71,53 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
 
   return (
     <>
-      <div className="fullscreen-overlay" onClick={onClose} style={{zIndex:210}} />
-      <div className="bottom-sheet" style={{paddingBottom:'calc(var(--safe-bottom) + 16px)',zIndex:211}}>
+      <div className="fullscreen-overlay" onClick={onClose} style={{ zIndex: 210 }} />
+      <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)', zIndex: 211 }}>
         <div className="sheet-handle" />
 
         {step === 1 && (
           <>
-            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:4}}>Recurring</div>
-            <div style={{fontSize:'0.73rem',color:'var(--text-muted)',marginBottom:16}}>
+            <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 4 }}>Recurring</div>
+            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginBottom: 16 }}>
               Set up recurring or instalment payments
             </div>
             {/* Instalment — only for Expense */}
             {isExpense && (
-              <div className="recur-option-row" onClick={()=>{setMode('instalment');setStep(2);}}>
+              <div className="recur-option-row" onClick={() => { setMode('instalment'); setStep(2); }}>
                 <div className="recur-option-icon">📋</div>
                 <div className="recur-option-body">
                   <div className="recur-option-title">Instalment</div>
                   <div className="recur-option-sub">Split total amount over days/months</div>
                 </div>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14" style={{opacity:0.4}}><path d="M9 18l6-6-6-6"/></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14" style={{ opacity: 0.4 }}><path d="M9 18l6-6-6-6" /></svg>
               </div>
             )}
-            <div className="recur-option-row" onClick={()=>{setMode('repeat');setStep(2);}}>
+            <div className="recur-option-row" onClick={() => { setMode('repeat'); setStep(2); }}>
               <div className="recur-option-icon">🔁</div>
               <div className="recur-option-body">
                 <div className="recur-option-title">Repeat</div>
                 <div className="recur-option-sub">Create same transaction on a schedule</div>
               </div>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14" style={{opacity:0.4}}><path d="M9 18l6-6-6-6"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14" style={{ opacity: 0.4 }}><path d="M9 18l6-6-6-6" /></svg>
             </div>
-            <button className="btn btn-ghost btn-full" style={{marginTop:12}} onMouseDown={onClose}>Cancel</button>
+            <button className="btn btn-ghost btn-full" style={{ marginTop: 12 }} onMouseDown={onClose}>Cancel</button>
           </>
         )}
 
         {step === 2 && mode === 'instalment' && (
           <>
-            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:2}}>📋 Instalment</div>
-            <div style={{fontSize:'0.72rem',color:'var(--text-muted)',marginBottom:14}}>
+            <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 2 }}>📋 Instalment</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 14 }}>
               Amount will be split proportionally across instalments
             </div>
             {/* Months / Days toggle */}
-            <div style={{display:'flex',gap:8,marginBottom:12}}>
-              <button className={`btn btn-sm ${inputMode==='months'?'btn-primary':'btn-secondary'}`}
-                onClick={()=>setInputMode('months')}>Months</button>
-              <button className={`btn btn-sm ${inputMode==='days'?'btn-primary':'btn-secondary'}`}
-                onClick={()=>setInputMode('days')}>Days</button>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <button className={`btn btn-sm ${inputMode === 'months' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setInputMode('months')}>Months</button>
+              <button className={`btn btn-sm ${inputMode === 'days' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setInputMode('days')}>Days</button>
             </div>
-            <div className="form-group" style={{marginBottom:14}}>
+            <div className="form-group" style={{ marginBottom: 14 }}>
               <label className="form-label">{inputMode === 'months' ? 'Number of Months' : 'Number of Days'}</label>
               <input
                 ref={el => { if (el) setTimeout(() => el.focus(), 150); }}
@@ -125,71 +127,81 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
                 onChange={e => inputMode === 'months' ? setMonths(e.target.value) : setDays(e.target.value)}
               />
             </div>
-            <button className="btn btn-primary btn-full" style={{marginBottom:8}}
-              onClick={()=>setStep(3)}>Next →</button>
-            <button className="btn btn-ghost btn-full" onClick={()=>setStep(1)}>← Back</button>
+            <button className="btn btn-primary btn-full" style={{ marginBottom: 8 }}
+              onClick={() => setStep(3)}>Next →</button>
+            <button className="btn btn-ghost btn-full" onClick={() => setStep(1)}>← Back</button>
           </>
         )}
 
         {step === 2 && mode === 'repeat' && (
           <>
-            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:14}}>🔁 Repeat frequency</div>
-            <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:14}}>
+            <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 14 }}>🔁 Repeat frequency</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
               {REPEAT_OPTIONS.map(opt => (
                 <div key={opt.id}
-                  onClick={()=>setRepeatFreq(opt.id)}
-                  style={{display:'flex',alignItems:'center',gap:12,padding:'10px 12px',borderRadius:10,
-                    background: repeatFreq===opt.id ? 'rgba(0,229,160,0.10)' : 'var(--bg-card2)',
-                    border: `1.5px solid ${repeatFreq===opt.id ? 'var(--accent)' : 'var(--border)'}`,
-                    cursor:'pointer'}}>
-                  <span style={{fontSize:'1.1rem'}}>{opt.icon}</span>
-                  <span style={{flex:1,fontSize:'0.85rem',fontWeight:600,color:repeatFreq===opt.id?'var(--accent)':'var(--text-primary)'}}>{opt.label}</span>
-                  {repeatFreq===opt.id && <span style={{color:'var(--accent)',fontWeight:700}}>✓</span>}
+                  onClick={() => setRepeatFreq(opt.id)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 10,
+                    background: repeatFreq === opt.id ? 'rgba(0,229,160,0.10)' : 'var(--bg-card2)',
+                    border: `1.5px solid ${repeatFreq === opt.id ? 'var(--accent)' : 'var(--border)'}`,
+                    cursor: 'pointer'
+                  }}>
+                  <span style={{ fontSize: '1.1rem' }}>{opt.icon}</span>
+                  <span style={{ flex: 1, fontSize: '0.85rem', fontWeight: 600, color: repeatFreq === opt.id ? 'var(--accent)' : 'var(--text-primary)' }}>{opt.label}</span>
+                  {repeatFreq === opt.id && <span style={{ color: 'var(--accent)', fontWeight: 700 }}>✓</span>}
                 </div>
               ))}
             </div>
-            <button className="btn btn-primary btn-full" style={{marginBottom:8}}
-              onClick={()=>setStep(3)}>Next →</button>
-            <button className="btn btn-ghost btn-full" onClick={()=>setStep(1)}>← Back</button>
+            <button className="btn btn-primary btn-full" style={{ marginBottom: 8 }}
+              onClick={() => setStep(3)}>Next →</button>
+            <button className="btn btn-ghost btn-full" onClick={() => setStep(1)}>← Back</button>
           </>
         )}
 
         {step === 3 && (
           <>
-            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:2}}>
+            <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 2 }}>
               {mode === 'instalment' ? '📋 Instalment — Schedule' : '🔁 Repeat — Schedule'}
             </div>
-            <div style={{fontSize:'0.72rem',color:'var(--text-muted)',marginBottom:14}}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 14 }}>
               How should dates be calculated?
             </div>
             {/* Schedule mode options */}
             {[
-              { id:'start_of_month', label:'Start of month',
-                sub: mode==='instalment'
+              {
+                id: 'start_of_month', label: 'Start of month',
+                sub: mode === 'instalment'
                   ? 'Remaining days this month, then 1st of each month (good for recharges)'
-                  : 'Repeats on the 1st of each period' },
-              { id:'on_date', label: mode==='instalment' ? 'On the day' : 'On the date',
-                sub: mode==='instalment'
+                  : 'Repeats on the 1st of each period'
+              },
+              {
+                id: 'on_date', label: mode === 'instalment' ? 'On the day' : 'On the date',
+                sub: mode === 'instalment'
                   ? `Same date each month (e.g. ${startDate ? startDate.slice(8) : '22'}nd of each month)`
-                  : 'Repeats on the same date each period' },
+                  : 'Repeats on the same date each period'
+              },
             ].map(opt => (
-              <div key={opt.id} onClick={()=>setSchedule(opt.id)}
-                style={{display:'flex',alignItems:'flex-start',gap:12,padding:'12px',borderRadius:10,marginBottom:8,
-                  background: scheduleMode===opt.id ? 'rgba(0,229,160,0.10)' : 'var(--bg-card2)',
-                  border:`1.5px solid ${scheduleMode===opt.id?'var(--accent)':'var(--border)'}`,cursor:'pointer'}}>
-                <div style={{width:18,height:18,borderRadius:'50%',marginTop:2,flexShrink:0,
-                  border:`2px solid ${scheduleMode===opt.id?'var(--accent)':'var(--border)'}`,
-                  background:scheduleMode===opt.id?'var(--accent)':'transparent'}}/>
+              <div key={opt.id} onClick={() => setSchedule(opt.id)}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px', borderRadius: 10, marginBottom: 8,
+                  background: scheduleMode === opt.id ? 'rgba(0,229,160,0.10)' : 'var(--bg-card2)',
+                  border: `1.5px solid ${scheduleMode === opt.id ? 'var(--accent)' : 'var(--border)'}`, cursor: 'pointer'
+                }}>
+                <div style={{
+                  width: 18, height: 18, borderRadius: '50%', marginTop: 2, flexShrink: 0,
+                  border: `2px solid ${scheduleMode === opt.id ? 'var(--accent)' : 'var(--border)'}`,
+                  background: scheduleMode === opt.id ? 'var(--accent)' : 'transparent'
+                }} />
                 <div>
-                  <div style={{fontSize:'0.85rem',fontWeight:700,color:scheduleMode===opt.id?'var(--accent)':'var(--text-primary)'}}>{opt.label}</div>
-                  <div style={{fontSize:'0.7rem',color:'var(--text-muted)',marginTop:2}}>{opt.sub}</div>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: scheduleMode === opt.id ? 'var(--accent)' : 'var(--text-primary)' }}>{opt.label}</div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 }}>{opt.sub}</div>
                 </div>
               </div>
             ))}
-            <div style={{display:'flex',gap:8,marginTop:8}}>
-              <button className="btn btn-ghost" style={{flex:1}} onClick={()=>setStep(2)}>← Back</button>
-              <button className="btn btn-primary" style={{flex:2}}
-                onClick={mode==='instalment' ? handleInstSave : handleRepeatSave}>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setStep(2)}>← Back</button>
+              <button className="btn btn-primary" style={{ flex: 2 }}
+                onClick={mode === 'instalment' ? handleInstSave : handleRepeatSave}>
                 Save
               </button>
             </div>
@@ -201,7 +213,7 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
 }
 
 // ── PickerSheetInline — inline chip grid with recent row ────────────────────────────────
-function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exclude='', onReorder }) {
+function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exclude = '', onReorder }) {
   const [query, setQuery] = React.useState('');
   const inputRef = React.useRef(null);
   const listRef = React.useRef(null);
@@ -233,8 +245,8 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
 
   const q = query.trim().toLowerCase();
   const recentList = recent.filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
-  const allItems   = items.filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
-  const noResults  = recentList.length === 0 && allItems.length === 0;
+  const allItems = items.filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
+  const noResults = recentList.length === 0 && allItems.length === 0;
 
   const Chip = ({ name }) => (
     <button type="button"
@@ -246,10 +258,10 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
 
   return (
     <div className="picker-sheet-inline">
-      <div className="picker-sheet-hdr" style={{position:'sticky',top:0,zIndex:10}}>
+      <div className="picker-sheet-hdr" style={{ position: 'sticky', top: 0, zIndex: 10 }}>
         <div className="picker-sheet-title">{label}</div>
         {!q && onReorder && (
-          <button className="picker-reorder-hint" onMouseDown={e=>{e.preventDefault();onReorder();onClose();}}>
+          <button className="picker-reorder-hint" onMouseDown={e => { e.preventDefault(); onReorder(); onClose(); }}>
             ⠿ Edit
           </button>
         )}
@@ -264,7 +276,7 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
               setQuery(e.target.value);
               if (listRef.current) listRef.current.scrollTop = 0;
             }} />
-          {query && <button className="picker-search-clear" onMouseDown={e=>{e.preventDefault();setQuery('');}}>✕</button>}
+          {query && <button className="picker-search-clear" onMouseDown={e => { e.preventDefault(); setQuery(''); }}>✕</button>}
         </div>
         {recentList.length > 0 && (
           <>
@@ -286,7 +298,7 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
 // ── SubcategoryPickerInline — inline chip grid ──────────
 function SubcategoryPickerInline({ items, recent, value, onSelect, onClose }) {
   const recentList = (recent || []).filter(i => items.includes(i));
-  const allItems   = items;
+  const allItems = items;
 
   const Chip = ({ name }) => (
     <button type="button"
@@ -298,11 +310,11 @@ function SubcategoryPickerInline({ items, recent, value, onSelect, onClose }) {
 
   return (
     <div className="picker-sheet-inline">
-      <div className="picker-sheet-hdr" style={{position:'sticky',top:0,zIndex:10}}>
+      <div className="picker-sheet-hdr" style={{ position: 'sticky', top: 0, zIndex: 10 }}>
         <div className="picker-sheet-title">Subcategory</div>
         <button className="picker-sheet-close" onMouseDown={onClose}>✕</button>
       </div>
-      <div className="picker-list" style={{paddingBottom:16}}>
+      <div className="picker-list" style={{ paddingBottom: 16 }}>
         {recentList.length > 0 && (
           <>
             <div className="picker-section-label">Recent</div>
@@ -313,7 +325,7 @@ function SubcategoryPickerInline({ items, recent, value, onSelect, onClose }) {
         <div className="picker-chip-grid">
           <button type="button"
             className={`picker-chip ${!value ? 'picker-chip-active' : ''}`}
-            onMouseDown={e=>{e.preventDefault();onSelect('');onClose();}}>
+            onMouseDown={e => { e.preventDefault(); onSelect(''); onClose(); }}>
             None
           </button>
           {allItems.map(n => <Chip key={n} name={n} />)}
@@ -323,24 +335,26 @@ function SubcategoryPickerInline({ items, recent, value, onSelect, onClose }) {
   );
 }
 
-function PickerField({ label, value, placeholder, error, items, recent, onSelect, exclude='', onReorder, onAfterSelect, setPickerState, hideLabel=false, active }, ref) {
-  React.useImperativeHandle(ref, () => ({ open: () => {
-    setPickerState({
-      type: label.toLowerCase().replace(' ', ''),
-      label,
-      value,
-      items,
-      recent,
-      onSelect: (v) => { onSelect(v); if (onAfterSelect) setTimeout(onAfterSelect, 100); },
-      exclude,
-      onReorder
-    });
-  } }), [label, value, items, recent, onSelect, onAfterSelect, exclude, onReorder, setPickerState]);
+function PickerField({ label, value, placeholder, error, items, recent, onSelect, exclude = '', onReorder, onAfterSelect, setPickerState, hideLabel = false, active }, ref) {
+  React.useImperativeHandle(ref, () => ({
+    open: () => {
+      setPickerState({
+        type: label.toLowerCase().replace(' ', ''),
+        label,
+        value,
+        items,
+        recent,
+        onSelect: (v) => { onSelect(v); if (onAfterSelect) setTimeout(onAfterSelect, 100); },
+        exclude,
+        onReorder
+      });
+    }
+  }), [label, value, items, recent, onSelect, onAfterSelect, exclude, onReorder, setPickerState]);
   return (
     <div className="form-group">
       {!hideLabel && <label className="form-label">{label}</label>}
       <button type="button"
-        className={`form-input picker-trigger ${error?'err':''} ${!value?'picker-trigger-empty':''}` + (active ? ' focus' : '')}
+        className={`form-input picker-trigger ${error ? 'err' : ''} ${!value ? 'picker-trigger-empty' : ''}` + (active ? ' focus' : '')}
         onClick={() => {
           setPickerState({
             type: label.toLowerCase().replace(' ', ''),
@@ -361,7 +375,7 @@ function PickerField({ label, value, placeholder, error, items, recent, onSelect
 }
 const PickerFieldFR = React.forwardRef(PickerField);
 
-function SubcatField({ value, items, onChange, onAfterSelect, hideLabel=false }) {
+function SubcatField({ value, items, onChange, onAfterSelect, hideLabel = false }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef(null);
   // Expose open via ref for focus flow
@@ -375,7 +389,7 @@ function SubcatField({ value, items, onChange, onAfterSelect, hideLabel=false })
   if (items.length === 0) return (
     <div className="form-group">
       {!hideLabel && <label className="form-label">Subcategory</label>}
-      <div className="form-input picker-trigger picker-trigger-empty" style={{cursor:'default',opacity:0.5}}>
+      <div className="form-input picker-trigger picker-trigger-empty" style={{ cursor: 'default', opacity: 0.5 }}>
         <span className="picker-trigger-value">None</span>
       </div>
     </div>
@@ -385,7 +399,7 @@ function SubcatField({ value, items, onChange, onAfterSelect, hideLabel=false })
     <div className="form-group">
       {!hideLabel && <label className="form-label">Subcategory</label>}
       <button type="button"
-        className={`form-input picker-trigger ${!value?'picker-trigger-empty':''}`}
+        className={`form-input picker-trigger ${!value ? 'picker-trigger-empty' : ''}`}
         onClick={() => setOpen(true)}>
         <span className="picker-trigger-value">{value || 'None'}</span>
       </button>
@@ -397,22 +411,26 @@ function SubcatField({ value, items, onChange, onAfterSelect, hideLabel=false })
   );
 }
 const SubcatFieldFR = React.forwardRef((props, ref) => {
-  React.useImperativeHandle(ref, () => ({ open: () => { if (props.items.length > 0) {
-    props.setPickerState({
-      type: 'subcategory',
-      label: 'Subcategory',
-      value: props.value,
-      items: props.items,
-      recent: props.recent || [],
-      onSelect: (v) => { props.onChange(v); if (props.onAfterSelect) setTimeout(() => props.onAfterSelect(v), 100); },
-      exclude: '',
-      onReorder: null
-    });
-  } } }), [props.items, props.value, props.onChange, props.onAfterSelect, props.setPickerState, props.recent]);
+  React.useImperativeHandle(ref, () => ({
+    open: () => {
+      if (props.items.length > 0) {
+        props.setPickerState({
+          type: 'subcategory',
+          label: 'Subcategory',
+          value: props.value,
+          items: props.items,
+          recent: props.recent || [],
+          onSelect: (v) => { props.onChange(v); if (props.onAfterSelect) setTimeout(() => props.onAfterSelect(v), 100); },
+          exclude: '',
+          onReorder: null
+        });
+      }
+    }
+  }), [props.items, props.value, props.onChange, props.onAfterSelect, props.setPickerState, props.recent]);
   // Always mark key='subcategory' so goNextEmpty knows subcat was explicitly touched (even None)
   if (props.items.length === 0) return (
     <div className="form-group">
-      <div className={`form-input picker-trigger picker-trigger-empty` + (props.active ? ' focus' : '')} style={{cursor:'default',opacity:0.5}}>
+      <div className={`form-input picker-trigger picker-trigger-empty` + (props.active ? ' focus' : '')} style={{ cursor: 'default', opacity: 0.5 }}>
         <span className="picker-trigger-value">None</span>
       </div>
     </div>
@@ -420,7 +438,7 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
   return (
     <div className="form-group">
       <button type="button"
-        className={`form-input picker-trigger ${!props.value?'picker-trigger-empty':''}` + (props.active ? ' focus' : '')}
+        className={`form-input picker-trigger ${!props.value ? 'picker-trigger-empty' : ''}` + (props.active ? ' focus' : '')}
         onClick={() => {
           props.setPickerState({
             type: 'subcategory',
@@ -434,15 +452,20 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
           });
         }}>
         <span className="picker-trigger-value">{props.value || 'None'}</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="12" height="12" style={{flexShrink:0,opacity:0.5}}><path d="M6 9l6 6 6-6"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="12" height="12" style={{ flexShrink: 0, opacity: 0.5 }}><path d="M6 9l6 6 6-6" /></svg>
       </button>
     </div>
   );
 });
 
 // ── Main AddTransaction ────────────────────────────────────────────────────
-export default function AddTransaction({ onClose, onSaveAndContinue=null, editTransaction=null, copyTransaction=null, prefillDate=null, prefillAccount=null, prefillCategory=null, backInterceptRef=null, onSaveInstalment=null }) {
-  const { state, navigate, addTransaction, updateTransaction, createRecurringRule } = useApp();
+export default function AddTransaction({
+  onClose, onSaveAndContinue = null, editTransaction = null, copyTransaction = null,
+  prefillDate = null, prefillAccount = null, prefillCategory = null,
+  prefillType = null, prefillFromAccount = null, prefillToAccount = null, prefillAmount = null, prefillNote = null, prefillTags = null,
+  backInterceptRef = null, onSaveInstalment = null
+}) {
+  const { state, navigate, addTransaction, updateTransaction, createRecurringRule, updateInstalmentSiblings } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
   const isCopy = !!copyTransaction;
@@ -454,66 +477,118 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   const [pickerState, setPickerState] = useState(null); // {type, label, value, items, recent, onSelect, exclude?, onReorder?}
 
   // Refs for focus flow
-  const amountRef       = useRef(null);
-  const noteRef         = useRef(null);
-  const accountRef      = useRef(null);
-  const categoryRef     = useRef(null);
-  const subcatRef       = useRef(null);
-  const fromRef         = useRef(null);
-  const toRef           = useRef(null);
-  const descriptionRef  = useRef(null);
+  const amountRef = useRef(null);
+  const noteRef = useRef(null);
+  const accountRef = useRef(null);
+  const categoryRef = useRef(null);
+  const subcatRef = useRef(null);
+  const fromRef = useRef(null);
+  const toRef = useRef(null);
+  const descriptionRef = useRef(null);
 
   const lastTime = useMemo(() => {
     if (!transactions.length) return nowTimeStr();
-    const sorted = [...transactions].sort((a,b)=>{ try{return new Date(b.created_at||0)-new Date(a.created_at||0);}catch{return 0;} });
+    const sorted = [...transactions].sort((a, b) => { try { return new Date(b.created_at || 0) - new Date(a.created_at || 0); } catch { return 0; } });
     return sorted[0]?.Time || nowTimeStr();
   }, [transactions]);
 
   const lastTimeForDate = useMemo(() => {
-    if (!prefillDate||!transactions.length) return null;
-    let dt = transactions.filter(t=>t.Date===prefillDate);
-    if (prefillAccount) dt=dt.filter(t=>(t.Account||t.FromAccount)===prefillAccount||t.ToAccount===prefillAccount);
-    if (prefillCategory) dt=dt.filter(t=>t.Category===prefillCategory);
+    if (!prefillDate || !transactions.length) return null;
+    let dt = transactions.filter(t => t.Date === prefillDate);
+    if (prefillAccount) dt = dt.filter(t => (t.Account || t.FromAccount) === prefillAccount || t.ToAccount === prefillAccount);
+    if (prefillCategory) dt = dt.filter(t => t.Category === prefillCategory);
     if (!dt.length) return null;
-    return dt.sort((a,b)=>{if(a.Time&&b.Time)return b.Time.localeCompare(a.Time);try{return new Date(b.created_at||0)-new Date(a.created_at||0);}catch{return 0;}})[0]?.Time||null;
+    return dt.sort((a, b) => { if (a.Time && b.Time) return b.Time.localeCompare(a.Time); try { return new Date(b.created_at || 0) - new Date(a.created_at || 0); } catch { return 0; } })[0]?.Time || null;
   }, [prefillDate, prefillAccount, prefillCategory, transactions]);
 
   const [form, setForm] = useState(() => {
     if (isEdit) {
-      const t=editTransaction, rt=t['Income/Expense']||'Expense';
+      const t = editTransaction, rt = t['Income/Expense'] || 'Expense';
       // Strip (x/x) instalment suffix from Note so user sees clean note in edit form
-      const cleanNote = (t.Note||'').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
-      return {type:rt,amount:String(t.INR||t.Amount||''),date:toInputDate(t.Date)||todayVal(),time:t.Time||lastTime,
-        account:rt.startsWith('Transfer')?'':(t.Account||''),fromAccount:rt.startsWith('Transfer')?(t.Account||t.FromAccount||''):'',
-        toAccount:rt.startsWith('Transfer')?(t.ToAccount||''):'',category:t.Category||'',
-        subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:cleanNote,description:t.Description||''};
+      const cleanNote = stripInstalmentSuffix(t.Note);
+      return {
+        type: rt, amount: String(t.INR || t.Amount || ''), date: toInputDate(t.Date) || todayVal(), time: t.Time || lastTime,
+        account: rt.startsWith('Transfer') ? '' : (t.Account || ''), fromAccount: rt.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
+        toAccount: rt.startsWith('Transfer') ? (t.ToAccount || '') : '', category: t.Category || '',
+        subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '', note: cleanNote, description: t.Description || '',
+        tags: t.Tags || t.tags || '',
+        receipt_image: t.receipt_image || '',
+        warranty_expiry: t.warranty_expiry || '',
+        serial_no: t.serial_no || ''
+      };
     }
     if (isCopy) {
-      const t=copyTransaction, rt=t['Income/Expense']||'Expense';
-      return {type:rt,amount:String(t.INR||t.Amount||''),date:toInputDate(t.Date)||todayVal(),time:t.Time||nowTimeStr(),
-        account:rt.startsWith('Transfer')?'':(t.Account||''),fromAccount:rt.startsWith('Transfer')?(t.Account||t.FromAccount||''):'',
-        toAccount:rt.startsWith('Transfer')?(t.ToAccount||''):'',category:t.Category||'',
-        subcategory:t.Subcategory&&t.Subcategory!=='Default'?t.Subcategory:'',note:t.Note||'',description:t.Description||''};
+      const t = copyTransaction, rt = t['Income/Expense'] || 'Expense';
+      return {
+        type: rt, amount: String(t.INR || t.Amount || ''), date: toInputDate(t.Date) || todayVal(), time: t.Time || nowTimeStr(),
+        account: rt.startsWith('Transfer') ? '' : (t.Account || ''), fromAccount: rt.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
+        toAccount: rt.startsWith('Transfer') ? (t.ToAccount || '') : '', category: t.Category || '',
+        subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '', note: t.Note || '', description: t.Description || '',
+        tags: t.Tags || t.tags || '',
+        receipt_image: t.receipt_image || '',
+        warranty_expiry: t.warranty_expiry || '',
+        serial_no: t.serial_no || ''
+      };
     }
-    return {type:'Expense',amount:'',date:prefillDate?(toInputDate(prefillDate)||todayVal()):todayVal(),
-      time:prefillDate&&lastTimeForDate?lastTimeForDate:nowTimeStr(),
-      account:prefillAccount||'',fromAccount:'',toAccount:'',category:prefillCategory||'',subcategory:'',note:'',description:''};
+    return {
+      type: prefillType || 'Expense',
+      amount: prefillAmount ? String(prefillAmount) : '',
+      date: prefillDate ? (toInputDate(prefillDate) || todayVal()) : todayVal(),
+      time: prefillDate && lastTimeForDate ? lastTimeForDate : nowTimeStr(),
+      account: prefillAccount || '',
+      fromAccount: prefillFromAccount || '',
+      toAccount: prefillToAccount || '',
+      category: prefillCategory || '',
+      subcategory: '',
+      note: prefillNote || '',
+      description: '',
+      tags: prefillTags || '',
+      receipt_image: '',
+      warranty_expiry: '',
+      serial_no: ''
+    };
   });
 
-  const [errors,      setErrors]      = useState({});
-  const [saving,      setSaving]      = useState(false);
-  const [noteSugs,    setNoteSugs]    = useState([]);
+  const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [noteSugs, setNoteSugs] = useState([]);
   const [noteFocused, setNoteFocused] = useState(false);
   const formRefLatest = useRef(form);
   formRefLatest.current = form;
+
+  // SMS / UPI Parser State
+  const [smsModal, setSmsModal] = useState(false);
+  const [smsInputText, setSmsInputText] = useState('');
+  const [smsFeedback, setSmsFeedback] = useState('');
+  const [viewingReceipt, setViewingReceipt] = useState(false);
+  const fileInputRef = useRef(null);
+
   // Recurring
   const [showRecurring, setShowRecurring] = useState(false);
   const [recurringConfig, setRecurringConfig] = useState(null); // {type, totalDays?, scheduleMode, frequency?}
 
+  // Split Transaction state
+  const [isSplit, setIsSplit] = useState(false);
+  const [splits, setSplits] = useState([
+    { id: 's1', category: '', subcategory: '', amount: '', note: '' },
+    { id: 's2', category: '', subcategory: '', amount: '', note: '' },
+  ]);
+  const [splitNoteFocusedIdx, setSplitNoteFocusedIdx] = useState(null);
+  const [splitNoteSugs, setSplitNoteSugs] = useState([]);
+
+  const allocatedSplitSum = useMemo(() => {
+    return splits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+  }, [splits]);
+
+  const splitRemaining = useMemo(() => {
+    const total = parseFloat(form.amount) || 0;
+    return Math.round((total - allocatedSplitSum) * 100) / 100;
+  }, [form.amount, allocatedSplitSum]);
+
   const textInputRef = (el) => {
     if (!el) return;
-    el.setAttribute('autocomplete','on'); el.setAttribute('autocorrect','on');
-    el.setAttribute('spellcheck','true'); el.setAttribute('autocapitalize','sentences');
+    el.setAttribute('autocomplete', 'on'); el.setAttribute('autocorrect', 'on');
+    el.setAttribute('spellcheck', 'true'); el.setAttribute('autocapitalize', 'sentences');
   };
 
   // Auto-resize textarea on mount and description changes
@@ -551,27 +626,27 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
 
   const set = (k, v) => {
     setForm(p => {
-      if (k==='type') {
-        const n={...p,type:v,category:'',subcategory:''};
-        if (v==='Transfer-Out'&&p.account){n.fromAccount=p.account;n.account='';}
-        else if(p.type==='Transfer-Out'&&v!=='Transfer-Out'&&p.fromAccount){n.account=p.fromAccount;n.fromAccount='';n.toAccount='';}
+      if (k === 'type') {
+        const n = { ...p, type: v, category: '', subcategory: '' };
+        if (v === 'Transfer-Out' && p.account) { n.fromAccount = p.account; n.account = ''; }
+        else if (p.type === 'Transfer-Out' && v !== 'Transfer-Out' && p.fromAccount) { n.account = p.fromAccount; n.fromAccount = ''; n.toAccount = ''; }
         return n;
       }
-      if (k==='category') return {...p,[k]:v,subcategory:''};
-      return {...p,[k]:v};
+      if (k === 'category') return { ...p, [k]: v, subcategory: '' };
+      return { ...p, [k]: v };
     });
-    if (errors[k]) setErrors(p=>({...p,[k]:''}));
+    if (errors[k]) setErrors(p => ({ ...p, [k]: '' }));
     // Auto-open picker for Transfer
-    if (k==='type') {
+    if (k === 'type') {
       setPickerState(null);
-      if (v==='Transfer-Out') {
+      if (v === 'Transfer-Out') {
         setTimeout(() => setPickerState({
           type: 'from',
           label: 'From',
           value: form.fromAccount,
           items: accountList,
           recent: recentAccounts,
-          onSelect: (val) => { set('fromAccount', val); goNextEmpty({key:'fromAccount',val}); },
+          onSelect: (val) => { set('fromAccount', val); goNextEmpty({ key: 'fromAccount', val }); },
           onReorder: () => setReorderScreen('accounts')
         }), 100);
       } else {
@@ -582,48 +657,71 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     }
   };
 
-  const isTransfer = form.type==='Transfer-Out';
+  const isTransfer = form.type === 'Transfer-Out';
 
   const accountList = useMemo(() => {
-    const accts=(accounts||[]).filter((a,i,arr)=>arr.findIndex(b=>(b.name||b)===(a.name||a))===i);
-    const groups=state.accountGroups||[];
-    const result=[];
-    for (const grp of groups) result.push(...accts.filter(a=>(a.group||'')===grp).map(a=>a.name||a).filter(Boolean));
-    const inAnyGroup=new Set(result);
-    result.push(...accts.filter(a=>!inAnyGroup.has(a.name||a)&&(a.name||a)).map(a=>a.name||a));
+    const accts = (accounts || []).filter((a, i, arr) => arr.findIndex(b => (b.name || b) === (a.name || a)) === i);
+    const groups = state.accountGroups || [];
+    const result = [];
+    for (const grp of groups) result.push(...accts.filter(a => (a.group || '') === grp).map(a => a.name || a).filter(Boolean));
+    const inAnyGroup = new Set(result);
+    result.push(...accts.filter(a => !inAnyGroup.has(a.name || a) && (a.name || a)).map(a => a.name || a));
     return result;
   }, [accounts, state.accountGroups]);
 
   const availCats = useMemo(() => {
-    const wantType=form.type==='Income'?'Income':'Expense';
-    const catArr=state.categoriesArr||[];
-    if (catArr.length>0) return catArr.filter(c=>(c.type||'Expense')===wantType).map(c=>c.name);
-    return Object.entries(categories||{}).filter(([,d])=>(d?.type||'Expense')===wantType).map(([n])=>n);
+    const wantType = form.type === 'Income' ? 'Income' : 'Expense';
+    const catArr = state.categoriesArr || [];
+    if (catArr.length > 0) return catArr.filter(c => (c.type || 'Expense') === wantType).map(c => c.name);
+    return Object.entries(categories || {}).filter(([, d]) => (d?.type || 'Expense') === wantType).map(([n]) => n);
   }, [categories, state.categoriesArr, form.type]);
 
   const availSubs = useMemo(() =>
-    (categories?.[form.category]?.subcategories||[]).filter(s=>s&&s!=='Default').sort(),
+    (categories?.[form.category]?.subcategories || []).filter(s => s && s !== 'Default').sort(),
     [categories, form.category]);
 
+  const instInfo = useMemo(() => isEdit ? parseInstalmentInfo(editTransaction?.Note) : null, [isEdit, editTransaction]);
+  const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!instInfo);
+
+  const instalmentStats = useMemo(() => {
+    if (!isInstalmentEdit) return null;
+    return getInstalmentSeriesStats(editTransaction, state.transactions, form.amount);
+  }, [isInstalmentEdit, editTransaction, state.transactions, form.amount]);
+
+  const getRecentSubsForCategory = useCallback((cat) => {
+    if (!cat) return [];
+    const seen = new Set(), result = [];
+    for (const t of [...transactions].sort((a, b) => (b.Date || '').localeCompare(a.Date || ''))) {
+      if (t.Category === cat && t.Subcategory && t.Subcategory !== 'Default') {
+        if (!seen.has(t.Subcategory)) {
+          seen.add(t.Subcategory);
+          result.push(t.Subcategory);
+        }
+      }
+      if (result.length >= 4) break;
+    }
+    return result;
+  }, [transactions]);
+
   const recentAccounts = useMemo(() => {
-    const seen=new Set(),result=[];
-    for (const t of [...transactions].sort((a,b)=>(b.Date||'').localeCompare(a.Date||''))) {
-      const name=t.Account||t.FromAccount||'';
-      if (name&&!seen.has(name)){seen.add(name);result.push(name);}
-      if (result.length>=5) break;
+    const seen = new Set(), result = [];
+    for (const t of [...transactions].sort((a, b) => (b.Date || '').localeCompare(a.Date || ''))) {
+      const name = t.Account || t.FromAccount || '';
+      if (name && !seen.has(name)) { seen.add(name); result.push(name); }
+      if (result.length >= 5) break;
     }
     return result;
   }, [transactions]);
 
   const recentCats = useMemo(() => {
-    const wantType=form.type==='Income'?'income':'expense';
-    const seen=new Set(),result=[];
-    for (const t of [...transactions].sort((a,b)=>(b.Date||'').localeCompare(a.Date||''))) {
-      const tp=(t['Income/Expense']||'').toLowerCase();
-      if (tp!==wantType) continue;
-      const cat=t.Category||'';
-      if (cat&&cat!=='Transfer'&&!seen.has(cat)){seen.add(cat);result.push(cat);}
-      if (result.length>=5) break;
+    const wantType = form.type === 'Income' ? 'income' : 'expense';
+    const seen = new Set(), result = [];
+    for (const t of [...transactions].sort((a, b) => (b.Date || '').localeCompare(a.Date || ''))) {
+      const tp = (t['Income/Expense'] || '').toLowerCase();
+      if (tp !== wantType) continue;
+      const cat = t.Category || '';
+      if (cat && cat !== 'Transfer' && !seen.has(cat)) { seen.add(cat); result.push(cat); }
+      if (result.length >= 5) break;
     }
     return result;
   }, [transactions, form.type]);
@@ -631,7 +729,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   const recentSubs = useMemo(() => {
     if (!form.category) return [];
     const seen = new Set(), result = [];
-    for (const t of [...transactions].sort((a,b)=>(b.Date||'').localeCompare(a.Date||''))) {
+    for (const t of [...transactions].sort((a, b) => (b.Date || '').localeCompare(a.Date || ''))) {
       if (t.Category === form.category) {
         const sub = t.Subcategory || '';
         if (sub && sub !== 'Default' && !seen.has(sub)) {
@@ -643,6 +741,103 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     }
     return result;
   }, [transactions, form.category]);
+
+  const allAvailableTags = useMemo(() => {
+    const seen = new Set();
+    for (const t of transactions) {
+      if (t.Tags) {
+        t.Tags.split(',').forEach(tag => {
+          const clean = tag.trim().toLowerCase();
+          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+      const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
+      if (matches) matches.forEach(m => seen.add(m.toLowerCase()));
+    }
+    try {
+      const custom = JSON.parse(state.settings?.customTags || '[]');
+      if (Array.isArray(custom)) {
+        custom.forEach(ct => {
+          const clean = String(ct).trim().toLowerCase();
+          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+    } catch { }
+
+    const defaults = ['#tax', '#personal', '#family', '#trip', '#impulse', '#work', '#medical'];
+    defaults.forEach(d => seen.add(d));
+    return Array.from(seen).slice(0, 25);
+  }, [transactions, state.settings?.customTags]);
+
+  const handlePasteAndParseSMS = async (directText = '') => {
+    let textToParse = directText;
+    if (!textToParse) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          textToParse = await navigator.clipboard.readText();
+        }
+      } catch { /* clipboard read blocked */ }
+    }
+    if (!textToParse) {
+      setSmsModal(true);
+      return;
+    }
+    const parsed = parseBankSMS(textToParse, accountList, categories);
+    if (parsed) {
+      setForm(p => ({
+        ...p,
+        amount: parsed.amount || p.amount,
+        type: parsed.type || p.type,
+        account: parsed.account || p.account,
+        category: parsed.category || p.category,
+        note: parsed.note || p.note,
+        date: parsed.date || p.date,
+        time: parsed.time || p.time,
+      }));
+      setSmsFeedback(`⚡ Pre-filled ₹${parsed.amount} (${parsed.type}) from SMS!`);
+      setTimeout(() => setSmsFeedback(''), 4000);
+      setSmsModal(false);
+      setSmsInputText('');
+    } else {
+      setSmsFeedback('Could not detect financial transaction in text.');
+      setTimeout(() => setSmsFeedback(''), 4000);
+    }
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1200;
+        const MAX_HEIGHT = 1200;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+        set('receipt_image', dataUrl);
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
 
   const getRecentAndMostUsedNotes = (targetType = form.type) => {
     const isTargetXfer = targetType.toLowerCase().startsWith('transfer');
@@ -678,7 +873,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
       const db = (b.Date || '').split('/').reverse().join('-');
       const dateCompare = db.localeCompare(da);
       if (dateCompare !== 0) return dateCompare;
-      
+
       // Fallback to Time
       return (b.Time || '').localeCompare(a.Time || '');
     });
@@ -734,25 +929,65 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
   };
 
   const validate = () => {
-    const e={};
-    if (!form.amount||isNaN(parseFloat(form.amount))||parseFloat(form.amount)<0) e.amount='Enter a valid amount';
-    if (!form.date) e.date='Required';
-    if (isTransfer){
-      if (!form.fromAccount) e.fromAccount='Select from account';
-      if (!form.toAccount)   e.toAccount='Select to account';
+    const e = {};
+    if (form.amount === '' || form.amount === undefined || isNaN(parseFloat(form.amount))) e.amount = 'Enter a valid amount';
+    if (!form.date) e.date = 'Required';
+    if (isTransfer) {
+      if (!form.fromAccount) e.fromAccount = 'Select from account';
+      if (!form.toAccount) e.toAccount = 'Select to account';
+    } else if (isSplit) {
+      if (!form.account) e.account = 'Select account';
+      if (form.amount && !isNaN(parseFloat(form.amount)) && Math.abs(splitRemaining) >= 0.01) {
+        e.splits = `Allocated sum (₹${allocatedSplitSum}) must match entered total (₹${form.amount})`;
+      }
+      for (let i = 0; i < splits.length; i++) {
+        if (!splits[i].category) e.splits = `Select category for split part ${i + 1}`;
+        if (splits[i].amount === '' || isNaN(parseFloat(splits[i].amount))) e.splits = `Enter valid amount for split part ${i + 1}`;
+        if (!splits[i].note || !splits[i].note.trim()) e.splits = `Enter note for split part ${i + 1}`;
+      }
     } else {
-      if (!form.account)  e.account='Select account';
-      if (!form.category) e.category='Select category';
+      if (!form.account) e.account = 'Select account';
+      if (!form.category) e.category = 'Select category';
     }
-    setErrors(e); return Object.keys(e).length===0;
+    setErrors(e); return Object.keys(e).length === 0;
   };
 
-  const handleSave = async (shouldContinue=false) => {
-    if (!validate()||saving) return;
+  const handleSave = async (shouldContinue = false) => {
+    if (!validate() || saving) return;
     setSaving(true);
     try {
       const baseNote = form.note || '';
-      const totalAmount = parseFloat(form.amount) || 0;
+      const totalAmount = isSplit && allocatedSplitSum > 0 ? allocatedSplitSum : (parseFloat(form.amount) || 0);
+
+      // Extract hashtags from Note & Description and combine with manual tags
+      const noteAndDesc = `${baseNote} ${form.description || ''}`;
+      const extractedHashtags = (noteAndDesc.match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g) || []).map(t => t.toLowerCase());
+      const manualTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean).map(t => t.startsWith('#') ? t : `#${t}`);
+      const combinedTags = Array.from(new Set([...manualTags, ...extractedHashtags])).join(', ');
+
+      if (isSplit && !isTransfer && !isEdit) {
+        const splitGroupId = 'split-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        for (const s of splits) {
+          const splitAmt = parseFloat(s.amount) || 0;
+          await addTransaction({
+            Date: inputToStorage(form.date),
+            Time: form.time || '',
+            Account: form.account,
+            Category: s.category,
+            Subcategory: s.subcategory || 'Default',
+            Note: s.note.trim(),
+            Description: form.description || '',
+            INR: splitAmt,
+            Amount: String(splitAmt),
+            Currency: 'INR',
+            'Income/Expense': form.type,
+            Tags: combinedTags,
+            split_group_id: splitGroupId,
+          });
+        }
+        onClose();
+        return;
+      }
 
       if (!isEdit && recurringConfig) {
         // form.date is YYYY-MM-DD (HTML date input format)
@@ -775,10 +1010,10 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
             schedule_mode: recurringConfig.scheduleMode,
           };
           const schedule = buildInstalmentSchedule(rule);
-          rule.total_parts    = schedule.length;
+          rule.total_parts = schedule.length;
           rule.completed_parts = schedule.length; // all created now
-          rule.next_date      = '';               // no pending parts
-          rule.end_date       = schedule[schedule.length - 1]?.date || '';
+          rule.next_date = '';               // no pending parts
+          rule.end_date = schedule[schedule.length - 1]?.date || '';
           rule.amount_per_part = schedule[0]?.amount || 0;
           const saved = await createRecurringRule(rule);
           // Create all instalment transactions — inst.date is YYYY-MM-DD, convert to DD/MM/YYYY
@@ -794,6 +1029,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
               INR: inst.amount, Amount: String(inst.amount),
               Currency: 'INR', 'Income/Expense': form.type,
               recurring_rule_id: saved.id,
+              Tags: combinedTags,
             });
           }
         } else if (recurringConfig.type === 'repeat') {
@@ -806,10 +1042,10 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
             category: form.category, subcategory: form.subcategory || '',
             base_note: baseNote, description: form.description || '',
             currency: 'INR', amount_per_part: totalAmount,
-            start_date:    isoDate,             // YYYY-MM-DD
-            next_date:     nextDate,            // YYYY-MM-DD
+            start_date: isoDate,             // YYYY-MM-DD
+            next_date: nextDate,            // YYYY-MM-DD
             schedule_mode: recurringConfig.scheduleMode,
-            frequency:     recurringConfig.frequency,
+            frequency: recurringConfig.frequency,
             completed_parts: 1,
           };
           const saved = await createRecurringRule(rule);
@@ -823,34 +1059,36 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
             INR: totalAmount, Amount: form.amount,
             Currency: 'INR', 'Income/Expense': form.type,
             recurring_rule_id: saved.id,
+            Tags: combinedTags,
           });
         }
       } else {
-        // Normal single transaction
-        // For instalment edits: keep recurring_rule_id and re-apply (x/x) suffix to THIS transaction
-        const thisNote = isEdit && onSaveInstalment
-          ? (() => {
-              // Re-apply the original (x/x) suffix from the transaction being edited
-              const m = (editTransaction.Note||'').match(/\s*\(\d+\/\d+\)\s*$/);
-              return m ? baseNote + m[0].trimStart() : baseNote;
-            })()
+        // Normal single transaction or instalment edit
+        const instInfo = parseInstalmentInfo(editTransaction?.Note);
+        const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!instInfo);
+        const thisNote = isInstalmentEdit && instInfo
+          ? `${baseNote} (${instInfo.part}/${instInfo.total})`.trim()
           : baseNote;
-        const data={
-          Date:inputToStorage(form.date),Time:form.time||'',
-          Account:isTransfer?form.fromAccount:form.account,
-          FromAccount:isTransfer?form.fromAccount:'',ToAccount:isTransfer?form.toAccount:'',
-          Category:isTransfer?'Transfer':form.category,
-          Subcategory:form.subcategory||'Default',
-          Note:thisNote,Description:form.description||'',
-          INR:totalAmount,Amount:form.amount,
-          Currency:'INR','Income/Expense':form.type,
+        const data = {
+          Date: inputToStorage(form.date), Time: form.time || '',
+          Account: isTransfer ? form.fromAccount : form.account,
+          FromAccount: isTransfer ? form.fromAccount : '', ToAccount: isTransfer ? form.toAccount : '',
+          Category: isTransfer ? 'Transfer' : form.category,
+          Subcategory: form.subcategory || 'Default',
+          Note: thisNote, Description: form.description || '',
+          INR: totalAmount, Amount: form.amount,
+          Currency: 'INR', 'Income/Expense': form.type,
           // Preserve recurring_rule_id so instalment link is never lost
           recurring_rule_id: editTransaction?.recurring_rule_id || '',
+          Tags: combinedTags,
+          receipt_image: form.receipt_image || '',
+          warranty_expiry: form.warranty_expiry || '',
+          serial_no: form.serial_no || '',
+          _id: editTransaction?._id,
         };
-        if (isEdit && onSaveInstalment) {
-          // Instalment edit: update this transaction (with its own suffix), bulk-update siblings
-          await updateTransaction(editTransaction._id, data);
-          await onSaveInstalment(data);
+        if (isInstalmentEdit) {
+          // Bulk update the entire series (including this transaction) in a single atomic call
+          await updateInstalmentSiblings(editTransaction.recurring_rule_id, data, editTransaction);
         } else if (isEdit) {
           await updateTransaction(editTransaction._id, data);
         } else {
@@ -863,6 +1101,7 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
           amount: '',
           note: '',
           description: '',
+          tags: '',
         }));
         setRecurringConfig(null);
         setShowRecurring(false);
@@ -909,11 +1148,11 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
           return;
         }
       } else {
-        if (!snap.account)  { accountRef.current?.open();  return; }
+        if (!snap.account) { accountRef.current?.open(); return; }
         if (!snap.category) { categoryRef.current?.open(); return; }
       }
       if (!snap.amount) { amountRef.current?.focus(); return; }
-      if (!snap.note)   { noteRef.current?.focus();   return; }
+      if (!snap.note) { noteRef.current?.focus(); return; }
     }, 120);
   };
 
@@ -921,12 +1160,44 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
     <>
       <div className="fullscreen-modal" data-type={form.type}>
         <div className="add-hdr">
-          <div className="add-title">{form.type==='Transfer-Out' ? 'Transfer' : form.type || (isEdit ? 'Edit' : 'Add')}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="add-title">{form.type === 'Transfer-Out' ? 'Transfer' : form.type || (isEdit ? 'Edit' : 'Add')}</div>
+            {!isEdit && (
+              <button
+                type="button"
+                onClick={() => handlePasteAndParseSMS()}
+                style={{
+                  background: 'rgba(0, 229, 160, 0.15)',
+                  border: '1px solid var(--accent)',
+                  color: 'var(--accent)',
+                  borderRadius: 12,
+                  padding: '3px 8px',
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3
+                }}
+              >
+                ⚡ Paste SMS / UPI
+              </button>
+            )}
+          </div>
           <button className="add-close" onClick={onClose}>✕</button>
         </div>
+        {smsFeedback && (
+          <div style={{
+            background: smsFeedback.includes('Pre-filled') ? 'rgba(0,229,160,0.15)' : 'rgba(255,77,106,0.15)',
+            color: smsFeedback.includes('Pre-filled') ? 'var(--income)' : 'var(--expense)',
+            fontSize: '0.72rem', fontWeight: 700, padding: '4px 14px', textAlign: 'center'
+          }}>
+            {smsFeedback}
+          </div>
+        )}
         <div className="type-tabs">
-          {TYPES.map(tp=>(
-            <button key={tp.id} className={`type-tab ${tp.cls} ${form.type===tp.id?'active':''}`} onClick={() => {
+          {TYPES.map(tp => (
+            <button key={tp.id} className={`type-tab ${tp.cls} ${form.type === tp.id ? 'active' : ''}`} onClick={() => {
               set('type', tp.id);
               if (noteFocused) {
                 if (!form.note || !form.note.trim()) {
@@ -956,13 +1227,13 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
             <label className="form-label">Date</label>
             <div className="date-time-row">
               <div className="date-time-inputs">
-                <input className={`form-input ${errors.date?'err':''}`} type="date" value={form.date} onChange={e=>set('date',e.target.value)} onFocus={() => setPickerState(null)}/>
-                <input className="form-input" type="time" value={form.time} onChange={e=>set('time',e.target.value)} onFocus={() => setPickerState(null)}/>
+                <input className={`form-input ${errors.date ? 'err' : ''}`} type="date" value={form.date} onChange={e => set('date', e.target.value)} onFocus={() => setPickerState(null)} />
+                <input className="form-input" type="time" value={form.time} onChange={e => set('time', e.target.value)} onFocus={() => setPickerState(null)} />
               </div>
               {!isEdit && (
-                <button type="button" className="recurring-button" onClick={()=>setShowRecurring(true)}>
-                  <span>{recurringConfig ? (recurringConfig.type==='instalment'?'📋':'🔁') : '🔁'}</span>
-                  <span>{recurringConfig ? (recurringConfig.type==='instalment'?'Instalment':'Repeat') : 'Rep/Inst'}</span>
+                <button type="button" className="recurring-button" onClick={() => setShowRecurring(true)}>
+                  <span>{recurringConfig ? (recurringConfig.type === 'instalment' ? '📋' : '🔁') : '🔁'}</span>
+                  <span>{recurringConfig ? (recurringConfig.type === 'instalment' ? 'Instalment' : 'Repeat') : 'Rep/Inst'}</span>
                 </button>
               )}
             </div>
@@ -971,11 +1242,11 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
           {!isEdit && recurringConfig && (
             <div className="recurring-summary">
               <span>
-                {recurringConfig.type==='instalment'
-                  ? `📋 Instalment · ${recurringConfig.totalDays} days · ${recurringConfig.scheduleMode==='start_of_month'?'Start of month':'On the day'}`
-                  : `🔁 Repeat ${recurringConfig.frequency} · ${recurringConfig.scheduleMode==='start_of_month'?'Start of month':'On date'}`}
+                {recurringConfig.type === 'instalment'
+                  ? `📋 Instalment · ${recurringConfig.totalDays} days · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On the day'}`
+                  : `🔁 Repeat ${recurringConfig.frequency} · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On date'}`}
               </span>
-              <button type="button" onClick={()=>setRecurringConfig(null)} className="recurring-clear">✕</button>
+              <button type="button" onClick={() => setRecurringConfig(null)} className="recurring-clear">✕</button>
             </div>
           )}
 
@@ -984,110 +1255,356 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
             <div className="transfer-swap-row">
               <PickerFieldFR ref={fromRef} setPickerState={setPickerState} label="From" value={form.fromAccount} placeholder="Select"
                 error={errors.fromAccount} items={accountList} recent={recentAccounts}
-                onSelect={v=>{set('fromAccount',v);goNextEmpty({key:'fromAccount',val:v});}}
+                onSelect={v => { set('fromAccount', v); goNextEmpty({ key: 'fromAccount', val: v }); }}
                 onAfterSelect={() => setPickerState(null)}
-                onReorder={()=>setReorderScreen('accounts')}
+                onReorder={() => setReorderScreen('accounts')}
                 active={pickerState && pickerState.type === 'from'} />
               <button type="button" className="swap-btn" title="Swap"
-                onClick={()=>setForm(p=>({...p,fromAccount:p.toAccount,toAccount:p.fromAccount}))}>
+                onClick={() => setForm(p => ({ ...p, fromAccount: p.toAccount, toAccount: p.fromAccount }))}>
                 ⇅
               </button>
               <PickerFieldFR ref={toRef} setPickerState={setPickerState} label="To" value={form.toAccount} placeholder="Select"
                 error={errors.toAccount} items={accountList} recent={recentAccounts}
-                onSelect={v=>{set('toAccount',v);goNextEmpty({key:'toAccount',val:v});}}
+                onSelect={v => { set('toAccount', v); goNextEmpty({ key: 'toAccount', val: v }); }}
                 onAfterSelect={() => setPickerState(null)}
-                onReorder={()=>setReorderScreen('accounts')}
+                onReorder={() => setReorderScreen('accounts')}
                 active={pickerState && pickerState.type === 'to'} />
             </div>
           ) : (
             <PickerFieldFR setPickerState={setPickerState} ref={accountRef} label="Account" value={form.account} placeholder="Select account"
               error={errors.account} items={accountList} recent={recentAccounts}
-              onSelect={v=>{set('account',v);goNextEmpty({key:'account',val:v});}}
+              onSelect={v => { set('account', v); goNextEmpty({ key: 'account', val: v }); }}
               onAfterSelect={() => setPickerState(null)}
-              onReorder={()=>setReorderScreen('accounts')}
+              onReorder={() => setReorderScreen('accounts')}
               active={pickerState && pickerState.type === 'account'} />
           )}
 
-          {/* Row 3: Category + Subcategory */}
-          {!isTransfer && (
+          {/* Row 3: Category + Subcategory (hidden when isSplit) */}
+          {!isTransfer && !isSplit && (
             <div className="form-group category-subcat-group">
               <label className="form-label">Category</label>
               <div className="category-subcat-wrap">
                 <PickerFieldFR setPickerState={setPickerState} ref={categoryRef} label="Category" value={form.category} placeholder="Select category"
                   hideLabel
                   error={errors.category} items={availCats} recent={recentCats}
-                  onSelect={v=>{
-                    set('category',v);
-                    const freshSubs=(categories?.[v]?.subcategories||[]).filter(s=>s&&s!=='Default');
+                  onSelect={v => {
+                    set('category', v);
+                    const freshSubs = (categories?.[v]?.subcategories || []).filter(s => s && s !== 'Default');
                     afterCategory(v, freshSubs);
                   }}
                   onAfterSelect={() => setPickerState(null)}
-                  onReorder={()=>setReorderScreen('categories')}
+                  onReorder={() => setReorderScreen('categories')}
                   active={pickerState && pickerState.type === 'category'} />
                 <SubcatFieldFR setPickerState={setPickerState} ref={subcatRef} value={form.subcategory} items={availSubs}
                   hideLabel
                   recent={recentSubs}
-                  onChange={v=>set('subcategory',v)}
-                  onAfterSelect={()=>{ if(!isEdit){ if(!form.amount) setTimeout(()=>amountRef.current?.focus(),120); else setTimeout(()=>noteRef.current?.focus(),120); } }}
+                  onChange={v => set('subcategory', v)}
+                  onAfterSelect={() => { if (!isEdit) { if (!form.amount) setTimeout(() => amountRef.current?.focus(), 120); else setTimeout(() => noteRef.current?.focus(), 120); } }}
                   active={pickerState && pickerState.type === 'subcategory'} />
               </div>
             </div>
           )}
 
-          {/* Row 4: Amount */}
+          {/* Row 4: Amount + Split Toggle button next to input */}
           <div className="form-group">
             <label className="form-label">Amount</label>
-            <div style={{position:'relative',display:'flex',alignItems:'center'}}>
-              <span style={{position:'absolute',left:10,fontSize:'0.9rem',color:'var(--text-muted)',pointerEvents:'none',zIndex:1}}>₹</span>
-              <input ref={amountRef}
-                className={`form-input ${errors.amount?'err':''}`}
-                style={{paddingLeft:24}}
-                type="text" inputMode="decimal" pattern="[0-9]*([.,][0-9]+)?"
-                autoComplete="off" autoCorrect="off" spellCheck="false"
-                onFocus={() => setPickerState(null)}
-                onKeyDown={e=>{
-                  const a=['Backspace','Delete','ArrowLeft','ArrowRight','Tab','.',','];
-                  if (e.key==='Enter'){e.preventDefault();goNextEmpty({key:'amount',val:form.amount});}
-                  else if (!a.includes(e.key)&&!/^[0-9]$/.test(e.key)) e.preventDefault();
-                }}
-                value={form.amount} onChange={e=>set('amount',e.target.value)}/>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
+                <span style={{ position: 'absolute', left: 10, fontSize: '0.9rem', color: 'var(--text-muted)', pointerEvents: 'none', zIndex: 1 }}>₹</span>
+                <input ref={amountRef}
+                  className={`form-input ${errors.amount ? 'err' : ''}`}
+                  style={{ paddingLeft: 24 }}
+                  type="text" inputMode="decimal" pattern="^-?[0-9]*([.,][0-9]+)?"
+                  autoComplete="off" autoCorrect="off" spellCheck="false"
+                  placeholder="0"
+                  onFocus={() => setPickerState(null)}
+                  value={form.amount} onChange={e => set('amount', e.target.value)} />
+              </div>
+              {!isTransfer && !isEdit && (
+                <button
+                  type="button"
+                  onClick={() => setIsSplit(v => !v)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 12,
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    border: `1.5px solid ${isSplit ? 'var(--accent)' : 'var(--border)'}`,
+                    background: isSplit ? 'rgba(0, 229, 160, 0.12)' : 'var(--bg-card)',
+                    color: isSplit ? 'var(--accent)' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                  }}
+                >
+                  ⚡ {isSplit ? 'Split Active' : 'Split'}
+                </button>
+              )}
             </div>
             {errors.amount && <div className="field-error">{errors.amount}</div>}
+            {isInstalmentEdit && instalmentStats && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                marginTop: 6,
+                fontSize: '0.74rem',
+                fontWeight: 600,
+                color: 'var(--text-muted)',
+              }}>
+                <span>Balance: <strong style={{ color: '#ffb74d' }}>{formatINR(instalmentStats.balanceRemaining)}</strong></span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span>Total: <strong style={{ color: 'var(--accent)' }}>{formatINR(instalmentStats.totalAmount)}</strong></span>
+              </div>
+            )}
           </div>
 
-          {/* Row 5: Note */}
-          <div className="form-group">
-            <label className="form-label">Note</label>
-            <div style={{position:'relative', flex: 1}}>
-              <input ref={el=>{textInputRef(el);noteRef.current=el;}} className="form-input" type="text" value={form.note}
-                style={{paddingRight:(form.note||noteFocused)?'30px':undefined}}
-                autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
-                onChange={e=>handleNoteChange(e.target.value)}
-                onFocus={handleNoteFocus}
-                onBlur={()=>{setNoteFocused(false);setTimeout(()=>setNoteSugs([]),180);}}
-                onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();descriptionRef.current?.focus();}}}
-              />
-              {noteFocused&&(
-                <button type="button" onMouseDown={e=>{e.preventDefault();set('note','');setNoteSugs([]);setNoteFocused(false);}}
-                  style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:'0.8rem',lineHeight:1,padding:'4px',borderRadius:'50%',zIndex:1}}>✕</button>
-              )}
-              {noteSugs.length>0&&(
-                <div className="note-sug-list">
-                  {noteSugs.map(s => {
-                    const isObj = typeof s === 'object';
-                    const label = isObj ? s.note : s;
-                    const icon = isObj ? (s.type === 'most_used' ? '🔥' : '🕒') : null;
-                    return (
-                      <div key={label} className="note-sug-item" onMouseDown={()=>{set('note',label);setNoteSugs([]);setTimeout(()=>descriptionRef.current?.focus(),150);}} style={{display:'flex',alignItems:'center'}}>
-                        {icon && <span className="note-sug-icon" style={{marginRight:8,fontSize:'0.75rem'}}>{icon}</span>}
-                        <span className="note-sug-text">{label}</span>
-                      </div>
-                    );
-                  })}
+          {/* Split Allocation Section */}
+          {isSplit && !isTransfer && (
+            <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 14, padding: 12, marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 800 }}>⚡ Split Breakdown</span>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: splitRemaining === 0 ? 'var(--income)' : 'var(--expense)' }}>
+                  {splitRemaining === 0 ? '✓ Fully Balanced' : `Remaining: ₹${splitRemaining}`}
+                </span>
+              </div>
+              {errors.splits && <div className="field-error" style={{ marginBottom: 10 }}>{errors.splits}</div>}
+
+              {splits.map((s, idx) => (
+                <div key={s.id} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: 10, marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>SPLIT #{idx + 1}</span>
+                    {splits.length > 2 && (
+                      <button
+                        type="button"
+                        onClick={() => setSplits(prev => prev.filter((_, i) => i !== idx))}
+                        style={{ background: 'none', border: 'none', color: 'var(--expense)', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700 }}
+                      >
+                        Remove ✕
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Category & Subcategory chip selectors */}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      type="button"
+                      onClick={() => setPickerState({
+                        type: `split-cat-${idx}`,
+                        label: `Select Category (Split #${idx + 1})`,
+                        value: s.category,
+                        items: availCats,
+                        recent: recentCats,
+                        onSelect: (v) => {
+                          const freshSubs = (categories?.[v]?.subcategories || []).filter(sub => sub && sub !== 'Default');
+                          const recSubs = getRecentSubsForCategory(v);
+                          setSplits(prev => prev.map((item, i) => i === idx ? { ...item, category: v, subcategory: '' } : item));
+                          if (freshSubs.length > 0) {
+                            setTimeout(() => {
+                              setPickerState({
+                                type: `split-sub-${idx}`,
+                                label: `Select Subcategory for ${v}`,
+                                value: '',
+                                items: freshSubs,
+                                recent: recSubs,
+                                onSelect: (subVal) => {
+                                  setSplits(prev => prev.map((item, i) => i === idx ? { ...item, subcategory: subVal } : item));
+                                  setPickerState(null);
+                                }
+                              });
+                            }, 50);
+                          } else {
+                            setPickerState(null);
+                          }
+                        }
+                      })}
+                      style={{
+                        flex: 1, padding: '8px 10px', borderRadius: 10, background: 'var(--bg-base)',
+                        border: `1px solid ${!s.category && errors.splits ? 'var(--expense)' : 'var(--border)'}`,
+                        color: s.category ? 'var(--text-primary)' : 'var(--text-muted)',
+                        fontSize: '0.78rem', fontWeight: 700, textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                      }}
+                    >
+                      <span>{s.category || 'Select Category'}</span>
+                      <span style={{ fontSize: '0.65rem' }}>▼</span>
+                    </button>
+
+                    {s.category && (categories?.[s.category]?.subcategories || []).filter(sub => sub && sub !== 'Default').length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const freshSubs = (categories?.[s.category]?.subcategories || []).filter(sub => sub && sub !== 'Default');
+                          const recSubs = getRecentSubsForCategory(s.category);
+                          setPickerState({
+                            type: `split-sub-${idx}`,
+                            label: `Select Subcategory for ${s.category}`,
+                            value: s.subcategory,
+                            items: freshSubs,
+                            recent: recSubs,
+                            onSelect: (v) => {
+                              setSplits(prev => prev.map((item, i) => i === idx ? { ...item, subcategory: v } : item));
+                              setPickerState(null);
+                            }
+                          });
+                        }}
+                        style={{
+                          flex: 1, padding: '8px 10px', borderRadius: 10, background: 'var(--bg-base)',
+                          border: '1px solid var(--border)',
+                          color: s.subcategory ? 'var(--text-primary)' : 'var(--text-muted)',
+                          fontSize: '0.78rem', fontWeight: 700, textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                        }}
+                      >
+                        <span>{s.subcategory || 'Subcategory'}</span>
+                        <span style={{ fontSize: '0.65rem' }}>▼</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Amount & Note in split row */}
+                  <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
+                    <div style={{ position: 'relative', width: '38%' }}>
+                      <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>₹</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="Amount"
+                        className="form-input"
+                        style={{ paddingLeft: 22, fontSize: '0.8rem', padding: '6px 8px 6px 20px' }}
+                        value={s.amount}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setSplits(prev => {
+                            const next = prev.map((item, i) => i === idx ? { ...item, amount: val } : item);
+                            const total = next.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+                            set('amount', String(total));
+                            return next;
+                          });
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ position: 'relative', flex: 1 }}>
+                      <input
+                        type="text"
+                        placeholder="Note (e.g. Vegetables)"
+                        className="form-input"
+                        style={{ width: '100%', fontSize: '0.8rem', padding: '6px 10px' }}
+                        value={s.note}
+                        onFocus={() => {
+                          setSplitNoteFocusedIdx(idx);
+                          setSplitNoteSugs(getRecentAndMostUsedNotes(form.type, s.category));
+                        }}
+                        onBlur={() => {
+                          setTimeout(() => {
+                            setSplitNoteFocusedIdx(null);
+                            setSplitNoteSugs([]);
+                          }, 200);
+                        }}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setSplits(prev => prev.map((item, i) => i === idx ? { ...item, note: val } : item));
+                          setSplitNoteSugs(getRecentAndMostUsedNotes(form.type, s.category).filter(n => {
+                            const noteStr = typeof n === 'object' ? n.note : n;
+                            return noteStr.toLowerCase().includes(val.toLowerCase());
+                          }));
+                        }}
+                      />
+                      {splitNoteFocusedIdx === idx && splitNoteSugs.length > 0 && (
+                        <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 10, maxHeight: 150, overflowY: 'auto' }}>
+                          {splitNoteSugs.map(item => {
+                            const isObj = typeof item === 'object';
+                            const label = isObj ? item.note : item;
+                            const icon = isObj ? (item.type === 'most_used' ? '🔥' : '🕒') : null;
+                            return (
+                              <div
+                                key={label}
+                                className="note-sug-item"
+                                onMouseDown={() => {
+                                  setSplits(prev => prev.map((part, i) => i === idx ? { ...part, note: label } : part));
+                                  setSplitNoteFocusedIdx(null);
+                                  setSplitNoteSugs([]);
+                                }}
+                                style={{ display: 'flex', alignItems: 'center', fontSize: '0.78rem', padding: '6px 10px' }}
+                              >
+                                {icon && <span style={{ marginRight: 6, fontSize: '0.7rem' }}>{icon}</span>}
+                                <span>{label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              )}
+              ))}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setSplits(prev => [...prev, { id: 's' + (prev.length + 1), category: '', subcategory: '', amount: '', note: '' }])}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  + Add Split Part
+                </button>
+                {splitRemaining > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSplits(prev => {
+                        const next = [...prev];
+                        const last = next[next.length - 1];
+                        if (last && (!last.amount || parseFloat(last.amount) === 0)) {
+                          last.amount = String(splitRemaining);
+                        } else {
+                          next.push({ id: 's' + (next.length + 1), category: '', subcategory: '', amount: String(splitRemaining), note: '' });
+                        }
+                        return next;
+                      });
+                    }}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '0.74rem', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Auto-Fill Remaining (₹{splitRemaining})
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Row 5: Note (hidden when isSplit) */}
+          {!isSplit && (
+            <div className="form-group">
+              <label className="form-label">Note</label>
+              <div style={{ position: 'relative', flex: 1 }}>
+                <input ref={el => { textInputRef(el); noteRef.current = el; }} className="form-input" type="text" value={form.note}
+                  style={{ paddingRight: (form.note || noteFocused) ? '30px' : undefined }}
+                  autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
+                  onChange={e => handleNoteChange(e.target.value)}
+                  onFocus={handleNoteFocus}
+                  onBlur={() => { setNoteFocused(false); setTimeout(() => setNoteSugs([]), 180); }}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); descriptionRef.current?.focus(); } }}
+                />
+                {noteFocused && (
+                  <button type="button" onMouseDown={e => { e.preventDefault(); set('note', ''); setNoteSugs([]); setNoteFocused(false); }}
+                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem', lineHeight: 1, padding: '4px', borderRadius: '50%', zIndex: 1 }}>✕</button>
+                )}
+                {noteSugs.length > 0 && (
+                  <div className="note-sug-list">
+                    {noteSugs.map(s => {
+                      const isObj = typeof s === 'object';
+                      const label = isObj ? s.note : s;
+                      const icon = isObj ? (s.type === 'most_used' ? '🔥' : '🕒') : null;
+                      return (
+                        <div key={label} className="note-sug-item" onMouseDown={() => { set('note', label); setNoteSugs([]); setTimeout(() => descriptionRef.current?.focus(), 150); }} style={{ display: 'flex', alignItems: 'center' }}>
+                          {icon && <span className="note-sug-icon" style={{ marginRight: 8, fontSize: '0.75rem' }}>{icon}</span>}
+                          <span className="note-sug-text">{label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="description-section">
             <div className="form-group">
@@ -1095,21 +1612,149 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
                 autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
                 onFocus={() => setPickerState(null)}
                 onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 220) + 'px'; }}
-                onChange={e=>set('description',e.target.value)} placeholder='Description'/>
+                onChange={e => set('description', e.target.value)} placeholder='Description' />
             </div>
           </div>
 
-          <div className="form-actions" style={{display:'flex',gap:'10px'}}>
-            <button className="btn btn-primary btn-lg" style={{flex:2}} onClick={()=>handleSave(false)} disabled={saving}>
-              {saving?'Saving…':isEdit?'Update':(isCopy?'Copy':'Save')}
+          {/* Tags (Header with label above, tags below full width) */}
+          <div className="tags-section" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14, width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <label className="form-label" style={{ margin: 0, fontWeight: 700 }}>Tags</label>
+              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Type #tag or tap below</span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, width: '100%' }}>
+              {allAvailableTags.map(tag => {
+                const currentTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+                const isSelected = currentTags.includes(tag.toLowerCase()) ||
+                  ((form.note || '') + ' ' + (form.description || '')).toLowerCase().includes(tag.toLowerCase());
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      let nextTags;
+                      if (isSelected) {
+                        nextTags = currentTags.filter(t => t !== tag.toLowerCase());
+                      } else {
+                        nextTags = [...currentTags, tag.toLowerCase()];
+                      }
+                      set('tags', nextTags.join(', '));
+                    }}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: 14,
+                      fontSize: '0.74rem',
+                      fontWeight: isSelected ? 800 : 500,
+                      border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
+                      background: isSelected ? 'rgba(0, 229, 160, 0.15)' : 'var(--bg-card2)',
+                      color: isSelected ? 'var(--accent)' : 'var(--text-muted)',
+                      cursor: 'pointer',
+                      transition: 'all 0.12s ease',
+                    }}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Receipt & Warranty Section */}
+          <div style={{
+            background: 'var(--bg-card2)', borderRadius: 12, border: '1px solid var(--border)',
+            padding: 12, display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                🧾 Receipt &amp; 🛡️ Warranty (Optional)
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: 'none' }}
+                onChange={handleImageUpload}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  background: 'rgba(0, 229, 160, 0.15)', border: '1px solid var(--accent)',
+                  color: 'var(--accent)', padding: '4px 10px', borderRadius: 8, fontSize: '0.7rem',
+                  fontWeight: 700, cursor: 'pointer'
+                }}
+              >
+                {form.receipt_image ? '📷 Replace Bill' : '📷 Attach Bill'}
+              </button>
+            </div>
+
+            {/* Receipt Preview if uploaded */}
+            {form.receipt_image && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-base)', padding: 6, borderRadius: 8 }}>
+                <img
+                  src={form.receipt_image}
+                  alt="Receipt Preview"
+                  onClick={() => setViewingReceipt(true)}
+                  style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, cursor: 'pointer' }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--income)' }}>Bill Photo Attached ✓</div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', cursor: 'pointer' }} onClick={() => setViewingReceipt(true)}>
+                    Tap image to zoom
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => set('receipt_image', '')}
+                  style={{ background: 'none', border: 'none', color: 'var(--expense)', fontSize: '0.75rem', cursor: 'pointer', padding: 4 }}
+                >
+                  ✕ Remove
+                </button>
+              </div>
+            )}
+
+            {/* Warranty Expiry Date & Serial No */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div>
+                <label style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 2 }}>
+                  Warranty Expiry
+                </label>
+                <input
+                  type="date"
+                  className="form-input"
+                  style={{ fontSize: '0.75rem', padding: '4px 6px' }}
+                  value={form.warranty_expiry}
+                  onChange={e => set('warranty_expiry', e.target.value)}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 2 }}>
+                  Invoice / Serial No.
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ fontSize: '0.75rem', padding: '4px 6px' }}
+                  placeholder="e.g. INV-9281"
+                  value={form.serial_no}
+                  onChange={e => set('serial_no', e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="form-actions" style={{ display: 'flex', gap: '10px' }}>
+            <button className="btn btn-primary btn-lg" style={{ flex: 2 }} onClick={() => handleSave(false)} disabled={saving}>
+              {saving ? 'Saving…' : isEdit ? 'Update' : (isCopy ? 'Copy' : 'Save')}
             </button>
-            {!isEdit&&onSaveAndContinue&&(
-              <button className="btn btn-secondary btn-lg" style={{flex:1}} onClick={()=>handleSave(true)} disabled={saving}>
-                {saving?'Saving…':'Continue'}
+            {!isEdit && onSaveAndContinue && (
+              <button className="btn btn-secondary btn-lg" style={{ flex: 1 }} onClick={() => handleSave(true)} disabled={saving}>
+                {saving ? 'Saving…' : 'Continue'}
               </button>
             )}
           </div>
-          <div style={{height:16}}/>
+          <div style={{ height: 16 }} />
         </div>
 
         {/* Inline Picker Room */}
@@ -1140,14 +1785,53 @@ export default function AddTransaction({ onClose, onSaveAndContinue=null, editTr
       </div>
 
       {/* Inline reorder overlay — keeps AddTransaction mounted */}
-      <ReorderOverlay screen={reorderScreen} onClose={()=>setReorderScreen(null)} />
+      <ReorderOverlay screen={reorderScreen} onClose={() => setReorderScreen(null)} />
       {/* Recurring sheet */}
       {showRecurring && (
         <RecurringSheet
-          isExpense={form.type==='Expense'}
+          isExpense={form.type === 'Expense'}
           startDate={form.date}
-          onClose={()=>setShowRecurring(false)}
-          onSave={cfg=>{setRecurringConfig(cfg);setShowRecurring(false);}}
+          onClose={() => setShowRecurring(false)}
+          onSave={cfg => { setRecurringConfig(cfg); setShowRecurring(false); }}
+        />
+      )}
+
+      {/* SMS Paste & Parse Sheet */}
+      {smsModal && (
+        <>
+          <div className="overlay" onClick={() => setSmsModal(false)} />
+          <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+            <div className="sheet-handle" />
+            <div style={{ fontSize: '1rem', fontWeight: 800, marginBottom: 4 }}>
+              ⚡ Paste Bank SMS or UPI Alert
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 12 }}>
+              Paste any transaction notification from HDFC, SBI, ICICI, Axis, PayTM, GPay, etc. to auto-fill amount, type, account, and merchant.
+            </div>
+            <textarea
+              className="form-input"
+              style={{ minHeight: 80, fontSize: '0.82rem', marginBottom: 14, background: 'var(--bg-card2)', borderRadius: 8, padding: 10 }}
+              placeholder="e.g. Rs 450.00 debited from A/c ending 1234 on 08-Aug at Swiggy via UPI..."
+              value={smsInputText}
+              onChange={e => setSmsInputText(e.target.value)}
+            />
+            <button
+              className="btn btn-primary btn-full"
+              disabled={!smsInputText.trim()}
+              onClick={() => handlePasteAndParseSMS(smsInputText)}
+            >
+              Parse &amp; Auto-Fill Form
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Receipt Fullscreen Zoom Viewer */}
+      {viewingReceipt && form.receipt_image && (
+        <ReceiptViewer
+          receiptUrl={form.receipt_image}
+          title={form.note || form.category || 'Receipt Bill'}
+          onClose={() => setViewingReceipt(false)}
         />
       )}
     </>

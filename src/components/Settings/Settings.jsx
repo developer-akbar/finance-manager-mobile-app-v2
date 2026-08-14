@@ -1,6 +1,10 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, parseDate } from '../../utils/format.js';
+import ReportGenerator from '../Reports/ReportGenerator.jsx';
+import WarrantyLocker from '../Accounts/WarrantyLocker.jsx';
+import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
+import { encryptBackupData, decryptBackupData } from '../../utils/cryptoBackup.js';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -131,16 +135,17 @@ function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, onReorder,
 // ─────────────────────────────────────────────
 export function AccountsManager({ onBack }) {
   const { state, updateSettings, renameAccount, deleteAccountTransactions } = useApp();
-  const [accounts, setAccounts] = useState(() => (state.accounts || []).map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0 } : a));
+  const [accounts, setAccounts] = useState(() => (state.accounts || []).map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, cardLast4: '' } : { ...a, cardLast4: a.cardLast4 || a.card_last4 || '' }));
   const [groups, setGroups] = useState(() => state.accountGroups || []);
   const [newAcct, setNewAcct] = useState('');
   const [newGrp, setNewGrp] = useState('');
-  const [editIdx, setEditIdx] = useState(null);
+  const [editingAcct, setEditingAcct] = useState(null);
   const [editName, setEditName] = useState('');
   const [editGrp, setEditGrp] = useState('');
   const [editAcctType, setEditAcctType] = useState('');
   const [editSettleDay, setEditSettleDay] = useState('');
   const [editPayDays, setEditPayDays] = useState('');
+  const [editCardLast4, setEditCardLast4] = useState('');
   const [editErrors, setEditErrors] = useState({});
   const [tabMode, setTabMode] = useState('list'); // 'list' | 'kanban'
   const [saving, setSaving] = useState(false);
@@ -150,6 +155,13 @@ export function AccountsManager({ onBack }) {
   const [editGrpName, setEditGrpName] = useState('');
   const dragIdx = useRef(null);
   const grpDragIdx = useRef(null);
+
+  // Sync when state.accounts updates
+  useEffect(() => {
+    if (state.accounts) {
+      setAccounts(state.accounts.map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, cardLast4: '' } : { ...a, cardLast4: a.cardLast4 || a.card_last4 || '' }));
+    }
+  }, [state.accounts]);
 
   const uniqueGroups = useMemo(() => [...new Set(groups)], [groups]);
   const uniqueAccounts = useMemo(() => {
@@ -279,23 +291,22 @@ export function AccountsManager({ onBack }) {
   // Only suggest CC if name contains 'credit' — never trigger on 'card', 'cc' alone
   const looksLikeCC = (name) => /\bcredit\b/i.test(name);
 
-  const startEdit = (i) => {
-    const a = accounts[i];
-    // If acctType is explicitly set (even ''), respect it — don't override with name detection
-    // acctType === undefined/null means old account before feature: suggest from name
+  const startEdit = (a) => {
+    if (!a) return;
     const hasExplicitType = a.acctType !== undefined && a.acctType !== null;
     const inferredType = hasExplicitType ? a.acctType : (looksLikeCC(a.name) ? 'Credit Card' : '');
-    setEditIdx(i);
+    setEditingAcct(a.name);
     setEditName(a.name);
     setEditGrp(a.group || '');
     setEditAcctType(inferredType);
     setEditSettleDay(a.settlementDate ? String(a.settlementDate) : '');
     setEditPayDays(a.paymentDueDays ? String(a.paymentDueDays) : '');
+    setEditCardLast4(a.cardLast4 || a.card_last4 || '');
     setEditErrors({});
   };
 
   const saveEdit = async () => {
-    if (!editName.trim()) return;
+    if (!editName.trim() || !editingAcct) return;
     const errs = {};
     const isCC = editAcctType === 'Credit Card';
     if (isCC) {
@@ -308,17 +319,23 @@ export function AccountsManager({ onBack }) {
     }
     if (Object.keys(errs).length) { setEditErrors(errs); return; }
     setEditErrors({});
-    const old = accounts[editIdx].name;
-    const upd = accounts.map((a, i) => i === editIdx ? {
+    const oldName = editingAcct;
+
+    const rawDigits = (editCardLast4 || '').replace(/\D/g, '');
+    const cleanLast4 = rawDigits.length >= 4 ? rawDigits.slice(-4) : rawDigits;
+
+    const upd = accounts.map(a => a.name === oldName ? {
       ...a,
       name: editName.trim(),
       group: editGrp,
       acctType: isCC ? 'Credit Card' : '',
       settlementDate: isCC ? parseInt(editSettleDay, 10) : 0,
       paymentDueDays: isCC ? parseInt(editPayDays, 10) : 0,
+      cardLast4: cleanLast4,
     } : a);
-    setAccounts(upd); setEditIdx(null);
-    if (old !== editName.trim()) await renameAccount(old, editName.trim());
+    setAccounts(upd);
+    setEditingAcct(null);
+    if (oldName !== editName.trim()) await renameAccount(oldName, editName.trim());
     await save(upd);
   };
 
@@ -407,18 +424,23 @@ export function AccountsManager({ onBack }) {
         {/* Tab toggle */}
         <div className="mgr-tabs" style={{ padding: '0 var(--page-px) 8px', display: 'flex', gap: 6 }}>
           <button className={`mgr-tab-btn ${tabMode === 'list' ? 'active' : ''}`} onClick={() => setTabMode('list')}>List</button>
-          <button className={`mgr-tab-btn ${tabMode === 'kanban' ? 'active' : ''}`} onClick={() => setTabMode('kanban')}>Kanban</button>
+          <button className={`mgr-tab-btn ${tabMode === 'kanban' ? 'active' : ''}`} onClick={() => setTabMode('kanban')}>Board</button>
         </div>
 
         {tabMode === 'kanban' ? (
-          <Kanban
-            columns={uniqueGroups}
-            items={uniqueAccounts}
-            getItemGroup={a => a.group || ''}
-            getItemLabel={a => a.name}
+          <AccountKanbanBoard
+            accounts={accounts}
+            groups={groups}
             onMove={handleKanbanMove}
             onReorder={handleKanbanReorder}
-            unassignedLabel="Ungrouped"
+            onAddGroup={() => {
+              const name = window.prompt('New group name:');
+              if (name && name.trim() && !groups.includes(name.trim())) {
+                const g = [...groups, name.trim()];
+                setGroups(g);
+                save(accounts, g);
+              }
+            }}
           />
         ) : (() => {
           // Build grouped sections preserving flat indices for drag/edit/delete
@@ -432,40 +454,59 @@ export function AccountsManager({ onBack }) {
 
           const renderEditPanel = (i) => (
             <div className="mgr-edit-panel">
-              <div className="mgr-edit-label">Edit Account</div>
-              <div className="form-group" style={{ marginBottom: 8 }}>
-                <label className="form-label">Name</label>
-                <input className="form-input" value={editName} onChange={e => setEditName(e.target.value)} spellCheck="true" autoCapitalize="sentences" />
-                <div className="mgr-edit-warn">⚠ Renaming updates all transactions</div>
+              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Edit Account
               </div>
-              <div className="form-group" style={{ marginBottom: 8 }}>
-                <label className="form-label">Group</label>
-                <select className="form-input" value={editGrp} onChange={e => setEditGrp(e.target.value)}>
-                  <option value="">No group</option>
-                  {uniqueGroups.map(g => <option key={g}>{g}</option>)}
-                </select>
+
+              {/* Name */}
+              <div className="mgr-edit-field">
+                <label className="mgr-edit-field-label">Account Name</label>
+                <input
+                  className="form-input"
+                  value={editName}
+                  onChange={e => setEditName(e.target.value)}
+                  spellCheck="true"
+                  autoCapitalize="sentences"
+                  placeholder="e.g. HDFC Credit, Amazon Pay ICICI"
+                />
+                <div className="mgr-edit-field-warn">⚠ Renaming updates all associated transactions</div>
               </div>
-              <div className="form-group" style={{ marginBottom: 8 }}>
-                <label className="form-label">Account Type</label>
-                <select className="form-input" value={editAcctType} onChange={e => { setEditAcctType(e.target.value); setEditErrors({}); }}>
-                  <option value="">Regular</option>
-                  <option value="Credit Card">💳 Credit Card</option>
-                </select>
+
+              {/* Group & Type in 2 columns */}
+              <div className="mgr-edit-grid-2">
+                <div className="mgr-edit-field">
+                  <label className="mgr-edit-field-label">Group</label>
+                  <select className="form-input" value={editGrp} onChange={e => setEditGrp(e.target.value)}>
+                    <option value="">No group</option>
+                    {uniqueGroups.map(g => <option key={g}>{g}</option>)}
+                  </select>
+                </div>
+                <div className="mgr-edit-field">
+                  <label className="mgr-edit-field-label">Account Type</label>
+                  <select className="form-input" value={editAcctType} onChange={e => { setEditAcctType(e.target.value); setEditErrors({}); }}>
+                    <option value="">Regular</option>
+                    <option value="Credit Card">💳 Credit Card</option>
+                  </select>
+                </div>
               </div>
+
+              {/* Credit Card Settings */}
               {editAcctType === 'Credit Card' && (
-                <div className="cc-config-panel">
+                <div className="cc-config-panel" style={{ margin: '4px 0 0' }}>
                   <div className="cc-config-title">💳 Credit Card Settings</div>
-                  <div className="form-group" style={{ marginBottom: 8 }}>
-                    <label className="form-label">Statement / Settlement Date <span className="form-label-hint">(day of month bill closes)</span></label>
-                    <input
-                      className={`form-input${editErrors.settlementDate ? ' input-error' : ''}`}
-                      type="number" inputMode="numeric" min="1" max="28"
-                      placeholder="e.g. 18"
-                      value={editSettleDay}
-                      onChange={e => { setEditSettleDay(e.target.value); setEditErrors(p => ({ ...p, settlementDate: '' })); }}
-                    />
-                    {editErrors.settlementDate && <div className="form-error">{editErrors.settlementDate}</div>}
-                    <div className="form-hint">
+                  <div className="mgr-edit-grid-2">
+                    <div className="mgr-edit-field">
+                      <label className="mgr-edit-field-label">
+                        Statement Date <span className="form-label-hint">(day bill closes)</span>
+                      </label>
+                      <input
+                        className={`form-input${editErrors.settlementDate ? ' input-error' : ''}`}
+                        type="number" inputMode="numeric" min="1" max="28"
+                        placeholder="e.g. 18"
+                        value={editSettleDay}
+                        onChange={e => { setEditSettleDay(e.target.value); setEditErrors(p => ({ ...p, settlementDate: '' })); }}
+                      />
+                      {editErrors.settlementDate && <div className="form-error">{editErrors.settlementDate}</div>}
                       {editSettleDay && !editErrors.settlementDate && (() => {
                         const sd = parseInt(editSettleDay, 10);
                         if (sd >= 1 && sd <= 28) {
@@ -474,23 +515,24 @@ export function AccountsManager({ onBack }) {
                           if (cd >= sd) { cycleStart = new Date(cy, cm, sd); cycleEnd = new Date(cy, cm + 1, sd - 1); }
                           else { cycleStart = new Date(cy, cm - 1, sd); cycleEnd = new Date(cy, cm, sd - 1); }
                           const fmt = d => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-                          return <span>Current billing cycle: <strong>{fmt(cycleStart)} – {fmt(cycleEnd)}</strong></span>;
+                          return <div className="mgr-edit-field-hint">Billing: <strong>{fmt(cycleStart)} – {fmt(cycleEnd)}</strong></div>;
                         }
                         return null;
                       })()}
                     </div>
-                  </div>
-                  <div className="form-group" style={{ marginBottom: 8 }}>
-                    <label className="form-label">Payment Due Days <span className="form-label-hint">(days after statement date)</span></label>
-                    <input
-                      className={`form-input${editErrors.paymentDueDays ? ' input-error' : ''}`}
-                      type="number" inputMode="numeric" min="1" max="30"
-                      placeholder="e.g. 18"
-                      value={editPayDays}
-                      onChange={e => { setEditPayDays(e.target.value); setEditErrors(p => ({ ...p, paymentDueDays: '' })); }}
-                    />
-                    {editErrors.paymentDueDays && <div className="form-error">{editErrors.paymentDueDays}</div>}
-                    <div className="form-hint">
+
+                    <div className="mgr-edit-field">
+                      <label className="mgr-edit-field-label">
+                        Payment Due Days <span className="form-label-hint">(after statement)</span>
+                      </label>
+                      <input
+                        className={`form-input${editErrors.paymentDueDays ? ' input-error' : ''}`}
+                        type="number" inputMode="numeric" min="1" max="30"
+                        placeholder="e.g. 19"
+                        value={editPayDays}
+                        onChange={e => { setEditPayDays(e.target.value); setEditErrors(p => ({ ...p, paymentDueDays: '' })); }}
+                      />
+                      {editErrors.paymentDueDays && <div className="form-error">{editErrors.paymentDueDays}</div>}
                       {editSettleDay && editPayDays && !editErrors.settlementDate && !editErrors.paymentDueDays && (() => {
                         const sd = parseInt(editSettleDay, 10), pd = parseInt(editPayDays, 10);
                         if (sd >= 1 && sd <= 28 && pd >= 1 && pd <= 30) {
@@ -498,7 +540,7 @@ export function AccountsManager({ onBack }) {
                           let stmtDate;
                           if (cd >= sd) stmtDate = new Date(cy, cm, sd); else stmtDate = new Date(cy, cm - 1, sd);
                           const dueDate = new Date(stmtDate); dueDate.setDate(dueDate.getDate() + pd);
-                          return <span>Last due date: <strong>{dueDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong></span>;
+                          return <div className="mgr-edit-field-hint">Due: <strong>{dueDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong></div>;
                         }
                         return null;
                       })()}
@@ -506,9 +548,34 @@ export function AccountsManager({ onBack }) {
                   </div>
                 </div>
               )}
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-ghost btn-sm" onClick={() => setEditIdx(null)}>Cancel</button>
-                <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+
+              {/* Card / Account Last 4 Digits */}
+              <div className="mgr-edit-field">
+                <label className="mgr-edit-field-label">
+                  Card / Account Last 4 Digits
+                </label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="e.g. 9009"
+                  maxLength={19}
+                  value={editCardLast4}
+                  onChange={e => setEditCardLast4(e.target.value)}
+                />
+                <div className="mgr-edit-field-hint" style={{ marginTop: 2 }}>
+                  {editCardLast4 && (
+                    <span style={{ color: 'var(--accent)', fontWeight: 700, marginRight: 6 }}>
+                      Masked preview: •••• {(editCardLast4.replace(/\D/g, '').slice(-4)) || editCardLast4} ·
+                    </span>
+                  )}
+                  Helps auto-identify this account when parsing SMS or UPI alerts.
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setEditingAcct(null)}>Cancel</button>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveEdit}>Save</button>
               </div>
             </div>
           );
@@ -532,17 +599,24 @@ export function AccountsManager({ onBack }) {
                       <div className="mgr-list-row mgr-list-row-indented">
                         <span className="mgr-drag-handle">⠿</span>
                         <div className="mgr-list-content" style={{ flex: 1 }}>
-                          <div className="mgr-list-name">{a.name}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div className="mgr-list-name">{a.name}</div>
+                            {(a.cardLast4 || a.card_last4) && (
+                              <span style={{ fontSize: '0.62rem', background: 'var(--bg-card2)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 6, color: 'var(--accent)', fontWeight: 700 }}>
+                                •••• {a.cardLast4 || a.card_last4}
+                              </span>
+                            )}
+                          </div>
                           {a.acctType === 'Credit Card' && (
                             <div style={{ fontSize: '0.63rem', color: 'var(--accent)', fontWeight: 700 }}>
                               💳 Credit Card{a.settlementDate ? ` · settles ${a.settlementDate}th` : ''}
                             </div>
                           )}
                         </div>
-                        <button className="mgr-edit-btn" onClick={() => editIdx === i ? setEditIdx(null) : startEdit(i)}>✏️</button>
+                        <button className="mgr-edit-btn" onClick={() => editingAcct === a.name ? setEditingAcct(null) : startEdit(a)}>✏️</button>
                         <button className="mgr-del-btn" onClick={() => removeAccount(a.name)}>✕</button>
                       </div>
-                      {editIdx === i && renderEditPanel(i)}
+                      {editingAcct === a.name && renderEditPanel(i)}
                     </div>
                   ))}
                 </div>
@@ -876,17 +950,285 @@ export function CategoriesManager({ onBack }) {
 }
 
 // ─────────────────────────────────────────────
+// Tags Manager
+// ─────────────────────────────────────────────
+function TagsManager({ onBack }) {
+  const { state, updateTransaction, updateSettings } = useApp();
+  const { transactions } = state;
+  const [newTagInput, setNewTagInput] = useState('');
+  const [editingTag, setEditingTag] = useState(null); // { oldName, newName }
+  const [confirmDelete, setConfirmDelete] = useState(null); // tag name
+
+  const customTagsList = useMemo(() => {
+    try {
+      const parsed = JSON.parse(state.settings?.customTags || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [state.settings?.customTags]);
+
+  // Aggregate all tags and their transaction counts
+  const tagList = useMemo(() => {
+    const map = {};
+    // Populate all custom tags created by user with initial 0 count
+    for (const ct of customTagsList) {
+      const clean = String(ct).trim().toLowerCase();
+      if (clean) {
+        const withHash = clean.startsWith('#') ? clean : `#${clean}`;
+        map[withHash] = 0;
+      }
+    }
+    // Count occurrences from transactions
+    for (const t of transactions) {
+      const tags = [];
+      if (t.Tags) {
+        t.Tags.split(',').forEach(tag => {
+          const clean = tag.trim().toLowerCase();
+          if (clean) tags.push(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+      const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
+      if (matches) matches.forEach(m => tags.push(m.toLowerCase()));
+
+      const unique = Array.from(new Set(tags));
+      for (const tag of unique) {
+        map[tag] = (map[tag] || 0) + 1;
+      }
+    }
+    return Object.entries(map).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [transactions, customTagsList]);
+
+  const handleAddNewTag = async () => {
+    const trimmed = (newTagInput || '').trim();
+    if (!trimmed) return;
+    const clean = trimmed.toLowerCase().replace(/\s+/g, '_');
+    const tagWithHash = clean.startsWith('#') ? clean : `#${clean}`;
+
+    const currentCustom = [...customTagsList];
+    if (!currentCustom.includes(tagWithHash)) {
+      currentCustom.push(tagWithHash);
+      await updateSettings({ customTags: JSON.stringify(currentCustom) });
+    }
+    setNewTagInput('');
+  };
+
+  const handleRename = async () => {
+    if (!editingTag || !editingTag.newName.trim()) return;
+    const rawOld = editingTag.oldName.toLowerCase();
+    const oldHash = rawOld.startsWith('#') ? rawOld : `#${rawOld}`;
+    const oldClean = rawOld.replace(/^#/, '');
+
+    const rawNew = editingTag.newName.trim().toLowerCase();
+    const newHash = rawNew.startsWith('#') ? rawNew : `#${rawNew}`;
+    const newClean = rawNew.replace(/^#/, '');
+
+    const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regexOldHash = new RegExp(`(^|\\s)${escapeRegex(oldHash)}(\\b|\\s|$)`, 'gi');
+
+    for (const t of transactions) {
+      let changed = false;
+      let curTags = (t.Tags || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      if (curTags.some(x => x === oldHash || x === oldClean)) {
+        curTags = curTags.map(x => (x === oldHash || x === oldClean) ? newHash : x);
+        changed = true;
+      }
+      let curNote = t.Note || '';
+      if (curNote.toLowerCase().includes(oldHash)) {
+        curNote = curNote.replace(regexOldHash, `$1${newHash}$2`).trim();
+        changed = true;
+      }
+      let curDesc = t.Description || '';
+      if (curDesc.toLowerCase().includes(oldHash)) {
+        curDesc = curDesc.replace(regexOldHash, `$1${newHash}$2`).trim();
+        changed = true;
+      }
+      if (changed) {
+        const id = t._id || t.id;
+        await updateTransaction(id, {
+          ...t,
+          Tags: Array.from(new Set(curTags)).join(', '),
+          Note: curNote,
+          Description: curDesc,
+        });
+      }
+    }
+
+    if (customTagsList.includes(oldHash)) {
+      const nextCustom = customTagsList.map(t => t === oldHash ? newHash : t);
+      await updateSettings({ customTags: JSON.stringify(nextCustom) });
+    }
+
+    setEditingTag(null);
+  };
+
+  const handleDelete = async (tagToDelete) => {
+    const rawTag = tagToDelete.toLowerCase();
+    const withHash = rawTag.startsWith('#') ? rawTag : `#${rawTag}`;
+    const noHash = rawTag.replace(/^#/, '');
+
+    const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const hashRegex = new RegExp(`(^|\\s)${escapeRegex(withHash)}(\\b|\\s|$)`, 'gi');
+
+    for (const t of transactions) {
+      let changed = false;
+      let curTags = (t.Tags || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      if (curTags.some(x => x === withHash || x === noHash)) {
+        curTags = curTags.filter(x => x !== withHash && x !== noHash);
+        changed = true;
+      }
+      let curNote = t.Note || '';
+      if (curNote.toLowerCase().includes(withHash)) {
+        curNote = curNote.replace(hashRegex, '$1$2').trim();
+        changed = true;
+      }
+      let curDesc = t.Description || '';
+      if (curDesc.toLowerCase().includes(withHash)) {
+        curDesc = curDesc.replace(hashRegex, '$1$2').trim();
+        changed = true;
+      }
+      if (changed) {
+        const id = t._id || t.id;
+        await updateTransaction(id, {
+          ...t,
+          Tags: curTags.join(', '),
+          Note: curNote,
+          Description: curDesc,
+        });
+      }
+    }
+
+    if (customTagsList.includes(withHash)) {
+      const nextCustom = customTagsList.filter(t => t !== withHash);
+      await updateSettings({ customTags: JSON.stringify(nextCustom) });
+    }
+
+    setConfirmDelete(null);
+  };
+
+  return (
+    <div className="sub-screen">
+      <div className="page-hdr">
+        <button className="back-btn" onClick={onBack}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+        </button>
+        <div className="page-hdr-title">Tags &amp; Hashtags</div>
+      </div>
+
+      <div className="sub-body">
+        <div style={{ padding: '0 var(--page-px) 12px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+          Tags allow cross-cutting tracking across multiple categories (e.g. #trip, #tax, #medical).
+        </div>
+
+        {/* Add Tag Row */}
+        <div style={{ display: 'flex', gap: 8, padding: '0 var(--page-px) 14px' }}>
+          <input
+            className="form-input"
+            style={{ flex: 1 }}
+            placeholder="Add new tag (e.g. #trip, #medical, grocery)"
+            value={newTagInput}
+            onChange={e => setNewTagInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleAddNewTag(); }}
+            spellCheck="true"
+            autoCapitalize="none"
+          />
+          <button className="btn btn-primary btn-sm" onClick={handleAddNewTag}>
+            + Add Tag
+          </button>
+        </div>
+
+        <div className="settings-card" style={{ margin: '0 var(--page-px) 14px' }}>
+          {tagList.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+              No hashtags found yet. Type above to add a new tag or use #tag in any transaction.
+            </div>
+          ) : (
+            tagList.map(tag => (
+              <div key={tag.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid var(--border-light)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontWeight: 800, color: 'var(--accent)', fontSize: '0.88rem' }}>{tag.name}</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'var(--bg-card2)', padding: '2px 6px', borderRadius: 6 }}>
+                    {tag.count} txn{tag.count !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => setEditingTag({ oldName: tag.name, newName: tag.name })}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete(tag.name)}
+                    style={{ background: 'none', border: 'none', color: 'var(--expense)', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Rename Modal */}
+        {editingTag && (
+          <>
+            <div className="overlay" onClick={() => setEditingTag(null)} />
+            <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+              <div className="sheet-handle" />
+              <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 8 }}>Rename Tag {editingTag.oldName}</div>
+              <input
+                className="form-input"
+                style={{ marginBottom: 12 }}
+                value={editingTag.newName}
+                onChange={e => setEditingTag(p => ({ ...p, newName: e.target.value }))}
+                placeholder="New tag name (e.g. #vacation)"
+                autoFocus
+              />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost btn-full" onClick={() => setEditingTag(null)}>Cancel</button>
+                <button className="btn btn-primary btn-full" onClick={handleRename}>Save &amp; Update All</button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Confirm Delete Modal */}
+        {confirmDelete && (
+          <>
+            <div className="overlay" onClick={() => setConfirmDelete(null)} />
+            <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+              <div className="sheet-handle" />
+              <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 6 }}>Delete tag {confirmDelete}?</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 14 }}>
+                This will remove the tag from all associated transactions. The transactions themselves will NOT be deleted.
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost btn-full" onClick={() => setConfirmDelete(null)}>Cancel</button>
+                <button className="btn btn-danger btn-full" onClick={() => handleDelete(confirmDelete)}>Delete Tag</button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // Data Manager
 // ─────────────────────────────────────────────
 function DataManager({ onBack }) {
   const { state, importData, cancelImport, clearAllData, cleanupAccounts, analyseImport, updateSettings, modifyRecurringRule, removeRecurringRule } = useApp();
   const { transactions, accounts, accountGroups, accountMapping, categories, budgets, importProgress, recurringRules } = state;
   const fileRef = useRef(null);
+  const [showReportGenerator, setShowReportGenerator] = useState(false);
   const [status, setStatus] = useState(null);
   const [showMode, setShowMode] = useState(false);
   const [pendingRows, setPending] = useState(null);
   const [pendingName, setPendingNm] = useState('');
   const [pendingIsBackup, setIsBackup] = useState(false);
+  const [pendingBackup, setPendingBackup] = useState(null);
   const [backupSchedule, setBackupSchedule] = useState(() => state.settings?.backupSchedule || 'off');
   const [backupHistory, setBackupHistory] = useState(() => {
     try { return JSON.parse(state.settings?.backupHistory || '[]'); } catch { return []; }
@@ -895,6 +1237,11 @@ function DataManager({ onBack }) {
   const [showDel, setShowDel] = useState(false);
   const [analysis, setAnalysis] = useState(null);   // { total, fileDupeCount, dbDupeCount }
   const [analysing, setAnalysing] = useState(false);
+
+  // Encrypted Backup & Restore State
+  const [cryptoModal, setCryptoModal] = useState(null); // null | { mode: 'export' } | { mode: 'import', rawText, fileName }
+  const [cryptoPin, setCryptoPin]     = useState('');
+  const [cryptoErr, setCryptoErr]     = useState('');
 
   // Stats
   const txnCount = transactions.length;
@@ -913,9 +1260,33 @@ function DataManager({ onBack }) {
     if (!file) return;
     setStatus(null);
     const name = file.name.toLowerCase();
+
+    // Check for encrypted FinMan backup (.finman or JSON with finman_encrypted_backup)
+    if (name.endsWith('.finman')) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target.result;
+        setCryptoModal({ mode: 'import', rawText: text, fileName: file.name });
+        setCryptoPin('');
+        setCryptoErr('');
+      };
+      reader.readAsText(file);
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
+
     try {
       const { parseFile } = await import('../../utils/xlsParser.js');
       const parsed = await parseFile(file);
+
+      // Check if plain JSON file is actually an encrypted backup
+      if (parsed && typeof parsed === 'object' && parsed.finman_encrypted_backup) {
+        setCryptoModal({ mode: 'import', rawText: JSON.stringify(parsed), fileName: file.name });
+        setCryptoPin('');
+        setCryptoErr('');
+        if (fileRef.current) fileRef.current.value = '';
+        return;
+      }
 
       // ── Full FinMan backup JSON ─────────────────────────────────────────
       // Detect by _finman_backup flag. These files contain both transactions
@@ -923,23 +1294,10 @@ function DataManager({ onBack }) {
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed._finman_backup) {
         const backup = parsed;
         const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
-        // Restore settings first so accounts/categories are ready before transactions
-        await updateSettings({
-          accounts: Array.isArray(backup.accounts) ? backup.accounts : undefined,
-          accountGroups: Array.isArray(backup.accountGroups) ? backup.accountGroups : (Array.isArray(backup.account_groups) ? backup.account_groups : (Array.isArray(backup.groups) ? backup.groups : undefined)),
-          accountMapping: Array.isArray(backup.accountMapping) ? backup.accountMapping : undefined,
-          categories: backup.categories && typeof backup.categories === 'object' ? backup.categories : undefined,
-          recurringRules: Array.isArray(backup.recurringRules) ? backup.recurringRules : (Array.isArray(backup.recurring_rules) ? backup.recurring_rules : (Array.isArray(backup.recurrings) ? backup.recurrings : undefined)),
-          budgets: Array.isArray(backup.budgets) ? backup.budgets : (Array.isArray(backup.budget) ? backup.budget : undefined),
-        });
-        if (txnRows.length === 0) {
-          setStatus({ type: 'success', msg: '✓ Settings restored. No transactions in backup.' });
-          if (fileRef.current) fileRef.current.value = '';
-          return;
-        }
         setPending(txnRows);
         setPendingNm(file.name);
         setIsBackup(true);
+        setPendingBackup(backup);
         setShowMode(true);
         if (fileRef.current) fileRef.current.value = '';
         return;
@@ -964,6 +1322,7 @@ function DataManager({ onBack }) {
       setPending(rows);
       setPendingNm(file.name);
       setIsBackup(false);
+      setPendingBackup(null);
       setShowMode(true);
     } catch (err) {
       setStatus({ type: 'error', msg: `Parse error: ${err.message}` });
@@ -973,12 +1332,13 @@ function DataManager({ onBack }) {
 
   const doImport = async (mode) => {
     setShowMode(false);
-    const result = await importData(pendingRows, mode, pendingIsBackup);
+    const result = await importData(pendingRows, mode, pendingBackup);
     setStatus(result.cancelled
       ? { type: 'error', msg: 'Import cancelled.' }
       : { type: 'success', msg: `✓ Imported ${result.imported.toLocaleString()} transactions${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''}.` }
     );
     setPending(null);
+    setPendingBackup(null);
   };
 
   // ── Capacitor-aware file save (no @capacitor/share — avoids Android 14 crash) ──
@@ -987,7 +1347,7 @@ function DataManager({ onBack }) {
 
   const buildBackupPayload = () => ({
     _finman_backup: true,
-    version: '2.2.1.4',
+    version: '2.3.0',
     exportedAt: new Date().toISOString(),
     transactions,
     accounts: accounts || [],
@@ -996,6 +1356,7 @@ function DataManager({ onBack }) {
     categories: categories || {},
     budgets: budgets || [],
     recurringRules: recurringRules || [],
+    customTags: state.settings?.customTags || '',
   });
 
   const runBackupNow = async () => {
@@ -1061,10 +1422,43 @@ function DataManager({ onBack }) {
   };
 
   const exportCSV = async () => {
-    const hdrs = ['Date', 'Time', 'Account', 'FromAccount', 'ToAccount', 'Category', 'Subcategory', 'Note', 'Description', 'INR', 'Amount', 'Currency', 'Income/Expense', 'ID'];
+    const hdrs = [
+      'Date', 'Time', 'Account', 'AccountGroup', 'AccountType', 'CardLast4', 'SettlementDate', 'PaymentDueDays', 'AccountOrder', 'AccountGroupOrder',
+      'FromAccount', 'FromAccountGroup', 'FromAccountOrder', 'ToAccount', 'ToAccountGroup', 'ToAccountOrder',
+      'Category', 'Subcategory', 'Note', 'Description',
+      'INR', 'Amount', 'Currency', 'Income/Expense',
+      'Tags', 'recurring_rule_id', 'warranty_expiry', 'serial_no', 'receipt_image', 'created_at', 'updated_at', 'ID'
+    ];
     // RFC 4180: quote any field containing comma, double-quote, newline or carriage-return
     const esc = v => { const s = String(v ?? ''); return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const rows = [hdrs.join(','), ...transactions.map(t => hdrs.map(h => esc(t[h])).join(','))];
+    const rows = [
+      hdrs.join(','),
+      ...transactions.map(t => {
+        const acctIdx = (accounts || []).findIndex(a => a.name === t.Account);
+        const acctObj = acctIdx !== -1 ? accounts[acctIdx] : null;
+        const fromAcctIdx = (accounts || []).findIndex(a => a.name === (t.FromAccount || t.Account));
+        const fromAcctObj = fromAcctIdx !== -1 ? accounts[fromAcctIdx] : null;
+        const toAcctIdx = (accounts || []).findIndex(a => a.name === t.ToAccount);
+        const toAcctObj = toAcctIdx !== -1 ? accounts[toAcctIdx] : null;
+        const grpIdx = (accountGroups || []).findIndex(g => (typeof g === 'string' ? g : g.name) === (acctObj?.group || ''));
+
+        return hdrs.map(h => {
+          if (h === 'AccountGroup') return esc(acctObj?.group || '');
+          if (h === 'AccountType') return esc(acctObj?.acctType || '');
+          if (h === 'CardLast4') return esc(acctObj?.cardLast4 || '');
+          if (h === 'SettlementDate') return esc(acctObj?.settlementDate || '');
+          if (h === 'PaymentDueDays') return esc(acctObj?.paymentDueDays || '');
+          if (h === 'AccountOrder') return esc(acctIdx !== -1 ? acctIdx : '');
+          if (h === 'AccountGroupOrder') return esc(grpIdx !== -1 ? grpIdx : '');
+          if (h === 'FromAccountGroup') return esc(fromAcctObj?.group || '');
+          if (h === 'FromAccountOrder') return esc(fromAcctIdx !== -1 ? fromAcctIdx : '');
+          if (h === 'ToAccountGroup') return esc(toAcctObj?.group || '');
+          if (h === 'ToAccountOrder') return esc(toAcctIdx !== -1 ? toAcctIdx : '');
+          if (h === 'Tags') return esc(t.Tags || t.tags || '');
+          return esc(t[h] ?? '');
+        }).join(',');
+      })
+    ];
     await saveFile('\ufeff' + rows.join('\n'), `finman_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv;charset=utf-8;');
   };
 
@@ -1073,7 +1467,56 @@ function DataManager({ onBack }) {
     await saveFile(JSON.stringify(backup, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
   };
 
+  const handleCryptoExport = async () => {
+    if (!cryptoPin || cryptoPin.length < 4) {
+      setCryptoErr('Please enter at least 4 digits/characters for encryption');
+      return;
+    }
+    try {
+      const payload = buildBackupPayload();
+      const encryptedJson = await encryptBackupData(payload, cryptoPin);
+      const filename = `finman_encrypted_${new Date().toISOString().split('T')[0]}.finman`;
+      await saveFile(encryptedJson, filename, 'application/octet-stream');
+      setStatus({ type: 'success', msg: `✓ Encrypted backup saved — ${filename}` });
+      setCryptoModal(null);
+      setCryptoPin('');
+      setCryptoErr('');
+    } catch (err) {
+      setCryptoErr(err.message);
+    }
+  };
+
+  const handleCryptoImport = async () => {
+    if (!cryptoPin) {
+      setCryptoErr('Please enter the password/PIN to decrypt');
+      return;
+    }
+    try {
+      const decryptedPayload = await decryptBackupData(cryptoModal.rawText, cryptoPin);
+      if (decryptedPayload && decryptedPayload._finman_backup) {
+        const backup = decryptedPayload;
+        const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
+        setPending(txnRows);
+        setPendingNm(cryptoModal.fileName);
+        setIsBackup(true);
+        setPendingBackup(backup);
+        setShowMode(true);
+        setCryptoModal(null);
+        setCryptoPin('');
+        setCryptoErr('');
+      } else {
+        setCryptoErr('Decrypted data is not a valid FinMan backup.');
+      }
+    } catch (err) {
+      setCryptoErr(err.message);
+    }
+  };
+
   const pct = importProgress ? Math.round((importProgress.processed / importProgress.total) * 100) : 0;
+
+  if (showReportGenerator) {
+    return <ReportGenerator onBack={() => setShowReportGenerator(false)} />;
+  }
 
   return (
     <div className="sub-screen">
@@ -1101,22 +1544,20 @@ function DataManager({ onBack }) {
           </div>
         </div>
 
+        {/* Status banner */}
         {status && (
-          <div className={`dm-alert ${status.type}`} style={{ margin: '0 var(--page-px) 10px' }}>
+          <div className={`dm-status ${status.type}`}>
             {status.msg}
           </div>
         )}
 
+        {/* Progress bar */}
         {importProgress && (
-          <div style={{ margin: '0 0 10px', background: 'var(--bg-card)', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '12px var(--page-px)' }}>
-            <div style={{ display: 'flex', justifycontent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Importing {importProgress.total.toLocaleString()} rows…</span>
-              <button className="btn btn-sm btn-danger" onClick={cancelImport}>Cancel</button>
+          <div className="dm-progress-wrap">
+            <div className="dm-progress-bar">
+              <div className="dm-progress-fill" style={{ width: `${pct}%` }} />
             </div>
-            <div className="progress-track">
-              <div className="progress-fill" style={{ width: `${pct}%`, background: 'var(--green)' }} />
-            </div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 5 }}>
+            <div className="dm-progress-txt">
               {importProgress.processed.toLocaleString()} / {importProgress.total.toLocaleString()} ({pct}%)
             </div>
           </div>
@@ -1125,22 +1566,33 @@ function DataManager({ onBack }) {
         {/* Import section */}
         <div className="dm-section-hdr">Import</div>
         <label className={`import-drop ${importProgress ? 'disabled' : ''}`} style={{ margin: '0 0 14px', borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '18px var(--page-px)', display: 'block' }}>
-          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json" style={{ display: 'none' }} onChange={handleFile} disabled={!!importProgress} />
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json,.finman" style={{ display: 'none' }} onChange={handleFile} disabled={!!importProgress} />
           <div className="import-folder-icon">📂</div>
           <div className="import-drop-title">Choose file</div>
-          <div className="import-drop-sub">CSV / XLS — transactions only · JSON — full backup incl. accounts &amp; categories</div>
+          <div className="import-drop-sub">CSV / XLS / JSON / 🔒 .finman encrypted backup</div>
         </label>
 
         {/* Export section */}
-        <div className="dm-section-hdr">Export</div>
+        <div className="dm-section-hdr">Export &amp; Reports</div>
         <div className="dm-card" style={{ margin: '0 0 14px', borderRadius: 0, borderLeft: 'none', borderRight: 'none' }}>
-          <div className="dm-row" onClick={exportCSV}>
-            <div className="dm-row-icon">📊</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export CSV</div><div className="dm-row-sub">Transactions only · safe for spreadsheets</div></div>
+          <div className="dm-row" onClick={() => setShowReportGenerator(true)}>
+            <div className="dm-row-icon">📑</div>
+            <div className="dm-row-content">
+              <div className="dm-row-title">Custom Report &amp; Statement (Excel / CSV)</div>
+              <div className="dm-row-sub">Date ranges, FY filters, category breakdown &amp; statements</div>
+            </div>
+          </div>
+          <div className="dm-row" onClick={() => { setCryptoModal({ mode: 'export' }); setCryptoPin(''); setCryptoErr(''); }}>
+            <div className="dm-row-icon">🔒</div>
+            <div className="dm-row-content"><div className="dm-row-title">Export Encrypted Backup (.finman)</div><div className="dm-row-sub">AES-256 zero-knowledge backup protected by your PIN</div></div>
           </div>
           <div className="dm-row" onClick={exportJSON}>
             <div className="dm-row-icon">🗃️</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export Full Backup (JSON)</div><div className="dm-row-sub">Transactions + accounts, groups, categories · re-importable</div></div>
+            <div className="dm-row-content"><div className="dm-row-title">Export Plain Backup (JSON)</div><div className="dm-row-sub">Transactions + accounts, groups, categories · re-importable</div></div>
+          </div>
+          <div className="dm-row" onClick={exportCSV}>
+            <div className="dm-row-icon">📊</div>
+            <div className="dm-row-content"><div className="dm-row-title">Export All CSV</div><div className="dm-row-sub">Transactions only · safe for spreadsheets</div></div>
           </div>
         </div>
 
@@ -1211,6 +1663,53 @@ function DataManager({ onBack }) {
                 </div>
               ))}
               <button className="btn btn-ghost btn-full" style={{ marginTop: 12 }} onClick={() => setShowBackupSheet(false)}>Cancel</button>
+            </div>
+          </>
+        )}
+
+        {/* Encrypted Export/Import PIN Modal */}
+        {cryptoModal && (
+          <>
+            <div className="overlay" onClick={() => setCryptoModal(null)} />
+            <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)' }}>
+              <div className="sheet-handle" />
+              <div style={{ fontSize: '1.2rem', textAlign: 'center', marginBottom: 6 }}>
+                {cryptoModal.mode === 'export' ? '🔒 Encrypt Backup' : '🔓 Decrypt & Restore Backup'}
+              </div>
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, textAlign: 'center', marginBottom: 4 }}>
+                {cryptoModal.mode === 'export' ? 'Create AES-256 Protected Backup' : `Decrypt ${cryptoModal.fileName || 'Backup'}`}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginBottom: 14 }}>
+                {cryptoModal.mode === 'export'
+                  ? 'Set a 4+ digit PIN or password. You will need this key whenever restoring on any device.'
+                  : 'Enter the PIN or password used when this backup was encrypted.'}
+              </div>
+
+              {cryptoErr && (
+                <div style={{ background: 'rgba(255, 77, 106, 0.15)', color: 'var(--expense)', padding: '6px 12px', borderRadius: 8, fontSize: '0.75rem', fontWeight: 700, marginBottom: 12, textAlign: 'center' }}>
+                  {cryptoErr}
+                </div>
+              )}
+
+              <input
+                type="password"
+                className="form-input"
+                autoFocus
+                placeholder="Enter PIN or Password"
+                value={cryptoPin}
+                onChange={e => { setCryptoPin(e.target.value); setCryptoErr(''); }}
+                style={{ fontSize: '1.1rem', textAlign: 'center', letterSpacing: 3, marginBottom: 16, background: 'var(--bg-card2)', borderRadius: 10, padding: '10px' }}
+              />
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost btn-full" onClick={() => setCryptoModal(null)}>Cancel</button>
+                <button
+                  className="btn btn-primary btn-full"
+                  onClick={cryptoModal.mode === 'export' ? handleCryptoExport : handleCryptoImport}
+                >
+                  {cryptoModal.mode === 'export' ? '🔒 Save Encrypted' : '🔓 Unlock & Import'}
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -1885,6 +2384,9 @@ export default function Settings({ backInterceptRef } = {}) {
 
   if (screen === 'recurring') return <RecurringManager onBack={() => setScreen(null)} />;
   if (screen === 'data') return <DataManager onBack={() => setScreen(null)} />;
+  if (screen === 'tags') return <TagsManager onBack={() => setScreen(null)} />;
+  if (screen === 'groups') return <GroupSplitManager onBack={() => setScreen(null)} backInterceptRef={backInterceptRef} />;
+  if (screen === 'warranty') return <WarrantyLocker onBack={() => setScreen(null)} backInterceptRef={backInterceptRef} />;
   if (screen === 'accounts') return <AccountsManager onBack={() => setScreen(null)} />;
   if (screen === 'categories') return <CategoriesManager onBack={() => setScreen(null)} />;
   if (screen === 'budgets') return <BudgetsManager onBack={() => setScreen(null)} />;
@@ -1928,7 +2430,7 @@ export default function Settings({ backInterceptRef } = {}) {
       <div className="settings-card">
         <div className="settings-row" onClick={() => setScreen('data')}>
           <div className="settings-row-icon" style={{ background: 'rgba(77,159,255,0.15)' }}>📊</div>
-          <div className="settings-row-content"><div className="settings-row-title">Data Management</div><div className="settings-row-sub">{txnCount.toLocaleString()} transactions</div></div>
+          <div className="settings-row-content"><div className="settings-row-title">Data Management</div><div className="settings-row-sub">{txnCount.toLocaleString()} transactions · Encrypted Backups</div></div>
           <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
         </div>
       </div>
@@ -1936,12 +2438,27 @@ export default function Settings({ backInterceptRef } = {}) {
       {/* Manage */}
       <div className="settings-group-label">Manage</div>
       <div className="settings-card">
+        <div className="settings-row" onClick={() => setScreen('groups')}>
+          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>👥</div>
+          <div className="settings-row-content"><div className="settings-row-title">Group Splits &amp; Trips</div><div className="settings-row-sub">Splitwise-style trip expenses, debt simplification &amp; slips</div></div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+        </div>
+        <div className="settings-row" onClick={() => setScreen('warranty')}>
+          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>🛡️</div>
+          <div className="settings-row-content"><div className="settings-row-title">Warranty &amp; Receipts</div><div className="settings-row-sub">Track gadget warranty expiries and bill photos</div></div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+        </div>
         <div className="settings-row" onClick={() => setScreen('recurring')}>
           <div className="settings-row-icon" style={{ background: 'rgba(99,179,237,0.15)' }}>🔁</div>
           <div className="settings-row-content">
             <div className="settings-row-title">Recurring</div>
             <div className="settings-row-sub">{(state.recurringRules || []).filter(r => r.rule_type === 'repeat' && r.status === 'active').length} active repeat rules</div>
           </div>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+        </div>
+        <div className="settings-row" onClick={() => setScreen('tags')}>
+          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>#️⃣</div>
+          <div className="settings-row-content"><div className="settings-row-title">Tags &amp; Hashtags</div><div className="settings-row-sub">Manage, rename, and clean cross-cutting tags</div></div>
           <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
         </div>
         <div className="settings-row" onClick={() => setScreen('accounts')}>
