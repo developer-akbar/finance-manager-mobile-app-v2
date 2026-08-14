@@ -516,3 +516,10 @@ select option {
 .tab-view.hidden {
   display: none !important;
 }
+
+.dm-status.success {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    padding-inline: 1rem;
+}
