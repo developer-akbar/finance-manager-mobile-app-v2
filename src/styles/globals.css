@@ -28,7 +28,7 @@
   --blue-bg:   rgba(77,159,255,0.10);
   --gold:      #ffd166;
   --gold-bg:   rgba(255,209,102,0.10);
-  --nav-bg: rgba(10,15,30,0.97);
+  --nav-bg: rgba(10,15,30,0.72);
   --shadow-md:    0 4px 16px rgba(0,0,0,0.4);
   --shadow-green: 0 4px 20px rgba(0,229,160,0.3);
   --input-border: rgba(255,255,255,0.10);
@@ -62,7 +62,7 @@
   --blue-bg:   rgba(26,110,255,0.10);
   --gold:      #c07800;
   --gold-bg:   rgba(192,120,0,0.10);
-  --nav-bg: rgba(255,255,255,0.97);
+  --nav-bg: rgba(255,255,255,0.72);
   --shadow-md:    0 4px 16px rgba(0,0,0,0.10);
   --shadow-green: 0 4px 20px rgba(0,184,122,0.2);
   --input-border: rgba(0,0,0,0.12);
@@ -125,7 +125,7 @@ body { font-family:var(--font); background:var(--bg-base); color:var(--text-prim
   height:calc(var(--nav-height) + var(--safe-bottom));
   padding-bottom:var(--safe-bottom);
   background:var(--nav-bg);
-  backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+  backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px);
   border-top:1px solid var(--border);
   display:flex; align-items:center; justify-content:space-around;
   flex-shrink:0; z-index:50;
@@ -136,11 +136,15 @@ body { font-family:var(--font); background:var(--bg-base); color:var(--text-prim
   padding:4px 6px; border-radius:var(--r-md);
   transition:var(--transition); flex:1; position:relative;
 }
-.nav-btn svg  { width:20px; height:20px; stroke:var(--text-muted); transition:stroke 0.18s; }
-.nav-btn span { font-size:0.62rem; font-weight:600; color:var(--text-muted); transition:color 0.18s; }
+.nav-btn svg  { width:20px; height:20px; stroke:var(--text-muted); transition:stroke 0.25s cubic-bezier(0.4,0,0.2,1); }
+.nav-btn span { font-size:0.62rem; font-weight:600; color:var(--text-muted); transition:color 0.25s cubic-bezier(0.4,0,0.2,1); }
 .nav-btn.active svg  { stroke:var(--green); }
 .nav-btn.active span { color:var(--green); }
-.nav-btn.active::before { content:''; position:absolute; top:-1px; left:50%; transform:translateX(-50%); width:20px; height:2px; background:var(--green); border-radius:2px; }
+.nav-btn::before {
+  content:''; position:absolute; top:-1px; left:50%; transform:translateX(-50%) scaleX(0); width:20px; height:2px; background:var(--green); border-radius:2px;
+  transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
+}
+.nav-btn.active::before { transform:translateX(-50%) scaleX(1); }
 
 /* Floating FAB on Trans & Home screens */
 .trans-fab {
@@ -159,7 +163,8 @@ body { font-family:var(--font); background:var(--bg-base); color:var(--text-prim
   height:var(--header-h);
   padding:6px var(--page-px) 6px;
   display:flex; align-items:center; gap:10px;
-  background:var(--bg-base); border-bottom:1px solid var(--border);
+  background:var(--nav-bg); border-bottom:1px solid var(--border);
+  backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px);
   flex-shrink:0; position:sticky; top:0; z-index:20;
 }
 .page-hdr-title { font-size:1.05rem; font-weight:800; color:var(--text-primary); }
