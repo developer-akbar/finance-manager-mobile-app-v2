@@ -10,10 +10,20 @@
 .pp-label { font-size:var(--fs-xl); font-weight:700; color:var(--text-primary); min-width:160px; text-align:center; }
 
 .an-summary { display:flex; gap:10px; padding:10px var(--page-px) 12px; }
-.an-sum-card { flex:1; padding:12px var(--card-p); border-radius:var(--r-lg); border:1px solid var(--border); display:flex; flex-direction:column; gap:3px; }
-.an-sum-card.income  { background:var(--income-bg);  border-color:rgba(0,229,160,0.2); }
-.an-sum-card.expense { background:var(--expense-bg); border-color:rgba(255,77,106,0.2); }
-.an-sum-card.savings { background:var(--blue-bg);    border-color:rgba(77,159,255,0.2); }
+.an-sum-card {
+  flex:1; padding:12px var(--card-p); border-radius:var(--r-lg); border:1px solid var(--border);
+  display:flex; flex-direction:column; gap:3px;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+}
+.an-sum-card:active {
+  transform: scale(0.96);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+}
+.an-sum-card.income  { background: linear-gradient(135deg, rgba(0, 229, 160, 0.14), rgba(0, 184, 122, 0.04)); border-color: rgba(0, 229, 160, 0.25); }
+.an-sum-card.expense { background: linear-gradient(135deg, rgba(255, 77, 106, 0.14), rgba(224, 32, 64, 0.04)); border-color: rgba(255, 77, 106, 0.25); }
+.an-sum-card.savings { background: linear-gradient(135deg, rgba(77, 159, 255, 0.14), rgba(26, 110, 255, 0.04)); border-color: rgba(77, 159, 255, 0.25); }
 .an-sum-label { font-size:var(--fs-xs); font-weight:700; text-transform:uppercase; letter-spacing:0.6px; opacity:0.7; }
 .an-sum-val   { font-size:var(--fs-2xl); font-weight:800; font-family:var(--font); }
 .an-sum-avg   { font-size:var(--fs-xs); opacity:0.65; font-family:var(--font); }
