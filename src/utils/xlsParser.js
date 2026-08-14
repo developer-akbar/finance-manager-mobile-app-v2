@@ -26,19 +26,7 @@
  */
 
 async function getXLSX() {
-  if (typeof window !== 'undefined' && window.XLSX) return window.XLSX;
-  return new Promise((res, rej) => {
-    if (document.getElementById('sheetjs-cdn')) {
-      const wait = setInterval(() => { if (window.XLSX) { clearInterval(wait); res(window.XLSX); } }, 50);
-      return;
-    }
-    const s = document.createElement('script');
-    s.id = 'sheetjs-cdn';
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-    s.onload  = () => res(window.XLSX);
-    s.onerror = () => rej(new Error('Failed to load SheetJS'));
-    document.head.appendChild(s);
-  });
+  return await import('xlsx');
 }
 
 /**
