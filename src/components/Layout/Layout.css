@@ -1,1 +1,26 @@
-/* Layout uses globals.css — nothing extra needed */
+.global-scroll-top-btn {
+  position: fixed;
+  bottom: calc(var(--nav-height, 56px) + var(--safe-bottom, 0px) + 16px);
+  right: 18px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 150;
+  color: var(--text-primary);
+  transition: var(--transition-spring);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.global-scroll-top-btn:active {
+  transform: scale(0.92);
+  background: var(--accent);
+  color: #000;
+}

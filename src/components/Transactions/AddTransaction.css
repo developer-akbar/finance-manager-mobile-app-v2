@@ -303,3 +303,12 @@
   color: var(--text-muted);
   margin-top: 2px;
 }
+
+/* ── Tags Section (Full width vertical layout) ──────────────────────────── */
+.tags-section {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  gap: 8px !important;
+  margin-bottom: 14px !important;
+}

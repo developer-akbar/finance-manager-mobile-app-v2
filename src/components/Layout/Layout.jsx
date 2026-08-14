@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import './Layout.css';
 
@@ -18,6 +18,62 @@ const NAV = [
 
 export default function Layout({ children, onNavTap }) {
   const { state, navigate } = useApp();
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const scrollTargetRef = useRef(null);
+
+  // Global scroll listener across window and any scrollable container
+  useEffect(() => {
+    const handleScroll = (e) => {
+      const target = e.target;
+      if (!target || !(target instanceof HTMLElement)) return;
+      const st = target.scrollTop || window.scrollY || 0;
+      if (st > 140) {
+        scrollTargetRef.current = target;
+        setShowScrollTop(true);
+      } else if (scrollTargetRef.current === target && st <= 80) {
+        setShowScrollTop(false);
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll, true);
+    return () => window.removeEventListener('scroll', handleScroll, true);
+  }, []);
+
+  // Hide scroll-to-top when navigating tabs
+  useEffect(() => {
+    setShowScrollTop(false);
+  }, [state.currentView]);
+
+  const handleScrollToTop = () => {
+    if (scrollTargetRef.current && scrollTargetRef.current.scrollTop > 0) {
+      scrollTargetRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const selectors = [
+      '.layout-screen',
+      '.dash-scrollable-content',
+      '.txn-list-body',
+      '.sub-body',
+      '.acct-detail-body',
+      '.cat-detail-body',
+      '.debt-tracker-body',
+      '.forecast-body',
+      '.settings-root',
+      '.categories-list',
+      '.accounts-list',
+      '.analytics-screen',
+      '.txn-monthly-list',
+      '.txn-screen-body',
+      '.search-list',
+      '.report-screen'
+    ];
+    document.querySelectorAll(selectors.join(', ')).forEach(el => {
+      if (el.scrollTop > 0) {
+        el.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    });
+    setTimeout(() => setShowScrollTop(false), 250);
+  };
 
   const handleNavClick = (id) => {
     if (state.currentView === id) {
@@ -33,6 +89,20 @@ export default function Layout({ children, onNavTap }) {
       <div className="layout-body">
         <div className="layout-screen">{children}</div>
       </div>
+
+      {showScrollTop && (
+        <button
+          className="global-scroll-top-btn"
+          onClick={handleScrollToTop}
+          title="Scroll to top"
+          aria-label="Scroll to top"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+            <path d="M18 15l-6-6-6 6"/>
+          </svg>
+        </button>
+      )}
+
       <nav className="bottom-nav">
         {NAV.map(({ id, label, Icon }) => (
           <button key={id} className={`nav-btn ${state.currentView === id ? 'active' : ''}`} onClick={() => handleNavClick(id)}>

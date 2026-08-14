@@ -5,6 +5,7 @@ import {
   parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount,
   getCategoryEmoji, getFY, fyLabel, fyStart, fyEnd, currentFY,
 } from '../../utils/format.js';
+import ReportGenerator from '../Reports/ReportGenerator.jsx';
 import './Analytics.css';
 
 const COLORS = ['#ff4d6a','#ffd166','#a78bfa','#4d9fff','#00e5a0','#fb8500','#06d6a0'];
@@ -23,11 +24,12 @@ const CustomTooltip = ({active,payload}) => {
 
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-export default function Analytics() {
+export default function Analytics({ backInterceptRef }) {
   const { state } = useApp();
   const { transactions } = state;
 
   const now     = new Date();
+  const [showReport, setShowReport] = useState(false);
   const [period,    setPeriod]    = useState('Month');
   const [viewType,  setViewType]  = useState('expense');
   // Month picker
@@ -37,6 +39,16 @@ export default function Analytics() {
   const [selAYear,  setSelAYear]  = useState(now.getFullYear());
   // FY picker
   const [selFY,     setSelFY]     = useState(currentFY());
+
+  useEffect(() => {
+    if (!backInterceptRef) return;
+    if (showReport) {
+      backInterceptRef.current = () => setShowReport(false);
+    } else {
+      backInterceptRef.current = null;
+    }
+    return () => { if (backInterceptRef) backInterceptRef.current = null; };
+  }, [showReport, backInterceptRef]);
 
   // Handle double-tap reset for Analytics tab
   useEffect(() => {
@@ -145,6 +157,30 @@ export default function Analytics() {
     });
   }, [transactions, period, selYear, selMonth, selAYear, selFY]);
 
+  // Tag breakdown
+  const tagData = useMemo(() => {
+    const map = {};
+    for (const t of periodTxns) {
+      if (txnType(t) !== viewType) continue;
+      const tags = [];
+      if (t.Tags) {
+        t.Tags.split(',').forEach(tag => {
+          const clean = tag.trim().toLowerCase();
+          if (clean) tags.push(clean.startsWith('#') ? clean : `#${clean}`);
+        });
+      }
+      const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
+      if (matches) matches.forEach(m => tags.push(m.toLowerCase()));
+
+      const uniqueTags = Array.from(new Set(tags));
+      for (const tag of uniqueTags) {
+        map[tag] = (map[tag] || 0) + txnAmount(t);
+      }
+    }
+    return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 8);
+  }, [periodTxns, viewType]);
+  const tagTotal = tagData.reduce((s, d) => s + d.value, 0) || 1;
+
   // Account breakdown
   const accountData = useMemo(() => {
     const map={};
@@ -157,10 +193,32 @@ export default function Analytics() {
     return Object.entries(map).map(([name,d])=>({name,...d})).sort((a,b)=>(b.income+b.expense)-(a.income+a.expense)).slice(0,6);
   }, [periodTxns]);
 
+  if (showReport) {
+    return <ReportGenerator onBack={() => setShowReport(false)} />;
+  }
+
   return (
     <div className="analytics-screen">
-      <div className="page-hdr">
+      <div className="page-hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="page-hdr-title">Analytics</div>
+        <button
+          onClick={() => setShowReport(true)}
+          style={{
+            padding: '6px 12px',
+            borderRadius: 14,
+            fontSize: '0.75rem',
+            fontWeight: 700,
+            border: '1px solid var(--border)',
+            background: 'var(--bg-card2)',
+            color: 'var(--accent)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            cursor: 'pointer',
+          }}
+        >
+          <span>📊</span> Custom Report
+        </button>
       </div>
 
       {/* Period selector */}
@@ -280,6 +338,35 @@ export default function Analytics() {
           </>
         )}
       </div>
+
+      {/* Tag breakdown */}
+      {tagData.length > 0 && (
+        <div className="an-card">
+          <div className="an-card-title">Top Tags ({viewType === 'expense' ? 'Expenses' : 'Income'})</div>
+          <div className="cat-breakdown-list">
+            {tagData.map((d, i) => {
+              const pct = Math.round((d.value / tagTotal) * 100);
+              return (
+                <div key={d.name} className="cat-breakdown-item">
+                  <div className="cat-breakdown-icon" style={{ fontSize: '1rem' }}>🏷️</div>
+                  <div className="cat-breakdown-main">
+                    <div className="cat-breakdown-row1">
+                      <span className="cat-breakdown-name" style={{ color: 'var(--accent)', fontWeight: 700 }}>{d.name}</span>
+                      <span className="cat-breakdown-amt">{formatINR(d.value)} <span className="cat-breakdown-pct">({pct}%)</span></span>
+                    </div>
+                    {showAverage && numMonths > 1 && (
+                      <div className="cat-bar-avg">avg {formatINR(d.value / numMonths)}/mo</div>
+                    )}
+                    <div className="progress-track" style={{ marginTop: 4 }}>
+                      <div className="progress-fill" style={{ width: `${pct}%`, background: COLORS[i % COLORS.length] }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Account breakdown */}
       {accountData.length>0 && (

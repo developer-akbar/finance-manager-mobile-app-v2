@@ -11,6 +11,11 @@ export const rowToTxn = (r) => ({
   Currency: r.currency || 'INR', 'Income/Expense': r.type || 'Expense',
   created_at: r.created_at, updated_at: r.updated_at,
   recurring_rule_id: r.recurring_rule_id || '',
+  Tags: r.tags || '',
+  split_group_id: r.split_group_id || '',
+  receipt_image: r.receipt_image || '',
+  warranty_expiry: r.warranty_expiry || '',
+  serial_no: r.serial_no || '',
 });
 
 export const getTransactions = async (filters = {}) => {
@@ -23,10 +28,25 @@ export const getTransactions = async (filters = {}) => {
   }
   if (filters.category) { sql += ' AND category=?'; vals.push(filters.category); }
   if (filters.type)     { sql += ' AND type=?';     vals.push(filters.type); }
+  if (filters.tag) {
+    sql += ' AND (tags LIKE ? OR note LIKE ? OR description LIKE ?)';
+    const t = `%${filters.tag}%`;
+    vals.push(t, t, t);
+  }
   if (filters.search) {
-    sql += ' AND (note LIKE ? OR category LIKE ? OR account LIKE ? OR description LIKE ? OR from_account LIKE ? OR to_account LIKE ?)';
-    const q = `%${filters.search}%`;
-    vals.push(q, q, q, q, q, q);
+    const rawQ = filters.search.trim();
+    if (rawQ.startsWith('#')) {
+      const cleanTag = rawQ.replace(/^#/, '');
+      sql += ' AND (tags LIKE ? OR note LIKE ? OR description LIKE ?)';
+      const t1 = `%#${cleanTag}%`;
+      const t2 = `%#${cleanTag}%`;
+      const t3 = `%#${cleanTag}%`;
+      vals.push(t1, t2, t3);
+    } else {
+      sql += ' AND (note LIKE ? OR category LIKE ? OR account LIKE ? OR description LIKE ? OR from_account LIKE ? OR to_account LIKE ? OR tags LIKE ?)';
+      const q = `%${rawQ}%`;
+      vals.push(q, q, q, q, q, q, q);
+    }
   }
   sql += ' ORDER BY date DESC, time DESC, created_at DESC';
   if (filters.limit) { sql += ' LIMIT ?'; vals.push(filters.limit); }
@@ -39,37 +59,52 @@ export const addTransaction = async (data) => {
   const id  = data.ID || data._id || uuid();
   const now = new Date().toISOString();
   await db.run(
-    `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [id, data.Date||'', data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
      data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
      parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
      data.Currency||'INR', data['Income/Expense']||'Expense', now, now,
-     data.recurring_rule_id||'']
+     data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'',
+     data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'']
   );
-  return rowToTxn({ id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'', category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'', inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR', type:data['Income/Expense']||'Expense', created_at:now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'' });
+  return rowToTxn({
+    id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'',
+    category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'',
+    inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR',
+    type:data['Income/Expense']||'Expense', created_at:now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'',
+    tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'',
+    receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||''
+  });
 };
 
 export const updateTransaction = async (id, data) => {
-  const db  = getDB();
+  const db = getDB();
   const now = new Date().toISOString();
-  let existingCreatedAt = now;
-  try {
-    const existing = await db.query('SELECT created_at FROM transactions WHERE id=?', [id]);
-    if (existing.values?.[0]?.created_at) {
-      existingCreatedAt = existing.values[0].created_at;
-    }
-  } catch (e) {
-    console.error('updateTransaction: failed to fetch existing created_at:', e);
-  }
   await db.run(
-    `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=? WHERE id=?`,
+    `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=?,tags=?,split_group_id=?,receipt_image=?,warranty_expiry=?,serial_no=? WHERE id=?`,
     [data.Date, data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
      data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
      parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
      data.Currency||'INR', data['Income/Expense']||'Expense', now,
-     data.recurring_rule_id||'', id]
+     data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'',
+     data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'', id]
   );
-  return rowToTxn({ id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'', category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'', inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR', type:data['Income/Expense']||'Expense', created_at:existingCreatedAt, updated_at:now, recurring_rule_id:data.recurring_rule_id||'' });
+  return {
+    _id: id, ID: id,
+    Date: data.Date || '', Time: data.Time || '',
+    Account: data.Account || '', FromAccount: data.FromAccount || '', ToAccount: data.ToAccount || '',
+    Category: data.Category || '', Subcategory: data.Subcategory || '',
+    Note: data.Note || '', Description: data.Description || '',
+    INR: parseFloat(data.INR || data.Amount || 0), Amount: String(data.Amount || data.INR || '0'),
+    Currency: data.Currency || 'INR', 'Income/Expense': data['Income/Expense'] || 'Expense',
+    created_at: data.created_at || now, updated_at: now,
+    recurring_rule_id: data.recurring_rule_id || '',
+    Tags: data.Tags || data.tags || '',
+    split_group_id: data.split_group_id || '',
+    receipt_image: data.receipt_image || '',
+    warranty_expiry: data.warranty_expiry || '',
+    serial_no: data.serial_no || '',
+  };
 };
 
 export const deleteTransaction    = async (id) => { await getDB().run('DELETE FROM transactions WHERE id=?', [id]); };
@@ -273,21 +308,27 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
 
     items.push({
       id,
-      date:         dateVal,
-      time:         String(r.Time || r.time || '').trim(),
-      account:      acctName,
-      from_account: acctName,   // same as account; kept for query/filter compatibility
-      to_account:   toAcctName,
-      category:     categoryVal,
-      subcategory:  subcategoryVal,
-      note:         String(r.Note || r.note || '').trim(),
-      description:  String(r.Description || r.description || '').trim(),
-      inr:          parseFloat(r.INR || r.Amount || r.inr || r.amount || 0),
-      amount:       String(r.Amount || r.INR || r.amount || r.inr || '0').trim(),
-      currency:     String(r.Currency || r.currency || 'INR').trim(),
-      type:         typeStr,
-      created_at:   now,
-      updated_at:   now,
+      date:              dateVal,
+      time:              String(r.Time || r.time || '').trim(),
+      account:           acctName,
+      from_account:      acctName,   // same as account; kept for query/filter compatibility
+      to_account:        toAcctName,
+      category:          categoryVal,
+      subcategory:       subcategoryVal,
+      note:              String(r.Note || r.note || '').trim(),
+      description:       String(r.Description || r.description || '').trim(),
+      inr:               parseFloat(r.INR || r.Amount || r.inr || r.amount || 0),
+      amount:            String(r.Amount || r.INR || r.amount || r.inr || '0').trim(),
+      currency:          String(r.Currency || r.currency || 'INR').trim(),
+      type:              typeStr,
+      created_at:        r.created_at || r['Created At'] || r.Created_At || r.CreatedAt || now,
+      updated_at:        r.updated_at || r['Last Modified At'] || r.updated_at || r.UpdatedAt || r.Updated_At || now,
+      recurring_rule_id: String(r.recurring_rule_id || '').trim(),
+      tags:              String(r.Tags || r.tags || '').trim(),
+      split_group_id:    String(r.split_group_id || '').trim(),
+      receipt_image:     String(r.receipt_image || '').trim(),
+      warranty_expiry:   String(r.warranty_expiry || '').trim(),
+      serial_no:         String(r.serial_no || '').trim(),
     });
   }
 
@@ -298,10 +339,12 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     skipped += res.skipped;
   } else if (typeof db.executeSet === 'function') {
     const set = items.map(obj => ({
-      statement: `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      statement: `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       values: [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
                obj.category, obj.subcategory, obj.note, obj.description,
-               obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at]
+               obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
+               obj.recurring_rule_id, obj.tags, obj.split_group_id,
+               obj.receipt_image, obj.warranty_expiry, obj.serial_no]
     }));
     try {
       const res = await db.executeSet(set);
@@ -313,10 +356,12 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
       for (const obj of items) {
         try {
           const res = await db.run(
-            `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
              obj.category, obj.subcategory, obj.note, obj.description,
-             obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at]
+             obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
+             obj.recurring_rule_id, obj.tags, obj.split_group_id,
+             obj.receipt_image, obj.warranty_expiry, obj.serial_no]
           );
           if (res.changes?.changes > 0) imported++; else skipped++;
         } catch { skipped++; }
@@ -326,10 +371,12 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     for (const obj of items) {
       try {
         const res = await db.run(
-          `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
            obj.category, obj.subcategory, obj.note, obj.description,
-           obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at]
+           obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
+           obj.recurring_rule_id, obj.tags, obj.split_group_id,
+           obj.receipt_image, obj.warranty_expiry, obj.serial_no]
         );
         if (res.changes?.changes > 0) imported++; else skipped++;
       } catch { skipped++; }

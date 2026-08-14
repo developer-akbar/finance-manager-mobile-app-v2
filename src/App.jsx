@@ -148,35 +148,40 @@ function AppInner() {
       if (id === 'settings') {
         window.dispatchEvent(new CustomEvent('reset-settings-view'));
       }
-      if (backInterceptRef.current) {
-        backInterceptRef.current();
-      }
     }
   };
 
   const backInterceptRef = React.useRef(null);
   const lastBackPressRef = useRef(0);
 
+  // Android hardware back button handler
   useEffect(() => {
     const setup = async () => {
       try {
-        if (!window.Capacitor || window.Capacitor.getPlatform?.() !== 'android') return;
-        const { App } = await import('@capacitor/app');
-        await App.removeAllListeners();
-        App.addListener('backButton', () => {
-          // 1. Close the Add/Edit modal
-          if (showAdd) { setShowAdd(false); return; }
-          // 2. Let the active child-screen handle it (e.g. account drill-down)
-          if (backInterceptRef.current) { backInterceptRef.current(); return; }
-          // 3. Any top-level tab → go home
-          if (currentView !== 'dashboard') { navigate('dashboard'); return; }
-          // 4. Already home → double press within 2s to close app completely
-          const nowTime = Date.now();
-          if (nowTime - lastBackPressRef.current < 2000) {
-            App.exitApp();
+        const { App: CapApp } = await import('@capacitor/app');
+        CapApp.addListener('backButton', () => {
+          // 1. If an active screen registered a back-intercept callback, execute it and stop
+          if (backInterceptRef.current) {
+            backInterceptRef.current();
+            return;
+          }
+          // 2. If AddTransaction modal is open, close it
+          if (showAdd) {
+            setShowAdd(false);
+            return;
+          }
+          // 3. If on a sub-screen, go to dashboard
+          if (currentView !== 'dashboard') {
+            navigate('dashboard');
+            return;
+          }
+          // 4. On dashboard root: double-tap within 2s to exit
+          const now = Date.now();
+          if (now - lastBackPressRef.current < 2000) {
+            CapApp.exitApp();
           } else {
-            lastBackPressRef.current = nowTime;
-            showToast('Press back again to close the app');
+            lastBackPressRef.current = now;
+            showToast('Press BACK again to exit');
           }
         });
       } catch { /* web */ }
@@ -194,7 +199,7 @@ function AppInner() {
     <PinLock>
       <Layout onNavTap={handleNavTap}>
         <div className={`tab-view ${currentView === 'dashboard' ? 'active-tab' : 'hidden'}`}>
-          <Dashboard onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }}/>
+          <Dashboard onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef}/>
         </div>
         <div className={`tab-view ${currentView === 'transactions' ? 'active-tab' : 'hidden'}`}>
           <Transactions isActive={currentView === 'transactions'} onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef} viewParams={state.viewParams}/>
@@ -206,7 +211,7 @@ function AppInner() {
           <Categories backInterceptRef={backInterceptRef} viewParams={state.viewParams}/>
         </div>
         <div className={`tab-view ${currentView === 'analytics' ? 'active-tab' : 'hidden'}`}>
-          <Analytics/>
+          <Analytics backInterceptRef={backInterceptRef}/>
         </div>
         <div className={`tab-view ${currentView === 'settings' ? 'active-tab' : 'hidden'}`}>
           <Settings backInterceptRef={backInterceptRef}/>
