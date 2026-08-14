@@ -13,15 +13,33 @@ import {
   getAccountGroups, replaceAccountGroups,
   getAccountMapping, replaceAccountMapping,
   getCategories, replaceCategories,
-  getBudgets, setBudget, deleteBudget,
+  getBudgets, setBudget, deleteBudget, replaceBudgets,
+  getDB,
 } from '../database/index.js';
 import { DEFAULT_ACCOUNT_GROUPS, DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES } from '../database/defaults.js';
 import { v4 as uuid } from 'uuid';
+import { parseDate } from '../utils/format.js';
 
 const Ctx = createContext(null);
 export const useApp = () => { const c = useContext(Ctx); if (!c) throw new Error('useApp outside AppProvider'); return c; };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+const sortTransactions = (txns) => {
+  return [...txns].sort((a, b) => {
+    const da = parseDate(a.Date).getTime();
+    const db = parseDate(b.Date).getTime();
+    if (da !== db) return db - da;
+
+    const ta = a.Time || '00:00';
+    const tb = b.Time || '00:00';
+    if (ta !== tb) return tb.localeCompare(ta);
+
+    const ca = a.created_at || '';
+    const cb = b.created_at || '';
+    return cb.localeCompare(ca);
+  });
+};
+
 // Categories in state: { CatName: { type:'Expense'|'Income', subcategories:['sub1',...] } }
 const catsArrToObj = (arr) => {
   const o = {};
@@ -55,9 +73,9 @@ const INIT = {
 
 function reducer(s, a) {
   switch (a.type) {
-    case 'INIT':         return { ...s, ...a.payload, loading: false };
-    case 'ADD_TXN':      return { ...s, transactions: [a.payload, ...s.transactions] };
-    case 'UPD_TXN':      return { ...s, transactions: s.transactions.map(t => t._id === a.payload._id ? a.payload : t) };
+    case 'INIT':         return { ...s, ...a.payload, transactions: sortTransactions(a.payload.transactions), loading: false };
+    case 'ADD_TXN':      return { ...s, transactions: sortTransactions([a.payload, ...s.transactions]) };
+    case 'UPD_TXN':      return { ...s, transactions: sortTransactions(s.transactions.map(t => t._id === a.payload._id ? a.payload : t)) };
     case 'DEL_TXN':      return { ...s, transactions: s.transactions.filter(t => t._id !== a.payload) };
     case 'SET_BUDGETS':  return { ...s, budgets: a.payload };
     case 'SET_IMPORT':   return { ...s, importProgress: a.payload };
@@ -67,7 +85,14 @@ function reducer(s, a) {
     case 'SET_FONTDATAWEIGHT':   return { ...s, fontDataWeight: a.payload };
     case 'SET_RECURRING':        return { ...s, recurringRules: a.payload };
     case 'UPD_SETTINGS': return { ...s, settings: { ...s.settings, ...a.payload } };
-    case 'NAVIGATE': return { ...s, currentView: a.payload };
+    case 'NAVIGATE': 
+      return { 
+        ...s, 
+        currentView: typeof a.payload === 'object' ? a.payload.view : a.payload,
+        viewParams: typeof a.payload === 'object' ? a.payload.params : null
+      };
+    case 'CLEAR_NAV_PARAMS':
+      return { ...s, viewParams: null };
     default: return s;
   }
 }
@@ -153,7 +178,8 @@ export function AppProvider({ children }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const navigate = (view) => dispatch({ type: 'NAVIGATE', payload: view });
+  const navigate = (view, params = null) => dispatch({ type: 'NAVIGATE', payload: { view, params } });
+  const clearNavParams = () => dispatch({ type: 'CLEAR_NAV_PARAMS' });
 
   const addTransaction    = async (data) => { const r = await dbAdd(data);    if (r) dispatch({ type:'ADD_TXN', payload:r }); return r; };
   const updateTransaction = async (id,d) => { const r = await dbUpdate(id,d); if (r) dispatch({ type:'UPD_TXN', payload:r }); return r; };
@@ -231,7 +257,30 @@ export function AppProvider({ children }) {
     await load();
   };
 
-  const importData = async (rows, mode = 'override') => {
+  const deleteAccountTransactions = async (oldName, fallbackName = 'Ungrouped') => {
+    for (const t of state.transactions.filter(t => t.Account===oldName||t.FromAccount===oldName||t.ToAccount===oldName)) {
+      await dbUpdate(t._id, {
+        ...t,
+        Account: t.Account===oldName ? fallbackName : t.Account,
+        FromAccount: t.FromAccount===oldName ? fallbackName : t.FromAccount,
+        ToAccount: t.ToAccount===oldName ? fallbackName : t.ToAccount
+      });
+    }
+  };
+
+  const deleteCategoryTransactions = async (oldCat, fallbackCat = 'Unassigned') => {
+    for (const t of state.transactions.filter(t => t.Category===oldCat)) {
+      await dbUpdate(t._id, { ...t, Category: fallbackCat });
+    }
+  };
+
+  const deleteSubcategoryTransactions = async (catName, oldSub) => {
+    for (const t of state.transactions.filter(t => t.Category===catName && t.Subcategory===oldSub)) {
+      await dbUpdate(t._id, { ...t, Subcategory: '' });
+    }
+  };
+
+  const importData = async (rows, mode = 'override', isBackup = false) => {
     const dbCount = mode === 'override' ? 0 : await getTransactionCount();
     const isFirstImport = dbCount === 0;
     cancelRef.current = false;
@@ -253,6 +302,12 @@ export function AppProvider({ children }) {
       imported += res.imported; skipped += res.skipped;
       dispatch({ type:'SET_IMPORT', payload:{ processed:Math.min(i+BATCH,total), total, startTime:Date.now() } });
       await new Promise(r => setTimeout(r, 0)); // yield to UI
+    }
+
+    if (isBackup) {
+      dispatch({ type:'SET_IMPORT', payload:null });
+      await load();
+      return { imported, skipped, cancelled:false };
     }
 
     // Auto-extract accounts & categories from imported rows.
@@ -304,14 +359,10 @@ export function AppProvider({ children }) {
 
     // Build account list from imported rows
     const newAcctNames = [...acctSet].filter(n => n);
-    if (mode === 'override') {
-      await replaceAccounts(newAcctNames.map(name => ({ name, group:'', icon:'💳', acctType:'', settlementDate:0, paymentDueDays:0 })));
-    } else {
-      const existAccts = normalizeAccounts(await getAccounts());
-      const existNames = new Set(existAccts.map(a => a.name));
-      const brandNew   = newAcctNames.filter(n => !existNames.has(n)).map(name => ({ name, group:'', icon:'💳', acctType:'', settlementDate:0, paymentDueDays:0 }));
-      await replaceAccounts([...existAccts, ...brandNew]);
-    }
+    const existAccts = normalizeAccounts(await getAccounts());
+    const existNames = new Set(existAccts.map(a => a.name));
+    const brandNew   = newAcctNames.filter(n => !existNames.has(n)).map(name => ({ name, group:'', icon:'💳', acctType:'', settlementDate:0, paymentDueDays:0 }));
+    await replaceAccounts([...existAccts, ...brandNew]);
 
     // Merge with existing categories — case-insensitive dedup.
     // Build a lookup: lowercase name → canonical (Title Case preferred) name already in DB.
@@ -362,22 +413,33 @@ export function AppProvider({ children }) {
     await load();
   };
 
-  const clearAllData = async () => { await deleteAllTransactions(); await load(); };
+  const clearAllData = async () => {
+    const db = getDB();
+    await db.run('DELETE FROM transactions');
+    await db.run('DELETE FROM accounts');
+    await db.run('DELETE FROM account_groups');
+    await db.run('DELETE FROM account_mapping');
+    await db.run('DELETE FROM categories');
+    await db.run('DELETE FROM subcategories');
+    await db.run('DELETE FROM budgets');
+    await db.run('DELETE FROM recurring_rules');
+    await load();
+  };
 
   const updateSettings = async (data) => {
     if (data.accounts       !== undefined) await replaceAccounts(data.accounts);
     if (data.categories     !== undefined) await replaceCategories(catsObjToArr(data.categories));
     if (data.accountGroups  !== undefined) await replaceAccountGroups(data.accountGroups);
     if (data.accountMapping  !== undefined) await replaceAccountMapping(data.accountMapping);
+    if (data.budgets         !== undefined) await replaceBudgets(data.budgets);
     if (data.recurringRules  !== undefined) {
       // Restore each rule
-      const { saveRecurringRule: saveRule } = await import('../database/recurring.js');
-      for (const rule of data.recurringRules) { await saveRule(rule); }
+      for (const rule of data.recurringRules) { await saveRecurringRule(rule); }
       const rules = await getAllRecurringRules();
       dispatch({ type:'SET_RECURRING', payload: rules });
     }
     // Persist simple key-value settings (profileName, pin, pinIdleSeconds, etc.)
-    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight'];
+    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight', 'biometricsEnabled'];
     const changed = {};
     for (const key of settingsKeys) {
       if (data[key] !== undefined) {
@@ -484,10 +546,11 @@ export function AppProvider({ children }) {
 
   return (
     <Ctx.Provider value={{
-      state, dispatch, load, navigate,
+      state, dispatch, load, navigate, clearNavParams,
       addTransaction, updateTransaction, deleteTransaction,
       updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments,
       renameAccount, renameCategory, cleanupAccounts,
+      deleteAccountTransactions, deleteCategoryTransactions, deleteSubcategoryTransactions,
       importData, cancelImport, clearAllData, analyseImport,
       updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight,
       createRecurringRule, modifyRecurringRule, removeRecurringRule, processDueRepeat,

@@ -17,7 +17,6 @@ export const getAccounts = async () => {
 
 export const replaceAccounts = async (list) => {
   const db = getDB();
-  await db.run('DELETE FROM accounts');
   const now = new Date().toISOString();
 
   const seen = new Set();
@@ -30,6 +29,7 @@ export const replaceAccounts = async (list) => {
     return !duplicate;
   });
 
+  const set = [{ statement: 'DELETE FROM accounts', values: [] }];
   for (let i = 0; i < uniqueList.length; i++) {
     const a    = typeof uniqueList[i] === 'string' ? { name: uniqueList[i] } : uniqueList[i];
     const name = a.name || '';
@@ -37,10 +37,19 @@ export const replaceAccounts = async (list) => {
     const acctType       = a.acctType       || '';
     const settlementDate = a.settlementDate ? Number(a.settlementDate) : 0;
     const paymentDueDays = a.paymentDueDays ? Number(a.paymentDueDays) : 0;
-    await db.run(
-      'INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days) VALUES (?,?,?,?,?,?,?,?)',
-      [a.id || uuid(), name, grp, i, now, acctType, settlementDate, paymentDueDays]
-    );
+    set.push({
+      statement: 'INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days) VALUES (?,?,?,?,?,?,?,?)',
+      values: [a.id || uuid(), name, grp, i, now, acctType, settlementDate, paymentDueDays]
+    });
+  }
+
+  if (typeof db.executeSet === 'function') {
+    await db.executeSet(set);
+  } else {
+    await db.run('DELETE FROM accounts');
+    for (const stmt of set.slice(1)) {
+      await db.run(stmt.statement, stmt.values);
+    }
   }
 };
 
@@ -52,22 +61,44 @@ export const getAccountGroups = async () => {
 
 export const replaceAccountGroups = async (list) => {
   const db = getDB();
-  await db.run('DELETE FROM account_groups');
   const uniqueList = [...new Set((list || []).map(item => (typeof item === 'string' ? item : (item?.name || '')).trim()).filter(Boolean))];
+
+  const set = [{ statement: 'DELETE FROM account_groups', values: [] }];
   for (let i = 0; i < uniqueList.length; i++) {
     const name = uniqueList[i];
-    if (!name) continue;
-    await db.run(
-      'INSERT INTO account_groups (id,name,sort_order) VALUES (?,?,?)',
-      [uuid(), name, i]
-    );
+    set.push({
+      statement: 'INSERT INTO account_groups (id,name,sort_order) VALUES (?,?,?)',
+      values: [uuid(), name, i]
+    });
+  }
+
+  if (typeof db.executeSet === 'function') {
+    await db.executeSet(set);
+  } else {
+    await db.run('DELETE FROM account_groups');
+    for (const stmt of set.slice(1)) {
+      await db.run(stmt.statement, stmt.values);
+    }
   }
 };
 
 export const getAccountMapping = async () => (await getDB().query('SELECT * FROM account_mapping')).values || [];
 export const replaceAccountMapping = async (list) => {
   const db = getDB();
-  await db.run('DELETE FROM account_mapping');
-  for (const m of list)
-    await db.run('INSERT INTO account_mapping (id,source_name,account_name) VALUES (?,?,?)', [m.id || uuid(), m.source_name||'', m.account_name||'']);
+  const set = [{ statement: 'DELETE FROM account_mapping', values: [] }];
+  for (const m of list) {
+    set.push({
+      statement: 'INSERT INTO account_mapping (id,source_name,account_name) VALUES (?,?,?)',
+      values: [m.id || uuid(), m.source_name||'', m.account_name||'']
+    });
+  }
+
+  if (typeof db.executeSet === 'function') {
+    await db.executeSet(set);
+  } else {
+    await db.run('DELETE FROM account_mapping');
+    for (const stmt of set.slice(1)) {
+      await db.run(stmt.statement, stmt.values);
+    }
+  }
 };

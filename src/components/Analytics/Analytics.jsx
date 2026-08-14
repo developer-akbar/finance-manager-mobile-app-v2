@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useApp } from '../../contexts/AppContext.jsx';
 import {
@@ -37,6 +37,21 @@ export default function Analytics() {
   const [selAYear,  setSelAYear]  = useState(now.getFullYear());
   // FY picker
   const [selFY,     setSelFY]     = useState(currentFY());
+
+  // Handle double-tap reset for Analytics tab
+  useEffect(() => {
+    const handleReset = () => {
+      setPeriod('Month');
+      setViewType('expense');
+      const now = new Date();
+      setSelYear(now.getFullYear());
+      setSelMonth(now.getMonth());
+      setSelAYear(now.getFullYear());
+      setSelFY(currentFY());
+    };
+    window.addEventListener('reset-analytics-view', handleReset);
+    return () => window.removeEventListener('reset-analytics-view', handleReset);
+  }, []);
 
   // Available years
   const availYears = useMemo(() => {

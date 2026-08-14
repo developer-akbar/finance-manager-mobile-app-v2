@@ -71,8 +71,9 @@ const MONTHS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','N
 const MONTHS_F = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 // ── Date-grouped list ─────────────────────────────────────────────────────────
-function DateGroupedList({ txns, onDateTap, selected, multiMode, onLongPress, onTap, backInterceptRef, onCopy }) {
+function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLongPress, onTap, backInterceptRef, onCopy }) {
   const closestRef = useRef(null);
+  const hasScrolledInitial = useRef(false);
 
   const groups = useMemo(() => {
     const today = new Date();
@@ -105,9 +106,21 @@ function DateGroupedList({ txns, onDateTap, selected, multiMode, onLongPress, on
   }, [txns]);
 
   useEffect(() => {
-    if (closestRef.current) {
+    if (isActive && closestRef.current && !hasScrolledInitial.current) {
+      hasScrolledInitial.current = true;
+      // Scroll instantly so the user doesn't even see the transition
       closestRef.current.scrollIntoView({ behavior: 'auto', block: 'start' });
     }
+  }, [isActive, groups.closestDk]);
+
+  useEffect(() => {
+    const handleScrollToToday = () => {
+      if (closestRef.current) {
+        closestRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+    window.addEventListener('scroll-to-today', handleScrollToToday);
+    return () => window.removeEventListener('scroll-to-today', handleScrollToToday);
   }, [groups.closestDk]);
 
   return <>
@@ -147,8 +160,7 @@ function DateGroupedList({ txns, onDateTap, selected, multiMode, onLongPress, on
 }
 
 // ── Monthly summary ───────────────────────────────────────────────────────────
-function MonthlyView({ transactions, onMonthClick }) {
-  const [year, setYear] = useState(new Date().getFullYear());
+function MonthlyView({ transactions, year, setYear, onMonthClick }) {
   const now = new Date();
 
   const prevYear = () => setYear(y => y - 1);
@@ -165,7 +177,7 @@ function MonthlyView({ transactions, onMonthClick }) {
   const totals = data.reduce((a,m) => ({ income:a.income+m.income, expense:a.expense+m.expense }), {income:0,expense:0});
 
   return (
-    <div style={{overflow:'auto',flex:1}} {...swipe}>
+    <div className="txn-monthly-list" style={{overflow:'auto',flex:1}} {...swipe}>
       <div className="txn-month-row">
         <button className="pp-arrow" onClick={prevYear}>‹</button>
         <div className="pp-label">{year}</div>
@@ -204,7 +216,6 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     el.setAttribute('autocorrect', 'on');
     el.setAttribute('spellcheck', 'true');
     el.setAttribute('autocapitalize', 'sentences');
-    el.setAttribute('inputmode', 'text');
   };
   const [query,     setQuery]     = useState('');
   const [debouncedQ,setDebouncedQ]= useState('');
@@ -352,7 +363,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
         if (seen.has(stripped)) continue;
         seen.add(stripped);
         sugs.push(stripped);
-        if (sugs.length >= 6) break;
+        if (sugs.length >= 15) break;
       }
       setNoteSugs(sugs);
     } else { setNoteSugs([]); }
@@ -534,8 +545,8 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
 }
 
 // ── Main Transactions screen ──────────────────────────────────────────────────
-export default function Transactions({ onAddTransaction, backInterceptRef }) {
-  const { state } = useApp();
+export default function Transactions({ isActive, onAddTransaction, backInterceptRef, viewParams }) {
+  const { state, clearNavParams } = useApp();
   const { transactions, accounts, categories } = state;
   const now = new Date();
 
@@ -549,8 +560,95 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
   const [multiMode, setMultiMode] = useState(false);
   const [copyTxn,       setCopyTxn]       = useState(null);
 
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const scrollRef = useRef(null);
+
   const multiModePrevHandler = React.useRef(null);
   const multiModeHandler = React.useRef(null);
+
+  // Sync year and view from dashboard clicks
+  useEffect(() => {
+    if (viewParams) {
+      if (viewParams.year !== undefined && viewParams.year !== null) {
+        setViewYear(Number(viewParams.year));
+      }
+      if (viewParams.month !== undefined && viewParams.month !== null) {
+        setViewMonth(Number(viewParams.month));
+        setViewMode('daily');
+      } else if (viewParams.year !== undefined && viewParams.year !== null) {
+        setViewMode('monthly');
+      }
+      clearNavParams();
+    }
+  }, [viewParams, clearNavParams]);
+
+  // Handle double-tap tab reset to Daily tab / current date
+  useEffect(() => {
+    const handleReset = () => {
+      setViewMode('daily');
+      const now = new Date();
+      setViewYear(now.getFullYear());
+      setViewMonth(now.getMonth());
+      setPickerY(now.getFullYear());
+      setMultiMode(false);
+      setSelected(new Set());
+    };
+    window.addEventListener('reset-transactions-view', handleReset);
+    return () => window.removeEventListener('reset-transactions-view', handleReset);
+  }, []);
+
+  useEffect(() => {
+    const handleNavTap = () => {
+      const listEl = scrollRef.current;
+      const now = new Date();
+      const isCurrentMonth = viewYear === now.getFullYear() && viewMonth === now.getMonth() && viewMode === 'daily';
+
+      if (!isCurrentMonth) {
+        // Other month or mode is active
+        if (listEl && listEl.scrollTop > 10) {
+          // First preference: scroll to top of that month's list
+          listEl.scrollTo({ top: 0, behavior: 'smooth' });
+        } else {
+          // Next click: go to current month daily view and scroll to today
+          setViewMode('daily');
+          setViewYear(now.getFullYear());
+          setViewMonth(now.getMonth());
+          setPickerY(now.getFullYear());
+          setMultiMode(false);
+          setSelected(new Set());
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('scroll-to-today'));
+          }, 100);
+        }
+      } else {
+        // Current month is active
+        if (listEl && listEl.scrollTop > 10) {
+          // Scroll to today's date (or closest date to today)
+          window.dispatchEvent(new CustomEvent('scroll-to-today'));
+        } else {
+          // Already at top, scroll to absolute top of page
+          if (listEl) listEl.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      }
+    };
+
+    window.addEventListener('transactions-nav-tap', handleNavTap);
+    return () => window.removeEventListener('transactions-nav-tap', handleNavTap);
+  }, [viewYear, viewMonth, viewMode]);
+
+  const handleScroll = (e) => {
+    if (e.target.scrollTop > 450) {
+      setShowScrollTop(true);
+    } else {
+      setShowScrollTop(false);
+    }
+  };
+
+  const scrollToTop = () => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 
   // Handle back button interception for multi-mode
   React.useEffect(() => {
@@ -637,18 +735,23 @@ export default function Transactions({ onAddTransaction, backInterceptRef }) {
 
       {/* Transaction list (daily) or monthly list */}
       {viewMode==='monthly' ? (
-        <MonthlyView transactions={transactions} onMonthClick={(y,mi)=>{setViewYear(y);setViewMonth(mi);setViewMode('daily');}}/>
+        <MonthlyView transactions={transactions} year={viewYear} setYear={setViewYear} onMonthClick={(y,mi)=>{setViewYear(y);setViewMonth(mi);setViewMode('daily');}}/>
       ) : (
         <>
           {multiMode && <BulkSelectionBar selected={selected} selTotals={selTotals} allTxns={transactions}
             onDone={()=>{setMultiMode(false);setSelected(new Set());}}
             onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
-          <div className="txn-list">
+          <div ref={scrollRef} className="txn-list" onScroll={handleScroll}>
             {monthTxns.length===0
               ? <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">No transactions</div><div className="empty-desc">{MONTHS_F[viewMonth]} {viewYear}</div></div>
-              : <DateGroupedList txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
+              : <DateGroupedList isActive={isActive} txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
             }
           </div>
+          {showScrollTop && (
+            <button className="scroll-top-btn" onClick={scrollToTop} aria-label="Scroll to top">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" width="16" height="16"><path d="M18 15l-6-6-6 6"/></svg>
+            </button>
+          )}
         </>
       )}
 

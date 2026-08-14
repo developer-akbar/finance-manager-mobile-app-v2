@@ -63,7 +63,7 @@ export function ccPrevCycle(settlementDate, refDate = new Date()) {
  *
  * Sign convention returned: positive = you owe / you've spent (shown as −)
  */
-function ccBalances(txns, acctName, settlementDate, today = new Date()) {
+export function ccBalances(txns, acctName, settlementDate, today = new Date()) {
   // Determine start of current (open) cycle
   const sd = settlementDate;
   const cy = today.getFullYear(), cm = today.getMonth(), cd = today.getDate();
@@ -639,7 +639,7 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
         <div style={{height:80}}/>
       </div>
       {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
-      {showAdd&&<AddTransaction key={addKey} prefillAccount={acctName} onClose={()=>setShowAdd(false)} onSaveAndContinue={() => setAddKey(k => k + 1)} backInterceptRef={backInterceptRef}/>}
+      {showAdd&&<AddTransaction key={addKey} prefillAccount={acctName} onClose={()=>setShowAdd(false)} onSaveAndContinue={() => {}} backInterceptRef={backInterceptRef}/>}
       {copyTxn&&<AddTransaction copyTransaction={copyTxn} onClose={()=>setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})} backInterceptRef={backInterceptRef}/>}
     </div>
   );
@@ -651,6 +651,16 @@ export default function Accounts({ backInterceptRef } = {}) {
   const { accounts, accountGroups, transactions } = state;
   const [drill, setDrill] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+
+  // Handle double-tap reset for Accounts tab
+  useEffect(() => {
+    const handleReset = () => {
+      setDrill(null);
+      setCollapsedGroups(new Set());
+    };
+    window.addEventListener('reset-accounts-view', handleReset);
+    return () => window.removeEventListener('reset-accounts-view', handleReset);
+  }, []);
 
   const PAID_ALERT_STORAGE = 'finman-paid-due-alerts';
   const DISMISS_ALERT_STORAGE = 'finman-dismissed-due-alerts';
@@ -724,11 +734,15 @@ export default function Accounts({ backInterceptRef } = {}) {
       const days = ccDaysUntilDue(a, today);
       if (days === null) continue;
       if (days <= 7) {
-        alerts.push({ acct: a, days, due: ccNextDueDate(a, today) });
+        // ONLY alert if there is actual balance payable
+        const { balancePayable } = ccBalances(transactions, a.name, a.settlementDate, today);
+        if (balancePayable > 0) {
+          alerts.push({ acct: a, days, due: ccNextDueDate(a, today) });
+        }
       }
     }
     return alerts;
-  }, [accounts]);
+  }, [accounts, transactions]);
 
   const toggleGroup = (groupName) => {
     setCollapsedGroups(prev => {
@@ -811,7 +825,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       const outCls  = outstanding > 0 ? 'warn' : outstanding < 0 ? 'pos' : '';
 
       const dueDays = ccDaysUntilDue(acctObj, now);
-      const showDueDot = !paidDueAlerts.has(name) && dueDays !== null && dueDays <= 7;
+      const showDueDot = !paidDueAlerts.has(name) && dueDays !== null && dueDays <= 7 && balancePayable > 0;
       return (
         <div key={name} className="acct-row acct-row-cc" onClick={() => setDrill(name)}>
           <div className="acct-row-name">

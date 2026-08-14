@@ -7,6 +7,7 @@ import './TransactionItem.css';
 // ── Shared TXN row (used across screens) ────────────────────────────────────
 export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy, runningBalance = null, isNewestInGroup = false }) {
   const [showDetail, setShowDetail] = useState(false);
+  const [isClosingDetail, setIsClosingDetail] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const pressTimer = React.useRef(null);
   const handlerRef = React.useRef(null);
@@ -20,14 +21,22 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const sign     = type === 'income' ? '+' : type === 'expense' ? '−' : '';
   const isTransfer = baseType === 'transfer';
   const label    = isTransfer
-    ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`
+    ? (t.Note || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`)
     : (t.Note || t.Category || '—');
   const subLabel = !isTransfer ? (t.Category || '') : '';
   const hasAccount = !isTransfer && t.Account;
+  const xferAccountLabel = isTransfer && t.Note ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}` : '';
 
   const closeDetail = () => {
-    setShowEdit(false);
-    setShowDetail(false);
+    if (showEdit) {
+      setShowEdit(false);
+    } else {
+      setIsClosingDetail(true);
+      setTimeout(() => {
+        setShowDetail(false);
+        setIsClosingDetail(false);
+      }, 200);
+    }
   };
 
   React.useEffect(() => {
@@ -110,6 +119,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
             {subLabel && <span className="txn-cat-tag">{subLabel}</span>}
             {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && <span className="txn-cat-tag">{t.Subcategory}</span>}
             {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
+            {xferAccountLabel && <span className="txn-time-tag">{xferAccountLabel}</span>}
           </div>
         </div>
         {/* Amount + running balance */}
@@ -126,17 +136,18 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
         </div>
       </div>
 
-      {showDetail && <DetailSheet t={t} onClose={() => setShowDetail(false)} onCopy={onCopy} backInterceptRef={backInterceptRef}/>}
+      {showDetail && <DetailSheet t={t} onClose={closeDetail} onCopy={onCopy} backInterceptRef={backInterceptRef} isClosing={isClosingDetail}/>}
     </>
   );
 }
 
 // ── Detail + Edit sheet ──────────────────────────────────────────────────────
-function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
+function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
   const { deleteTransaction, updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments, state } = useApp();
   const [showEdit,       setShowEdit]       = useState(false);
   const [showDelete,     setShowDelete]     = useState(false);
   const [showCopyPicker, setShowCopyPicker] = useState(false);
+  const [showDebug,      setShowDebug]      = useState(false);
 
   const type   = txnType(t);
   const amount = txnAmount(t);
@@ -186,9 +197,27 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
 
   return (
     <>
-      <div className="overlay" onClick={onClose}/>
-      <div className="bottom-sheet dp-sheet">
+      <div className={`overlay ${isClosing ? 'closing' : ''}`} onClick={onClose}/>
+      <div className={`bottom-sheet dp-sheet ${isClosing ? 'closing' : ''}`}>
         <div className="sheet-handle"/>
+        
+        {/* Debug Button */}
+        <button type="button" onClick={() => setShowDebug(p => !p)} style={{
+          position: 'absolute',
+          right: 16,
+          top: 14,
+          background: 'none',
+          border: 'none',
+          color: showDebug ? 'var(--green)' : 'var(--text-muted)',
+          cursor: 'pointer',
+          fontSize: '1.1rem',
+          padding: '6px',
+          zIndex: 10,
+          transition: 'color 0.15s ease',
+        }} title="Toggle Debug Info">
+          🐞
+        </button>
+
         {/* Hero */}
         <div className="dp-hero" onClick={() => setShowEdit(true)} style={{cursor:'pointer'}}>
           <div className={`dp-amount ${cls}`}>{sign}{formatINR(amount)}</div>
@@ -224,6 +253,32 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef }) {
           {t.Note        && <DPRow label="Note"        value={t.Note}/>}
           {t.Description && <DPRow label="Description" value={t.Description}/>}
         </div>
+
+        {/* Debug Metadata Panel */}
+        {showDebug && (
+          <div className="dp-debug-section" style={{
+            background: 'var(--bg-input)',
+            border: '1px solid var(--border)',
+            borderRadius: '12px',
+            padding: '10px 14px',
+            marginBottom: '12px',
+            fontSize: '0.72rem',
+            fontFamily: 'monospace',
+            color: 'var(--text-secondary)',
+            textAlign: 'left',
+            lineHeight: 1.5
+          }}>
+            <div style={{fontWeight:800, color:'var(--green)', marginBottom:6, textTransform:'uppercase', letterSpacing:0.5, fontSize:'0.65rem'}}>🔍 Developer Debug Info</div>
+            <div style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}><strong>Txn ID:</strong> {t._id || t.ID}</div>
+            <div><strong>Created At:</strong> {t.created_at ? new Date(t.created_at).toLocaleString('en-IN') : '—'}</div>
+            <div><strong>Last Modified:</strong> {t.updated_at ? new Date(t.updated_at).toLocaleString('en-IN') : '—'}</div>
+            {t.recurring_rule_id && <div style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}><strong>Recurring Rule ID:</strong> {t.recurring_rule_id}</div>}
+            <div><strong>Raw INR Value:</strong> {t.INR}</div>
+            <div><strong>Currency:</strong> {t.Currency}</div>
+            <div><strong>Original Type:</strong> {t['Income/Expense']}</div>
+          </div>
+        )}
+
         {/* Actions */}
         <div className="dp-actions" style={{ display: 'flex', gap: '10px' }}>
           <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowEdit(true)}>✏️ Edit</button>
