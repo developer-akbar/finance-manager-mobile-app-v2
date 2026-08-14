@@ -7,6 +7,7 @@ import AddTransaction from '../Transactions/AddTransaction.jsx';
 import DebtTracker from './DebtTracker.jsx';
 import CardOptimizer from './CardOptimizer.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
+import StockManager from './StockManager.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Accounts.css';
@@ -657,6 +658,7 @@ export default function Accounts({ backInterceptRef } = {}) {
   const [showDebtTracker, setShowDebtTracker] = useState(false);
   const [showOptimizer,   setShowOptimizer]   = useState(false);
   const [showGroups,      setShowGroups]      = useState(false);
+  const [showStockManager, setShowStockManager] = useState(false);
   const [settlePrefill, setSettlePrefill] = useState(null);
 
   // Handle double-tap reset for Accounts tab
@@ -666,6 +668,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       setShowDebtTracker(false);
       setShowOptimizer(false);
       setShowGroups(false);
+      setShowStockManager(false);
       setSettlePrefill(null);
       setCollapsedGroups(new Set());
     };
@@ -684,13 +687,15 @@ export default function Accounts({ backInterceptRef } = {}) {
       backInterceptRef.current = () => setShowOptimizer(false);
     } else if (showDebtTracker) {
       backInterceptRef.current = () => setShowDebtTracker(false);
+    } else if (showStockManager) {
+      backInterceptRef.current = () => setShowStockManager(false);
     } else if (drill) {
       backInterceptRef.current = () => setDrill(null);
     } else {
       backInterceptRef.current = null;
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
-  }, [settlePrefill, showGroups, showOptimizer, showDebtTracker, drill, backInterceptRef]);
+  }, [settlePrefill, showGroups, showOptimizer, showDebtTracker, showStockManager, drill, backInterceptRef]);
 
   const PAID_ALERT_STORAGE = 'finman-paid-due-alerts';
   const DISMISS_ALERT_STORAGE = 'finman-dismissed-due-alerts';
@@ -891,6 +896,10 @@ export default function Accounts({ backInterceptRef } = {}) {
     );
   }
 
+  if (showStockManager) {
+    return <StockManager onBack={() => setShowStockManager(false)} backInterceptRef={backInterceptRef} />;
+  }
+
   if (drill) {
     const drillAcct = (uniqueAccounts||[]).find(a => (a.name||a) === drill);
     const ccCfg = drillAcct && isCreditCard(drillAcct) ? drillAcct : null;
@@ -1012,6 +1021,24 @@ export default function Accounts({ backInterceptRef } = {}) {
             }}
           >
             <span>🤝</span> Debt Tracker
+          </button>
+          <button
+            onClick={() => setShowStockManager(true)}
+            style={{
+              padding: '6px 9px',
+              borderRadius: 14,
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              cursor: 'pointer',
+            }}
+          >
+            <span>🥫</span> Stock Manager
           </button>
         </div>
       </div>
