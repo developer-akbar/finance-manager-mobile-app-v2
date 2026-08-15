@@ -107,7 +107,29 @@ export const updateTransaction = async (id, data) => {
   };
 };
 
-export const deleteTransaction    = async (id) => { await getDB().run('DELETE FROM transactions WHERE id=?', [id]); };
+export const deleteTransaction = async (id) => {
+  const db = getDB();
+  try {
+    const res = await db.query('SELECT * FROM transactions WHERE id = ?', [id]);
+    const txn = res.values?.[0];
+    if (txn) {
+      const stockRefTag = (txn.tags || '').split(' ').find(t => t.startsWith('#stock_ref_'));
+      if (stockRefTag) {
+        const itemId = stockRefTag.replace('#stock_ref_', '');
+        const match = (txn.description || '').match(/^(Used|Lent)\s+([\d\.]+)\s+(\w+)\s+of\s+/i);
+        if (match) {
+          const qtyVal = parseFloat(match[2]);
+          const unitMode = match[3];
+          const { restoreInventoryItem } = await import('./inventory.js');
+          await restoreInventoryItem(itemId, qtyVal, unitMode);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to restore stock on transaction delete:', err);
+  }
+  await db.run('DELETE FROM transactions WHERE id=?', [id]);
+};
 export const deleteAllTransactions = async ()  => { await getDB().run('DELETE FROM transactions'); };
 
 // Normalise any date value → dd/mm/yyyy string for storage.

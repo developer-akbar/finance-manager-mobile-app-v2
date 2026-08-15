@@ -872,9 +872,9 @@ export default function Accounts({ backInterceptRef } = {}) {
             const firstSavings = (accounts || []).find(a => !['credit card', 'credit', 'lend', 'borrow'].some(k => (a.name || a).toLowerCase().includes(k))) || 'Cash';
             const bankName = typeof firstSavings === 'object' ? firstSavings.name : firstSavings;
             setSettlePrefill({
-              type: 'Transfer',
+              type: 'Transfer-Out',
               fromAccount: type === 'receive' ? 'Lend' : bankName,
-              toAccount: type === 'receive' ? bankName : 'Borrow',
+              toAccount: type === 'receive' ? '' : 'Borrow',
               amount: String(amount),
               note: type === 'receive' ? `From ${name}` : `To ${name}`,
             });
@@ -969,24 +969,6 @@ export default function Accounts({ backInterceptRef } = {}) {
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <button
-            onClick={() => setShowGroups(true)}
-            style={{
-              padding: '6px 9px',
-              borderRadius: 14,
-              fontSize: '0.7rem',
-              fontWeight: 700,
-              border: '1px solid var(--border)',
-              background: 'var(--bg-card2)',
-              color: 'var(--accent)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-              cursor: 'pointer',
-            }}
-          >
-            <span>👥</span> Group Splits
-          </button>
-          <button
             onClick={() => setShowOptimizer(true)}
             style={{
               padding: '6px 9px',
@@ -1021,24 +1003,6 @@ export default function Accounts({ backInterceptRef } = {}) {
             }}
           >
             <span>🤝</span> Debt Tracker
-          </button>
-          <button
-            onClick={() => setShowStockManager(true)}
-            style={{
-              padding: '6px 9px',
-              borderRadius: 14,
-              fontSize: '0.7rem',
-              fontWeight: 700,
-              border: '1px solid var(--border)',
-              background: 'var(--bg-card2)',
-              color: 'var(--accent)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-              cursor: 'pointer',
-            }}
-          >
-            <span>🥫</span> Stock Manager
           </button>
         </div>
       </div>

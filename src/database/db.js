@@ -252,7 +252,9 @@ const applySchema = async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS budgets (id TEXT PRIMARY KEY,category TEXT NOT NULL,amount REAL NOT NULL,period TEXT DEFAULT 'Monthly',created_at TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS recurring_rules (id TEXT PRIMARY KEY,rule_type TEXT NOT NULL,status TEXT DEFAULT 'active',txn_type TEXT DEFAULT 'Expense',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',base_note TEXT DEFAULT '',description TEXT DEFAULT '',currency TEXT DEFAULT 'INR',total_amount REAL DEFAULT 0,amount_per_part REAL DEFAULT 0,total_days INTEGER DEFAULT 0,total_parts INTEGER DEFAULT 0,completed_parts INTEGER DEFAULT 0,start_date TEXT DEFAULT '',next_date TEXT DEFAULT '',end_date TEXT DEFAULT '',schedule_mode TEXT DEFAULT 'on_date',frequency TEXT DEFAULT '',created_at TEXT DEFAULT '');`);
-  await db.execute(`CREATE TABLE IF NOT EXISTS inventory (id TEXT PRIMARY KEY,name TEXT NOT NULL,qty REAL DEFAULT 0,unit TEXT DEFAULT '',price REAL DEFAULT 0,discounted_price REAL DEFAULT 0,status TEXT DEFAULT 'available',purchased_date TEXT DEFAULT '',notes TEXT DEFAULT '',updated_at TEXT);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS inventory (id TEXT PRIMARY KEY,name TEXT NOT NULL,qty REAL DEFAULT 0,unit TEXT DEFAULT '',price REAL DEFAULT 0,discounted_price REAL DEFAULT 0,status TEXT DEFAULT 'available',purchased_date TEXT DEFAULT '',notes TEXT DEFAULT '',updated_at TEXT,sub_qty REAL DEFAULT 1,sub_unit TEXT DEFAULT '');`);
+  try { await db.run(`ALTER TABLE inventory ADD COLUMN sub_qty REAL DEFAULT 1`); } catch {}
+  try { await db.run(`ALTER TABLE inventory ADD COLUMN sub_unit TEXT DEFAULT ''`); } catch {}
 };
 
 let _db = null;

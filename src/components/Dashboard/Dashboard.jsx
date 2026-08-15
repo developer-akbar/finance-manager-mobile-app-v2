@@ -5,6 +5,11 @@ import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 import { ccBalances, isCreditCard, ccDaysUntilDue, ccNextDueDate } from '../Accounts/Accounts.jsx';
 import CashFlowForecast from '../Forecast/CashFlowForecast.jsx';
 import { parseBankSMS } from '../../utils/smsParser.js';
+import DebtTracker from '../Accounts/DebtTracker.jsx';
+import CardOptimizer from '../Accounts/CardOptimizer.jsx';
+import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
+import StockManager from '../Accounts/StockManager.jsx';
+import AddTransaction from '../Transactions/AddTransaction.jsx';
 import './Dashboard.css';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -43,6 +48,34 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   const [showAllYears, setShowAllYears] = useState(false);
   const [showForecast, setShowForecast] = useState(false);
   const [detectedSmsTxn, setDetectedSmsTxn] = useState(null);
+
+  // Sub-screen navigation states
+  const [showGroups, setShowGroups] = useState(false);
+  const [showOptimizer, setShowOptimizer] = useState(false);
+  const [showDebtTracker, setShowDebtTracker] = useState(false);
+  const [showStockManager, setShowStockManager] = useState(false);
+  const [settlePrefill, setSettlePrefill] = useState(null);
+
+  // Sync back button intercepts dynamically
+  useEffect(() => {
+    if (!backInterceptRef) return;
+    if (showGroups) {
+      backInterceptRef.current = () => setShowGroups(false);
+    } else if (showOptimizer) {
+      backInterceptRef.current = () => setShowOptimizer(false);
+    } else if (showDebtTracker) {
+      backInterceptRef.current = () => setShowDebtTracker(false);
+    } else if (showStockManager) {
+      backInterceptRef.current = () => setShowStockManager(false);
+    } else if (showForecast) {
+      backInterceptRef.current = () => setShowForecast(false);
+    } else {
+      backInterceptRef.current = null;
+    }
+    return () => {
+      if (backInterceptRef) backInterceptRef.current = null;
+    };
+  }, [showGroups, showOptimizer, showDebtTracker, showStockManager, showForecast, backInterceptRef]);
 
   // Auto-detect SMS / UPI transaction copied to clipboard
   useEffect(() => {
@@ -379,6 +412,52 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
     return <CashFlowForecast onBack={() => setShowForecast(false)} backInterceptRef={backInterceptRef} />;
   }
 
+  if (showGroups) {
+    return <GroupSplitManager onBack={() => setShowGroups(false)} backInterceptRef={backInterceptRef} />;
+  }
+
+  if (showOptimizer) {
+    return <CardOptimizer onBack={() => setShowOptimizer(false)} backInterceptRef={backInterceptRef} />;
+  }
+
+  if (showDebtTracker) {
+    return (
+      <>
+        <DebtTracker
+          onBack={() => setShowDebtTracker(false)}
+          backInterceptRef={backInterceptRef}
+          onSettle={({ name, amount, type }) => {
+            const firstSavings = (state.accounts || []).find(a => !['credit card', 'credit', 'lend', 'borrow'].some(k => (a.name || a).toLowerCase().includes(k))) || 'Cash';
+            const bankName = typeof firstSavings === 'object' ? firstSavings.name : firstSavings;
+            setSettlePrefill({
+              type: 'Transfer-Out',
+              fromAccount: type === 'receive' ? 'Lend' : bankName,
+              toAccount: type === 'receive' ? '' : 'Borrow',
+              amount: String(amount),
+              note: type === 'receive' ? `From ${name}` : `To ${name}`,
+            });
+          }}
+        />
+        {settlePrefill && (
+          <AddTransaction
+            prefillType={settlePrefill.type}
+            prefillFromAccount={settlePrefill.fromAccount}
+            prefillToAccount={settlePrefill.toAccount}
+            prefillAmount={settlePrefill.amount}
+            prefillNote={settlePrefill.note}
+            onClose={() => setSettlePrefill(null)}
+            onSaveAndContinue={() => setSettlePrefill(null)}
+            backInterceptRef={backInterceptRef}
+          />
+        )}
+      </>
+    );
+  }
+
+  if (showStockManager) {
+    return <StockManager onBack={() => setShowStockManager(false)} backInterceptRef={backInterceptRef} />;
+  }
+
   return (
     <div className="dash-screen">
       <div className="dash-scrollable-content">
@@ -541,35 +620,46 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           )}
         </div>
 
-        {/* ── Advanced Financial Health Metrics Grid ── */}
-        <div className="dash-metrics-grid">
-          <div className="dash-metric-card">
-            <div className="dash-metric-icon">🛡️</div>
-            <div className="dash-metric-content">
-              <div className="dash-metric-value" style={{ color: runwayStats.runwayMonths >= 6 ? 'var(--income)' : runwayStats.runwayMonths >= 3 ? '#f0a500' : 'var(--expense)' }}>
-                {runwayStats.runwayMonths >= 99 ? '99+' : runwayStats.runwayMonths.toFixed(1)} mo
-              </div>
-              <div className="dash-metric-label">Cash Runway</div>
-            </div>
-          </div>
-          <div className="dash-metric-card">
-            <div className="dash-metric-icon">🚀</div>
-            <div className="dash-metric-content">
-              <div className="dash-metric-value" style={{ color: 'var(--income)' }}>
-                {formatINRCompact(investmentStats.monthlyInvested)}
-              </div>
-              <div className="dash-metric-label">Invested this month</div>
-            </div>
-          </div>
-          <div className="dash-metric-card">
-            <div className="dash-metric-icon">📈</div>
-            <div className="dash-metric-content">
-              <div className="dash-metric-value" style={{ color: momStats.pctChange <= 0 ? 'var(--income)' : 'var(--expense)' }}>
-                {momStats.pctChange <= 0 ? '▼' : '▲'} {Math.abs(momStats.pctChange).toFixed(0)}%
-              </div>
-              <div className="dash-metric-label">MoM Spend change</div>
-            </div>
-          </div>
+        {/* ── Home Feature Grid ── */}
+        <div className="home-features-grid" style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: '10px',
+          margin: '0 var(--page-px) 14px'
+        }}>
+          {[
+            { id: 'analytics', label: 'Analytics', icon: '📊', onClick: () => navigate('analytics') },
+            { id: 'forecast', label: 'Cashflow', icon: '🔮', onClick: () => setShowForecast(true) },
+            { id: 'groups', label: 'Group Splits', icon: '👥', onClick: () => setShowGroups(true) },
+            { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
+            { id: 'debt', label: 'Debt Tracker', icon: '🤝', onClick: () => setShowDebtTracker(true) },
+            { id: 'stock', label: 'Stock Manager', icon: '🥫', onClick: () => setShowStockManager(true) },
+          ].map(item => (
+            <button
+              key={item.id}
+              onClick={item.onClick}
+              className="home-feature-card"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                background: 'var(--bg-card)',
+                border: '1.5px solid var(--border)',
+                borderRadius: '16px',
+                padding: '14px 10px',
+                cursor: 'pointer',
+                transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)'
+              }}
+            >
+              <span style={{ fontSize: '1.5rem' }}>{item.icon}</span>
+              <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-secondary)', textAlign: 'center', lineHeight: 1.2 }}>
+                {item.label}
+              </span>
+            </button>
+          ))}
         </div>
 
 

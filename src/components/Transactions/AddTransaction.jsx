@@ -503,7 +503,9 @@ export default function AddTransaction({
 
   const [form, setForm] = useState(() => {
     if (isEdit) {
-      const t = editTransaction, rt = t['Income/Expense'] || 'Expense';
+      const t = editTransaction;
+      let rt = t['Income/Expense'] || 'Expense';
+      if (rt === 'Transfer') rt = 'Transfer-Out';
       // Strip (x/x) instalment suffix from Note so user sees clean note in edit form
       const cleanNote = stripInstalmentSuffix(t.Note);
       return {
@@ -518,7 +520,9 @@ export default function AddTransaction({
       };
     }
     if (isCopy) {
-      const t = copyTransaction, rt = t['Income/Expense'] || 'Expense';
+      const t = copyTransaction;
+      let rt = t['Income/Expense'] || 'Expense';
+      if (rt === 'Transfer') rt = 'Transfer-Out';
       return {
         type: rt, amount: String(t.INR || t.Amount || ''), date: toInputDate(t.Date) || todayVal(), time: t.Time || nowTimeStr(),
         account: rt.startsWith('Transfer') ? '' : (t.Account || ''), fromAccount: rt.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
@@ -531,7 +535,7 @@ export default function AddTransaction({
       };
     }
     return {
-      type: prefillType || 'Expense',
+      type: (prefillType === 'Transfer' ? 'Transfer-Out' : prefillType) || 'Expense',
       amount: prefillAmount ? String(prefillAmount) : '',
       date: prefillDate ? (toInputDate(prefillDate) || todayVal()) : todayVal(),
       time: prefillDate && lastTimeForDate ? lastTimeForDate : nowTimeStr(),
@@ -619,7 +623,13 @@ export default function AddTransaction({
   // Open account picker as first focus on mount (add/copy only, not edit)
   React.useEffect(() => {
     if (isEdit) return;
-    if (isTransfer) return; // transfer has From/To, leave as-is
+    if (isTransfer) {
+      if (form.fromAccount && !form.toAccount) {
+        const t = setTimeout(() => toRef.current?.open(), 200);
+        return () => clearTimeout(t);
+      }
+      return;
+    }
     const t = setTimeout(() => accountRef.current?.open(), 200);
     return () => clearTimeout(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

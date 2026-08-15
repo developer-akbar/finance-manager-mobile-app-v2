@@ -20,7 +20,7 @@
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 14px 16px;
+  padding: 12px 14px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
   display: flex;
   align-items: center;
@@ -31,19 +31,19 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   text-align: center;
 }
 
 .stock-summary-divider {
   width: 1px;
-  height: 36px;
+  height: 32px;
   background: var(--border);
-  margin: 0 10px;
+  margin: 0 8px;
 }
 
 .stock-summary-label {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -51,7 +51,7 @@
 }
 
 .stock-summary-val {
-  font-size: 1.1rem;
+  font-size: 1rem;
   font-weight: 800;
   color: var(--text-primary);
 }
@@ -111,39 +111,44 @@
 .stock-item-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .stock-item-card {
   background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  transition: transform 0.12s, border-color 0.12s;
+  gap: 6px;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+}
+
+.stock-item-card:hover {
+  border-color: rgba(0, 229, 160, 0.3);
 }
 
 .stock-item-top {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .stock-item-info {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
 }
 
 .stock-item-icon {
-  font-size: 1.5rem;
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
+  font-size: 1.25rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   background: var(--bg-card2);
   display: flex;
   align-items: center;
@@ -154,10 +159,13 @@
 .stock-item-details {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .stock-item-name {
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   font-weight: 700;
   color: var(--text-primary);
   white-space: nowrap;
@@ -165,10 +173,16 @@
   text-overflow: ellipsis;
 }
 
-.stock-item-meta {
-  font-size: 0.68rem;
+.stock-store-chip {
+  display: inline-flex;
+  padding: 1px 6px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  border-radius: 6px;
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
   color: var(--text-muted);
-  margin-top: 1px;
+  text-transform: uppercase;
 }
 
 .stock-item-qty-col {
@@ -177,7 +191,7 @@
 }
 
 .stock-item-qty {
-  font-size: 0.95rem;
+  font-size: 0.82rem;
   font-weight: 800;
   color: var(--green);
 }
@@ -188,36 +202,44 @@
 }
 
 .stock-item-price {
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   color: var(--text-muted);
-  margin-top: 2px;
 }
 
-.stock-item-notes {
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  background: var(--bg-card2);
-  padding: 6px 10px;
-  border-radius: 8px;
-  line-height: 1.3;
-}
-
-.stock-item-actions {
+/* Accordion Batch styles */
+.stock-batch-list {
+  border-top: 1px dashed var(--border);
+  margin-top: 4px;
+  padding-top: 6px;
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  border-top: 1px solid var(--border-light);
-  padding-top: 8px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stock-batch-row {
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stock-batch-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: var(--text-secondary);
 }
 
 .stock-btn-action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 0.72rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.68rem;
   font-weight: 700;
   border: 1px solid var(--border);
   background: var(--bg-card2);
@@ -236,6 +258,12 @@
   border-color: rgba(77, 159, 255, 0.2);
 }
 
+.stock-btn-action.edit {
+  background: rgba(255, 179, 0, 0.1);
+  color: var(--gold);
+  border-color: rgba(255, 179, 0, 0.2);
+}
+
 .stock-btn-action.delete {
   background: var(--expense-bg);
   color: var(--expense);
@@ -244,25 +272,28 @@
 
 .stock-consume-inline {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--bg-card2);
+  flex-direction: column;
+  background: var(--bg-card);
   border: 1px solid var(--border);
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: 8px;
   margin-top: 4px;
 }
 
 .stock-consume-input {
-  width: 70px;
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 6px;
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   color: var(--text-primary);
   outline: none;
   font-family: var(--font);
+}
+
+.stock-consume-input.err {
+  border-color: var(--expense) !important;
+  box-shadow: 0 0 4px rgba(255, 77, 106, 0.2);
 }
 
 /* Purchase Form Styles */
@@ -296,7 +327,7 @@
   padding: 16px var(--page-px);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .stock-item-row-builder {
@@ -315,13 +346,13 @@
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: var(--expense-bg);
   color: var(--expense);
   border: none;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   font-weight: bold;
   cursor: pointer;
   display: flex;
@@ -347,4 +378,40 @@
   color: var(--text-muted);
   text-transform: uppercase;
   margin-bottom: 2px;
+}
+
+.picker-trigger {
+  width: 100%;
+  background: var(--bg-card2);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.picker-trigger:focus, .picker-trigger:active {
+  border-color: var(--accent);
+}
+
+.field-error {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--expense);
+  margin-top: 2px;
+  font-weight: 700;
+}
+
+.grand-total-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-top: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
