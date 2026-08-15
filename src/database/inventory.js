@@ -42,6 +42,14 @@ const formatFraction = (val) => {
   return String(parseFloat(val.toFixed(3)));
 };
 
+const cleanItemName = (rawName) => {
+  if (!rawName) return '';
+  let name = rawName.trim();
+  // Strip trailing size patterns like " 10kg", " 500g", " 1L", " 125g*8", " 600g*2"
+  name = name.replace(/\s+([\d\.]+)\s*(kg|g|ml|l|pcs|pc|box|pack|bottle|oz|m)s?(\s*[\*x]\s*\d+)?\s*$/i, '');
+  return name.trim();
+};
+
 export const getInventoryItems = async () => {
   const db = getDB();
   const res = await db.query('SELECT * FROM inventory ORDER BY purchased_date DESC, updated_at DESC', []);
@@ -67,13 +75,14 @@ export const addInventoryPurchase = async (fromAccount, date, items, noteText = 
     const subUnit = item.sub_unit || '';
     const itemAmtBeforeDisc = price * qty;
     const itemAmtAfterDisc = discPrice * qty;
-    itemDetails.push(`${item.name} ${qty} ${item.unit} ${subQty} ${subUnit} ${itemAmtBeforeDisc}: @${itemAmtAfterDisc}`);
+    const cleanedName = cleanItemName(item.name);
+    itemDetails.push(`${cleanedName} ${qty} ${item.unit} ${subQty} ${subUnit} ${itemAmtBeforeDisc}: @${itemAmtAfterDisc}`);
 
     const status = qty > 0 ? 'available' : 'unavailable';
     const id = uuid();
     await db.run(
-      'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, item.name.trim(), qty, item.unit || '', price, discPrice, status, date, item.notes || '', now, parseFloat(item.sub_qty) || 1, item.sub_unit || '']
+      'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, cleanedName, qty, item.unit || '', price, discPrice, status, date, item.notes || '', now, parseFloat(item.sub_qty) || 1, item.sub_unit || '', qty]
     );
   }
 
@@ -180,10 +189,12 @@ export const updateInventoryItem = async (id, data) => {
   const price = parseFloat(data.price) || 0;
   const discPrice = parseFloat(data.discounted_price) || price;
   const status = qty > 0 ? 'available' : 'unavailable';
+  const original_qty = parseFloat(data.original_qty) || qty;
+  const cleanedName = cleanItemName(data.name);
 
   await db.run(
-    'UPDATE inventory SET name = ?, qty = ?, unit = ?, price = ?, discounted_price = ?, status = ?, purchased_date = ?, notes = ?, updated_at = ?, sub_qty = ?, sub_unit = ? WHERE id = ?',
-    [data.name.trim(), qty, data.unit || '', price, discPrice, status, data.purchased_date || '', data.notes || '', now, parseFloat(data.sub_qty) || 1, data.sub_unit || '', id]
+    'UPDATE inventory SET name = ?, qty = ?, unit = ?, price = ?, discounted_price = ?, status = ?, purchased_date = ?, notes = ?, updated_at = ?, sub_qty = ?, sub_unit = ?, original_qty = ? WHERE id = ?',
+    [cleanedName, qty, data.unit || '', price, discPrice, status, data.purchased_date || '', data.notes || '', now, parseFloat(data.sub_qty) || 1, data.sub_unit || '', original_qty, id]
   );
 };
 
@@ -213,4 +224,146 @@ export const restoreInventoryItem = async (itemId, qtyToRestore, unitMode) => {
     'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
     [newQty, status, new Date().toISOString(), itemId]
   );
+};
+
+export const syncStockFromPastTransactions = async () => {
+  const db = getDB();
+  const now = new Date().toISOString();
+
+  // Query all past transactions matching To:Stock, Stock category, #stock tags, or stock descriptions
+  const res = await db.query(
+    "SELECT * FROM transactions WHERE to_account = 'Stock' OR category = 'Stock' OR tags LIKE '%stock%' OR description LIKE '%stock available%' OR description LIKE '%stock unavailable%'",
+    []
+  );
+  
+  const txns = res.values || [];
+  let parsedCount = 0;
+
+  // Clear existing items to prevent duplicates
+  await db.run('DELETE FROM inventory', []);
+
+  const cleanPrice = (str) => {
+    if (!str) return 0;
+    const noComma = str.split(',')[0];
+    const base = noComma.split('*')[0].split(/x/i)[0];
+    const cleaned = base.replace(/[^\d\.]/g, '').trim();
+    return parseFloat(cleaned) || 0;
+  };
+
+  for (const r of txns) {
+    const desc = r.description || '';
+    const txnDate = r.date || '';
+    
+    // Normalise date: "dd/mm/yyyy" to "yyyy-mm-dd"
+    let formattedDate = txnDate;
+    if (txnDate.includes('/')) {
+      const parts = txnDate.split('/');
+      if (parts.length === 3) {
+        formattedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      }
+    }
+
+    const lines = desc.split('\n');
+    let storeName = '';
+    if (lines[0] && !lines[0].toLowerCase().includes('stock')) {
+      storeName = lines[0].split('with')[0].trim();
+    }
+
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      if (!cleanLine) continue;
+
+      const isAvailable = cleanLine.toLowerCase().includes('stock available');
+      const isUnavailable = cleanLine.toLowerCase().includes('stock unavailable');
+      if (!isAvailable && !isUnavailable) continue;
+
+      const statusStr = isAvailable ? 'stock available' : 'stock unavailable';
+      const status = isAvailable ? 'available' : 'unavailable';
+
+      const parts = cleanLine.split(new RegExp(statusStr, 'i'));
+      const name = parts[0].trim();
+      const details = parts[1] ? parts[1].trim() : '';
+
+      const detailsParts = details.split(':');
+      const sizeStr = detailsParts[0] ? detailsParts[0].trim() : '';
+
+      let qty = 1;
+      let unit = 'pcs';
+      let subQty = 1;
+      let subUnit = '';
+
+      // Match multi-units
+      const multMatch = sizeStr.match(/^([\d\.]+)\s*([a-zA-Z]+)\s*\*\s*([\d\.]+)$/);
+      const singleMatch = sizeStr.match(/^([\d\.]+)\s*([a-zA-Z]+)$/);
+
+      if (multMatch) {
+        subQty = parseFloat(multMatch[1]) || 1;
+        subUnit = multMatch[2];
+        qty = parseFloat(multMatch[3]) || 1;
+      } else if (singleMatch) {
+        subQty = parseFloat(singleMatch[1]) || 1;
+        subUnit = singleMatch[2];
+        qty = 1;
+      }
+
+      let originalPrice = 0;
+      let discountedPrice = 0;
+      let isUnitPrice = false;
+      let priceQtyMultiplier = 1;
+
+      if (detailsParts.length > 1) {
+        const rawPricePart = detailsParts[1];
+        const multPriceMatch = rawPricePart.match(/[\*x]\s*([\d\.]+)/i);
+        if (multPriceMatch) {
+          isUnitPrice = true;
+          priceQtyMultiplier = parseFloat(multPriceMatch[1]) || 1;
+        }
+
+        originalPrice = cleanPrice(rawPricePart);
+
+        const lastPriceStr = detailsParts[detailsParts.length - 1];
+        const lastNoComma = lastPriceStr.split(',')[0];
+        if (lastNoComma.includes('*') || lastNoComma.includes('x')) {
+          isUnitPrice = true;
+        }
+
+        if (detailsParts.length > 2) {
+          discountedPrice = cleanPrice(lastPriceStr);
+        } else {
+          discountedPrice = originalPrice;
+        }
+      }
+
+      if (qty === 1 && priceQtyMultiplier > 1) {
+        qty = priceQtyMultiplier;
+      }
+
+      const lastPart = detailsParts[detailsParts.length - 1] || '';
+      const commaIndex = lastPart.lastIndexOf(',');
+      let remainingQty = status === 'unavailable' ? 0 : qty;
+      if (status === 'available' && commaIndex !== -1) {
+        const trailingNum = parseInt(lastPart.slice(commaIndex + 1).trim());
+        if (!isNaN(trailingNum)) {
+          remainingQty = trailingNum;
+        }
+      }
+
+      let unitPrice = discountedPrice;
+      if (!isUnitPrice && qty > 1) {
+        unitPrice = discountedPrice / qty;
+      }
+
+      const cleanedName = cleanItemName(name);
+      const id = uuid();
+      const itemStatus = remainingQty > 0 ? 'available' : 'unavailable';
+      
+      await db.run(
+        'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, cleanedName, remainingQty, unit, originalPrice, unitPrice, itemStatus, formattedDate, storeName, now, subQty, subUnit, qty]
+      );
+      parsedCount++;
+    }
+  }
+  
+  return parsedCount;
 };

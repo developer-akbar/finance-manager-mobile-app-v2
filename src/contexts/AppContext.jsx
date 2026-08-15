@@ -435,6 +435,30 @@ export function AppProvider({ children }) {
         const rules = backupData.recurringRules || backupData.recurring_rules || backupData.recurrings || [];
         for (const rule of rules) { await saveRecurringRule(rule); }
 
+        // Restoring stock inventory table
+        await db.run('DELETE FROM inventory');
+        const inventory = backupData.inventory || [];
+        for (const item of inventory) {
+          await db.run(
+            'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+              item.id,
+              item.name,
+              parseFloat(item.qty) || 0,
+              item.unit || '',
+              parseFloat(item.price) || 0,
+              parseFloat(item.discounted_price) || 0,
+              item.status || 'available',
+              item.purchased_date || '',
+              item.notes || '',
+              item.updated_at || new Date().toISOString(),
+              parseFloat(item.sub_qty) || 1,
+              item.sub_unit || '',
+              parseFloat(item.original_qty) || parseFloat(item.qty) || 0
+            ]
+          );
+        }
+
         const tagVal = backupData.customTags || backupData.savedTags || '';
         if (tagVal) await setSetting('customTags', String(tagVal));
       } else {

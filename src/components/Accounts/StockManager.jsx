@@ -6,7 +6,8 @@ import {
   addInventoryPurchase,
   consumeInventoryItem,
   updateInventoryItem,
-  deleteInventoryItem
+  deleteInventoryItem,
+  syncStockFromPastTransactions
 } from '../../database/inventory.js';
 import './StockManager.css';
 
@@ -84,6 +85,16 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const [search, setSearch] = useState('');
   const [expandedGroups, setExpandedGroups] = useState({});
 
+  const [popup, setPopup] = useState(null);
+
+  const showAppAlert = (message, onConfirm = null) => {
+    setPopup({ type: 'alert', message, onConfirm });
+  };
+
+  const showAppConfirm = (message, onConfirm, onCancel = null) => {
+    setPopup({ type: 'confirm', message, onConfirm, onCancel });
+  };
+
   // Inline edit state
   const [editingBatchId, setEditingBatchId] = useState(null);
   const [editFormData, setEditFormData] = useState({});
@@ -116,6 +127,90 @@ export default function StockManager({ onBack, backInterceptRef }) {
     { name: '', qty: '', unit: 'pcs', price: '', discountType: 'percentage', discountValue: '', notes: '', sub_qty: '1', sub_unit: '' }
   ]);
   const [errors, setErrors] = useState({});
+  const [syncing, setSyncing] = useState(false);
+
+  const handleExportExcel = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      const dataRows = [];
+      
+      // Header row matching Stock-Inventory.xlsx exactly
+      dataRows.push([
+        'Date', 'Product', 'Qty', 'Item Price', 'Items', 'Parts',
+        'Available Parts', 'Actual Price', 'Final Price', 'Cashback',
+        'Source', 'Status', '%'
+      ]);
+      
+      items.forEach(b => {
+        const qty = parseFloat(b.qty) || 0;
+        const subQty = parseFloat(b.sub_qty) || 1;
+        const price = parseFloat(b.price) || 0;
+        const discPrice = parseFloat(b.discounted_price) || price;
+        
+        const actPrice = qty * price;
+        const finPrice = qty * discPrice;
+        const cb = Math.max(0, actPrice - finPrice);
+        const pct = price > 0 ? (price - discPrice) / price : 0;
+        
+        dataRows.push([
+          b.purchased_date || '',
+          b.name,
+          b.sub_unit ? `${subQty}${b.sub_unit}` : 'NA',
+          price,
+          qty,
+          subQty,
+          parseFloat((qty * subQty).toFixed(3)),
+          actPrice,
+          finPrice,
+          cb,
+          b.notes || '',
+          qty > 0 ? 'Available' : 'Unavailable',
+          pct
+        ]);
+      });
+      
+      const ws = XLSX.utils.aoa_to_sheet(dataRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Stock');
+      
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'binary' });
+      const buf = new ArrayBuffer(wbout.length);
+      const view = new Uint8Array(buf);
+      for (let i = 0; i < wbout.length; i++) view[i] = wbout.charCodeAt(i) & 0xFF;
+      
+      const blob = new Blob([buf], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Stock-Inventory_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      showAppAlert('Failed to export Excel report.');
+    }
+  };
+
+  const handleSyncTransactions = () => {
+    showAppConfirm(
+      'This will scan past Transfer transactions to To:Stock and rebuild your inventory batches. All existing items in the current local Stock Manager screen will be reset and replaced with the parsed history. Continue?',
+      async () => {
+        setSyncing(true);
+        try {
+          const count = await syncStockFromPastTransactions();
+          showAppAlert(`Successfully synchronized stock inventory! Extracted ${count} batches from your past transactions.`);
+          await fetchItems();
+        } catch (err) {
+          console.error(err);
+          showAppAlert('Failed to synchronize stock from past transactions.');
+        } finally {
+          setSyncing(false);
+        }
+      }
+    );
+  };
 
   // Fetch inventory items on mount
   const fetchItems = async () => {
@@ -157,9 +252,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
       const qty = parseFloat(item.qty) || 0;
       const price = parseFloat(item.price) || 0;
       const discPrice = parseFloat(item.discounted_price) || price;
+      const origQty = parseFloat(item.original_qty || item.qty) || 0;
 
       availableValue += qty * discPrice;
-      totalSaved += qty * Math.max(0, price - discPrice);
+      totalSaved += origQty * Math.max(0, price - discPrice);
     });
 
     // Sum transactions transferring funds TO Stock
@@ -187,6 +283,12 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const groupedItems = useMemo(() => {
     const groups = {};
     items.forEach(item => {
+      const qty = parseFloat(item.qty) || 0;
+      
+      // Filter individual batches based on tab
+      if (filter === 'in_stock' && qty === 0) return;
+      if (filter === 'out_of_stock' && qty > 0) return;
+      
       const key = item.name.toLowerCase().trim();
       if (!groups[key]) {
         groups[key] = {
@@ -201,9 +303,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
         };
       }
       const g = groups[key];
-      const qty = parseFloat(item.qty) || 0;
-      const price = parseFloat(item.discounted_price) || parseFloat(item.price) || 0;
       g.totalQty += qty;
+      const price = parseFloat(item.discounted_price) || parseFloat(item.price) || 0;
       g.availableValue += qty * price;
       g.batches.push(item);
     });
@@ -216,13 +317,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
       .filter(g => {
         const matchesSearch = g.name.toLowerCase().includes(search.toLowerCase()) ||
           g.batches.some(b => (b.notes || '').toLowerCase().includes(search.toLowerCase()));
-        
-        const matchesFilter =
-          filter === 'all' ? true :
-          filter === 'in_stock' ? g.totalQty > 0 :
-          g.totalQty === 0;
-
-        return matchesSearch && matchesFilter;
+        return matchesSearch;
       });
   }, [items, filter, search]);
 
@@ -401,7 +496,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
       await load();
     } catch (err) {
       console.error(err);
-      alert('Failed to save purchase.');
+      showAppAlert('Failed to save purchase.');
     }
   };
 
@@ -416,7 +511,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
       purchased_date: batch.purchased_date || '',
       notes: batch.notes || '',
       sub_qty: String(batch.sub_qty || 1),
-      sub_unit: batch.sub_unit || ''
+      sub_unit: batch.sub_unit || '',
+      original_qty: String(batch.original_qty || batch.qty || 1)
     });
   };
 
@@ -431,25 +527,27 @@ export default function StockManager({ onBack, backInterceptRef }) {
         purchased_date: editFormData.purchased_date,
         notes: editFormData.notes,
         sub_qty: parseFloat(editFormData.sub_qty) || 1,
-        sub_unit: editFormData.sub_unit
+        sub_unit: editFormData.sub_unit,
+        original_qty: parseFloat(editFormData.original_qty) || parseFloat(editFormData.qty) || 0
       });
       setEditingBatchId(null);
       await fetchItems();
     } catch (err) {
       console.error(err);
-      alert('Failed to update batch details.');
+      showAppAlert('Failed to update batch details.');
     }
   };
 
-  const handleDeleteItem = async (id) => {
-    if (!window.confirm('Delete this stock batch?')) return;
-    try {
-      await deleteInventoryItem(id);
-      await fetchItems();
-    } catch (err) {
-      console.error(err);
-      alert('Failed to delete item.');
-    }
+  const handleDeleteItem = (id) => {
+    showAppConfirm('Delete this stock batch?', async () => {
+      try {
+        await deleteInventoryItem(id);
+        await fetchItems();
+      } catch (err) {
+        console.error(err);
+        showAppAlert('Failed to delete item.');
+      }
+    });
   };
 
   const toggleGroup = (key) => {
@@ -488,8 +586,25 @@ export default function StockManager({ onBack, backInterceptRef }) {
         </button>
         <div className="page-hdr-title" style={{ flex: 1 }}>Stock Inventory</div>
         <button
+          className="btn btn-sm btn-secondary"
+          style={{ padding: '6px 10px', fontSize: '0.72rem', borderRadius: 8, marginRight: 6, display: 'flex', alignItems: 'center', gap: 4 }}
+          onClick={handleExportExcel}
+          title="Export Stock Report to Excel"
+        >
+          📊 Export
+        </button>
+        <button
+          className="btn btn-sm btn-secondary"
+          style={{ padding: '6px 10px', fontSize: '0.72rem', borderRadius: 8, marginRight: 6, display: 'flex', alignItems: 'center', gap: 4 }}
+          onClick={handleSyncTransactions}
+          disabled={syncing}
+          title="Extract stock from transaction history"
+        >
+          {syncing ? '⏳ Syncing...' : '🔄 Sync'}
+        </button>
+        <button
           className="btn btn-sm btn-primary"
-          style={{ padding: '6px 12px', fontSize: '0.75rem', borderRadius: 8 }}
+          style={{ padding: '6px 12px', fontSize: '0.72rem', borderRadius: 8 }}
           onClick={() => {
             setShowPurchaseModal(true);
             setErrors({});
@@ -569,6 +684,23 @@ export default function StockManager({ onBack, backInterceptRef }) {
         </div>
 
         {/* Grouped Stock List */}
+        {editingBatchId && (
+          <div 
+            className="stock-edit-overlay" 
+            onClick={() => setEditingBatchId(null)}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0, 0, 0, 0.65)',
+              backdropFilter: 'blur(4px)',
+              zIndex: 90,
+              pointerEvents: 'auto'
+            }}
+          />
+        )}
         <div className="stock-item-list">
           {groupedItems.map(group => {
             const isOut = group.totalQty <= 0;
@@ -612,28 +744,109 @@ export default function StockManager({ onBack, backInterceptRef }) {
 
                       if (isEditing) {
                         return (
-                          <div key={batch.id} className="stock-batch-row" style={{ gap: 8, padding: 10 }}>
-                            <div className="stock-builder-lbl" style={{ color: 'var(--accent)' }}>Edit Batch Details</div>
+                          <div 
+                            key={batch.id} 
+                            className="stock-batch-row" 
+                            style={{ 
+                              position: 'fixed',
+                              top: '50%',
+                              left: '50%',
+                              transform: 'translate(-50%, -50%)',
+                              width: '90%',
+                              maxWidth: '420px',
+                              gap: 8, 
+                              padding: 16,
+                              zIndex: 95,
+                              background: 'var(--bg-card)',
+                              borderRadius: '12px',
+                              border: '1.5px solid var(--accent)',
+                              boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)',
+                              maxHeight: '90vh',
+                              overflowY: 'auto'
+                            }}
+                          >
+                            <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800 }}>Edit Batch Details</div>
                             <div className="stock-row-grid-2">
                               <div className="mgr-edit-field">
-                                <label className="stock-builder-lbl">Qty</label>
+                                <label className="stock-builder-lbl">Item Name</label>
+                                <input
+                                  type="text"
+                                  className="stock-consume-input"
+                                  style={{ width: '100%' }}
+                                  value={editFormData.name}
+                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onChange={e => setEditFormData({ ...editFormData, name: e.target.value })}
+                                />
+                              </div>
+                              <div className="mgr-edit-field">
+                                <label className="stock-builder-lbl">Original Qty (Bought)</label>
+                                <input
+                                  type="number"
+                                  className="stock-consume-input"
+                                  style={{ width: '100%' }}
+                                  value={editFormData.original_qty}
+                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onChange={e => setEditFormData({ ...editFormData, original_qty: e.target.value })}
+                                />
+                              </div>
+                            </div>
+                            <div className="stock-row-grid-2">
+                              <div className="mgr-edit-field">
+                                <label className="stock-builder-lbl">Current Qty (Available)</label>
                                 <input
                                   type="number"
                                   className="stock-consume-input"
                                   style={{ width: '100%' }}
                                   value={editFormData.qty}
+                                  onFocus={() => setActiveStoreEditSug(false)}
                                   onChange={e => setEditFormData({ ...editFormData, qty: e.target.value })}
                                 />
                               </div>
                               <div className="mgr-edit-field">
                                 <label className="stock-builder-lbl">Unit</label>
-                                <input
-                                  type="text"
+                                <select
                                   className="stock-consume-input"
                                   style={{ width: '100%' }}
                                   value={editFormData.unit}
+                                  onFocus={() => setActiveStoreEditSug(false)}
                                   onChange={e => setEditFormData({ ...editFormData, unit: e.target.value })}
+                                >
+                                  <option value="pcs">pcs</option>
+                                  <option value="packet">packet</option>
+                                  <option value="box">box</option>
+                                  <option value="bottle">bottle</option>
+                                  <option value="kg">kg</option>
+                                  <option value="litre">litre</option>
+                                </select>
+                              </div>
+                            </div>
+                            <div className="stock-row-grid-2">
+                              <div className="mgr-edit-field">
+                                <label className="stock-builder-lbl">Parts (Sub-Qty)</label>
+                                <input
+                                  type="number"
+                                  className="stock-consume-input"
+                                  style={{ width: '100%' }}
+                                  value={editFormData.sub_qty}
+                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onChange={e => setEditFormData({ ...editFormData, sub_qty: e.target.value })}
                                 />
+                              </div>
+                              <div className="mgr-edit-field">
+                                <label className="stock-builder-lbl">Parts Unit (Sub-Unit)</label>
+                                <select
+                                  className="stock-consume-input"
+                                  style={{ width: '100%' }}
+                                  value={editFormData.sub_unit}
+                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onChange={e => setEditFormData({ ...editFormData, sub_unit: e.target.value })}
+                                >
+                                  <option value="">None (Count Only)</option>
+                                  <option value="g">g</option>
+                                  <option value="ml">ml</option>
+                                  <option value="kg">kg</option>
+                                  <option value="litre">litre</option>
+                                </select>
                               </div>
                             </div>
                             <div className="stock-row-grid-2">
@@ -644,6 +857,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   className="stock-consume-input"
                                   style={{ width: '100%' }}
                                   value={editFormData.price}
+                                  onFocus={() => setActiveStoreEditSug(false)}
                                   onChange={e => setEditFormData({ ...editFormData, price: e.target.value })}
                                 />
                               </div>
@@ -654,6 +868,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   className="stock-consume-input"
                                   style={{ width: '100%' }}
                                   value={editFormData.discounted_price}
+                                  onFocus={() => setActiveStoreEditSug(false)}
                                   onChange={e => setEditFormData({ ...editFormData, discounted_price: e.target.value })}
                                 />
                               </div>
@@ -698,6 +913,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   className="stock-consume-input"
                                   style={{ width: '100%' }}
                                   value={editFormData.purchased_date}
+                                  onFocus={() => setActiveStoreEditSug(false)}
                                   onChange={e => setEditFormData({ ...editFormData, purchased_date: e.target.value })}
                                 />
                               </div>
@@ -890,18 +1106,19 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             </div>
                           ) : (
                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 2 }}>
-                              <button
-                                className="stock-btn-action consume"
-                                disabled={batch.qty <= 0}
-                                onClick={() => {
-                                  setConsumingItemId(batch.id);
-                                  setConsumeUnitMode('pack');
-                                  setUsageType('consume');
-                                  setConsumeQty(String(Math.min(1, batch.qty)));
-                                }}
-                              >
-                                🍽️ Use
-                              </button>
+                              {batch.qty > 0 && (
+                                <button
+                                  className="stock-btn-action consume"
+                                  onClick={() => {
+                                    setConsumingItemId(batch.id);
+                                    setConsumeUnitMode('pack');
+                                    setUsageType('consume');
+                                    setConsumeQty(String(Math.min(1, batch.qty)));
+                                  }}
+                                >
+                                  🍽️ Use
+                                </button>
+                              )}
                               <button className="stock-btn-action edit" onClick={() => handleStartEditBatch(batch)}>✏️ Edit</button>
                               <button className="stock-btn-action delete" onClick={() => handleDeleteItem(batch.id)}>✕ Delete</button>
                             </div>
@@ -1377,6 +1594,43 @@ export default function StockManager({ onBack, backInterceptRef }) {
                   Save Stock
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {popup && (
+        <div className="stock-modal-backdrop" style={{ zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="stock-modal-card animate-pop" style={{ width: '90%', maxWidth: 360, padding: 20, borderRadius: 16, border: '1px solid var(--border-color)', background: 'var(--card-bg)' }}>
+            <h3 style={{ marginTop: 0, fontSize: '1rem', fontWeight: 800 }}>
+              {popup.type === 'confirm' ? 'Confirm Action' : 'Notification'}
+            </h3>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.5, margin: '12px 0 20px 0' }}>
+              {popup.message}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              {popup.type === 'confirm' && (
+                <button
+                  className="btn btn-sm btn-secondary"
+                  style={{ borderRadius: 8, padding: '6px 14px', fontSize: '0.75rem' }}
+                  onClick={() => {
+                    if (popup.onCancel) popup.onCancel();
+                    setPopup(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
+              <button
+                className="btn btn-sm btn-primary"
+                style={{ borderRadius: 8, padding: '6px 14px', fontSize: '0.75rem' }}
+                onClick={() => {
+                  if (popup.onConfirm) popup.onConfirm();
+                  setPopup(null);
+                }}
+              >
+                {popup.type === 'confirm' ? 'Proceed' : 'OK'}
+              </button>
             </div>
           </div>
         </div>

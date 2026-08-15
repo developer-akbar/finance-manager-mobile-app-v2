@@ -5,6 +5,7 @@ import ReportGenerator from '../Reports/ReportGenerator.jsx';
 import WarrantyLocker from '../Accounts/WarrantyLocker.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import { encryptBackupData, decryptBackupData } from '../../utils/cryptoBackup.js';
+import { getDB } from '../../database/db.js';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -1345,22 +1346,33 @@ function DataManager({ onBack }) {
   // ── Backup helpers ─────────────────────────────────────────────────────────
   const MAX_BACKUPS = 3;
 
-  const buildBackupPayload = () => ({
-    _finman_backup: true,
-    version: '2.3.0',
-    exportedAt: new Date().toISOString(),
-    transactions,
-    accounts: accounts || [],
-    accountGroups: accountGroups || [],
-    accountMapping: accountMapping || [],
-    categories: categories || {},
-    budgets: budgets || [],
-    recurringRules: recurringRules || [],
-    customTags: state.settings?.customTags || '',
-  });
+  const buildBackupPayload = async () => {
+    let inventory = [];
+    try {
+      const db = getDB();
+      const res = await db.query('SELECT * FROM inventory', []);
+      inventory = res.values || [];
+    } catch (e) {
+      console.error('Failed to export stock inventory:', e);
+    }
+    return {
+      _finman_backup: true,
+      version: '2.3.0',
+      exportedAt: new Date().toISOString(),
+      transactions,
+      accounts: accounts || [],
+      accountGroups: accountGroups || [],
+      accountMapping: accountMapping || [],
+      categories: categories || {},
+      budgets: budgets || [],
+      recurringRules: recurringRules || [],
+      customTags: state.settings?.customTags || '',
+      inventory
+    };
+  };
 
   const runBackupNow = async () => {
-    const payload = buildBackupPayload();
+    const payload = await buildBackupPayload();
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
     const filename = `finman_backup_${dateStr}.json`;
@@ -1463,7 +1475,7 @@ function DataManager({ onBack }) {
   };
 
   const exportJSON = async () => {
-    const backup = buildBackupPayload();
+    const backup = await buildBackupPayload();
     await saveFile(JSON.stringify(backup, null, 2), `finman_backup_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
   };
 
@@ -1473,7 +1485,7 @@ function DataManager({ onBack }) {
       return;
     }
     try {
-      const payload = buildBackupPayload();
+      const payload = await buildBackupPayload();
       const encryptedJson = await encryptBackupData(payload, cryptoPin);
       const filename = `finman_encrypted_${new Date().toISOString().split('T')[0]}.finman`;
       await saveFile(encryptedJson, filename, 'application/octet-stream');
