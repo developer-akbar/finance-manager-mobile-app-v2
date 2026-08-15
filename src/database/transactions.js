@@ -77,9 +77,127 @@ export const addTransaction = async (data) => {
   });
 };
 
+const parseDescriptionStockInfo = (description) => {
+  if (!description) return null;
+  const match = description.match(/^(Used|Lent)\s+([\d\.\s\/]+)\s+(\w+)\s+of\s+/i);
+  if (!match) return null;
+
+  const type = match[1].toLowerCase();
+  const qtyStr = match[2].trim();
+  const unit = match[3].trim();
+
+  let qty = 0;
+  if (qtyStr.includes('/')) {
+    if (qtyStr.includes(' ')) {
+      const parts = qtyStr.split(/\s+/);
+      const whole = parseFloat(parts[0]) || 0;
+      const fracParts = parts[1].split('/');
+      const num = parseFloat(fracParts[0]) || 0;
+      const den = parseFloat(fracParts[1]) || 1;
+      qty = whole + (num / den);
+    } else {
+      const parts = qtyStr.split('/');
+      const num = parseFloat(parts[0]) || 0;
+      const den = parseFloat(parts[1]) || 1;
+      qty = num / den;
+    }
+  } else {
+    qty = parseFloat(qtyStr) || 0;
+  }
+
+  return { type, qty, unit };
+};
+
+const syncStockOnTxnChange = async (oldTxn, newTxn) => {
+  const oldTag = (oldTxn.tags || '').split(' ').find(t => t.startsWith('#stock_ref_'));
+  const newTag = (newTxn.tags || '').split(' ').find(t => t.startsWith('#stock_ref_'));
+
+  if (oldTag && oldTag !== newTag) {
+    const itemId = oldTag.replace('#stock_ref_', '');
+    const info = parseDescriptionStockInfo(oldTxn.description);
+    if (info) {
+      const { restoreInventoryItem } = await import('./inventory.js');
+      await restoreInventoryItem(itemId, info.qty, info.unit);
+    }
+  }
+
+  if (oldTag && oldTag === newTag) {
+    const oldInfo = parseDescriptionStockInfo(oldTxn.description);
+    const newInfo = parseDescriptionStockInfo(newTxn.description);
+    if (oldInfo && newInfo) {
+      const qtyDiff = newInfo.qty - oldInfo.qty;
+      if (qtyDiff !== 0 || oldInfo.unit !== newInfo.unit) {
+        const itemId = oldTag.replace('#stock_ref_', '');
+        const { getDB } = await import('./db.js');
+        const db = getDB();
+        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
+        const item = res.values?.[0];
+        if (item) {
+          const subQtyVal = parseFloat(item.sub_qty) || 1;
+          let oldQtyInPacks = oldInfo.qty;
+          if (item.sub_unit && oldInfo.unit === item.sub_unit && subQtyVal > 0) {
+            oldQtyInPacks = oldInfo.qty / subQtyVal;
+          }
+          let newQtyInPacks = newInfo.qty;
+          if (item.sub_unit && newInfo.unit === item.sub_unit && subQtyVal > 0) {
+            newQtyInPacks = newInfo.qty / subQtyVal;
+          }
+          const packDiff = newQtyInPacks - oldQtyInPacks;
+          const currQty = parseFloat(item.qty) || 0;
+          const newQty = Math.max(0, currQty - packDiff);
+          const status = newQty > 0 ? 'available' : 'unavailable';
+          await db.run(
+            'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
+            [newQty, status, new Date().toISOString(), itemId]
+          );
+        }
+      }
+    }
+  }
+
+  if (!oldTag && newTag) {
+    const info = parseDescriptionStockInfo(newTxn.description);
+    if (info) {
+      const itemId = newTag.replace('#stock_ref_', '');
+      const { getDB } = await import('./db.js');
+      const db = getDB();
+      const res = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
+      const item = res.values?.[0];
+      if (item) {
+        const subQtyVal = parseFloat(item.sub_qty) || 1;
+        let qtyInPacks = info.qty;
+        if (item.sub_unit && info.unit === item.sub_unit && subQtyVal > 0) {
+          qtyInPacks = info.qty / subQtyVal;
+        }
+        const currQty = parseFloat(item.qty) || 0;
+        const newQty = Math.max(0, currQty - qtyInPacks);
+        const status = newQty > 0 ? 'available' : 'unavailable';
+        await db.run(
+          'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
+          [newQty, status, new Date().toISOString(), itemId]
+        );
+      }
+    }
+  }
+};
+
 export const updateTransaction = async (id, data) => {
   const db = getDB();
   const now = new Date().toISOString();
+  try {
+    const res = await db.query('SELECT * FROM transactions WHERE id = ?', [id]);
+    const oldTxn = res.values?.[0];
+    if (oldTxn) {
+      const newTxn = {
+        tags: data.Tags || data.tags || '',
+        description: data.Description || ''
+      };
+      await syncStockOnTxnChange(oldTxn, newTxn);
+    }
+  } catch (err) {
+    console.error('Failed to sync stock on transaction edit:', err);
+  }
+
   await db.run(
     `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=?,tags=?,split_group_id=?,receipt_image=?,warranty_expiry=?,serial_no=? WHERE id=?`,
     [data.Date, data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
@@ -116,12 +234,10 @@ export const deleteTransaction = async (id) => {
       const stockRefTag = (txn.tags || '').split(' ').find(t => t.startsWith('#stock_ref_'));
       if (stockRefTag) {
         const itemId = stockRefTag.replace('#stock_ref_', '');
-        const match = (txn.description || '').match(/^(Used|Lent)\s+([\d\.]+)\s+(\w+)\s+of\s+/i);
-        if (match) {
-          const qtyVal = parseFloat(match[2]);
-          const unitMode = match[3];
+        const info = parseDescriptionStockInfo(txn.description);
+        if (info) {
           const { restoreInventoryItem } = await import('./inventory.js');
-          await restoreInventoryItem(itemId, qtyVal, unitMode);
+          await restoreInventoryItem(itemId, info.qty, info.unit);
         }
       }
     }

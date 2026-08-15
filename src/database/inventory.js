@@ -2,6 +2,46 @@ import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
 import { addTransaction } from './transactions.js';
 
+const formatFraction = (val) => {
+  if (val === 0 || !val) return '0';
+  const integerPart = Math.floor(val);
+  const decimalPart = val - integerPart;
+
+  if (decimalPart < 0.005) {
+    return String(integerPart);
+  }
+  if (Math.abs(decimalPart - 1) < 0.005) {
+    return String(integerPart + 1);
+  }
+
+  const epsilon = 0.01;
+  const fractions = [
+    { dec: 0.5, frac: '1/2' },
+    { dec: 0.25, frac: '1/4' },
+    { dec: 0.75, frac: '3/4' },
+    { dec: 1/3, frac: '1/3' },
+    { dec: 2/3, frac: '2/3' },
+    { dec: 1/8, frac: '1/8' },
+    { dec: 3/8, frac: '3/8' },
+    { dec: 5/8, frac: '5/8' },
+    { dec: 7/8, frac: '7/8' },
+    { dec: 0.2, frac: '1/5' },
+    { dec: 0.4, frac: '2/5' },
+    { dec: 0.6, frac: '3/5' },
+    { dec: 0.8, frac: '4/5' },
+    { dec: 1/6, frac: '1/6' },
+    { dec: 5/6, frac: '5/6' },
+  ];
+
+  for (const item of fractions) {
+    if (Math.abs(decimalPart - item.dec) < epsilon) {
+      return integerPart > 0 ? `${integerPart} ${item.frac}` : item.frac;
+    }
+  }
+
+  return String(parseFloat(val.toFixed(3)));
+};
+
 export const getInventoryItems = async () => {
   const db = getDB();
   const res = await db.query('SELECT * FROM inventory ORDER BY purchased_date DESC, updated_at DESC', []);
@@ -101,9 +141,10 @@ export const consumeInventoryItem = async (
 
   const formattedDate = date.includes('/') ? date : date.split('-').reverse().join('/');
 
+  const qtyStrFormatted = formatFraction(qtyToConsume);
   const consumedStr = useSubUnit
-    ? `${qtyToConsume} ${item.sub_unit || 'g'}`
-    : `${qtyToConsume} ${item.unit || 'pcs'}`;
+    ? `${qtyStrFormatted} ${item.sub_unit || 'g'}`
+    : `${qtyStrFormatted} ${item.unit || 'pcs'}`;
 
   // Human-readable batch connectivity in description
   const batchDate = item.purchased_date

@@ -35,6 +35,46 @@ const extractPersonName = (rawNote) => {
   return s.trim();
 };
 
+const formatFraction = (val) => {
+  if (val === 0 || !val) return '0';
+  const integerPart = Math.floor(val);
+  const decimalPart = val - integerPart;
+
+  if (decimalPart < 0.005) {
+    return String(integerPart);
+  }
+  if (Math.abs(decimalPart - 1) < 0.005) {
+    return String(integerPart + 1);
+  }
+
+  const epsilon = 0.01;
+  const fractions = [
+    { dec: 0.5, frac: '1/2' },
+    { dec: 0.25, frac: '1/4' },
+    { dec: 0.75, frac: '3/4' },
+    { dec: 1/3, frac: '1/3' },
+    { dec: 2/3, frac: '2/3' },
+    { dec: 1/8, frac: '1/8' },
+    { dec: 3/8, frac: '3/8' },
+    { dec: 5/8, frac: '5/8' },
+    { dec: 7/8, frac: '7/8' },
+    { dec: 0.2, frac: '1/5' },
+    { dec: 0.4, frac: '2/5' },
+    { dec: 0.6, frac: '3/5' },
+    { dec: 0.8, frac: '4/5' },
+    { dec: 1/6, frac: '1/6' },
+    { dec: 5/6, frac: '5/6' },
+  ];
+
+  for (const item of fractions) {
+    if (Math.abs(decimalPart - item.dec) < epsilon) {
+      return integerPart > 0 ? `${integerPart} ${item.frac}` : item.frac;
+    }
+  }
+
+  return String(parseFloat(val.toFixed(3)));
+};
+
 export default function StockManager({ onBack, backInterceptRef }) {
   const { state, load } = useApp();
   const { accounts, categories, transactions } = state;
@@ -89,7 +129,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
 
   useEffect(() => {
     fetchItems();
-  }, []);
+  }, [transactions]);
 
   // Sync back button intercept
   useEffect(() => {
@@ -550,10 +590,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
                   </div>
                   <div className="stock-item-qty-col">
                     <div className={`stock-item-qty ${isOut ? 'out' : ''}`} style={{ fontSize: '0.8rem', fontWeight: 900 }}>
-                      {parseFloat(group.totalQty.toFixed(3))} {group.unit}
+                      {formatFraction(group.totalQty)} {group.unit}
                       {group.sub_unit && group.totalQty > 0 && (
                         <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block', fontWeight: 700 }}>
-                          (total: {parseFloat(totalSubVal.toFixed(3))} {group.sub_unit})
+                          (total: {formatFraction(totalSubVal)} {group.sub_unit})
                         </span>
                       )}
                     </div>
@@ -678,8 +718,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
                               {batch.notes && ` @ ${batch.notes}`}
                             </span>
                              <span style={{ fontWeight: 800, color: 'var(--green)' }}>
-                               {parseFloat(batch.qty.toFixed(3))} {batch.unit || 'pcs'}
-                               {batch.sub_unit && ` (${parseFloat((batch.qty * batch.sub_qty).toFixed(3))} ${batch.sub_unit})`}
+                               {formatFraction(batch.qty)} {batch.unit || 'pcs'}
+                               {batch.sub_unit && ` (${formatFraction(batch.qty * batch.sub_qty)} ${batch.sub_unit})`}
                              </span>
                           </div>
                           <div className="stock-batch-meta" style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
