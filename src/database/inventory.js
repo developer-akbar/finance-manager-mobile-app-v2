@@ -147,10 +147,11 @@ export const consumeInventoryItem = async (
 
   // 1. Get all batches of the same name to validate total quantity (filtering/sorting done in JS to support IndexedDB query limitations)
   const allRes = await db.query(
-    'SELECT * FROM inventory WHERE LOWER(name) = ?',
-    [item.name.toLowerCase()]
+    'SELECT * FROM inventory WHERE name = ?',
+    [item.name]
   );
-  const allBatches = (allRes.values || []).filter(b => (parseFloat(b.qty) || 0) > 0.0001);
+  const nameLower = item.name.toLowerCase();
+  const allBatches = (allRes.values || []).filter(b => b.name.toLowerCase() === nameLower && (parseFloat(b.qty) || 0) > 0.0001);
 
   const totalAvailablePacks = allBatches.reduce((sum, b) => {
     const bQty = parseFloat(b.qty) || 0;
@@ -195,7 +196,7 @@ export const consumeInventoryItem = async (
 
   // Other batches next
   if (remainingToConsume > 0.0001) {
-    const otherBatches = (allRes.values || []).filter(b => b.id !== itemId && (parseFloat(b.qty) || 0) > 0.0001);
+    const otherBatches = (allRes.values || []).filter(b => b.name.toLowerCase() === nameLower && b.id !== itemId && (parseFloat(b.qty) || 0) > 0.0001);
     otherBatches.sort((a, b) => (a.purchased_date || '').localeCompare(b.purchased_date || '') || (a.updated_at || '').localeCompare(b.updated_at || ''));
 
     for (const other of otherBatches) {
