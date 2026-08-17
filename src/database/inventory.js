@@ -1,6 +1,7 @@
 import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
 import { addTransaction } from './transactions.js';
+import { saveRecurringRule, buildInstalmentSchedule, buildInstalmentNote } from './recurring.js';
 
 const formatFraction = (val) => {
   if (val === 0 || !val) return '0';
@@ -127,7 +128,9 @@ export const consumeInventoryItem = async (
   category = 'To Home',
   subcategory = 'Groceries',
   usageType = 'consume',
-  personName = ''
+  personName = '',
+  instalmentMonths = 3,
+  timeStr = ''
 ) => {
   const db = getDB();
   const now = new Date().toISOString();
@@ -159,6 +162,7 @@ export const consumeInventoryItem = async (
   const roundedExpense = Math.round(rawExpense);
 
   const formattedDate = date.includes('/') ? date : date.split('-').reverse().join('/');
+  const finalTime = timeStr || new Date().toLocaleTimeString('en-IN', { hour12: false }).slice(0, 5);
 
   const qtyStrFormatted = formatFraction(qtyToConsume);
   const consumedStr = useSubUnit
@@ -167,29 +171,94 @@ export const consumeInventoryItem = async (
 
   // Human-readable batch connectivity in description
   const batchDate = item.purchased_date
-    ? new Date(item.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+    ? new Date(item.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
     : 'unknown date';
   const batchStore = item.notes ? ` from ${item.notes}` : '';
-  const description = `${usageType === 'lend' ? 'Lent' : 'Used'} ${consumedStr} of ${item.name} (Batch: bought on ${batchDate}${batchStore})`;
+  
+  let labelPrefix = 'Used';
+  if (usageType === 'lend') labelPrefix = 'Lent';
+  else if (usageType === 'instalment') labelPrefix = 'Instalment Use';
 
-  const txn = {
-    Date: formattedDate,
-    Time: new Date().toLocaleTimeString('en-IN', { hour12: false }).slice(0, 5),
-    Account: usageType === 'lend' ? 'Lend' : 'Stock',
-    FromAccount: usageType === 'lend' ? 'Lend' : 'Stock',
-    ToAccount: '',
-    Category: usageType === 'lend' ? 'Lend' : category,
-    Subcategory: usageType === 'lend' ? '' : subcategory,
-    Note: usageType === 'lend' ? `Lend to ${personName.trim()}` : 'consumed',
-    Description: description,
-    INR: roundedExpense,
-    Amount: String(roundedExpense),
-    Currency: 'INR',
-    'Income/Expense': 'Expense',
-    tags: `#stock #${usageType === 'lend' ? 'lent' : 'consumed'} #stock_ref_${item.id}`,
-  };
+  const description = `${labelPrefix} ${consumedStr} of ${item.name} (Batch: bought on ${batchDate}${batchStore})`;
 
-  await addTransaction(txn);
+  if (usageType === 'instalment') {
+    // Convert date format to YYYY-MM-DD for recurring engine
+    let isoStartDate = date;
+    if (date.includes('/')) {
+      const [dd, mm, yyyy] = date.split('/');
+      isoStartDate = `${yyyy}-${mm}-${dd}`;
+    }
+
+    const months = parseInt(instalmentMonths) || 3;
+    const totalDays = months * 30;
+
+    const rule = {
+      rule_type: 'instalment',
+      status: 'completed', // all parts created upfront
+      txn_type: 'Expense',
+      account: 'Stock',
+      from_account: 'Stock',
+      to_account: '',
+      category: category,
+      subcategory: subcategory || 'Default',
+      base_note: 'consumed',
+      description: description,
+      currency: 'INR',
+      total_amount: roundedExpense,
+      total_days: totalDays,
+      start_date: isoStartDate,
+      schedule_mode: 'on_date',
+    };
+
+    const schedule = buildInstalmentSchedule(rule);
+    rule.total_parts = schedule.length;
+    rule.completed_parts = schedule.length;
+    rule.next_date = '';
+    rule.end_date = schedule[schedule.length - 1]?.date || '';
+    rule.amount_per_part = schedule[0]?.amount || 0;
+
+    const saved = await saveRecurringRule(rule);
+
+    for (const inst of schedule) {
+      const [iy, im, id2] = inst.date.split('-');
+      const instTxnDate = `${id2}/${im}/${iy}`;
+      await addTransaction({
+        Date: instTxnDate,
+        Time: finalTime,
+        Account: 'Stock',
+        FromAccount: 'Stock',
+        ToAccount: '',
+        Category: category,
+        Subcategory: subcategory || 'Default',
+        Note: buildInstalmentNote('consumed', inst.part, inst.total),
+        Description: description,
+        INR: inst.amount,
+        Amount: String(inst.amount),
+        Currency: 'INR',
+        'Income/Expense': 'Expense',
+        recurring_rule_id: saved.id,
+        Tags: `#stock #instalment #stock_ref_${item.id}`,
+      });
+    }
+  } else {
+    const txn = {
+      Date: formattedDate,
+      Time: finalTime,
+      Account: usageType === 'lend' ? 'Lend' : 'Stock',
+      FromAccount: usageType === 'lend' ? 'Lend' : 'Stock',
+      ToAccount: '',
+      Category: usageType === 'lend' ? 'Lend' : category,
+      Subcategory: usageType === 'lend' ? '' : subcategory,
+      Note: usageType === 'lend' ? `Lend to ${personName.trim()}` : 'consumed',
+      Description: description,
+      INR: roundedExpense,
+      Amount: String(roundedExpense),
+      Currency: 'INR',
+      'Income/Expense': 'Expense',
+      tags: `#stock #${usageType === 'lend' ? 'lent' : 'consumed'} #stock_ref_${item.id}`,
+    };
+    await addTransaction(txn);
+  }
 };
 
 export const updateInventoryItem = async (id, data) => {

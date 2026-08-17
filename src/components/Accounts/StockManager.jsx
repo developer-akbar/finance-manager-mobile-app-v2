@@ -122,10 +122,12 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const [consumingItemId, setConsumingItemId] = useState(null);
   const [consumeQty, setConsumeQty] = useState('');
   const [consumeDate, setConsumeDate] = useState(new Date().toISOString().split('T')[0]);
+  const [consumeTime, setConsumeTime] = useState('');
   const [consumeUnitMode, setConsumeUnitMode] = useState('pack'); // 'pack' or 'sub'
   const [consumeCategory, setConsumeCategory] = useState('To Home');
   const [consumeSubcategory, setConsumeSubcategory] = useState('Groceries');
-  const [usageType, setUsageType] = useState('consume'); // 'consume' or 'lend'
+  const [usageType, setUsageType] = useState('consume'); // 'consume' or 'lend' or 'instalment'
+  const [instalmentMonths, setInstalmentMonths] = useState('3');
   const [personName, setPersonName] = useState('');
   const [consumeError, setConsumeError] = useState('');
 
@@ -334,6 +336,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
         g.batches.sort((a, b) => (b.purchased_date || '').localeCompare(a.purchased_date || ''));
         return g;
       })
+      .sort((a, b) => {
+        const dateA = a.batches[0]?.purchased_date || '';
+        const dateB = b.batches[0]?.purchased_date || '';
+        return dateB.localeCompare(dateA);
+      })
       .filter(g => {
         const matchesSearch = g.name.toLowerCase().includes(search.toLowerCase()) ||
           g.batches.some(b => (b.notes || '').toLowerCase().includes(search.toLowerCase()));
@@ -408,10 +415,23 @@ export default function StockManager({ onBack, backInterceptRef }) {
     }
 
     try {
-      await consumeInventoryItem(item.id, qty, consumeDate, isSubMode, consumeCategory, consumeSubcategory, usageType, personName);
+      await consumeInventoryItem(
+        item.id,
+        qty,
+        consumeDate,
+        isSubMode,
+        consumeCategory,
+        consumeSubcategory,
+        usageType,
+        personName,
+        parseInt(instalmentMonths) || 3,
+        consumeTime
+      );
       setConsumingItemId(null);
       setConsumeQty('');
       setPersonName('');
+      setConsumeTime('');
+      setInstalmentMonths('3');
       setConsumeError('');
       await fetchItems();
       await load();
@@ -682,7 +702,15 @@ export default function StockManager({ onBack, backInterceptRef }) {
   };
 
   const toggleGroup = (key) => {
-    setExpandedGroups(prev => ({ ...prev, [key]: !prev[key] }));
+    setExpandedGroups(prev => {
+      const willCollapse = !!prev[key];
+      if (willCollapse) {
+        setEditingBatchId(null);
+        setConsumingItemId(null);
+        setConsumeError('');
+      }
+      return { ...prev, [key]: !prev[key] };
+    });
   };
 
   const totalPurchaseSum = useMemo(() => {
@@ -700,13 +728,24 @@ export default function StockManager({ onBack, backInterceptRef }) {
   }, [purchaseItems]);
 
   return (
-    <div className="stock-manager-screen" onClick={() => {
-      // Click outside suggestions lists to close them
-      setActiveItemSugIdx(null);
-      setActiveStoreSugIdx(null);
-      setActiveStoreEditSug(false);
-      setActiveLendSug(false);
-    }}>
+    <>
+      {consumingItemId && (
+        <div
+          className="overlay"
+          style={{ zIndex: 999 }}
+          onClick={() => {
+            setConsumingItemId(null);
+            setConsumeError('');
+          }}
+        />
+      )}
+      <div className="stock-manager-screen" onClick={() => {
+        // Click outside suggestions lists to close them
+        setActiveItemSugIdx(null);
+        setActiveStoreSugIdx(null);
+        setActiveStoreEditSug(false);
+        setActiveLendSug(false);
+      }}>
       <div className="page-hdr">
         <button className="back-btn" onClick={onBack} title="Back">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16">
@@ -721,15 +760,6 @@ export default function StockManager({ onBack, backInterceptRef }) {
           title="Export Stock Report to Excel"
         >
           📊 Export
-        </button>
-        <button
-          className="btn btn-sm btn-secondary"
-          style={{ padding: '6px 10px', fontSize: '0.72rem', borderRadius: 8, marginRight: 6, display: 'flex', alignItems: 'center', gap: 4 }}
-          onClick={handleSyncTransactions}
-          disabled={syncing}
-          title="Extract stock from transaction history"
-        >
-          {syncing ? '⏳ Syncing...' : '🔄 Sync'}
         </button>
         <button
           className="btn btn-sm btn-primary"
@@ -835,9 +865,15 @@ export default function StockManager({ onBack, backInterceptRef }) {
             const isOut = group.totalQty <= 0;
             const isExpanded = expandedGroups[group.key];
             const avgPrice = group.totalQty > 0 ? (group.availableValue / group.totalQty) : 0;
+            const containsConsumingBatch = group.batches.some(b => b.id === consumingItemId);
 
             return (
-              <div key={group.key} className="stock-item-card" onClick={() => toggleGroup(group.key)}>
+              <div
+                key={group.key}
+                className={`stock-item-card ${containsConsumingBatch ? 'consuming-active' : ''}`}
+                style={containsConsumingBatch ? { position: 'relative', zIndex: 1000, background: 'var(--bg-card)', boxShadow: '0 8px 30px rgba(0,0,0,0.5)' } : {}}
+                onClick={() => toggleGroup(group.key)}
+              >
                 <div className="stock-item-top">
                   <div className="stock-item-info">
                     <div className="stock-item-icon">{getEmoji(group.name)}</div>
@@ -933,7 +969,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   step="any"
                                   className="form-input"
                                   value={editFormData.sub_qty}
-                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onFocus={e => {
+                                    setActiveStoreEditSug(false);
+                                    e.target.select();
+                                  }}
                                   onChange={e => setEditFormData({ ...editFormData, sub_qty: e.target.value })}
                                 />
                               </div>
@@ -961,7 +1000,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   step="any"
                                   className="form-input"
                                   value={editFormData.pack_qty}
-                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onFocus={e => {
+                                    setActiveStoreEditSug(false);
+                                    e.target.select();
+                                  }}
                                   onChange={e => setEditFormData({ ...editFormData, pack_qty: e.target.value })}
                                 />
                               </div>
@@ -976,7 +1018,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   step="any"
                                   className="form-input"
                                   value={editFormData.original_qty}
-                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onFocus={e => {
+                                    setActiveStoreEditSug(false);
+                                    e.target.select();
+                                  }}
                                   onChange={e => {
                                     const val = e.target.value;
                                     setEditFormData(prev => {
@@ -996,7 +1041,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   step="any"
                                   className="form-input"
                                   value={editFormData.qty}
-                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onFocus={e => {
+                                    setActiveStoreEditSug(false);
+                                    e.target.select();
+                                  }}
                                   onChange={e => setEditFormData({ ...editFormData, qty: e.target.value })}
                                 />
                               </div>
@@ -1011,7 +1059,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   step="any"
                                   className="form-input"
                                   value={editFormData.price}
-                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onFocus={e => {
+                                    setActiveStoreEditSug(false);
+                                    e.target.select();
+                                  }}
                                   onChange={e => setEditFormData({ ...editFormData, price: e.target.value })}
                                 />
                               </div>
@@ -1057,7 +1108,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                     style={{ flex: 1 }}
                                     placeholder={editFormData.discountType === 'percentage' ? 'Disc. %' : 'Value after disc.'}
                                     value={editFormData.discountValue}
-                                    onFocus={() => setActiveStoreEditSug(false)}
+                                    onFocus={e => {
+                                      setActiveStoreEditSug(false);
+                                      e.target.select();
+                                    }}
                                     onChange={e => setEditFormData({ ...editFormData, discountValue: e.target.value })}
                                   />
                                 </div>
@@ -1139,7 +1193,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                         <div key={batch.id} className="stock-batch-row">
                           <div className="stock-batch-meta">
                             <span style={{ fontWeight: 700 }}>
-                              📅 {batch.purchased_date ? new Date(batch.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'Unknown Date'}
+                              📅 {batch.purchased_date ? new Date(batch.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Unknown Date'}
                               {batch.notes && ` @ ${batch.notes}`}
                             </span>
                             <span style={{ fontWeight: 800, color: 'var(--green)' }}>
@@ -1183,7 +1237,20 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   }}
                                   onClick={() => setUsageType('lend')}
                                 >
-                                  🤝 Lend Item
+                                  🤝 Lend
+                                </button>
+                                <button
+                                  type="button"
+                                  className="stock-btn-action"
+                                  style={{
+                                    flex: 1,
+                                    background: usageType === 'instalment' ? 'rgba(255, 179, 0, 0.15)' : 'var(--bg-card2)',
+                                    color: usageType === 'instalment' ? 'var(--gold)' : 'var(--text-primary)',
+                                    borderColor: usageType === 'instalment' ? 'rgba(255, 179, 0, 0.2)' : 'var(--border)'
+                                  }}
+                                  onClick={() => setUsageType('instalment')}
+                                >
+                                  📋 Instalment
                                 </button>
                               </div>
 
@@ -1231,6 +1298,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                     className={`stock-consume-input ${consumeError ? 'err' : ''}`}
                                     style={{ width: 65 }}
                                     value={consumeQty}
+                                    onFocus={e => e.target.select()}
                                     onChange={e => {
                                       setConsumeQty(e.target.value);
                                       setConsumeError('');
@@ -1293,6 +1361,19 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                     >
                                       {subcategoriesList.map(s => <option key={s} value={s}>{s}</option>)}
                                     </select>
+                                    {usageType === 'instalment' && (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                        <span style={{ fontSize: '0.65rem', fontWeight: 700 }}>Months:</span>
+                                        <input
+                                          type="number"
+                                          className="stock-consume-input"
+                                          style={{ width: 50 }}
+                                          value={instalmentMonths}
+                                          onFocus={e => e.target.select()}
+                                          onChange={e => setInstalmentMonths(e.target.value)}
+                                        />
+                                      </div>
+                                    )}
                                   </>
                                 )}
 
@@ -1302,6 +1383,14 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   style={{ width: 100 }}
                                   value={consumeDate}
                                   onChange={e => setConsumeDate(e.target.value)}
+                                />
+
+                                <input
+                                  type="time"
+                                  className="stock-consume-input"
+                                  style={{ width: 80 }}
+                                  value={consumeTime}
+                                  onChange={e => setConsumeTime(e.target.value)}
                                 />
 
                                 {consumeError && (
@@ -1326,6 +1415,16 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                     setConsumeUnitMode('pack');
                                     setUsageType('consume');
                                     setConsumeQty(String(Math.min(1, batch.qty)));
+                                    
+                                    const now = new Date();
+                                    const yyyy = now.getFullYear();
+                                    const mm = String(now.getMonth() + 1).padStart(2, '0');
+                                    const dd = String(now.getDate()).padStart(2, '0');
+                                    const hh = String(now.getHours()).padStart(2, '0');
+                                    const min = String(now.getMinutes()).padStart(2, '0');
+                                    setConsumeDate(`${yyyy}-${mm}-${dd}`);
+                                    setConsumeTime(`${hh}:${min}`);
+                                    setInstalmentMonths('3');
                                   }}
                                 >
                                   🍽️ Use
@@ -1573,10 +1672,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             className="form-input"
                             placeholder="e.g. 200"
                             value={item.sub_qty}
-                            onFocus={() => {
+                            onFocus={(e) => {
                               setShowAccountPicker(false);
                               setActiveItemSugIdx(null);
                               setActiveStoreSugIdx(null);
+                              e.target.select();
                             }}
                             onChange={e => handlePurchaseItemChange(idx, 'sub_qty', e.target.value)}
                           />
@@ -1612,10 +1712,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             className="form-input"
                             placeholder="1"
                             value={item.pack_qty}
-                            onFocus={() => {
+                            onFocus={(e) => {
                               setShowAccountPicker(false);
                               setActiveItemSugIdx(null);
                               setActiveStoreSugIdx(null);
+                              e.target.select();
                             }}
                             onChange={e => handlePurchaseItemChange(idx, 'pack_qty', e.target.value)}
                           />
@@ -1633,10 +1734,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             className="form-input"
                             placeholder="e.g. 4"
                             value={item.original_qty}
-                            onFocus={() => {
+                            onFocus={(e) => {
                               setShowAccountPicker(false);
                               setActiveItemSugIdx(null);
                               setActiveStoreSugIdx(null);
+                              e.target.select();
                             }}
                             onChange={e => {
                               const val = e.target.value;
@@ -1656,10 +1758,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             className="form-input"
                             placeholder="e.g. 4"
                             value={item.qty}
-                            onFocus={() => {
+                            onFocus={(e) => {
                               setShowAccountPicker(false);
                               setActiveItemSugIdx(null);
                               setActiveStoreSugIdx(null);
+                              e.target.select();
                             }}
                             onChange={e => handlePurchaseItemChange(idx, 'qty', e.target.value)}
                           />
@@ -1676,10 +1779,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             step="any"
                             className="form-input"
                             value={item.price}
-                            onFocus={() => {
+                            onFocus={(e) => {
                               setShowAccountPicker(false);
                               setActiveItemSugIdx(null);
                               setActiveStoreSugIdx(null);
+                              e.target.select();
                             }}
                             onChange={e => handlePurchaseItemChange(idx, 'price', e.target.value)}
                           />
@@ -1727,10 +1831,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
                               style={{ flex: 1 }}
                               placeholder={item.discountType === 'percentage' ? 'Disc. %' : 'Value after disc.'}
                               value={item.discountValue}
-                              onFocus={() => {
+                              onFocus={e => {
                                 setShowAccountPicker(false);
                                 setActiveItemSugIdx(null);
                                 setActiveStoreSugIdx(null);
+                                e.target.select();
                               }}
                               onChange={e => handlePurchaseItemChange(idx, 'discountValue', e.target.value)}
                             />
@@ -1886,5 +1991,6 @@ export default function StockManager({ onBack, backInterceptRef }) {
         </div>
       )}
     </div>
+  </>
   );
 }

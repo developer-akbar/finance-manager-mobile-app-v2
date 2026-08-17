@@ -124,6 +124,7 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
                 className="form-input" type="tel" inputMode="numeric" pattern="[0-9]*"
                 placeholder={inputMode === 'months' ? 'e.g. 3' : 'e.g. 84'}
                 value={inputMode === 'months' ? months : days}
+                onFocus={e => e.target.select()}
                 onChange={e => inputMode === 'months' ? setMonths(e.target.value) : setDays(e.target.value)}
               />
             </div>
@@ -1327,7 +1328,7 @@ export default function AddTransaction({
                   type="text" inputMode="decimal" pattern="^-?[0-9]*([.,][0-9]+)?"
                   autoComplete="off" autoCorrect="off" spellCheck="false"
                   placeholder="0"
-                  onFocus={() => setPickerState(null)}
+                  onFocus={e => { setPickerState(null); e.target.select(); }}
                   value={form.amount} onChange={e => set('amount', e.target.value)} />
               </div>
               {!isTransfer && !isEdit && (
@@ -1481,6 +1482,7 @@ export default function AddTransaction({
                         className="form-input"
                         style={{ paddingLeft: 22, fontSize: '0.8rem', padding: '6px 8px 6px 20px' }}
                         value={s.amount}
+                        onFocus={e => e.target.select()}
                         onChange={e => {
                           const val = e.target.value;
                           setSplits(prev => {
