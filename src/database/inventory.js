@@ -152,7 +152,10 @@ export const consumeInventoryItem = async (
   );
   const allBatches = allRes.values || [];
 
-  const totalAvailablePacks = allBatches.reduce((sum, b) => sum + (parseFloat(b.qty) || 0), 0);
+  const totalAvailablePacks = allBatches.reduce((sum, b) => {
+    const bQty = parseFloat(b.qty) || 0;
+    return sum + (bQty > 0.0001 ? bQty : 0);
+  }, 0);
   if (finalQtyToConsume > totalAvailablePacks) {
     throw new Error(`Insufficient total stock. You requested ${formatFraction(finalQtyToConsume)} packs but only have ${formatFraction(totalAvailablePacks)} packs in total.`);
   }
@@ -166,7 +169,7 @@ export const consumeInventoryItem = async (
   const currQty = parseFloat(item.qty) || 0;
   const deductFromCurrent = Math.min(currQty, remainingToConsume);
   const newQty = Math.max(0, currQty - deductFromCurrent);
-  const status = newQty > 0 ? 'available' : 'unavailable';
+  const status = newQty > 0.0001 ? 'available' : 'unavailable';
 
   await db.run(
     'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
@@ -177,7 +180,7 @@ export const consumeInventoryItem = async (
   totalCost += deductFromCurrent * pricePaidPerPack;
   remainingToConsume -= deductFromCurrent;
 
-  if (deductFromCurrent > 0) {
+  if (deductFromCurrent > 0.0001) {
     const batchDate = item.purchased_date
       ? new Date(item.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
       : 'unknown date';
@@ -189,7 +192,7 @@ export const consumeInventoryItem = async (
   }
 
   // Other batches next
-  if (remainingToConsume > 0) {
+  if (remainingToConsume > 0.0001) {
     const otherRes = await db.query(
       'SELECT * FROM inventory WHERE LOWER(name) = ? AND id != ? AND qty > 0 ORDER BY purchased_date ASC, updated_at ASC',
       [item.name.toLowerCase(), itemId]
@@ -197,12 +200,16 @@ export const consumeInventoryItem = async (
     const otherBatches = otherRes.values || [];
 
     for (const other of otherBatches) {
-      if (remainingToConsume <= 0) break;
+      if (remainingToConsume <= 0.0001) break;
 
       const otherQty = parseFloat(other.qty) || 0;
+      if (otherQty <= 0.0001) continue;
+
       const deductFromOther = Math.min(otherQty, remainingToConsume);
+      if (deductFromOther <= 0.0001) continue;
+
       const newQtyOther = Math.max(0, otherQty - deductFromOther);
-      const statusOther = newQtyOther > 0 ? 'available' : 'unavailable';
+      const statusOther = newQtyOther > 0.0001 ? 'available' : 'unavailable';
 
       await db.run(
         'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
