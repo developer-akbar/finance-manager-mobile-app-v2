@@ -958,6 +958,32 @@ export default function StockManager({ onBack, backInterceptRef }) {
                               >
                             <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800, marginBottom: 4 }}>Edit Batch Details</div>
 
+                            {/* Purchase Date & Time */}
+                            <div className="stock-row-grid-2">
+                              <div className="mgr-edit-field">
+                                <label className="stock-builder-lbl">Purchase Date</label>
+                                <input
+                                  type="date"
+                                  className="form-input"
+                                  style={{ width: '100%' }}
+                                  value={editFormData.purchased_date}
+                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onChange={e => setEditFormData({ ...editFormData, purchased_date: e.target.value })}
+                                />
+                              </div>
+                              <div className="mgr-edit-field">
+                                <label className="stock-builder-lbl">Purchase Time</label>
+                                <input
+                                  type="time"
+                                  className="form-input"
+                                  style={{ width: '100%' }}
+                                  value={editFormData.purchased_time || '12:00'}
+                                  onFocus={() => setActiveStoreEditSug(false)}
+                                  onChange={e => setEditFormData({ ...editFormData, purchased_time: e.target.value })}
+                                />
+                              </div>
+                            </div>
+
                             {/* Item Name */}
                             <div className="mgr-edit-field" style={{ position: 'relative' }}>
                               <label className="stock-builder-lbl">Item Name</label>
@@ -1163,19 +1189,6 @@ export default function StockManager({ onBack, backInterceptRef }) {
                               )}
                             </div>
 
-                            {/* Purchase Date */}
-                            <div className="mgr-edit-field">
-                              <label className="stock-builder-lbl">Purchase Date</label>
-                              <input
-                                type="date"
-                                className="form-input"
-                                style={{ width: '100%' }}
-                                value={editFormData.purchased_date}
-                                onFocus={() => setActiveStoreEditSug(false)}
-                                onChange={e => setEditFormData({ ...editFormData, purchased_date: e.target.value })}
-                              />
-                            </div>
-
                             {/* Calculated dynamic display */}
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 2, paddingInline: 2, marginTop: 4 }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -1220,32 +1233,61 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             <span>Batch Value: {formatINR(batchCost)}</span>
                           </div>
 
-                          {isConsuming ? (
-                            <div
-                              className="stock-batch-row animate-pop"
-                              style={{
-                                position: 'fixed',
-                                top: '50%',
-                                left: '50%',
-                                transform: 'translate(-50%, -50%)',
-                                width: '90%',
-                                maxWidth: '420px',
-                                gap: 8,
-                                padding: 16,
-                                zIndex: 1000,
-                                background: 'var(--bg-card)',
-                                borderRadius: '12px',
-                                border: '1.5px solid var(--accent)',
-                                boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)',
-                                maxHeight: '90vh',
-                                overflowY: 'auto',
-                                display: 'flex',
-                                flexDirection: 'column'
-                              }}
-                            >
-                              <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800, marginBottom: 4 }}>
-                                Use Item: {group.name} ({batch.purchased_date ? new Date(batch.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'Unknown'})
-                              </div>
+                          {isConsuming ? (() => {
+                            const subQtyVal = parseFloat(batch.sub_qty) || 1;
+                            const isSubMode = consumeUnitMode === 'sub';
+                            const availableQty = isSubMode ? (batch.qty * subQtyVal) : batch.qty;
+                            const unitLabel = isSubMode ? (batch.sub_unit || 'g') : (batch.unit || 'pcs');
+
+                            return (
+                              <div
+                                key={batch.id}
+                                className="stock-batch-row animate-pop"
+                                style={{
+                                  position: 'fixed',
+                                  top: '50%',
+                                  left: '50%',
+                                  transform: 'translate(-50%, -50%)',
+                                  width: '90%',
+                                  maxWidth: '420px',
+                                  gap: 8,
+                                  padding: 16,
+                                  zIndex: 1000,
+                                  background: 'var(--bg-card)',
+                                  borderRadius: '12px',
+                                  border: '1.5px solid var(--accent)',
+                                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)',
+                                  maxHeight: '90vh',
+                                  overflowY: 'auto',
+                                  display: 'flex',
+                                  flexDirection: 'column'
+                                }}
+                              >
+                                <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800, marginBottom: 4 }}>
+                                  Use Item: {group.name} ({batch.purchased_date ? new Date(batch.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'Unknown'})
+                                </div>
+                                
+                                {/* Use Date & Time */}
+                                <div className="stock-row-grid-2">
+                                  <div className="mgr-edit-field">
+                                    <label className="stock-builder-lbl">Date</label>
+                                    <input
+                                      type="date"
+                                      className="form-input"
+                                      value={consumeDate}
+                                      onChange={e => setConsumeDate(e.target.value)}
+                                    />
+                                  </div>
+                                  <div className="mgr-edit-field">
+                                    <label className="stock-builder-lbl">Time</label>
+                                    <input
+                                      type="time"
+                                      className="form-input"
+                                      value={consumeTime}
+                                      onChange={e => setConsumeTime(e.target.value)}
+                                    />
+                                  </div>
+                                </div>
                               
                               {/* Usage Type toggles */}
                               <div style={{ display: 'flex', gap: 6, width: '100%', marginBottom: 4 }}>
@@ -1326,7 +1368,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                               )}
 
                               <div className="mgr-edit-field">
-                                <label className="stock-builder-lbl">Qty to Use</label>
+                                <label className="stock-builder-lbl">Qty to Use (Available: {formatFraction(availableQty)} {unitLabel})</label>
                                 <input
                                   type="number"
                                   step="any"
@@ -1416,27 +1458,6 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                 </>
                               )}
 
-                              <div className="stock-row-grid-2">
-                                <div className="mgr-edit-field">
-                                  <label className="stock-builder-lbl">Date</label>
-                                  <input
-                                    type="date"
-                                    className="form-input"
-                                    value={consumeDate}
-                                    onChange={e => setConsumeDate(e.target.value)}
-                                  />
-                                </div>
-                                <div className="mgr-edit-field">
-                                  <label className="stock-builder-lbl">Time</label>
-                                  <input
-                                    type="time"
-                                    className="form-input"
-                                    value={consumeTime}
-                                    onChange={e => setConsumeTime(e.target.value)}
-                                  />
-                                </div>
-                              </div>
-
                               {consumeError && (
                                 <div className="field-error" style={{ width: '100%', marginTop: 4 }}>
                                   ⚠️ {consumeError}
@@ -1448,7 +1469,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                 <button className="stock-btn-action" onClick={() => { setConsumingItemId(null); setConsumeError(''); }}>Cancel</button>
                               </div>
                             </div>
-                          ) : (
+                          )})() : (
                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 2 }}>
                               {batch.qty > 0 && (
                                 <button
