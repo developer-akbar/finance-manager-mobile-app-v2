@@ -139,16 +139,33 @@ export const consumeInventoryItem = async (
   const item = res.values?.[0];
   if (!item) throw new Error('Item not found in stock');
 
-  const currQty = parseFloat(item.qty) || 0;
   const subQtyVal = parseFloat(item.sub_qty) || 1;
-
   let finalQtyToConsume = qtyToConsume;
   if (useSubUnit && subQtyVal > 0) {
-    // Convert sub-unit consumption to parent pack unit
     finalQtyToConsume = qtyToConsume / subQtyVal;
   }
 
-  const newQty = Math.max(0, currQty - finalQtyToConsume);
+  // 1. Get all available batches of the same name to validate total quantity
+  const allRes = await db.query(
+    'SELECT * FROM inventory WHERE LOWER(name) = ? AND qty > 0',
+    [item.name.toLowerCase()]
+  );
+  const allBatches = allRes.values || [];
+
+  const totalAvailablePacks = allBatches.reduce((sum, b) => sum + (parseFloat(b.qty) || 0), 0);
+  if (finalQtyToConsume > totalAvailablePacks) {
+    throw new Error(`Insufficient total stock. You requested ${formatFraction(finalQtyToConsume)} packs but only have ${formatFraction(totalAvailablePacks)} packs in total.`);
+  }
+
+  // 2. Perform sequential FIFO deduction (starting with clicked item first, then oldest other batches)
+  let remainingToConsume = finalQtyToConsume;
+  let totalCost = 0;
+  const detailsList = [];
+
+  // Clicked item first
+  const currQty = parseFloat(item.qty) || 0;
+  const deductFromCurrent = Math.min(currQty, remainingToConsume);
+  const newQty = Math.max(0, currQty - deductFromCurrent);
   const status = newQty > 0 ? 'available' : 'unavailable';
 
   await db.run(
@@ -156,30 +173,72 @@ export const consumeInventoryItem = async (
     [newQty, status, now, itemId]
   );
 
-  // Create corresponding Expense transaction (Account: Stock)
   const pricePaidPerPack = parseFloat(item.discounted_price) || parseFloat(item.price) || 0;
-  const rawExpense = finalQtyToConsume * pricePaidPerPack;
-  const roundedExpense = Math.round(rawExpense);
+  totalCost += deductFromCurrent * pricePaidPerPack;
+  remainingToConsume -= deductFromCurrent;
 
+  if (deductFromCurrent > 0) {
+    const batchDate = item.purchased_date
+      ? new Date(item.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+      : 'unknown date';
+    const batchStore = item.notes ? ` from ${item.notes}` : '';
+    const consumedStrCurrent = useSubUnit
+      ? `${formatFraction(deductFromCurrent * subQtyVal)} ${item.sub_unit || 'g'}`
+      : `${formatFraction(deductFromCurrent)} ${item.unit || 'pcs'}`;
+    detailsList.push(`${consumedStrCurrent} (bought on ${batchDate}${batchStore})`);
+  }
+
+  // Other batches next
+  if (remainingToConsume > 0) {
+    const otherRes = await db.query(
+      'SELECT * FROM inventory WHERE LOWER(name) = ? AND id != ? AND qty > 0 ORDER BY purchased_date ASC, updated_at ASC',
+      [item.name.toLowerCase(), itemId]
+    );
+    const otherBatches = otherRes.values || [];
+
+    for (const other of otherBatches) {
+      if (remainingToConsume <= 0) break;
+
+      const otherQty = parseFloat(other.qty) || 0;
+      const deductFromOther = Math.min(otherQty, remainingToConsume);
+      const newQtyOther = Math.max(0, otherQty - deductFromOther);
+      const statusOther = newQtyOther > 0 ? 'available' : 'unavailable';
+
+      await db.run(
+        'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
+        [newQtyOther, statusOther, now, other.id]
+      );
+
+      const otherPrice = parseFloat(other.discounted_price) || parseFloat(other.price) || 0;
+      totalCost += deductFromOther * otherPrice;
+      remainingToConsume -= deductFromOther;
+
+      const otherSubQty = parseFloat(other.sub_qty) || 1;
+      const otherDate = other.purchased_date
+        ? new Date(other.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+        : 'unknown date';
+      const otherStore = other.notes ? ` from ${other.notes}` : '';
+      const consumedStrOther = useSubUnit
+        ? `${formatFraction(deductFromOther * otherSubQty)} ${other.sub_unit || 'g'}`
+        : `${formatFraction(deductFromOther)} ${other.unit || 'pcs'}`;
+      detailsList.push(`${consumedStrOther} (bought on ${otherDate}${otherStore})`);
+    }
+  }
+
+  const roundedExpense = Math.round(totalCost);
   const formattedDate = date.includes('/') ? date : date.split('-').reverse().join('/');
   const finalTime = timeStr || new Date().toLocaleTimeString('en-IN', { hour12: false }).slice(0, 5);
 
-  const qtyStrFormatted = formatFraction(qtyToConsume);
-  const consumedStr = useSubUnit
-    ? `${qtyStrFormatted} ${item.sub_unit || 'g'}`
-    : `${qtyStrFormatted} ${item.unit || 'pcs'}`;
-
-  // Human-readable batch connectivity in description
-  const batchDate = item.purchased_date
-    ? new Date(item.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-    : 'unknown date';
-  const batchStore = item.notes ? ` from ${item.notes}` : '';
-  
   let labelPrefix = 'Used';
   if (usageType === 'lend') labelPrefix = 'Lent';
   else if (usageType === 'instalment') labelPrefix = 'Instalment Use';
 
-  const description = `${labelPrefix} ${consumedStr} of ${item.name} (Batch: bought on ${batchDate}${batchStore})`;
+  const totalQtyStr = formatFraction(qtyToConsume);
+  const totalConsumedStr = useSubUnit
+    ? `${totalQtyStr} ${item.sub_unit || 'g'}`
+    : `${totalQtyStr} ${item.unit || 'pcs'}`;
+
+  const description = `${labelPrefix} ${totalConsumedStr} of ${item.name} (${detailsList.join(', ')})`;
 
   if (usageType === 'instalment') {
     // Convert date format to YYYY-MM-DD for recurring engine

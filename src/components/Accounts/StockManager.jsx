@@ -426,12 +426,21 @@ export default function StockManager({ onBack, backInterceptRef }) {
       return;
     }
 
-    const subQtyVal = parseFloat(item.sub_qty) || 1;
+    const nameLower = item.name.toLowerCase();
     const isSubMode = consumeUnitMode === 'sub';
-    const availableQty = isSubMode ? (item.qty * subQtyVal) : item.qty;
+    const sameNameBatches = items.filter(i => i.name.toLowerCase() === nameLower);
+    const totalAvailable = sameNameBatches.reduce((sum, b) => {
+      const bQty = parseFloat(b.qty) || 0;
+      if (isSubMode) {
+        const bSubQty = parseFloat(b.sub_qty) || 1;
+        return sum + (bQty * bSubQty);
+      } else {
+        return sum + bQty;
+      }
+    }, 0);
 
-    if (qty > availableQty) {
-      setConsumeError(`Exceeds available stock (${parseFloat(availableQty.toFixed(3))} ${isSubMode ? (item.sub_unit || 'g') : (item.unit || 'pcs')}).`);
+    if (qty > totalAvailable) {
+      setConsumeError(`Exceeds total stock (${parseFloat(totalAvailable.toFixed(3))} ${isSubMode ? (item.sub_unit || 'g') : (item.unit || 'pcs')}).`);
       return;
     }
 
@@ -880,8 +889,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
             return (
               <div
                 key={group.key}
-                className={`stock-item-card ${containsConsumingBatch ? 'consuming-active' : ''}`}
-                style={containsConsumingBatch ? { position: 'relative', zIndex: 1000, background: 'var(--bg-card)', boxShadow: '0 8px 30px rgba(0,0,0,0.5)' } : {}}
+                className="stock-item-card"
                 onClick={() => toggleGroup(group.key)}
               >
                 <div className="stock-item-top">
@@ -1239,6 +1247,16 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             const availableQty = isSubMode ? (batch.qty * subQtyVal) : batch.qty;
                             const unitLabel = isSubMode ? (batch.sub_unit || 'g') : (batch.unit || 'pcs');
 
+                            const totalAvailInGroup = group.batches.reduce((sum, b) => {
+                              const bQty = parseFloat(b.qty) || 0;
+                              if (isSubMode) {
+                                const bSubQty = parseFloat(b.sub_qty) || 1;
+                                return sum + (bQty * bSubQty);
+                              } else {
+                                return sum + bQty;
+                              }
+                            }, 0);
+
                             return (
                               <div
                                 key={batch.id}
@@ -1368,7 +1386,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                               )}
 
                               <div className="mgr-edit-field">
-                                <label className="stock-builder-lbl">Qty to Use (Available: {formatFraction(availableQty)} {unitLabel})</label>
+                                <label className="stock-builder-lbl">Qty to Use (Available in batch: {formatFraction(availableQty)} {unitLabel}, Total stock: {formatFraction(totalAvailInGroup)} {unitLabel})</label>
                                 <input
                                   type="number"
                                   step="any"
