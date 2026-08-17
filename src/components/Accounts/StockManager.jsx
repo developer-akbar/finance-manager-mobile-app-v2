@@ -248,7 +248,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
     if (showPurchaseModal) {
       backInterceptRef.current = () => setShowPurchaseModal(false);
     } else if (consumingItemId) {
-      backInterceptRef.current = () => setConsumingItemId(null);
+      backInterceptRef.current = () => {
+        setConsumingItemId(null);
+        setConsumeError('');
+      };
     } else if (editingBatchId) {
       backInterceptRef.current = () => setEditingBatchId(null);
     } else {
@@ -258,6 +261,24 @@ export default function StockManager({ onBack, backInterceptRef }) {
       if (backInterceptRef) backInterceptRef.current = onBack;
     };
   }, [showPurchaseModal, consumingItemId, editingBatchId, onBack, backInterceptRef]);
+
+  // Escape key handler to close popup/modals
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showPurchaseModal) {
+          setShowPurchaseModal(false);
+        } else if (consumingItemId) {
+          setConsumingItemId(null);
+          setConsumeError('');
+        } else if (editingBatchId) {
+          setEditingBatchId(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showPurchaseModal, consumingItemId, editingBatchId]);
 
   // Compute statistics
   const stats = useMemo(() => {
@@ -729,13 +750,19 @@ export default function StockManager({ onBack, backInterceptRef }) {
 
   return (
     <>
-      {consumingItemId && (
+      {(consumingItemId || editingBatchId) && (
         <div
-          className="overlay"
-          style={{ zIndex: 999 }}
-          onClick={() => {
-            setConsumingItemId(null);
-            setConsumeError('');
+          className="stock-edit-overlay"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 990,
+            pointerEvents: 'auto'
           }}
         />
       )}
@@ -843,23 +870,6 @@ export default function StockManager({ onBack, backInterceptRef }) {
         </div>
 
         {/* Grouped Stock List */}
-        {editingBatchId && (
-          <div
-            className="stock-edit-overlay"
-            onClick={() => setEditingBatchId(null)}
-            style={{
-              position: 'fixed',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: 'rgba(0, 0, 0, 0.65)',
-              backdropFilter: 'blur(4px)',
-              zIndex: 90,
-              pointerEvents: 'auto'
-            }}
-          />
-        )}
         <div className="stock-item-list">
           {groupedItems.map(group => {
             const isOut = group.totalQty <= 0;
@@ -907,6 +917,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                       const batchCost = batch.qty * (batch.discounted_price || batch.price || 0);
 
                       if (isEditing) {
+                        const editCost = (parseFloat(editFormData.qty) || 0) * (parseFloat(editFormData.discounted_price || editFormData.price || 0));
                         const editFinalBatchPrice = (() => {
                           const price = parseFloat(editFormData.price) || 0;
                           const discVal = parseFloat(editFormData.discountValue) || 0;
@@ -922,29 +933,29 @@ export default function StockManager({ onBack, backInterceptRef }) {
                         const editRemainingTotalValue = editUnitPrice * editAvailParts;
 
                         return (
-                          <div
-                            key={batch.id}
-                            className="stock-batch-row animate-pop"
-                            style={{
-                              position: 'fixed',
-                              top: '50%',
-                              left: '50%',
-                              transform: 'translate(-50%, -50%)',
-                              width: '90%',
-                              maxWidth: '420px',
-                              gap: 8,
-                              padding: 16,
-                              zIndex: 95,
-                              background: 'var(--bg-card)',
-                              borderRadius: '12px',
-                              border: '1.5px solid var(--accent)',
-                              boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)',
-                              maxHeight: '90vh',
-                              overflowY: 'auto',
-                              display: 'flex',
-                              flexDirection: 'column'
-                            }}
-                          >
+                              <div
+                                key={batch.id}
+                                className="stock-batch-row animate-pop"
+                                style={{
+                                  position: 'fixed',
+                                  top: '50%',
+                                  left: '50%',
+                                  transform: 'translate(-50%, -50%)',
+                                  width: '90%',
+                                  maxWidth: '420px',
+                                  gap: 8,
+                                  padding: 16,
+                                  zIndex: 1000,
+                                  background: 'var(--bg-card)',
+                                  borderRadius: '12px',
+                                  border: '1.5px solid var(--accent)',
+                                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)',
+                                  maxHeight: '90vh',
+                                  overflowY: 'auto',
+                                  display: 'flex',
+                                  flexDirection: 'column'
+                                }}
+                              >
                             <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800, marginBottom: 4 }}>Edit Batch Details</div>
 
                             {/* Item Name */}
@@ -1210,7 +1221,32 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           </div>
 
                           {isConsuming ? (
-                            <div className="stock-consume-inline" style={{ gap: 6 }}>
+                            <div
+                              className="stock-batch-row animate-pop"
+                              style={{
+                                position: 'fixed',
+                                top: '50%',
+                                left: '50%',
+                                transform: 'translate(-50%, -50%)',
+                                width: '90%',
+                                maxWidth: '420px',
+                                gap: 8,
+                                padding: 16,
+                                zIndex: 1000,
+                                background: 'var(--bg-card)',
+                                borderRadius: '12px',
+                                border: '1.5px solid var(--accent)',
+                                boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)',
+                                maxHeight: '90vh',
+                                overflowY: 'auto',
+                                display: 'flex',
+                                flexDirection: 'column'
+                              }}
+                            >
+                              <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800, marginBottom: 4 }}>
+                                Use Item: {group.name} ({batch.purchased_date ? new Date(batch.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'Unknown'})
+                              </div>
+                              
                               {/* Usage Type toggles */}
                               <div style={{ display: 'flex', gap: 6, width: '100%', marginBottom: 4 }}>
                                 <button
@@ -1289,120 +1325,127 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                 </div>
                               )}
 
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, width: '100%', alignItems: 'center', position: 'relative' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                  <span style={{ fontSize: '0.65rem', fontWeight: 700 }}>Qty:</span>
+                              <div className="mgr-edit-field">
+                                <label className="stock-builder-lbl">Qty to Use</label>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  className={`form-input ${consumeError ? 'err' : ''}`}
+                                  value={consumeQty}
+                                  onFocus={e => e.target.select()}
+                                  onChange={e => {
+                                    setConsumeQty(e.target.value);
+                                    setConsumeError('');
+                                  }}
+                                />
+                              </div>
+
+                              {usageType === 'lend' ? (
+                                <div className="mgr-edit-field" style={{ position: 'relative' }}>
+                                  <label className="stock-builder-lbl">Lend to (Person)</label>
                                   <input
-                                    type="number"
-                                    step="any"
-                                    className={`stock-consume-input ${consumeError ? 'err' : ''}`}
-                                    style={{ width: 65 }}
-                                    value={consumeQty}
-                                    onFocus={e => e.target.select()}
+                                    type="text"
+                                    className="form-input"
+                                    placeholder="Person name..."
+                                    value={personName}
+                                    onClick={e => { e.stopPropagation(); setActiveLendSug(true); }}
+                                    onFocus={() => setActiveLendSug(true)}
                                     onChange={e => {
-                                      setConsumeQty(e.target.value);
-                                      setConsumeError('');
+                                      setPersonName(e.target.value);
+                                      setActiveLendSug(true);
                                     }}
                                   />
+                                  {activeLendSug && debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase())).length > 0 && (
+                                    <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 100, maxHeight: 100, overflowY: 'auto' }}>
+                                      {debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase())).map(item => (
+                                        <div
+                                          key={item}
+                                          className="note-sug-item"
+                                          onMouseDown={() => {
+                                            setPersonName(item);
+                                            setActiveLendSug(false);
+                                          }}
+                                          style={{ fontSize: '0.72rem', padding: '6px 8px', cursor: 'pointer' }}
+                                        >
+                                          {item}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
-
-                                {usageType === 'lend' ? (
-                                  <div style={{ position: 'relative', flex: 1, minWidth: 120 }}>
-                                    <input
-                                      type="text"
-                                      className="stock-consume-input"
-                                      style={{ width: '100%' }}
-                                      placeholder="Lend to (Person)..."
-                                      value={personName}
-                                      onClick={e => { e.stopPropagation(); setActiveLendSug(true); }}
-                                      onFocus={() => setActiveLendSug(true)}
-                                      onChange={e => {
-                                        setPersonName(e.target.value);
-                                        setActiveLendSug(true);
-                                      }}
-                                    />
-                                    {activeLendSug && debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase())).length > 0 && (
-                                      <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, bottom: '100%', mb: 4, zIndex: 100, maxHeight: 100, overflowY: 'auto' }}>
-                                        {debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase())).map(item => (
-                                          <div
-                                            key={item}
-                                            className="note-sug-item"
-                                            onMouseDown={() => {
-                                              setPersonName(item);
-                                              setActiveLendSug(false);
-                                            }}
-                                            style={{ fontSize: '0.72rem', padding: '6px 8px', cursor: 'pointer' }}
-                                          >
-                                            {item}
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
+                              ) : (
+                                <>
+                                  <div className="stock-row-grid-2">
+                                    <div className="mgr-edit-field">
+                                      <label className="stock-builder-lbl">Category</label>
+                                      <select
+                                        className="form-input"
+                                        value={consumeCategory}
+                                        onChange={e => {
+                                          setConsumeCategory(e.target.value);
+                                          const firstSub = categories?.[e.target.value]?.subcategories?.[0] || '';
+                                          setConsumeSubcategory(firstSub);
+                                        }}
+                                      >
+                                        {categoriesList.map(c => <option key={c} value={c}>{c}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="mgr-edit-field">
+                                      <label className="stock-builder-lbl">Subcategory</label>
+                                      <select
+                                        className="form-input"
+                                        value={consumeSubcategory}
+                                        onChange={e => setConsumeSubcategory(e.target.value)}
+                                      >
+                                        {subcategoriesList.map(s => <option key={s} value={s}>{s}</option>)}
+                                      </select>
+                                    </div>
                                   </div>
-                                ) : (
-                                  <>
-                                    <select
-                                      className="stock-consume-input"
-                                      style={{ width: 95 }}
-                                      value={consumeCategory}
-                                      onChange={e => {
-                                        setConsumeCategory(e.target.value);
-                                        const firstSub = categories?.[e.target.value]?.subcategories?.[0] || '';
-                                        setConsumeSubcategory(firstSub);
-                                      }}
-                                    >
-                                      {categoriesList.map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
-                                    <select
-                                      className="stock-consume-input"
-                                      style={{ width: 95 }}
-                                      value={consumeSubcategory}
-                                      onChange={e => setConsumeSubcategory(e.target.value)}
-                                    >
-                                      {subcategoriesList.map(s => <option key={s} value={s}>{s}</option>)}
-                                    </select>
-                                    {usageType === 'instalment' && (
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                        <span style={{ fontSize: '0.65rem', fontWeight: 700 }}>Months:</span>
-                                        <input
-                                          type="number"
-                                          className="stock-consume-input"
-                                          style={{ width: 50 }}
-                                          value={instalmentMonths}
-                                          onFocus={e => e.target.select()}
-                                          onChange={e => setInstalmentMonths(e.target.value)}
-                                        />
-                                      </div>
-                                    )}
-                                  </>
-                                )}
+                                  {usageType === 'instalment' && (
+                                    <div className="mgr-edit-field">
+                                      <label className="stock-builder-lbl">Instalment Months</label>
+                                      <input
+                                        type="number"
+                                        className="form-input"
+                                        value={instalmentMonths}
+                                        onFocus={e => e.target.select()}
+                                        onChange={e => setInstalmentMonths(e.target.value)}
+                                      />
+                                    </div>
+                                  )}
+                                </>
+                              )}
 
-                                <input
-                                  type="date"
-                                  className="stock-consume-input"
-                                  style={{ width: 100 }}
-                                  value={consumeDate}
-                                  onChange={e => setConsumeDate(e.target.value)}
-                                />
-
-                                <input
-                                  type="time"
-                                  className="stock-consume-input"
-                                  style={{ width: 80 }}
-                                  value={consumeTime}
-                                  onChange={e => setConsumeTime(e.target.value)}
-                                />
-
-                                {consumeError && (
-                                  <div className="field-error" style={{ width: '100%', marginTop: 4 }}>
-                                    ⚠️ {consumeError}
-                                  </div>
-                                )}
-
-                                <div style={{ display: 'flex', gap: 4, marginLeft: 'auto', marginTop: 4 }}>
-                                  <button className="stock-btn-action consume" onClick={() => handleConsume(batch)}>Save</button>
-                                  <button className="stock-btn-action" onClick={() => { setConsumingItemId(null); setConsumeError(''); }}>Cancel</button>
+                              <div className="stock-row-grid-2">
+                                <div className="mgr-edit-field">
+                                  <label className="stock-builder-lbl">Date</label>
+                                  <input
+                                    type="date"
+                                    className="form-input"
+                                    value={consumeDate}
+                                    onChange={e => setConsumeDate(e.target.value)}
+                                  />
                                 </div>
+                                <div className="mgr-edit-field">
+                                  <label className="stock-builder-lbl">Time</label>
+                                  <input
+                                    type="time"
+                                    className="form-input"
+                                    value={consumeTime}
+                                    onChange={e => setConsumeTime(e.target.value)}
+                                  />
+                                </div>
+                              </div>
+
+                              {consumeError && (
+                                <div className="field-error" style={{ width: '100%', marginTop: 4 }}>
+                                  ⚠️ {consumeError}
+                                </div>
+                              )}
+
+                              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                                <button className="stock-btn-action consume" onClick={() => handleConsume(batch)}>Save</button>
+                                <button className="stock-btn-action" onClick={() => { setConsumingItemId(null); setConsumeError(''); }}>Cancel</button>
                               </div>
                             </div>
                           ) : (

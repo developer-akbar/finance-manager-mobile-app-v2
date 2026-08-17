@@ -755,22 +755,35 @@ export default function AddTransaction({
 
   const allAvailableTags = useMemo(() => {
     const seen = new Set();
+    const isSystemTag = (tag) => {
+      const t = tag.toLowerCase().trim();
+      return t === '#stock' || t === '#consumed' || t === '#lent' || t === '#instalment' || t.startsWith('#stock_ref_');
+    };
     for (const t of transactions) {
       if (t.Tags) {
         t.Tags.split(',').forEach(tag => {
           const clean = tag.trim().toLowerCase();
-          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+          if (clean && !isSystemTag(clean)) {
+            seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+          }
         });
       }
       const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
-      if (matches) matches.forEach(m => seen.add(m.toLowerCase()));
+      if (matches) {
+        matches.forEach(m => {
+          const clean = m.toLowerCase();
+          if (!isSystemTag(clean)) seen.add(clean);
+        });
+      }
     }
     try {
       const custom = JSON.parse(state.settings?.customTags || '[]');
       if (Array.isArray(custom)) {
         custom.forEach(ct => {
           const clean = String(ct).trim().toLowerCase();
-          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+          if (clean && !isSystemTag(clean)) {
+            seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+          }
         });
       }
     } catch { }
