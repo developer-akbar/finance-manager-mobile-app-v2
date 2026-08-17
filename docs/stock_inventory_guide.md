@@ -60,4 +60,5 @@ If you consume more than a single batch's remaining quantity (e.g., you have 11 
 
 * **Physical vs. Financial**: The **Stock Inventory** tracks physical quantities (e.g., pieces, grams). The **Transactions list** tracks money paid or transferred.
 * **Editing Transactions**: Modifying or deleting a utilized stock transaction inside the standard **Transactions Edit** screen does not retroactively change the physical count in the inventory batch.
+* **Transaction Deletion / Restoring Stock**: When deleting or replacing a consumption transaction, FinMan automatically restores the exact quantities deducted back to **each** respective batch (using tag metadata: `#stock_ref_<itemId>:<qty>`). This prevents stock inflation or batch calculation errors.
 * **Tag Protection**: All system tags (`#stock`, `#consumed`, `#lent`, `#instalment`, `#stock_ref_<id>`) are automatically hidden from your transaction suggestions list to keep your tags selection screen clean and clutter-free.
