@@ -145,12 +145,12 @@ export const consumeInventoryItem = async (
     finalQtyToConsume = qtyToConsume / subQtyVal;
   }
 
-  // 1. Get all available batches of the same name to validate total quantity
+  // 1. Get all batches of the same name to validate total quantity (filtering/sorting done in JS to support IndexedDB query limitations)
   const allRes = await db.query(
-    'SELECT * FROM inventory WHERE LOWER(name) = ? AND qty > 0',
+    'SELECT * FROM inventory WHERE LOWER(name) = ?',
     [item.name.toLowerCase()]
   );
-  const allBatches = allRes.values || [];
+  const allBatches = (allRes.values || []).filter(b => (parseFloat(b.qty) || 0) > 0.0001);
 
   const totalAvailablePacks = allBatches.reduce((sum, b) => {
     const bQty = parseFloat(b.qty) || 0;
@@ -164,6 +164,7 @@ export const consumeInventoryItem = async (
   let remainingToConsume = finalQtyToConsume;
   let totalCost = 0;
   const detailsList = [];
+  const deductions = [];
 
   // Clicked item first
   const currQty = parseFloat(item.qty) || 0;
@@ -181,6 +182,7 @@ export const consumeInventoryItem = async (
   remainingToConsume -= deductFromCurrent;
 
   if (deductFromCurrent > 0.0001) {
+    deductions.push({ id: itemId, qty: deductFromCurrent });
     const batchDate = item.purchased_date
       ? new Date(item.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
       : 'unknown date';
@@ -193,11 +195,8 @@ export const consumeInventoryItem = async (
 
   // Other batches next
   if (remainingToConsume > 0.0001) {
-    const otherRes = await db.query(
-      'SELECT * FROM inventory WHERE LOWER(name) = ? AND id != ? AND qty > 0 ORDER BY purchased_date ASC, updated_at ASC',
-      [item.name.toLowerCase(), itemId]
-    );
-    const otherBatches = otherRes.values || [];
+    const otherBatches = (allRes.values || []).filter(b => b.id !== itemId && (parseFloat(b.qty) || 0) > 0.0001);
+    otherBatches.sort((a, b) => (a.purchased_date || '').localeCompare(b.purchased_date || '') || (a.updated_at || '').localeCompare(b.updated_at || ''));
 
     for (const other of otherBatches) {
       if (remainingToConsume <= 0.0001) break;
@@ -220,15 +219,18 @@ export const consumeInventoryItem = async (
       totalCost += deductFromOther * otherPrice;
       remainingToConsume -= deductFromOther;
 
-      const otherSubQty = parseFloat(other.sub_qty) || 1;
-      const otherDate = other.purchased_date
-        ? new Date(other.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-        : 'unknown date';
-      const otherStore = other.notes ? ` from ${other.notes}` : '';
-      const consumedStrOther = useSubUnit
-        ? `${formatFraction(deductFromOther * otherSubQty)} ${other.sub_unit || 'g'}`
-        : `${formatFraction(deductFromOther)} ${other.unit || 'pcs'}`;
-      detailsList.push(`${consumedStrOther} (bought on ${otherDate}${otherStore})`);
+      if (deductFromOther > 0.0001) {
+        deductions.push({ id: other.id, qty: deductFromOther });
+        const otherSubQty = parseFloat(other.sub_qty) || 1;
+        const otherDate = other.purchased_date
+          ? new Date(other.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+          : 'unknown date';
+        const otherStore = other.notes ? ` from ${other.notes}` : '';
+        const consumedStrOther = useSubUnit
+          ? `${formatFraction(deductFromOther * otherSubQty)} ${other.sub_unit || 'g'}`
+          : `${formatFraction(deductFromOther)} ${other.unit || 'pcs'}`;
+        detailsList.push(`${consumedStrOther} (bought on ${otherDate}${otherStore})`);
+      }
     }
   }
 
@@ -246,6 +248,7 @@ export const consumeInventoryItem = async (
     : `${totalQtyStr} ${item.unit || 'pcs'}`;
 
   const description = `${labelPrefix} ${totalConsumedStr} of ${item.name} (${detailsList.join(', ')})`;
+  const stockTags = deductions.map(d => `#stock_ref_${d.id}:${d.qty}`).join(' ');
 
   if (usageType === 'instalment') {
     // Convert date format to YYYY-MM-DD for recurring engine
@@ -303,7 +306,7 @@ export const consumeInventoryItem = async (
         Currency: 'INR',
         'Income/Expense': 'Expense',
         recurring_rule_id: saved.id,
-        Tags: `#stock #instalment #stock_ref_${item.id}`,
+        Tags: `#stock #instalment ${stockTags}`,
       });
     }
   } else {
@@ -321,7 +324,7 @@ export const consumeInventoryItem = async (
       Amount: String(roundedExpense),
       Currency: 'INR',
       'Income/Expense': 'Expense',
-      tags: `#stock #${usageType === 'lend' ? 'lent' : 'consumed'} #stock_ref_${item.id}`,
+      tags: `#stock #${usageType === 'lend' ? 'lent' : 'consumed'} ${stockTags}`,
     };
     await addTransaction(txn);
   }

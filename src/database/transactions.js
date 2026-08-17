@@ -109,28 +109,49 @@ const parseDescriptionStockInfo = (description) => {
 };
 
 const syncStockOnTxnChange = async (oldTxn, newTxn) => {
-  const oldTag = (oldTxn.tags || '').split(' ').find(t => t.startsWith('#stock_ref_'));
-  const newTag = (newTxn.tags || '').split(' ').find(t => t.startsWith('#stock_ref_'));
+  const parseStockRefs = (tagsStr) => {
+    return (tagsStr || '').split(' ').filter(t => t.startsWith('#stock_ref_')).map(tag => {
+      const content = tag.replace('#stock_ref_', '');
+      const parts = content.split(':');
+      return {
+        id: parts[0],
+        qty: parts.length > 1 ? parseFloat(parts[1]) || 0 : null
+      };
+    });
+  };
 
-  if (oldTag && oldTag !== newTag) {
-    const itemId = oldTag.replace('#stock_ref_', '');
-    const info = parseDescriptionStockInfo(oldTxn.description);
-    if (info) {
-      const { restoreInventoryItem } = await import('./inventory.js');
-      await restoreInventoryItem(itemId, info.qty, info.unit);
+  const oldRefs = parseStockRefs(oldTxn.tags || oldTxn.Tags);
+  const newRefs = parseStockRefs(newTxn.tags || newTxn.Tags);
+  const oldIds = oldRefs.map(r => r.id);
+  const newIds = newRefs.map(r => r.id);
+
+  // 1. Restore any old ref that is no longer present in newRefs
+  const removedRefs = oldRefs.filter(r => !newIds.includes(r.id));
+  if (removedRefs.length > 0) {
+    const { restoreInventoryItem } = await import('./inventory.js');
+    const oldInfo = parseDescriptionStockInfo(oldTxn.description);
+    for (const r of removedRefs) {
+      let restoreQty = r.qty;
+      if (restoreQty === null) {
+        restoreQty = oldInfo ? oldInfo.qty : 0;
+      }
+      if (restoreQty > 0) {
+        await restoreInventoryItem(r.id, restoreQty, oldInfo && oldInfo.unit === 'sub' ? 'sub' : 'pack');
+      }
     }
   }
 
-  if (oldTag && oldTag === newTag) {
+  // 2. Adjust first batch if quantities changed but references remained same
+  if (oldRefs.length > 0 && newRefs.length > 0 && oldRefs[0].id === newRefs[0].id) {
+    const firstRef = oldRefs[0];
     const oldInfo = parseDescriptionStockInfo(oldTxn.description);
     const newInfo = parseDescriptionStockInfo(newTxn.description);
     if (oldInfo && newInfo) {
       const qtyDiff = newInfo.qty - oldInfo.qty;
       if (qtyDiff !== 0 || oldInfo.unit !== newInfo.unit) {
-        const itemId = oldTag.replace('#stock_ref_', '');
         const { getDB } = await import('./db.js');
         const db = getDB();
-        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
+        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [firstRef.id]);
         const item = res.values?.[0];
         if (item) {
           const subQtyVal = parseFloat(item.sub_qty) || 1;
@@ -145,37 +166,44 @@ const syncStockOnTxnChange = async (oldTxn, newTxn) => {
           const packDiff = newQtyInPacks - oldQtyInPacks;
           const currQty = parseFloat(item.qty) || 0;
           const newQty = Math.max(0, currQty - packDiff);
-          const status = newQty > 0 ? 'available' : 'unavailable';
+          const status = newQty > 0.0001 ? 'available' : 'unavailable';
           await db.run(
             'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
-            [newQty, status, new Date().toISOString(), itemId]
+            [newQty, status, new Date().toISOString(), firstRef.id]
           );
         }
       }
     }
   }
 
-  if (!oldTag && newTag) {
-    const info = parseDescriptionStockInfo(newTxn.description);
-    if (info) {
-      const itemId = newTag.replace('#stock_ref_', '');
-      const { getDB } = await import('./db.js');
-      const db = getDB();
-      const res = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
-      const item = res.values?.[0];
-      if (item) {
-        const subQtyVal = parseFloat(item.sub_qty) || 1;
-        let qtyInPacks = info.qty;
-        if (item.sub_unit && info.unit === item.sub_unit && subQtyVal > 0) {
-          qtyInPacks = info.qty / subQtyVal;
+  // 3. Deduct any new ref that was added
+  const addedRefs = newRefs.filter(r => !oldIds.includes(r.id));
+  if (addedRefs.length > 0) {
+    const { getDB } = await import('./db.js');
+    const db = getDB();
+    const newInfo = parseDescriptionStockInfo(newTxn.description);
+    for (const r of addedRefs) {
+      let deductQty = r.qty;
+      if (deductQty === null) {
+        deductQty = newInfo ? newInfo.qty : 0;
+      }
+      if (deductQty > 0) {
+        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [r.id]);
+        const item = res.values?.[0];
+        if (item) {
+          const subQtyVal = parseFloat(item.sub_qty) || 1;
+          let qtyInPacks = deductQty;
+          if (newInfo && item.sub_unit && newInfo.unit === item.sub_unit && subQtyVal > 0 && r.qty === null) {
+            qtyInPacks = deductQty / subQtyVal;
+          }
+          const currQty = parseFloat(item.qty) || 0;
+          const newQty = Math.max(0, currQty - qtyInPacks);
+          const status = newQty > 0.0001 ? 'available' : 'unavailable';
+          await db.run(
+            'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
+            [newQty, status, new Date().toISOString(), r.id]
+          );
         }
-        const currQty = parseFloat(item.qty) || 0;
-        const newQty = Math.max(0, currQty - qtyInPacks);
-        const status = newQty > 0 ? 'available' : 'unavailable';
-        await db.run(
-          'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
-          [newQty, status, new Date().toISOString(), itemId]
-        );
       }
     }
   }
@@ -231,13 +259,27 @@ export const deleteTransaction = async (id) => {
     const res = await db.query('SELECT * FROM transactions WHERE id = ?', [id]);
     const txn = res.values?.[0];
     if (txn) {
-      const stockRefTag = (txn.tags || '').split(' ').find(t => t.startsWith('#stock_ref_'));
-      if (stockRefTag) {
-        const itemId = stockRefTag.replace('#stock_ref_', '');
+      const stockRefTags = (txn.tags || txn.Tags || '').split(' ').filter(t => t.startsWith('#stock_ref_'));
+      if (stockRefTags.length > 0) {
+        const { restoreInventoryItem } = await import('./inventory.js');
         const info = parseDescriptionStockInfo(txn.description);
-        if (info) {
-          const { restoreInventoryItem } = await import('./inventory.js');
-          await restoreInventoryItem(itemId, info.qty, info.unit);
+        for (const tag of stockRefTags) {
+          const content = tag.replace('#stock_ref_', '');
+          let itemId = content;
+          let qtyToRestore = 0;
+          if (content.includes(':')) {
+            const parts = content.split(':');
+            itemId = parts[0];
+            qtyToRestore = parseFloat(parts[1]) || 0;
+            if (qtyToRestore > 0) {
+              await restoreInventoryItem(itemId, qtyToRestore, 'pack');
+            }
+          } else {
+            qtyToRestore = info ? info.qty : 0;
+            if (qtyToRestore > 0) {
+              await restoreInventoryItem(itemId, qtyToRestore, info.unit);
+            }
+          }
         }
       }
     }
