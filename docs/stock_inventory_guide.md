@@ -41,6 +41,12 @@ There are three ways to record usage:
 * **Ledger**: Decreases physical stock count and creates a completed **Instalment Schedule** (recurring rule) in the database, automatically logging the individual instalment part transactions on their respective future dates.
 * **Fields**: Select Category, Subcategory, Date, Time, Qty, and the number of **Instalment Months** (defaults to 3).
 
+### D. 🔄 Automatic FIFO Batch Rollover
+If you consume more than a single batch's remaining quantity (e.g., you have 11 pcs of Oil split as 2 pcs and 9 pcs, and you want to use 10 pcs), you can click **Use** on either batch and enter `10`. FinMan will:
+1. Deduct the available quantity from the selected clicked batch first.
+2. Automatically deduct the remaining quantity from the next oldest batch of the same item name (FIFO style).
+3. Create a single combined transaction ledger entry, logging the respective deductions in the description for accurate auditing.
+
 ---
 
 ## 3. Keyboard Navigation
