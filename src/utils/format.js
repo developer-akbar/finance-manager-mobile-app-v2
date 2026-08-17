@@ -45,6 +45,35 @@ export const inputToStorage = (v) => {
   return `${dd}/${m}/${y}`;
 };
 
+export const calculateAge = (dateStr) => {
+  if (!dateStr) return '';
+  const birthDate = parseDate(dateStr);
+  if (birthDate.getTime() === 0) return '';
+
+  const today = new Date();
+
+  let years = today.getFullYear() - birthDate.getFullYear();
+  let months = today.getMonth() - birthDate.getMonth();
+  let days = today.getDate() - birthDate.getDate();
+
+  if (days < 0) {
+    months--;
+    const prevMonth = new Date(today.getFullYear(), today.getMonth(), 0);
+    days += prevMonth.getDate();
+  }
+  if (months < 0) {
+    years--;
+    months += 12;
+  }
+
+  const ageParts = [];
+  if (years > 0) ageParts.push(`${years} yr${years > 1 ? 's' : ''}`);
+  if (months > 0) ageParts.push(`${months} mo${months > 1 ? 's' : ''}`);
+  if (days > 0 || ageParts.length === 0) ageParts.push(`${days} day${days > 1 ? 's' : ''}`);
+
+  return ageParts.join(' ');
+};
+
 export const normaliseDate = (raw) => {
   if (raw === null || raw === undefined || raw === '') return '';
   if (typeof raw === 'number') {

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage } from '../../utils/format.js';
+import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage, calculateAge } from '../../utils/format.js';
 import { parseInstalmentInfo, getInstalmentSeriesStats } from '../../database/recurring.js';
 import AddTransaction from './AddTransaction.jsx';
 import ReceiptViewer from '../Common/ReceiptViewer.jsx';
@@ -8,6 +8,7 @@ import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
 export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy, runningBalance = null, isNewestInGroup = false }) {
+  const { state } = useApp();
   const [showDetail, setShowDetail] = useState(false);
   const [isClosingDetail, setIsClosingDetail] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -15,6 +16,17 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const handlerRef = React.useRef(null);
   const prevHandlerRef = React.useRef(null);
   const startPos = React.useRef(null);
+
+  const accountEntries = state.accounts || [];
+  const isInvestmentAccount = (name) => {
+    if (!name) return false;
+    const acct = accountEntries.find(a => a.name.toLowerCase() === name.toLowerCase());
+    return acct?.group?.toLowerCase() === 'investments';
+  };
+
+  const isInvested = isInvestmentAccount(t.Account) || isInvestmentAccount(t.FromAccount) || isInvestmentAccount(t.ToAccount);
+  const isRedeemed = (t.Tags || t.tags || t.Note || t.Description || '').toLowerCase().includes('redeemed');
+  const ageStr = isInvested && !isRedeemed ? calculateAge(t.Date) : null;
 
   const baseType = txnType(t);
   const type     = overrideType || baseType;
@@ -126,6 +138,18 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
             {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && <span className="txn-cat-tag">{t.Subcategory}</span>}
             {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
             {xferAccountLabel && <span className="txn-time-tag">{xferAccountLabel}</span>}
+            {ageStr && (
+              <span 
+                className="txn-cat-tag age-tag" 
+                style={{ 
+                  background: 'rgba(0, 229, 160, 0.08)', 
+                  color: 'var(--accent)', 
+                  border: '1px solid rgba(0, 229, 160, 0.2)' 
+                }}
+              >
+                ⏳ {ageStr}
+              </span>
+            )}
           </div>
         </div>
         {/* Amount + running balance */}
@@ -169,6 +193,16 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
   const ruleEntry   = ruleId ? (state.recurringRules || []).find(r => r.id === ruleId) : null;
   const isInstalment = !!(instInfo || partLabel || (ruleEntry?.rule_type === 'instalment'));
   const isRepeat     = ruleEntry?.rule_type === 'repeat';
+
+  const accountEntries = state.accounts || [];
+  const isInvestmentAccount = (name) => {
+    if (!name) return false;
+    const acct = accountEntries.find(a => a.name.toLowerCase() === name.toLowerCase());
+    return acct?.group?.toLowerCase() === 'investments';
+  };
+  const isInvested = isInvestmentAccount(t.Account) || isInvestmentAccount(t.FromAccount) || isInvestmentAccount(t.ToAccount);
+  const isRedeemed = (t.Tags || t.tags || t.Note || t.Description || '').toLowerCase().includes('redeemed');
+  const ageStr = isInvested && !isRedeemed ? calculateAge(t.Date) : null;
 
   // Compute instalment series stats (Total amount, Remaining Balance)
   const instalmentStats = React.useMemo(() => {
@@ -255,6 +289,8 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
         <div className="dp-fields" onClick={() => setShowEdit(true)} style={{cursor:'pointer'}}>
           <DPRow label="Date"    value={formatDate(t.Date,'short')}/>
           {t.Time && <DPRow label="Time"    value={formatTime(t.Time)}/>}
+          {ageStr && <DPRow label="Age" value={ageStr}/>}
+          {isInvested && isRedeemed && <DPRow label="Portfolio Status" value="Redeemed (Inactive)"/>}
           {isXfer ? <>
             <DPRow label="From"  value={t.Account || t.FromAccount || '—'}/>
             <DPRow label="To"    value={t.ToAccount || '—'}/>

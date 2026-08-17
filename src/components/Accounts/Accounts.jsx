@@ -8,6 +8,7 @@ import DebtTracker from './DebtTracker.jsx';
 import CardOptimizer from './CardOptimizer.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import StockManager from './StockManager.jsx';
+import InvestmentsPortfolio from './InvestmentsPortfolio.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Accounts.css';
@@ -659,6 +660,7 @@ export default function Accounts({ backInterceptRef } = {}) {
   const [showOptimizer,   setShowOptimizer]   = useState(false);
   const [showGroups,      setShowGroups]      = useState(false);
   const [showStockManager, setShowStockManager] = useState(false);
+  const [showInvestments, setShowInvestments] = useState(false);
   const [settlePrefill, setSettlePrefill] = useState(null);
 
   // Handle double-tap reset for Accounts tab
@@ -669,6 +671,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       setShowOptimizer(false);
       setShowGroups(false);
       setShowStockManager(false);
+      setShowInvestments(false);
       setSettlePrefill(null);
       setCollapsedGroups(new Set());
     };
@@ -791,18 +794,20 @@ export default function Accounts({ backInterceptRef } = {}) {
     });
   };
 
-  // Register Android back intercept when drill-down or debt tracker is open
+  // Register Android back intercept when drill-down, debt tracker or investments portfolio is open
   useEffect(() => {
     if (!backInterceptRef) return;
     if (showDebtTracker) {
       backInterceptRef.current = () => setShowDebtTracker(false);
+    } else if (showInvestments) {
+      backInterceptRef.current = () => setShowInvestments(false);
     } else if (drill) {
       backInterceptRef.current = () => setDrill(null);
     } else {
       backInterceptRef.current = null;
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
-  }, [showDebtTracker, drill, backInterceptRef]);
+  }, [showDebtTracker, showInvestments, drill, backInterceptRef]);
 
 
   const acctBalances = useMemo(() => buildBalanceMap(transactions), [transactions]);
@@ -900,6 +905,10 @@ export default function Accounts({ backInterceptRef } = {}) {
     return <StockManager onBack={() => setShowStockManager(false)} backInterceptRef={backInterceptRef} />;
   }
 
+  if (showInvestments) {
+    return <InvestmentsPortfolio onBack={() => setShowInvestments(false)} backInterceptRef={backInterceptRef} />;
+  }
+
   if (drill) {
     const drillAcct = (uniqueAccounts||[]).find(a => (a.name||a) === drill);
     const ccCfg = drillAcct && isCreditCard(drillAcct) ? drillAcct : null;
@@ -985,6 +994,24 @@ export default function Accounts({ backInterceptRef } = {}) {
             }}
           >
             <span>💳</span> Card Perks
+          </button>
+          <button
+            onClick={() => setShowInvestments(true)}
+            style={{
+              padding: '6px 9px',
+              borderRadius: 14,
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card2)',
+              color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              cursor: 'pointer',
+            }}
+          >
+            <span>📈</span> Portfolio
           </button>
           <button
             onClick={() => setShowDebtTracker(true)}
@@ -1114,6 +1141,32 @@ export default function Accounts({ backInterceptRef } = {}) {
               {!isCollapsed && (
                 <>
                   {accts.map(renderAcctRow)}
+                  {grp === 'Investments' && (
+                    <button
+                      onClick={() => setShowInvestments(true)}
+                      className="investments-portfolio-banner-btn"
+                      style={{
+                        margin: '8px 12px',
+                        width: 'calc(100% - 24px)',
+                        padding: '10px 12px',
+                        borderRadius: '12px',
+                        background: 'linear-gradient(135deg, rgba(0, 229, 160, 0.08), rgba(0, 229, 160, 0.02))',
+                        border: '1.5px dashed rgba(0, 229, 160, 0.3)',
+                        color: 'var(--accent)',
+                        fontSize: '0.78rem',
+                        fontWeight: 700,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px',
+                        cursor: 'pointer',
+                        transition: 'all 0.25s ease',
+                        boxSizing: 'border-box'
+                      }}
+                    >
+                      📈 View Investment Portfolio Dashboard
+                    </button>
+                  )}
                 </>
               )}
             </div>
