@@ -440,7 +440,7 @@ export function AppProvider({ children }) {
         const inventory = backupData.inventory || [];
         for (const item of inventory) {
           await db.run(
-            'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
               item.id,
               item.name,
@@ -454,7 +454,10 @@ export function AppProvider({ children }) {
               item.updated_at || new Date().toISOString(),
               parseFloat(item.sub_qty) || 1,
               item.sub_unit || '',
-              parseFloat(item.original_qty) || parseFloat(item.qty) || 0
+              parseFloat(item.original_qty) || parseFloat(item.qty) || 0,
+              parseFloat(item.pack_qty) || 1,
+              item.discount_type || 'percentage',
+              parseFloat(item.discount_value) || 0
             ]
           );
         }
@@ -472,6 +475,35 @@ export function AppProvider({ children }) {
           budgets: Array.isArray(backupData.budgets) ? backupData.budgets : undefined,
           customTags: backupData.customTags || backupData.savedTags || undefined,
         });
+
+        // Restore inventory table in Merge mode as well (clear and load backup active stock items)
+        if (Array.isArray(backupData.inventory) && backupData.inventory.length > 0) {
+          const db = getDB();
+          await db.run('DELETE FROM inventory');
+          for (const item of backupData.inventory) {
+            await db.run(
+              'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              [
+                item.id,
+                item.name,
+                parseFloat(item.qty) || 0,
+                item.unit || '',
+                parseFloat(item.price) || 0,
+                parseFloat(item.discounted_price) || 0,
+                item.status || 'available',
+                item.purchased_date || '',
+                item.notes || '',
+                item.updated_at || new Date().toISOString(),
+                parseFloat(item.sub_qty) || 1,
+                item.sub_unit || '',
+                parseFloat(item.original_qty) || parseFloat(item.qty) || 0,
+                parseFloat(item.pack_qty) || 1,
+                item.discount_type || 'percentage',
+                parseFloat(item.discount_value) || 0
+              ]
+            );
+          }
+        }
       }
 
       // Import transactions in batches
@@ -656,6 +688,18 @@ export function AppProvider({ children }) {
     }
 
     dispatch({ type:'SET_IMPORT', payload:null });
+
+    // Automatically trigger Stock Inventory Sync from newly imported transaction records
+    // only if we did not restore a full JSON/Encrypted backup (which already contains the active stock inventory)
+    if (!backupData) {
+      try {
+        const { syncStockFromPastTransactions } = await import('../database/inventory.js');
+        await syncStockFromPastTransactions();
+      } catch (e) {
+        console.warn('Failed to auto-sync inventory after import:', e);
+      }
+    }
+
     await load();
     return { imported, skipped, cancelled:false };
   };
@@ -686,6 +730,7 @@ export function AppProvider({ children }) {
     await db.run('DELETE FROM subcategories');
     await db.run('DELETE FROM budgets');
     await db.run('DELETE FROM recurring_rules');
+    await db.run('DELETE FROM inventory');
     await load();
   };
 

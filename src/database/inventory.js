@@ -66,23 +66,33 @@ export const addInventoryPurchase = async (fromAccount, date, items, noteText = 
   const formattedTime = timeText || new Date().toLocaleTimeString('en-IN', { hour12: false }).slice(0, 5);
 
   for (const item of items) {
-    const qty = parseFloat(item.qty) || 0;
-    const price = parseFloat(item.price) || 0;
-    const discPrice = parseFloat(item.discounted_price) || price;
-    totalAmount += qty * discPrice;
+    const packQty = parseFloat(item.pack_qty) || 1; // Items/Packs bought
+    const subQty = parseFloat(item.sub_qty) || 1;   // Pack Size (e.g. 200)
+    const subUnit = item.sub_unit || 'pcs';         // Pack Unit (e.g. g)
+    const partsVal = parseFloat(item.original_qty) || 1; // Parts (e.g. 4)
+    const remainingParts = parseFloat(item.qty) || partsVal; // Available Parts (e.g. 4)
+    const originalPrice = parseFloat(item.price) || 0; // Original Price of batch (e.g. 360)
+    const discountedPrice = parseFloat(item.discounted_price) || originalPrice; // Discounted Price of batch (e.g. 324)
 
-    const subQty = item.sub_qty || 1;
-    const subUnit = item.sub_unit || '';
-    const itemAmtBeforeDisc = price * qty;
-    const itemAmtAfterDisc = discPrice * qty;
+    totalAmount += discountedPrice;
+
     const cleanedName = cleanItemName(item.name);
-    itemDetails.push(`${cleanedName} ${qty} ${item.unit} ${subQty} ${subUnit} ${itemAmtBeforeDisc}: @${itemAmtAfterDisc}`);
+    
+    // Formatting description line
+    const sizePart = partsVal > 1 ? `${subQty}${subUnit}*${partsVal}` : `${subQty}${subUnit}`;
+    const suffix = remainingParts < partsVal ? `, ${remainingParts}` : '';
+    const statusWord = remainingParts > 0 ? 'stock available' : 'stock unavailable';
+    itemDetails.push(`${cleanedName} ${statusWord} ${sizePart}: ${originalPrice}: @${discountedPrice}${suffix}`);
 
-    const status = qty > 0 ? 'available' : 'unavailable';
+    const status = remainingParts > 0 ? 'available' : 'unavailable';
     const id = uuid();
+    
+    // Calculate unit price per part
+    const unitPrice = partsVal > 0 ? (discountedPrice / partsVal) : discountedPrice;
+
     await db.run(
-      'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, cleanedName, qty, item.unit || '', price, discPrice, status, date, item.notes || '', now, parseFloat(item.sub_qty) || 1, item.sub_unit || '', qty]
+      'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, cleanedName, remainingParts, item.unit || 'pcs', originalPrice, unitPrice, status, date, item.notes || '', now, subQty, subUnit, partsVal, packQty, item.discountType || 'percentage', parseFloat(item.discountValue) || 0]
     );
   }
 
@@ -190,11 +200,12 @@ export const updateInventoryItem = async (id, data) => {
   const discPrice = parseFloat(data.discounted_price) || price;
   const status = qty > 0 ? 'available' : 'unavailable';
   const original_qty = parseFloat(data.original_qty) || qty;
+  const pack_qty = parseFloat(data.pack_qty) || 1;
   const cleanedName = cleanItemName(data.name);
 
   await db.run(
-    'UPDATE inventory SET name = ?, qty = ?, unit = ?, price = ?, discounted_price = ?, status = ?, purchased_date = ?, notes = ?, updated_at = ?, sub_qty = ?, sub_unit = ?, original_qty = ? WHERE id = ?',
-    [cleanedName, qty, data.unit || '', price, discPrice, status, data.purchased_date || '', data.notes || '', now, parseFloat(data.sub_qty) || 1, data.sub_unit || '', original_qty, id]
+    'UPDATE inventory SET name = ?, qty = ?, unit = ?, price = ?, discounted_price = ?, status = ?, purchased_date = ?, notes = ?, updated_at = ?, sub_qty = ?, sub_unit = ?, original_qty = ?, pack_qty = ?, discount_type = ?, discount_value = ? WHERE id = ?',
+    [cleanedName, qty, data.unit || '', price, discPrice, status, data.purchased_date || '', data.notes || '', now, parseFloat(data.sub_qty) || 1, data.sub_unit || '', original_qty, pack_qty, data.discount_type || 'percentage', parseFloat(data.discount_value) || 0, id]
   );
 };
 
@@ -357,9 +368,20 @@ export const syncStockFromPastTransactions = async () => {
       const id = uuid();
       const itemStatus = remainingQty > 0 ? 'available' : 'unavailable';
       
+      let discountType = 'percentage';
+      let discountValue = 0;
+      if (originalPrice > 0) {
+        const batchFinalPrice = unitPrice * qty;
+        const diff = originalPrice - batchFinalPrice;
+        if (diff > 0) {
+          discountType = 'percentage';
+          discountValue = Number(((diff / originalPrice) * 100).toFixed(2));
+        }
+      }
+
       await db.run(
-        'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, cleanedName, remainingQty, unit, originalPrice, unitPrice, itemStatus, formattedDate, storeName, now, subQty, subUnit, qty]
+        'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, cleanedName, remainingQty, unit, originalPrice, unitPrice, itemStatus, formattedDate, storeName, now, subQty, subUnit, qty, 1, discountType, discountValue]
       );
       parsedCount++;
     }
