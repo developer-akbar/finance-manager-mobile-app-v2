@@ -228,8 +228,20 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       {/* Header */}
       <div className="page-hdr" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button onClick={onBack} className="hdr-back-btn" title="Go back">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="20" height="20">
+          <button 
+            onClick={onBack} 
+            style={{ 
+              background: 'none', 
+              border: 'none', 
+              color: 'var(--text-muted)', 
+              display: 'flex', 
+              alignItems: 'center', 
+              cursor: 'pointer', 
+              padding: 0 
+            }} 
+            title="Go back"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="20" height="20" style={{ stroke: 'var(--text-muted)' }}>
               <line x1="19" y1="12" x2="5" y2="12"></line>
               <polyline points="12 19 5 12 12 5"></polyline>
             </svg>
@@ -283,7 +295,18 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v) => formatINR(v)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} />
+                    <Tooltip 
+                      formatter={(v) => [formatINR(v), 'Value']} 
+                      contentStyle={{ 
+                        background: 'rgba(20, 25, 40, 0.98)', 
+                        border: '1px solid var(--border)', 
+                        borderRadius: '12px',
+                        boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+                        padding: '8px 12px'
+                      }}
+                      itemStyle={{ color: 'var(--accent)', fontSize: '0.78rem', fontWeight: 'bold' }}
+                      labelStyle={{ color: '#fff', fontSize: '0.74rem', fontWeight: 'bold', marginBottom: '4px' }}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
               </div>

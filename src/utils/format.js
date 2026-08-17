@@ -45,12 +45,34 @@ export const inputToStorage = (v) => {
   return `${dd}/${m}/${y}`;
 };
 
-export const calculateAge = (dateStr) => {
+export const calculateAge = (dateStr, timeStr) => {
   if (!dateStr) return '';
-  const birthDate = parseDate(dateStr);
-  if (birthDate.getTime() === 0) return '';
+  const baseDate = parseDate(dateStr);
+  if (baseDate.getTime() === 0) return '';
+
+  let workingDaysToAdd = 1;
+  if (timeStr && timeStr.trim()) {
+    const parts = timeStr.trim().split(':');
+    const hour = parseInt(parts[0], 10);
+    if (!isNaN(hour) && hour >= 12) {
+      workingDaysToAdd = 2;
+    }
+  }
+
+  let birthDate = new Date(baseDate);
+  let added = 0;
+  while (added < workingDaysToAdd) {
+    birthDate.setDate(birthDate.getDate() + 1);
+    const day = birthDate.getDay();
+    if (day !== 0 && day !== 6) {
+      added++;
+    }
+  }
 
   const today = new Date();
+  if (today < birthDate) {
+    return '0 days';
+  }
 
   let years = today.getFullYear() - birthDate.getFullYear();
   let months = today.getMonth() - birthDate.getMonth();

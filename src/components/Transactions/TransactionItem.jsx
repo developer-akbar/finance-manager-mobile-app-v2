@@ -26,7 +26,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
 
   const isInvested = isInvestmentAccount(t.Account) || isInvestmentAccount(t.FromAccount) || isInvestmentAccount(t.ToAccount);
   const isRedeemed = (t.Tags || t.tags || t.Note || t.Description || '').toLowerCase().includes('redeemed');
-  const ageStr = isInvested && !isRedeemed ? calculateAge(t.Date) : null;
+  const ageStr = isInvested && !isRedeemed ? calculateAge(t.Date, t.Time) : null;
 
   const baseType = txnType(t);
   const type     = overrideType || baseType;
@@ -130,6 +130,20 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
             {label}
             {t.receipt_image && <span style={{ marginLeft: 6, fontSize: '0.72rem' }}>🧾</span>}
             {t.warranty_expiry && <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>🛡️</span>}
+            {ageStr && (
+              <span 
+                className="txn-age-text" 
+                style={{ 
+                  marginLeft: 8, 
+                  fontSize: '0.7rem', 
+                  color: 'var(--text-muted)', 
+                  fontWeight: 'normal',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                ({ageStr})
+              </span>
+            )}
           </div>
           <div className="txn-sub-l">
             {t.Time && <span className="txn-time-tag txn-time-first">{formatTime(t.Time)}</span>}
@@ -138,18 +152,6 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
             {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && <span className="txn-cat-tag">{t.Subcategory}</span>}
             {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
             {xferAccountLabel && <span className="txn-time-tag">{xferAccountLabel}</span>}
-            {ageStr && (
-              <span 
-                className="txn-cat-tag age-tag" 
-                style={{ 
-                  background: 'rgba(0, 229, 160, 0.08)', 
-                  color: 'var(--accent)', 
-                  border: '1px solid rgba(0, 229, 160, 0.2)' 
-                }}
-              >
-                ⏳ {ageStr}
-              </span>
-            )}
           </div>
         </div>
         {/* Amount + running balance */}
