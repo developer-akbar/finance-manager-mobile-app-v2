@@ -1238,6 +1238,8 @@ function DataManager({ onBack }) {
   const [showDel, setShowDel] = useState(false);
   const [analysis, setAnalysis] = useState(null);   // { total, fileDupeCount, dbDupeCount }
   const [analysing, setAnalysing] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importLoadingMessage, setImportLoadingMessage] = useState('Processing backup file...');
 
   // Encrypted Backup & Restore State
   const [cryptoModal, setCryptoModal] = useState(null); // null | { mode: 'export' } | { mode: 'import', rawText, fileName }
@@ -1265,17 +1267,26 @@ function DataManager({ onBack }) {
     // Check for encrypted FinMan backup (.finman or JSON with finman_encrypted_backup)
     if (name.endsWith('.finman')) {
       const reader = new FileReader();
+      setImportLoadingMessage('Parsing encrypted file...');
+      setImportLoading(true);
       reader.onload = (event) => {
         const text = event.target.result;
         setCryptoModal({ mode: 'import', rawText: text, fileName: file.name });
         setCryptoPin('');
         setCryptoErr('');
+        setImportLoading(false);
+      };
+      reader.onerror = () => {
+        setStatus({ type: 'error', msg: 'Failed to read file.' });
+        setImportLoading(false);
       };
       reader.readAsText(file);
       if (fileRef.current) fileRef.current.value = '';
       return;
     }
 
+    setImportLoadingMessage('Parsing backup file...');
+    setImportLoading(true);
     try {
       const { parseFile } = await import('../../utils/xlsParser.js');
       const parsed = await parseFile(file);
@@ -1285,6 +1296,7 @@ function DataManager({ onBack }) {
         setCryptoModal({ mode: 'import', rawText: JSON.stringify(parsed), fileName: file.name });
         setCryptoPin('');
         setCryptoErr('');
+        setImportLoading(false);
         if (fileRef.current) fileRef.current.value = '';
         return;
       }
@@ -1300,6 +1312,7 @@ function DataManager({ onBack }) {
         setIsBackup(true);
         setPendingBackup(backup);
         setShowMode(true);
+        setImportLoading(false);
         if (fileRef.current) fileRef.current.value = '';
         return;
       }
@@ -1308,6 +1321,7 @@ function DataManager({ onBack }) {
       const rows = Array.isArray(parsed) ? parsed : [];
       if (rows.length === 0) {
         setStatus({ type: 'error', msg: 'File appears empty or unreadable.' });
+        setImportLoading(false);
         if (fileRef.current) fileRef.current.value = '';
         return;
       }
@@ -1317,6 +1331,7 @@ function DataManager({ onBack }) {
       const hasType = 'Income/Expense' in firstRow || 'type' in firstRow;
       if (!hasDate || !hasType) {
         setStatus({ type: 'error', msg: `Missing required columns. Need: Date, Income/Expense, Amount/INR, Account, Category. Found: ${Object.keys(firstRow).slice(0, 6).join(', ')}…` });
+        setImportLoading(false);
         if (fileRef.current) fileRef.current.value = '';
         return;
       }
@@ -1327,19 +1342,29 @@ function DataManager({ onBack }) {
       setShowMode(true);
     } catch (err) {
       setStatus({ type: 'error', msg: `Parse error: ${err.message}` });
+    } finally {
+      setImportLoading(false);
+      if (fileRef.current) fileRef.current.value = '';
     }
-    if (fileRef.current) fileRef.current.value = '';
   };
 
   const doImport = async (mode) => {
     setShowMode(false);
-    const result = await importData(pendingRows, mode, pendingBackup);
-    setStatus(result.cancelled
-      ? { type: 'error', msg: 'Import cancelled.' }
-      : { type: 'success', msg: `✓ Imported ${result.imported.toLocaleString()} transactions${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''}.` }
-    );
-    setPending(null);
-    setPendingBackup(null);
+    setImportLoadingMessage('Importing transactions & reloading database...');
+    setImportLoading(true);
+    try {
+      const result = await importData(pendingRows, mode, pendingBackup);
+      setStatus(result.cancelled
+        ? { type: 'error', msg: 'Import cancelled.' }
+        : { type: 'success', msg: `✓ Imported ${result.imported.toLocaleString()} transactions${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''}.` }
+      );
+    } catch (err) {
+      setStatus({ type: 'error', msg: `Import failed: ${err.message}` });
+    } finally {
+      setPending(null);
+      setPendingBackup(null);
+      setImportLoading(false);
+    }
   };
 
   // ── Capacitor-aware file save (no @capacitor/share — avoids Android 14 crash) ──
@@ -1503,6 +1528,8 @@ function DataManager({ onBack }) {
       setCryptoErr('Please enter the password/PIN to decrypt');
       return;
     }
+    setImportLoadingMessage('Decrypting & reading backup file...');
+    setImportLoading(true);
     try {
       const decryptedPayload = await decryptBackupData(cryptoModal.rawText, cryptoPin);
       if (decryptedPayload && decryptedPayload._finman_backup) {
@@ -1521,6 +1548,8 @@ function DataManager({ onBack }) {
       }
     } catch (err) {
       setCryptoErr(err.message);
+    } finally {
+      setImportLoading(false);
     }
   };
 
@@ -1808,6 +1837,29 @@ function DataManager({ onBack }) {
               <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={() => { setShowMode(false); setPending(null); setAnalysis(null); setIsBackup(false); }}>Cancel</button>
             </div>
           </>
+        )}
+
+        {importLoading && (
+          <div className="fullscreen-loader-overlay">
+            <div className="loader-card">
+              <div className="loader-spinner" />
+              <div className="loader-text">{importLoadingMessage}</div>
+              <div className="loader-subtext" style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: 4, textAlign: 'center' }}>
+                This will take a moment, please wait...
+              </div>
+              
+              {importProgress && (
+                <div className="loader-progress-wrap" style={{ width: '100%', marginTop: 16 }}>
+                  <div className="dm-progress-bar" style={{ marginBottom: 6 }}>
+                    <div className="dm-progress-fill" style={{ width: `${pct}%` }} />
+                  </div>
+                  <div className="dm-progress-txt">
+                    {importProgress.processed.toLocaleString()} / {importProgress.total.toLocaleString()} ({pct}%)
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         <div style={{ height: 24 }} />

@@ -476,7 +476,24 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     //    get unique IDs and all rows are inserted.
     //  • merge → deterministic hash so the same transaction always maps to the
     //    same ID and INSERT OR IGNORE skips true duplicates.
-    const stableKey = `${dateVal}|${String(r.Time||r.time||'').trim()}|${acctName}|${parseFloat(r.INR||r.Amount||r.inr||r.amount||0)}|${String(r.Note||r.note||'').trim()}`;
+    const rawTime = String(r.Time||r.time||'').trim();
+    const parseExcelTime = (s) => {
+      if (!s) return '';
+      if (/^\d{1,2}:\d{2}/.test(s)) return s.substring(0, 5);
+      if (/[ap]m/i.test(s)) return s;
+      const val = parseFloat(s);
+      if (!isNaN(val)) {
+        const fraction = val - Math.floor(val);
+        const totalSeconds = Math.round(fraction * 86400);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      }
+      return s;
+    };
+    const timeVal = parseExcelTime(rawTime);
+
+    const stableKey = `${dateVal}|${rawTime}|${acctName}|${parseFloat(r.INR||r.Amount||r.inr||r.amount||0)}|${String(r.Note||r.note||'').trim()}`;
     const id = r.ID || r.id || (firstImport ? uuid() : deterministicId(stableKey));
     // For Transfer rows: category holds the destination account name in both formats.
     // For FinMan exports where toAcctName was already resolved from ToAccount,
@@ -489,7 +506,7 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     items.push({
       id,
       date:              dateVal,
-      time:              String(r.Time || r.time || '').trim(),
+      time:              timeVal,
       account:           acctName,
       from_account:      acctName,   // same as account; kept for query/filter compatibility
       to_account:        toAcctName,

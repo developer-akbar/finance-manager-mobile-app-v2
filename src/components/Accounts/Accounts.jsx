@@ -593,7 +593,7 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
         {groups.length===0
           ? <div className="empty-state"><div className="empty-icon">📭</div><div className="empty-title">No transactions</div><div className="empty-desc">{periodLabel}</div></div>
           : <>
-              {multiMode && <BulkSelectionBar selected={selected} selTotals={selTotals} allTxns={periodTxns}
+              {multiMode && <BulkSelectionBar selected={selected} setSelected={setSelected} selTotals={selTotals} allTxns={periodTxns}
                 onDone={()=>{setMultiMode(false);setSelected(new Set());}}
                 onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
               {groups.map(([dk,txns], gi)=>{

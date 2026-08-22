@@ -1,21 +1,154 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, calcTotals, groupByDate, txnType, txnAmount } from '../../utils/format.js';
+import { parseDate, formatINR, calcTotals, groupByDate, txnType, txnAmount, inputToStorage } from '../../utils/format.js';
 import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Transactions.css';
 
-// ── BulkSelectionBar — reusable selection bar with delete ────────────────────
-export function BulkSelectionBar({ selected, selTotals, allTxns, onDone, onDeleted }) {
-  const { deleteTransaction } = useApp();
+// ── BulkSelectionBar — reusable selection bar with delete & edit ────────────────────
+export function BulkSelectionBar({ selected, setSelected, selTotals, allTxns, onDone, onDeleted }) {
+  const { deleteTransaction, updateTransaction, state } = useApp();
+  const { accounts, categories } = state;
+
   const [confirm, setConfirm] = React.useState(false);
+  const [showEditSheet, setShowEditSheet] = React.useState(false);
+  const [updating, setUpdating] = React.useState(false);
+  const [progress, setProgress] = React.useState(0);
+
+  // Checkboxes next to each field
+  const [updDate, setUpdDate] = React.useState(false);
+  const [updType, setUpdType] = React.useState(false);
+  const [updAcct, setUpdAcct] = React.useState(false);
+  const [updToAcct, setUpdToAcct] = React.useState(false);
+  const [updCat, setUpdCat] = React.useState(false);
+  const [updSubcat, setUpdSubcat] = React.useState(false);
+  const [updNote, setUpdNote] = React.useState(false);
+
+  // Field values
+  const [dateVal, setDateVal] = React.useState('');
+  const [typeVal, setTypeVal] = React.useState('Expense');
+  const [acctVal, setAcctVal] = React.useState('');
+  const [toAcctVal, setToAcctVal] = React.useState('');
+  const [catVal, setCatVal] = React.useState('');
+  const [subcatVal, setSubcatVal] = React.useState('');
+  const [noteVal, setNoteVal] = React.useState('');
+
   const selArr = allTxns.filter(t => selected.has(t._id));
+
+  const filteredCategories = useMemo(() => {
+    const wantType = typeVal;
+    return Object.entries(categories || {})
+      .filter(([, d]) => (d?.type || 'Expense') === wantType)
+      .map(([n]) => n)
+      .sort();
+  }, [categories, typeVal]);
+
+  const subcategoriesList = useMemo(() => {
+    return (categories?.[catVal]?.subcategories || []).filter(s => s && s !== 'Default').sort();
+  }, [categories, catVal]);
+
+  const allVisibleIds = allTxns.map(tx => tx._id);
+  const allSel = allVisibleIds.length > 0 && allVisibleIds.every(id => selected.has(id));
+  const isIndeterminate = !allSel && allVisibleIds.some(id => selected.has(id));
+
+  const handleSelectAllToggle = () => {
+    if (allSel) {
+      setSelected(prev => {
+        const next = new Set(prev);
+        allVisibleIds.forEach(id => next.delete(id));
+        return next;
+      });
+    } else {
+      setSelected(prev => {
+        const next = new Set(prev);
+        allVisibleIds.forEach(id => next.add(id));
+        return next;
+      });
+    }
+  };
+
+  const handleSaveBulk = async () => {
+    setUpdating(true);
+    setProgress(0);
+    const ids = [...selected];
+    const total = ids.length;
+    
+    for (let i = 0; i < total; i++) {
+      const id = ids[i];
+      const t = allTxns.find(x => x._id === id);
+      if (!t) continue;
+      
+      // Start with the existing transaction data to prevent blanking out any fields!
+      const payload = { ...t };
+      
+      if (updDate && dateVal) {
+        payload.Date = inputToStorage(dateVal);
+      }
+      if (updNote) {
+        payload.Note = noteVal;
+      }
+      if (updType) {
+        payload['Income/Expense'] = typeVal; // 'Income', 'Expense', or 'Transfer'
+        if (typeVal !== 'Transfer') {
+          payload.ToAccount = '';
+          payload.ToAccountGroup = '';
+          payload.ToAccountOrder = '';
+        }
+      }
+      if (updAcct && acctVal) {
+        const acctObj = accounts.find(a => a.name === acctVal);
+        if (acctObj) {
+          payload.Account = acctObj.name;
+          payload.AccountGroup = acctObj.group;
+          payload.AccountOrder = acctObj.account_order;
+          payload.AccountGroupOrder = acctObj.group_order;
+          payload.FromAccount = acctObj.name;
+          payload.FromAccountGroup = acctObj.group;
+          payload.FromAccountOrder = acctObj.account_order;
+        }
+      }
+      if (updToAcct && toAcctVal) {
+        const destObj = accounts.find(a => a.name === toAcctVal);
+        if (destObj) {
+          payload.ToAccount = destObj.name;
+          payload.ToAccountGroup = destObj.group;
+          payload.ToAccountOrder = destObj.account_order;
+          payload.Category = destObj.name;
+        }
+      }
+      if (updCat && catVal) {
+        payload.Category = catVal;
+      }
+      if (updSubcat) {
+        payload.Subcategory = subcatVal;
+      }
+      
+      await updateTransaction(id, payload);
+      setProgress(Math.round(((i + 1) / total) * 100));
+    }
+    
+    setUpdating(false);
+    setShowEditSheet(false);
+    onDone(); // Clears selection mode
+  };
+
   if (!selected.size) return null;
+
   return (
     <>
       <div className="search-sel-bar">
         <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
+          <input 
+            type="checkbox" 
+            checked={allSel}
+            ref={el => {
+              if (el) el.indeterminate = isIndeterminate;
+            }}
+            onChange={handleSelectAllToggle}
+            style={{ marginRight: 6, transform: 'scale(1.2)', cursor: 'pointer' }}
+            title="Toggle All Visible"
+          />
           <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
           {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
           {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
@@ -26,14 +159,22 @@ export function BulkSelectionBar({ selected, selTotals, allTxns, onDone, onDelet
             </span>
           )}
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0,position:'relative'}}>
+          <button onClick={()=>setShowEditSheet(true)}
+            style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--text-secondary)'}}
+            title="Bulk Edit Fields">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="18" height="18"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          
           <button onClick={()=>setConfirm(true)}
-            style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--expense)'}}>
+            style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--expense)'}}
+            title="Delete Selected">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="18" height="18"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
           </button>
           <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',fontSize:'0.82rem'}} onClick={onDone}>Done</button>
         </div>
       </div>
+
       {confirm && (
         <>
           <div className="overlay" onClick={()=>setConfirm(false)}/>
@@ -62,9 +203,229 @@ export function BulkSelectionBar({ selected, selTotals, allTxns, onDone, onDelet
           </div>
         </>
       )}
+
+      {showEditSheet && (
+        <>
+          <div className="overlay" onClick={()=>setShowEditSheet(false)}/>
+          <div className="bottom-sheet" style={{paddingBottom:'calc(var(--safe-bottom) + 16px)', zIndex: 10000}}>
+            <div className="sheet-handle"/>
+            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:10}}>Bulk Edit Transactions</div>
+            <div style={{maxHeight:'55dvh',overflowY:'auto',display:'flex',flexDirection:'column',gap:14,padding:'4px 2px',marginBottom:16}}>
+              
+              {/* Note field */}
+              <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'0.75rem',fontWeight:700,cursor:'pointer'}}>
+                  <input type="checkbox" checked={updNote} onChange={e=>setUpdNote(e.target.checked)} />
+                  Update Notes
+                </label>
+                {updNote && (
+                  <input 
+                    type="text" 
+                    value={noteVal} 
+                    onChange={e=>setNoteVal(e.target.value)} 
+                    placeholder="Enter note/description..."
+                    style={{padding:'9px 12px',borderRadius:8,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',fontSize:'0.8rem',outline:'none'}}
+                  />
+                )}
+              </div>
+
+              {/* Date field */}
+              <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'0.75rem',fontWeight:700,cursor:'pointer'}}>
+                  <input type="checkbox" checked={updDate} onChange={e=>setUpdDate(e.target.checked)} />
+                  Update Date
+                </label>
+                {updDate && (
+                  <input 
+                    type="date" 
+                    value={dateVal} 
+                    onChange={e=>setDateVal(e.target.value)}
+                    style={{padding:'9px 12px',borderRadius:8,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',fontSize:'0.8rem',outline:'none',fontFamily:'var(--font)'}}
+                  />
+                )}
+              </div>
+
+              {/* Type Context Selector */}
+              <div style={{display:'flex',flexDirection:'column',gap:6,background:'var(--bg-surface-hover, rgba(255,255,255,0.03))',padding:10,borderRadius:10,border:'1px solid var(--border-light)'}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                  <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'0.75rem',fontWeight:700,cursor:'pointer'}}>
+                    <input type="checkbox" checked={updType} onChange={e=>setUpdType(e.target.checked)} />
+                    Update Transaction Type
+                  </label>
+                  <span style={{fontSize:'0.65rem',color:'var(--text-muted)',fontWeight:600}}>
+                    {updType ? 'Overwriting types' : 'Display context only'}
+                  </span>
+                </div>
+                <div style={{display:'flex',gap:6,marginTop:4}}>
+                  {['Expense', 'Income', 'Transfer'].map(t => (
+                    <button 
+                      key={t}
+                      type="button"
+                      onClick={() => {
+                        setTypeVal(t);
+                        setCatVal('');
+                        setSubcatVal('');
+                      }}
+                      className={`portfolio-chip-btn ${typeVal === t ? 'active' : ''}`}
+                      style={{flex:1,padding:'6px 0',fontSize:'0.74rem'}}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* From Account / Account field */}
+              {typeVal !== 'Transfer' ? (
+                <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                  <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'0.75rem',fontWeight:700,cursor:'pointer'}}>
+                    <input type="checkbox" checked={updAcct} onChange={e=>setUpdAcct(e.target.checked)} />
+                    Update Account
+                  </label>
+                  {updAcct && (
+                    <select 
+                      value={acctVal} 
+                      onChange={e=>setAcctVal(e.target.value)}
+                      style={{padding:'9px 12px',borderRadius:8,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',fontSize:'0.8rem',outline:'none'}}
+                    >
+                      <option value="">Select Account...</option>
+                      {(accounts || []).map(a => (
+                        <option key={a.id || a.name} value={a.name}>{a.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {/* From Account */}
+                  <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                    <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'0.75rem',fontWeight:700,cursor:'pointer'}}>
+                      <input type="checkbox" checked={updAcct} onChange={e=>setUpdAcct(e.target.checked)} />
+                      Update From Account
+                    </label>
+                    {updAcct && (
+                      <select 
+                        value={acctVal} 
+                        onChange={e=>setAcctVal(e.target.value)}
+                        style={{padding:'9px 12px',borderRadius:8,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',fontSize:'0.8rem',outline:'none'}}
+                      >
+                        <option value="">Select From Account...</option>
+                        {(accounts || []).map(a => (
+                          <option key={a.id || a.name} value={a.name}>{a.name}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* To Account */}
+                  <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                    <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'0.75rem',fontWeight:700,cursor:'pointer'}}>
+                      <input type="checkbox" checked={updToAcct} onChange={e=>setUpdToAcct(e.target.checked)} />
+                      Update To Account
+                    </label>
+                    {updToAcct && (
+                      <select 
+                        value={toAcctVal} 
+                        onChange={e=>setToAcctVal(e.target.value)}
+                        style={{padding:'9px 12px',borderRadius:8,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',fontSize:'0.8rem',outline:'none'}}
+                      >
+                        <option value="">Select To Account...</option>
+                        {(accounts || []).map(a => (
+                          <option key={a.id || a.name} value={a.name}>{a.name}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* Category & Subcategory (only shown for Expense / Income) */}
+              {typeVal !== 'Transfer' && (
+                <>
+                  {/* Category */}
+                  <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                    <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'0.75rem',fontWeight:700,cursor:'pointer'}}>
+                      <input type="checkbox" checked={updCat} onChange={e=>setUpdCat(e.target.checked)} />
+                      Update Category
+                    </label>
+                    {updCat && (
+                      <select 
+                        value={catVal} 
+                        onChange={e=>setCatVal(e.target.value)}
+                        style={{padding:'9px 12px',borderRadius:8,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',fontSize:'0.8rem',outline:'none'}}
+                      >
+                        <option value="">Select Category...</option>
+                        {filteredCategories.map(c => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Subcategory */}
+                  <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                    <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'0.75rem',fontWeight:700,cursor:'pointer'}}>
+                      <input type="checkbox" checked={updSubcat} onChange={e=>setUpdSubcat(e.target.checked)} />
+                      Update Subcategory
+                    </label>
+                    {updSubcat && (
+                      subcategoriesList.length > 0 ? (
+                        <select 
+                          value={subcatVal} 
+                          onChange={e=>setSubcatVal(e.target.value)}
+                          style={{padding:'9px 12px',borderRadius:8,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',fontSize:'0.8rem',outline:'none'}}
+                        >
+                          <option value="">Select Subcategory...</option>
+                          <option value="Default">Default</option>
+                          {subcategoriesList.map(s => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input 
+                          type="text" 
+                          value={subcatVal} 
+                          onChange={e=>setSubcatVal(e.target.value)} 
+                          placeholder="Enter subcategory..."
+                          style={{padding:'9px 12px',borderRadius:8,border:'1px solid var(--border)',background:'var(--bg-card)',color:'var(--text-primary)',fontSize:'0.8rem',outline:'none'}}
+                        />
+                      )
+                    )}
+                  </div>
+                </>
+              )}
+
+            </div>
+
+            <div style={{display:'flex',gap:10}}>
+              <button className="btn btn-ghost btn-full" onClick={()=>setShowEditSheet(false)}>Cancel</button>
+              <button 
+                className="btn btn-primary btn-full" 
+                onClick={handleSaveBulk}
+                disabled={!(updDate || updType || updAcct || updToAcct || updCat || updSubcat || updNote)}
+              >
+                Apply Changes
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {updating && (
+        <>
+          <div className="overlay" style={{zIndex: 20000}} />
+          <div className="bottom-sheet" style={{padding:'32px 16px', textAlign:'center', zIndex: 20001}}>
+            <div className="loader-spinner" style={{margin:'0 auto 16px'}} />
+            <div style={{fontWeight:800,fontSize:'0.95rem',marginBottom:4}}>Updating transactions...</div>
+            <div style={{fontSize:'0.74rem',color:'var(--text-muted)'}}>{progress}% completed</div>
+          </div>
+        </>
+      )}
     </>
   );
 }
+
+
 
 
 const MONTHS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -512,7 +873,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       )}
 
       {/* Multi-select summary bar */}
-      {multiMode && <BulkSelectionBar selected={selected} selTotals={selTotals} allTxns={transactions}
+      {multiMode && <BulkSelectionBar selected={selected} setSelected={setSelected} selTotals={selTotals} allTxns={results}
         onDone={()=>{setMultiMode(false);setSelected(new Set());}}
         onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
 
@@ -952,7 +1313,7 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
         <MonthlyView transactions={transactions} year={viewYear} setYear={setViewYear} onMonthClick={(y,mi)=>{setViewYear(y);setViewMonth(mi);setViewMode('daily');}}/>
       ) : (
         <>
-          {multiMode && <BulkSelectionBar selected={selected} selTotals={selTotals} allTxns={transactions}
+          {multiMode && <BulkSelectionBar selected={selected} setSelected={setSelected} selTotals={selTotals} allTxns={monthTxns}
             onDone={()=>{setMultiMode(false);setSelected(new Set());}}
             onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
           <div ref={scrollRef} className="txn-list" onScroll={handleScroll}>
