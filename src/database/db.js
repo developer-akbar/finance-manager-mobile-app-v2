@@ -5,7 +5,7 @@
 import { Capacitor } from '@capacitor/core';
 
 const IDB_NAME    = 'finman_v2';
-const IDB_VERSION = 9; // v9 — inventory table
+const IDB_VERSION = 10; // v10 — sub_accounts table
 
 // Each store and its primary key field
 const STORE_DEFS = [
@@ -15,6 +15,7 @@ const STORE_DEFS = [
   { name:'account_mapping', key:'id'  },
   { name:'categories',      key:'id'  },
   { name:'subcategories',   key:'id'  },
+  { name:'sub_accounts',    key:'id'  },
   { name:'budgets',         key:'id'  },
   { name:'settings',        key:'key' }, // settings uses 'key' not 'id'
   { name:'recurring_rules',  key:'id'  },
@@ -229,7 +230,7 @@ const openSQLite = async () => {
 };
 
 const applySchema = async (db) => {
-  await db.execute(`CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY,date TEXT NOT NULL,time TEXT DEFAULT '',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',note TEXT DEFAULT '',description TEXT DEFAULT '',inr REAL DEFAULT 0,amount TEXT DEFAULT '0',currency TEXT DEFAULT 'INR',type TEXT DEFAULT 'Expense',created_at TEXT,updated_at TEXT,recurring_rule_id TEXT DEFAULT '',tags TEXT DEFAULT '',split_group_id TEXT DEFAULT '',receipt_image TEXT DEFAULT '',warranty_expiry TEXT DEFAULT '',serial_no TEXT DEFAULT '');`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY,date TEXT NOT NULL,time TEXT DEFAULT '',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',note TEXT DEFAULT '',description TEXT DEFAULT '',inr REAL DEFAULT 0,amount TEXT DEFAULT '0',currency TEXT DEFAULT 'INR',type TEXT DEFAULT 'Expense',created_at TEXT,updated_at TEXT,recurring_rule_id TEXT DEFAULT '',tags TEXT DEFAULT '',split_group_id TEXT DEFAULT '',receipt_image TEXT DEFAULT '',warranty_expiry TEXT DEFAULT '',serial_no TEXT DEFAULT '',sub_account TEXT DEFAULT '',from_sub_account TEXT DEFAULT '',to_sub_account TEXT DEFAULT '');`);
   try { await db.run(`ALTER TABLE transactions ADD COLUMN description TEXT DEFAULT ''`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN time TEXT DEFAULT ''`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN recurring_rule_id TEXT DEFAULT ''`); } catch {}
@@ -238,6 +239,9 @@ const applySchema = async (db) => {
   try { await db.run(`ALTER TABLE transactions ADD COLUMN receipt_image TEXT DEFAULT ''`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN warranty_expiry TEXT DEFAULT ''`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN serial_no TEXT DEFAULT ''`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN sub_account TEXT DEFAULT ''`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN from_sub_account TEXT DEFAULT ''`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN to_sub_account TEXT DEFAULT ''`); } catch {}
   await db.execute(`CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,group_name TEXT DEFAULT '',sort_order INTEGER DEFAULT 0,created_at TEXT,acct_type TEXT DEFAULT '',settlement_date INTEGER DEFAULT 0,payment_due_days INTEGER DEFAULT 0,is_asset INTEGER DEFAULT 1,card_last4 TEXT DEFAULT '');`);
   try { await db.execute(`ALTER TABLE accounts ADD COLUMN acct_type TEXT DEFAULT '';`); } catch {}
   try { await db.execute(`ALTER TABLE accounts ADD COLUMN settlement_date INTEGER DEFAULT 0;`); } catch {}
@@ -249,6 +253,7 @@ const applySchema = async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS account_mapping (id TEXT PRIMARY KEY,source_name TEXT,account_name TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY,name TEXT NOT NULL,type TEXT DEFAULT 'Expense',sort_order INTEGER DEFAULT 0);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS subcategories (id TEXT PRIMARY KEY,name TEXT NOT NULL,category_id TEXT NOT NULL,sort_order INTEGER DEFAULT 0);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS sub_accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,account_id TEXT NOT NULL,sort_order INTEGER DEFAULT 0);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS budgets (id TEXT PRIMARY KEY,category TEXT NOT NULL,amount REAL NOT NULL,period TEXT DEFAULT 'Monthly',created_at TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS recurring_rules (id TEXT PRIMARY KEY,rule_type TEXT NOT NULL,status TEXT DEFAULT 'active',txn_type TEXT DEFAULT 'Expense',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',base_note TEXT DEFAULT '',description TEXT DEFAULT '',currency TEXT DEFAULT 'INR',total_amount REAL DEFAULT 0,amount_per_part REAL DEFAULT 0,total_days INTEGER DEFAULT 0,total_parts INTEGER DEFAULT 0,completed_parts INTEGER DEFAULT 0,start_date TEXT DEFAULT '',next_date TEXT DEFAULT '',end_date TEXT DEFAULT '',schedule_mode TEXT DEFAULT 'on_date',frequency TEXT DEFAULT '',created_at TEXT DEFAULT '');`);

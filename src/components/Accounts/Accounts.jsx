@@ -214,8 +214,47 @@ function buildBalanceMap(transactions) {
   return map;
 }
 
+// Build a sub-account balance map over ALL transactions.
+function buildSubAccountBalanceMap(transactions) {
+  const map = {};
+  const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(String(s).trim());
+
+  for (const t of transactions) {
+    const amt = txnAmount(t);
+    const type = String(t['Income/Expense'] || '').trim();
+    const acct = String(t.Account || t.FromAccount || '').trim();
+    const dest = String(t.ToAccount || '').trim();
+    
+    const sub = String(t.SubAccount || t.sub_account || '').trim();
+    const fromSub = String(t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '').trim();
+    const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+
+    if (type === 'Income') {
+      if (acct && sub && !looksNumeric(acct)) {
+        if (!map[acct]) map[acct] = {};
+        map[acct][sub] = (map[acct][sub] || 0) + amt;
+      }
+    } else if (type === 'Expense') {
+      if (acct && sub && !looksNumeric(acct)) {
+        if (!map[acct]) map[acct] = {};
+        map[acct][sub] = (map[acct][sub] || 0) - amt;
+      }
+    } else if (type === 'Transfer-Out') {
+      if (acct && fromSub && !looksNumeric(acct)) {
+        if (!map[acct]) map[acct] = {};
+        map[acct][fromSub] = (map[acct][fromSub] || 0) - amt;
+      }
+      if (dest && toSub && !looksNumeric(dest)) {
+        if (!map[dest]) map[dest] = {};
+        map[dest][toSub] = (map[dest][toSub] || 0) + amt;
+      }
+    }
+  }
+  return map;
+}
+
 // ── Account Detail ────────────────────────────────────────────────────────────
-function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }) {
+function AccountDetail({ acctName, subAccountName, allTxns, onBack, backInterceptRef, ccConfig }) {
   const now = new Date();
 
   // If this is a CC account, default period to 'CC Cycle'; otherwise 'Month'
@@ -292,8 +331,20 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
     allTxns.filter(t => {
       const acct = t.Account || t.FromAccount || '';
       const dest = t.ToAccount || '';
+      const sub = t.SubAccount || t.sub_account || '';
+      const fromSub = t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '';
+      const toSub = t.ToSubAccount || t.to_sub_account || '';
+
+      if (subAccountName) {
+        const isXfer = t['Income/Expense'] === 'Transfer' || t['Income/Expense'] === 'Transfer-Out' || t['Income/Expense'] === 'Transfer-In';
+        if (isXfer) {
+          return (acct === acctName && fromSub === subAccountName) || (dest === acctName && toSub === subAccountName);
+        } else {
+          return acct === acctName && sub === subAccountName;
+        }
+      }
       return acct === acctName || dest === acctName;
-    }), [allTxns, acctName]);
+    }), [allTxns, acctName, subAccountName]);
 
   // Compute current CC cycle range based on offset
   const ccCycleRange = useMemo(() => {
@@ -471,8 +522,8 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         </button>
         <div style={{flex:1}}>
-          <div className="page-hdr-title">{acctName}</div>
-          <div className="page-hdr-sub">Account · {acctTxns.length} total txns</div>
+          <div className="page-hdr-title">{acctName}{subAccountName ? ` › ${subAccountName}` : ''}</div>
+          <div className="page-hdr-sub">{subAccountName ? 'Sub Account' : 'Account'} · {acctTxns.length} total txns</div>
         </div>
         <div className="entity-badge" style={{background:closingBal>=0?'var(--income-bg)':'var(--expense-bg)',color:closingBal>=0?'var(--income)':'var(--expense)'}}>
           {closingBal>=0?'+':''}{formatINRCompact(Math.abs(closingBal))}
@@ -643,8 +694,8 @@ function AccountDetail({ acctName, allTxns, onBack, backInterceptRef, ccConfig }
         }
         <div style={{height:80}}/>
       </div>
-      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} onClose={()=>setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
-      {showAdd&&<AddTransaction key={addKey} prefillAccount={acctName} onClose={()=>setShowAdd(false)} onSaveAndContinue={() => {}} backInterceptRef={backInterceptRef}/>}
+      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={()=>setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
+      {showAdd&&<AddTransaction key={addKey} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={()=>setShowAdd(false)} onSaveAndContinue={() => {}} backInterceptRef={backInterceptRef}/>}
       {copyTxn&&<AddTransaction copyTransaction={copyTxn} onClose={()=>setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})} backInterceptRef={backInterceptRef}/>}
     </div>
   );
@@ -655,7 +706,9 @@ export default function Accounts({ backInterceptRef } = {}) {
   const { state, navigate } = useApp();
   const { accounts, accountGroups, transactions } = state;
   const [drill, setDrill] = useState(null);
+  const [drillSub, setDrillSub] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+  const [expandedAccounts, setExpandedAccounts] = useState(new Set());
   const [showDebtTracker, setShowDebtTracker] = useState(false);
   const [showOptimizer,   setShowOptimizer]   = useState(false);
   const [showGroups,      setShowGroups]      = useState(false);
@@ -667,6 +720,7 @@ export default function Accounts({ backInterceptRef } = {}) {
   useEffect(() => {
     const handleReset = () => {
       setDrill(null);
+      setDrillSub(null);
       setShowDebtTracker(false);
       setShowOptimizer(false);
       setShowGroups(false);
@@ -674,6 +728,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       setShowInvestments(false);
       setSettlePrefill(null);
       setCollapsedGroups(new Set());
+      setExpandedAccounts(new Set());
     };
     window.addEventListener('reset-accounts-view', handleReset);
     return () => window.removeEventListener('reset-accounts-view', handleReset);
@@ -693,7 +748,7 @@ export default function Accounts({ backInterceptRef } = {}) {
     } else if (showStockManager) {
       backInterceptRef.current = () => setShowStockManager(false);
     } else if (drill) {
-      backInterceptRef.current = () => setDrill(null);
+      backInterceptRef.current = () => { setDrill(null); setDrillSub(null); };
     } else {
       backInterceptRef.current = null;
     }
@@ -794,6 +849,18 @@ export default function Accounts({ backInterceptRef } = {}) {
     });
   };
 
+  const toggleAccountExpand = (acctName) => {
+    setExpandedAccounts(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(acctName)) {
+        newSet.delete(acctName);
+      } else {
+        newSet.add(acctName);
+      }
+      return newSet;
+    });
+  };
+
   // Register Android back intercept when drill-down, debt tracker or investments portfolio is open
   useEffect(() => {
     if (!backInterceptRef) return;
@@ -811,6 +878,7 @@ export default function Accounts({ backInterceptRef } = {}) {
 
 
   const acctBalances = useMemo(() => buildBalanceMap(transactions), [transactions]);
+  const subAcctBalances = useMemo(() => buildSubAccountBalanceMap(transactions), [transactions]);
 
   const netWorth = useMemo(() => Object.values(acctBalances).reduce((s,v)=>s+v,0), [acctBalances]);
   const assets = useMemo(() => {
@@ -912,14 +980,17 @@ export default function Accounts({ backInterceptRef } = {}) {
   if (drill) {
     const drillAcct = (uniqueAccounts||[]).find(a => (a.name||a) === drill);
     const ccCfg = drillAcct && isCreditCard(drillAcct) ? drillAcct : null;
-    return <AccountDetail acctName={drill} allTxns={transactions} onBack={() => setDrill(null)} backInterceptRef={backInterceptRef} ccConfig={ccCfg} />;
+    return <AccountDetail acctName={drill} subAccountName={drillSub} allTxns={transactions} onBack={() => { setDrill(null); setDrillSub(null); }} backInterceptRef={backInterceptRef} ccConfig={ccCfg} />;
   }
 
   const renderAcctRow = (a) => {
     const name   = a.name || a;
     const bal    = acctBalances[name] ?? 0;
     const acctObj = typeof a === 'object' ? a : { name };
+    const hasSubs = acctObj.subAccounts && acctObj.subAccounts.length > 0;
+    const isAcctExpanded = expandedAccounts.has(name);
 
+    let parentRow;
     if (isCreditCard(acctObj)) {
       const now  = new Date();
       let balancePayable = 0, outstanding = 0;
@@ -934,7 +1005,7 @@ export default function Accounts({ backInterceptRef } = {}) {
 
       const dueDays = ccDaysUntilDue(acctObj, now);
       const showDueDot = !paidDueAlerts.has(name) && dueDays !== null && dueDays <= 7 && balancePayable > 0;
-      return (
+      parentRow = (
         <div key={name} className="acct-row acct-row-cc" onClick={() => setDrill(name)}>
           <div className="acct-row-name">
             {name}
@@ -959,15 +1030,84 @@ export default function Accounts({ backInterceptRef } = {}) {
           <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11" style={{flexShrink:0}}><path d="M9 18l6-6-6-6"/></svg>
         </div>
       );
+    } else {
+      parentRow = (
+        <div key={name} className="acct-row" style={{ display: 'flex', alignItems: 'center' }}>
+          {hasSubs && (
+            <button
+              type="button"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-muted)',
+                padding: '0 8px 0 0',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'transform 0.2s',
+                transform: isAcctExpanded ? 'rotate(0deg)' : 'rotate(-90deg)'
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleAccountExpand(name);
+              }}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" width="10" height="10"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+          )}
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => setDrill(name)}>
+            <div className="acct-row-name" style={{ flex: 1 }}>{name}</div>
+            <div className={`acct-row-bal ${bal >= 0 ? 'pos' : 'neg'}`} style={{ marginRight: 6 }}>{bal < 0 ? '−' : ''}{formatINR(Math.abs(bal))}</div>
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11"><path d="M9 18l6-6-6-6"/></svg>
+          </div>
+        </div>
+      );
     }
 
-    return (
-      <div key={name} className="acct-row" onClick={() => setDrill(name)}>
-        <div className="acct-row-name">{name}</div>
-        <div className={`acct-row-bal ${bal >= 0 ? 'pos' : 'neg'}`}>{bal < 0 ? '−' : ''}{formatINR(Math.abs(bal))}</div>
-        <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11"><path d="M9 18l6-6-6-6"/></svg>
-      </div>
-    );
+    if (hasSubs) {
+      return (
+        <React.Fragment key={name}>
+          {parentRow}
+          {isAcctExpanded && [...acctObj.subAccounts]
+            .sort((a, b) => {
+              const balA = subAcctBalances[name]?.[a.name] ?? 0;
+              const balB = subAcctBalances[name]?.[b.name] ?? 0;
+              return balB - balA;
+            })
+            .map(sub => {
+              const subBal = subAcctBalances[name]?.[sub.name] ?? 0;
+            return (
+              <div
+                key={`${name}-${sub.name}`}
+                className="acct-row"
+                style={{
+                  paddingLeft: '32px',
+                  background: 'var(--bg-card2)',
+                  borderBottom: '1px solid var(--border-light)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  cursor: 'pointer'
+                }}
+                onClick={() => {
+                  setDrill(name);
+                  setDrillSub(sub.name);
+                }}
+              >
+                <span style={{ fontSize: '0.8rem', marginRight: 6, color: 'var(--text-muted)' }}>↳</span>
+                <div className="acct-row-name" style={{ flex: 1, fontSize: '0.8rem', opacity: 0.9 }}>{sub.name}</div>
+                <div className={`acct-row-bal ${subBal >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: '0.8rem', marginRight: 6 }}>
+                  {subBal < 0 ? '−' : ''}{formatINR(Math.abs(subBal))}
+                </div>
+                <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="9" height="9"><path d="M9 18l6-6-6-6"/></svg>
+              </div>
+            );
+          })}
+        </React.Fragment>
+      );
+    }
+
+    return parentRow;
   };
 
   return (

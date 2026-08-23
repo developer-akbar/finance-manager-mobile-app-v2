@@ -31,8 +31,17 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const baseType = txnType(t);
   const type = overrideType || baseType;
   const amount = txnAmount(t);
-  const cls = type === 'income' ? 'income' : type === 'expense' ? 'expense' : 'transfer';
-  const sign = type === 'income' ? '+' : type === 'expense' ? '−' : '';
+
+  // Determine actual display type based on the sign of the amount
+  let displayType = type;
+  if (type === 'income' && amount < 0) {
+    displayType = 'expense';
+  } else if (type === 'expense' && amount < 0) {
+    displayType = 'income';
+  }
+
+  const cls = displayType === 'income' ? 'income' : displayType === 'expense' ? 'expense' : 'transfer';
+  const sign = displayType === 'income' ? '+' : displayType === 'expense' ? '−' : '';
   const isTransfer = baseType === 'transfer';
   const label = isTransfer
     ? (t.Note || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`)
@@ -184,8 +193,17 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
 
   const type = txnType(t);
   const amount = txnAmount(t);
-  const cls = type === 'income' ? 'income' : type === 'expense' ? 'expense' : 'transfer';
-  const sign = type === 'income' ? '+' : type === 'expense' ? '−' : '';
+
+  // Determine actual display type based on the sign of the amount
+  let displayType = type;
+  if (type === 'income' && amount < 0) {
+    displayType = 'expense';
+  } else if (type === 'expense' && amount < 0) {
+    displayType = 'income';
+  }
+
+  const cls = displayType === 'income' ? 'income' : displayType === 'expense' ? 'expense' : 'transfer';
+  const sign = displayType === 'income' ? '+' : displayType === 'expense' ? '−' : '';
   const isXfer = type === 'transfer';
 
   // Instalment detection: use note pattern AND recurring_rule_id

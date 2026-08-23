@@ -17,11 +17,11 @@ export const DEFAULT_ACCOUNTS = [
   { name: 'Cash Wallet',        group: 'Cash' },
   { name: 'HDFC Credit Card',   group: 'Credit Cards' },
   { name: 'SBI Credit Card',    group: 'Credit Cards' },
-  { name: 'Zerodha / Stocks',   group: 'Investments' },
-  { name: 'Mutual Funds',       group: 'Investments' },
-  { name: 'PPF',                group: 'Investments' },
-  { name: 'Home Loan',          group: 'Loans' },
-  { name: 'Car Loan',           group: 'Loans' },
+  { name: 'Share Market',        group: 'Investments', subAccounts: [ { name: 'Zerodha' }, { name: 'Groww' } ] },
+  { name: 'Liquid Mutual Funds', group: 'Investments', subAccounts: [ { name: 'Groww' } ] },
+  { name: 'PPF',                  group: 'Investments' },
+  { name: 'Home Loan',            group: 'Loans' },
+  { name: 'Car Loan',             group: 'Loans' },
 ];
 
 export const DEFAULT_CATEGORIES = [

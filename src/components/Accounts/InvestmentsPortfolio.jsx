@@ -64,11 +64,85 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     return (name) => name ? names.has(name.toLowerCase()) : false;
   }, [investmentAccounts]);
 
+  const getAssociatedInvestmentAsset = (t) => {
+    const acct = String(t.Account || t.FromAccount || '').trim();
+    const dest = String(t.ToAccount || '').trim();
+    const acctLower = acct.toLowerCase();
+    const destLower = dest.toLowerCase();
+    
+    const ia = investmentAccounts.find(a => a.name.toLowerCase() === acctLower);
+    if (ia) return ia.name;
+    const idest = investmentAccounts.find(a => a.name.toLowerCase() === destLower);
+    if (idest) return idest.name;
+
+    const note = String(t.Note || '').toLowerCase();
+    const desc = String(t.Description || '').toLowerCase();
+    const cat = String(t.Category || '').toLowerCase();
+    const combined = `${note} ${desc} ${cat}`;
+
+    if (combined.includes('tax saver') || combined.includes('tax advantage')) {
+      return 'Mutual Funds Tax Saver';
+    }
+    if (combined.includes('liquid') || combined.includes('lmf')) {
+      return 'Liquid Mutual Funds';
+    }
+    if (combined.includes('mutual fund') || combined.includes('mf') || combined.includes('groww')) {
+      return 'Liquid Mutual Funds';
+    }
+    if (combined.includes('share market') || combined.includes('zerodha') || combined.includes('dividend') || cat === 'equity') {
+      return 'Share Market';
+    }
+    return null;
+  };
+
+  const getAssociatedSubAccount = (t, parentAsset) => {
+    const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim();
+    if (sub) return sub;
+
+    const note = String(t.Note || '').toLowerCase();
+    const desc = String(t.Description || '').toLowerCase();
+    const combined = `${note} ${desc}`;
+
+    if (parentAsset === 'Share Market') {
+      if (combined.includes('groww') || combined.includes('fareeda')) return 'Fareeda Groww';
+      return 'Zerodha';
+    }
+    if (parentAsset === 'Liquid Mutual Funds') {
+      if (combined.includes('ammi grow') || combined.includes('ammi')) return 'Ammi Groww';
+      if (combined.includes('fareeda') && combined.includes('groww')) return 'Fareeda Groww';
+      if (combined.includes('fareeda') && combined.includes('etmoney')) return 'Fareeda ETMoney';
+      if (combined.includes('scripbox')) return 'Scripbox';
+      return 'Groww';
+    }
+    return null;
+  };
+
   const isInvestmentTxn = useMemo(() => {
     return (t) => {
       const acct = t.Account || t.FromAccount || '';
       const dest = t.ToAccount || '';
-      return isInvestmentAccount(acct) || isInvestmentAccount(dest);
+      const isInvAcc = isInvestmentAccount(acct) || isInvestmentAccount(dest);
+      
+      const cat = String(t.Category || '').toLowerCase();
+      const note = String(t.Note || '').toLowerCase();
+
+      // Ignore generic/inventory stock profit and lending profit on non-investment accounts
+      if (!isInvAcc && (note === 'stock profit' || note === 'profit')) {
+        return false;
+      }
+
+      if (isInvAcc) return true;
+      if (cat === 'equity' || cat === 'investment returns') return true;
+      if (
+        note.includes('dividend') || 
+        note.includes('profit') || 
+        note.includes('loss') ||
+        note === 'motilal oswal asset management' ||
+        note === 'l&t tax advantage'
+      ) {
+        return true;
+      }
+      return false;
     };
   }, [isInvestmentAccount]);
 
@@ -136,9 +210,27 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     dividendsByFund,
     fundValuationsMap
   } = useMemo(() => {
+    // Resolve asset key for a transaction
+    const getAssetKeyForTxn = (parentName, subName) => {
+      if (!parentName) return null;
+      const a = investmentAccounts.find(acc => acc.name.toLowerCase() === parentName.toLowerCase());
+      if (!a) return null;
+      if (a.subAccounts && a.subAccounts.length > 0) {
+        const sub = a.subAccounts.find(s => s.name.toLowerCase() === (subName || '').toLowerCase());
+        if (sub) {
+          return `${a.name} > ${sub.name}`;
+        }
+        if (subName) {
+          return `${a.name} > ${subName}`;
+        }
+      }
+      return a.name;
+    };
+
     const balances = {};
     const invested = {};
     const divs = {};
+    const realizedMap = {};
     let grandDivs = 0;
 
     const targetAccounts = selectedAsset === 'All'
@@ -146,9 +238,18 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       : investmentAccounts.filter(a => a.name.toLowerCase() === selectedAsset.toLowerCase());
 
     targetAccounts.forEach(a => {
-      balances[a.name] = 0;
-      invested[a.name] = 0;
-      divs[a.name] = 0;
+      if (a.subAccounts && a.subAccounts.length > 0) {
+        a.subAccounts.forEach(sub => {
+          const key = `${a.name} > ${sub.name}`;
+          balances[key] = 0;
+          invested[key] = 0;
+          divs[key] = 0;
+        });
+      } else {
+        balances[a.name] = 0;
+        invested[a.name] = 0;
+        divs[a.name] = 0;
+      }
     });
 
     const isTargetAccount = (name) => {
@@ -156,14 +257,15 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       return targetAccounts.some(a => a.name.toLowerCase() === name.toLowerCase());
     };
 
-    const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(String(s).trim());
-    const addToBal = (n, v) => {
-      if (n && !looksNumeric(n) && balances[n] !== undefined) {
-        balances[n] = (balances[n] || 0) + v;
+    const addToBal = (n, subName, v) => {
+      const key = getAssetKeyForTxn(n, subName);
+      if (key && balances[key] !== undefined) {
+        balances[key] = (balances[key] || 0) + v;
       }
     };
 
     let periodGainsSum = 0;
+    let periodRealizedGains = 0;
 
     for (const t of transactions) {
       const amt = parseFloat(t.INR || t.Amount || 0);
@@ -171,41 +273,69 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       const acct = String(t.Account || t.FromAccount || '').trim();
       const dest = String(t.ToAccount || '').trim();
 
+      const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || '').trim();
+      const destSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+
+      const acctKey = getAssetKeyForTxn(acct, sub);
+      const destKey = getAssetKeyForTxn(dest, destSub);
+
       const isAcctInv = isTargetAccount(acct);
       const isDestInv = isTargetAccount(dest);
 
-      // Cumulative Balances (All Time - Issue 7: keep the total portfolio value)
+      // Cumulative Balances
       if (type === 'Income') {
-        addToBal(acct, +amt);
+        addToBal(acct, sub, +amt);
       } else if (type === 'Expense') {
-        addToBal(acct, -amt);
+        addToBal(acct, sub, -amt);
       } else if (type === 'Transfer-Out') {
-        addToBal(acct, -amt);
-        addToBal(dest, +amt);
+        addToBal(acct, sub, -amt);
+        addToBal(dest, destSub, +amt);
       }
 
-      // Period Investments & Gains (Issue 7 & 8)
+      // Period Investments & Gains
       if (isInPeriod(t.Date)) {
-        const isIncome = (type === 'Income');
-        const isDividend = isIncome && String(t.Note || '').toLowerCase().includes('dividend');
+        const cat = String(t.Category || '').toLowerCase();
+        const note = String(t.Note || '').toLowerCase();
+        const isDividend = note.includes('dividend') || (cat === 'equity' && note === 'dividend');
 
-        if (isDestInv && !isIncome) {
-          invested[dest] = (invested[dest] || 0) + amt;
-        }
-        if (isAcctInv && !isIncome) {
-          invested[acct] = (invested[acct] || 0) - amt;
+        const isRealizedGain = !isDividend && (
+          note.includes('profit') || 
+          note.includes('loss') ||
+          (cat === 'equity' && (note === 'motilal oswal asset management' || note === 'l&t tax advantage'))
+        );
+
+        if (isDividend) {
+          const parent = getAssociatedInvestmentAsset(t);
+          if (parent && isTargetAccount(parent)) {
+            const sName = getAssociatedSubAccount(t, parent);
+            const key = getAssetKeyForTxn(parent, sName);
+            if (key && divs[key] !== undefined) {
+              grandDivs += amt;
+              divs[key] = (divs[key] || 0) + amt;
+            }
+          }
+        } else if (isRealizedGain) {
+          const parent = getAssociatedInvestmentAsset(t);
+          if (parent && isTargetAccount(parent)) {
+            const sName = getAssociatedSubAccount(t, parent);
+            const key = getAssetKeyForTxn(parent, sName);
+            if (key) {
+              periodRealizedGains += amt;
+              realizedMap[key] = (realizedMap[key] || 0) + amt;
+            }
+          }
+        } else {
+          // Regular buy/sell transfers
+          if (isDestInv && destKey) {
+            invested[destKey] = (invested[destKey] || 0) + amt;
+          }
+          if (isAcctInv && acctKey) {
+            invested[acctKey] = (invested[acctKey] || 0) - amt;
+          }
         }
 
-        // Dividends
-        if (isDividend && isAcctInv) {
-          grandDivs += amt;
-          const matched = findDividendFund(t.Note);
-          const key = matched || (t.Note || t.Category || t.Account || 'Unspecified').trim();
-          divs[key] = (divs[key] || 0) + amt;
-        }
-
-        // Gains summation within the period
-        if (isAcctInv) {
+        // Gains summation within the period for investment account ledger adjustments
+        if (isAcctInv && !isDividend && !isRealizedGain) {
           if (type === 'Income') {
             periodGainsSum += amt;
           } else if (type === 'Expense') {
@@ -214,15 +344,6 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         }
       }
     }
-
-    const totalVal = Object.values(balances).reduce((sum, v) => sum + v, 0);
-    const totalInv = Object.values(invested).reduce((sum, v) => sum + v, 0);
-
-    // Gain Loss display logic: cumulative if all time, period-specific if filtered
-    const gainLoss = periodMode === 'all' ? (totalVal - totalInv) : periodGainsSum;
-    const gainLossPct = periodMode === 'all'
-      ? (totalInv > 0 ? (gainLoss / totalInv) * 100 : 0)
-      : (totalInv > 0 ? (periodGainsSum / totalInv) * 100 : 0);
 
     // ── Parse Valuations Chronologically for Accordion ──
     const valuations = {};
@@ -275,6 +396,42 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         }
       }
     }
+
+    const totalVal = Object.values(balances).reduce((sum, v) => sum + v, 0);
+    const totalInv = Object.values(invested).reduce((sum, v) => sum + v, 0);
+
+    const getValuationForAssetLocal = (keyName) => {
+      if (!keyName) return null;
+      if (valuations[keyName]) return valuations[keyName];
+      if (keyName.includes(' > ')) {
+        const parts = keyName.split(' > ');
+        const lastPart = parts[parts.length - 1];
+        if (valuations[lastPart]) return valuations[lastPart];
+      }
+      return null;
+    };
+
+    let totalGainLoss = 0;
+    if (periodMode === 'all') {
+      Object.keys(balances).forEach(key => {
+        const valObj = getValuationForAssetLocal(key);
+        const groupRealized = realizedMap[key] || 0;
+        if (valObj) {
+          const currentValue = valObj.currentValue;
+          const totalAmount = invested[key] || 0;
+          totalGainLoss += (currentValue - totalAmount) + groupRealized;
+        } else {
+          totalGainLoss += groupRealized;
+        }
+      });
+    }
+
+    // Gain Loss display logic: cumulative if all time, period-specific if filtered
+    const gainLoss = periodMode === 'all'
+      ? totalGainLoss
+      : periodGainsSum + periodRealizedGains;
+
+    const gainLossPct = totalInv > 0 ? (gainLoss / totalInv) * 100 : 0;
 
     return {
       accountBalances: balances,
@@ -356,14 +513,72 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
   // 8. Group list by Fund Name and apply dynamic sorting (Issue 1)
   const groupedList = useMemo(() => {
     if (viewMode !== 'grouped') return [];
+
+    // Resolve asset key for a transaction
+    const getAssetKeyForTxn = (parentName, subName) => {
+      if (!parentName) return null;
+      const a = investmentAccounts.find(acc => acc.name.toLowerCase() === parentName.toLowerCase());
+      if (!a) return null;
+      if (a.subAccounts && a.subAccounts.length > 0) {
+        const sub = a.subAccounts.find(s => s.name.toLowerCase() === (subName || '').toLowerCase());
+        if (sub) {
+          return `${a.name} > ${sub.name}`;
+        }
+        if (subName) {
+          return `${a.name} > ${subName}`;
+        }
+      }
+      return a.name;
+    };
+
+    const getValuationForAsset = (assetKey) => {
+      if (!assetKey) return null;
+      if (fundValuationsMap[assetKey]) return fundValuationsMap[assetKey];
+      if (assetKey.includes(' > ')) {
+        const parts = assetKey.split(' > ');
+        const subPart = parts[parts.length - 1];
+        if (fundValuationsMap[subPart]) return fundValuationsMap[subPart];
+      }
+      return null;
+    };
+
     const groups = {};
 
     for (const t of filteredList) {
       const acct = String(t.Account || t.FromAccount || '').trim();
       const dest = String(t.ToAccount || '').trim();
+      const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || '').trim();
+      const destSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+
+      const acctKey = getAssetKeyForTxn(acct, sub);
+      const destKey = getAssetKeyForTxn(dest, destSub);
+
       let fundName = (t.Note || t.Category || t.Account || 'Unspecified').trim();
-      if (acct.toLowerCase() === 'share market' || dest.toLowerCase() === 'share market') {
-        fundName = 'Share Market';
+      if (destKey) {
+        fundName = destKey;
+      } else if (acctKey) {
+        fundName = acctKey;
+      } else {
+        // Fallback for bank-deposited dividends or mutual fund profit/loss
+        const cat = String(t.Category || '').toLowerCase();
+        const note = String(t.Note || '').toLowerCase();
+        const isDividend = note.includes('dividend') || (cat === 'equity' && note === 'dividend');
+        const isRealizedGain = !isDividend && (
+          note.includes('profit') || 
+          note.includes('loss') ||
+          (cat === 'equity' && (note === 'motilal oswal asset management' || note === 'l&t tax advantage'))
+        );
+
+        if (isDividend || isRealizedGain) {
+          const parent = getAssociatedInvestmentAsset(t);
+          if (parent) {
+            const sName = getAssociatedSubAccount(t, parent);
+            const key = getAssetKeyForTxn(parent, sName);
+            if (key) {
+              fundName = key;
+            }
+          }
+        }
       }
 
       if (!groups[fundName]) {
@@ -397,10 +612,32 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
 
     // Enrich valuations and gains
     for (const g of Object.values(groups)) {
+      let groupRealized = 0;
+      let groupDividends = 0;
+      for (const t of g.transactions) {
+        const amt = parseFloat(t.INR || t.Amount || 0);
+        const cat = String(t.Category || '').toLowerCase();
+        const note = String(t.Note || '').toLowerCase();
+        if (note.includes('dividend') || (cat === 'equity' && note === 'dividend')) {
+          groupDividends += amt;
+        } else if (
+          note.includes('profit') || 
+          note.includes('loss') ||
+          (cat === 'equity' && (note === 'motilal oswal asset management' || note === 'l&t tax advantage'))
+        ) {
+          groupRealized += amt;
+        }
+      }
+
       if (activeTab === 'active') {
-        const parsedVal = fundValuationsMap[g.fundName]?.currentValue;
-        g.currentValue = (parsedVal !== undefined && parsedVal > 0) ? parsedVal : g.totalAmount;
-        g.gainAmount = g.currentValue - g.totalAmount;
+        const valObj = getValuationForAsset(g.fundName);
+        if (valObj) {
+          g.currentValue = valObj.currentValue;
+          g.gainAmount = (g.currentValue - g.totalAmount) + groupRealized + groupDividends;
+        } else {
+          g.currentValue = accountBalances[g.fundName] !== undefined ? accountBalances[g.fundName] : g.totalAmount;
+          g.gainAmount = groupRealized + groupDividends;
+        }
         g.gainPercent = g.totalAmount > 0 ? (g.gainAmount / g.totalAmount) * 100 : 0;
       } else {
         // Redeemed tab - calculate realized profit
@@ -420,7 +657,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         }
         g.currentValue = totalSell;
         g.totalAmount = totalBuy;
-        g.gainAmount = totalSell - totalBuy;
+        g.gainAmount = (totalSell - totalBuy) + groupRealized + groupDividends;
         g.gainPercent = totalBuy > 0 ? (g.gainAmount / totalBuy) * 100 : 0;
       }
     }

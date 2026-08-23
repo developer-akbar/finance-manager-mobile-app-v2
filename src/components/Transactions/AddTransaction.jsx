@@ -464,6 +464,7 @@ export default function AddTransaction({
   onClose, onSaveAndContinue = null, editTransaction = null, copyTransaction = null,
   prefillDate = null, prefillAccount = null, prefillCategory = null,
   prefillType = null, prefillFromAccount = null, prefillToAccount = null, prefillAmount = null, prefillNote = null, prefillTags = null,
+  prefillSubAccount = null,
   backInterceptRef = null, onSaveInstalment = null
 }) {
   const { state, navigate, addTransaction, updateTransaction, createRecurringRule, updateInstalmentSiblings } = useApp();
@@ -517,7 +518,10 @@ export default function AddTransaction({
         tags: t.Tags || t.tags || '',
         receipt_image: t.receipt_image || '',
         warranty_expiry: t.warranty_expiry || '',
-        serial_no: t.serial_no || ''
+        serial_no: t.serial_no || '',
+        subAccount: t.SubAccount || t.sub_account || '',
+        fromSubAccount: t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '',
+        toSubAccount: t.ToSubAccount || t.to_sub_account || ''
       };
     }
     if (isCopy) {
@@ -532,7 +536,10 @@ export default function AddTransaction({
         tags: t.Tags || t.tags || '',
         receipt_image: t.receipt_image || '',
         warranty_expiry: t.warranty_expiry || '',
-        serial_no: t.serial_no || ''
+        serial_no: t.serial_no || '',
+        subAccount: t.SubAccount || t.sub_account || '',
+        fromSubAccount: t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '',
+        toSubAccount: t.ToSubAccount || t.to_sub_account || ''
       };
     }
     return {
@@ -550,7 +557,10 @@ export default function AddTransaction({
       tags: prefillTags || '',
       receipt_image: '',
       warranty_expiry: '',
-      serial_no: ''
+      serial_no: '',
+      subAccount: prefillSubAccount || '',
+      fromSubAccount: prefillSubAccount || '',
+      toSubAccount: ''
     };
   });
 
@@ -669,6 +679,18 @@ export default function AddTransaction({
   };
 
   const isTransfer = form.type === 'Transfer-Out';
+
+  const selectedAcctObj = useMemo(() => {
+    return (accounts || []).find(a => a.name === form.account);
+  }, [accounts, form.account]);
+
+  const fromAcctObj = useMemo(() => {
+    return (accounts || []).find(a => a.name === form.fromAccount);
+  }, [accounts, form.fromAccount]);
+
+  const toAcctObj = useMemo(() => {
+    return (accounts || []).find(a => a.name === form.toAccount);
+  }, [accounts, form.toAccount]);
 
   const accountList = useMemo(() => {
     const accts = (accounts || []).filter((a, i, arr) => arr.findIndex(b => (b.name || b) === (a.name || a)) === i);
@@ -1007,6 +1029,7 @@ export default function AddTransaction({
             'Income/Expense': form.type,
             Tags: combinedTags,
             split_group_id: splitGroupId,
+            SubAccount: form.subAccount,
           });
         }
         onClose();
@@ -1054,6 +1077,9 @@ export default function AddTransaction({
               Currency: 'INR', 'Income/Expense': form.type,
               recurring_rule_id: saved.id,
               Tags: combinedTags,
+              SubAccount: isTransfer ? form.fromSubAccount : form.subAccount,
+              FromSubAccount: isTransfer ? form.fromSubAccount : '',
+              ToSubAccount: isTransfer ? form.toSubAccount : '',
             });
           }
         } else if (recurringConfig.type === 'repeat') {
@@ -1084,6 +1110,9 @@ export default function AddTransaction({
             Currency: 'INR', 'Income/Expense': form.type,
             recurring_rule_id: saved.id,
             Tags: combinedTags,
+            SubAccount: isTransfer ? form.fromSubAccount : form.subAccount,
+            FromSubAccount: isTransfer ? form.fromSubAccount : '',
+            ToSubAccount: isTransfer ? form.toSubAccount : '',
           });
         }
       } else {
@@ -1109,6 +1138,9 @@ export default function AddTransaction({
           warranty_expiry: form.warranty_expiry || '',
           serial_no: form.serial_no || '',
           _id: editTransaction?._id,
+          SubAccount: isTransfer ? form.fromSubAccount : form.subAccount,
+          FromSubAccount: isTransfer ? form.fromSubAccount : '',
+          ToSubAccount: isTransfer ? form.toSubAccount : '',
         };
         if (isInstalmentEdit) {
           // Bulk update the entire series (including this transaction) in a single atomic call
@@ -1276,31 +1308,67 @@ export default function AddTransaction({
 
           {/* Row 2: Account(s) */}
           {isTransfer ? (
-            <div className="transfer-swap-row">
-              <PickerFieldFR ref={fromRef} setPickerState={setPickerState} label="From" value={form.fromAccount} placeholder="Select"
-                error={errors.fromAccount} items={accountList} recent={recentAccounts}
-                onSelect={v => { set('fromAccount', v); goNextEmpty({ key: 'fromAccount', val: v }); }}
-                onAfterSelect={() => setPickerState(null)}
-                onReorder={() => setReorderScreen('accounts')}
-                active={pickerState && pickerState.type === 'from'} />
-              <button type="button" className="swap-btn" title="Swap"
-                onClick={() => setForm(p => ({ ...p, fromAccount: p.toAccount, toAccount: p.fromAccount }))}>
-                ⇅
-              </button>
-              <PickerFieldFR ref={toRef} setPickerState={setPickerState} label="To" value={form.toAccount} placeholder="Select"
-                error={errors.toAccount} items={accountList} recent={recentAccounts}
-                onSelect={v => { set('toAccount', v); goNextEmpty({ key: 'toAccount', val: v }); }}
-                onAfterSelect={() => setPickerState(null)}
-                onReorder={() => setReorderScreen('accounts')}
-                active={pickerState && pickerState.type === 'to'} />
-            </div>
+            <>
+              <div className="transfer-swap-row">
+                <PickerFieldFR ref={fromRef} setPickerState={setPickerState} label="From" value={form.fromAccount} placeholder="Select"
+                  error={errors.fromAccount} items={accountList} recent={recentAccounts}
+                  onSelect={v => { set('fromAccount', v); goNextEmpty({ key: 'fromAccount', val: v }); }}
+                  onAfterSelect={() => setPickerState(null)}
+                  onReorder={() => setReorderScreen('accounts')}
+                  active={pickerState && pickerState.type === 'from'} />
+                <button type="button" className="swap-btn" title="Swap"
+                  onClick={() => setForm(p => ({ ...p, fromAccount: p.toAccount, toAccount: p.fromAccount, fromSubAccount: p.toSubAccount, toSubAccount: p.fromSubAccount }))}>
+                  ⇅
+                </button>
+                <PickerFieldFR ref={toRef} setPickerState={setPickerState} label="To" value={form.toAccount} placeholder="Select"
+                  error={errors.toAccount} items={accountList} recent={recentAccounts}
+                  onSelect={v => { set('toAccount', v); goNextEmpty({ key: 'toAccount', val: v }); }}
+                  onAfterSelect={() => setPickerState(null)}
+                  onReorder={() => setReorderScreen('accounts')}
+                  active={pickerState && pickerState.type === 'to'} />
+              </div>
+              {((fromAcctObj && fromAcctObj.subAccounts && fromAcctObj.subAccounts.length > 0) ||
+                (toAcctObj && toAcctObj.subAccounts && toAcctObj.subAccounts.length > 0)) && (
+                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                  {fromAcctObj && fromAcctObj.subAccounts && fromAcctObj.subAccounts.length > 0 ? (
+                    <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                      <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>From Sub Account</label>
+                      <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.fromSubAccount} onChange={e => set('fromSubAccount', e.target.value)}>
+                        <option value="">(Select Sub Account)</option>
+                        {fromAcctObj.subAccounts.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                      </select>
+                    </div>
+                  ) : <div style={{ flex: 1 }} />}
+                  {toAcctObj && toAcctObj.subAccounts && toAcctObj.subAccounts.length > 0 ? (
+                    <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                      <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>To Sub Account</label>
+                      <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.toSubAccount} onChange={e => set('toSubAccount', e.target.value)}>
+                        <option value="">(Select Sub Account)</option>
+                        {toAcctObj.subAccounts.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                      </select>
+                    </div>
+                  ) : <div style={{ flex: 1 }} />}
+                </div>
+              )}
+            </>
           ) : (
-            <PickerFieldFR setPickerState={setPickerState} ref={accountRef} label="Account" value={form.account} placeholder="Select account"
-              error={errors.account} items={accountList} recent={recentAccounts}
-              onSelect={v => { set('account', v); goNextEmpty({ key: 'account', val: v }); }}
-              onAfterSelect={() => setPickerState(null)}
-              onReorder={() => setReorderScreen('accounts')}
-              active={pickerState && pickerState.type === 'account'} />
+            <>
+              <PickerFieldFR setPickerState={setPickerState} ref={accountRef} label="Account" value={form.account} placeholder="Select account"
+                error={errors.account} items={accountList} recent={recentAccounts}
+                onSelect={v => { set('account', v); goNextEmpty({ key: 'account', val: v }); }}
+                onAfterSelect={() => setPickerState(null)}
+                onReorder={() => setReorderScreen('accounts')}
+                active={pickerState && pickerState.type === 'account'} />
+              {selectedAcctObj && selectedAcctObj.subAccounts && selectedAcctObj.subAccounts.length > 0 && (
+                <div className="form-group" style={{ marginTop: 8 }}>
+                  <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>Sub Account</label>
+                  <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.subAccount} onChange={e => set('subAccount', e.target.value)}>
+                    <option value="">(Select Sub Account)</option>
+                    {selectedAcctObj.subAccounts.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                  </select>
+                </div>
+              )}
+            </>
           )}
 
           {/* Row 3: Category + Subcategory (hidden when isSplit) */}

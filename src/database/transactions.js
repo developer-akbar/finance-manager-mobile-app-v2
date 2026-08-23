@@ -16,6 +16,9 @@ export const rowToTxn = (r) => ({
   receipt_image: r.receipt_image || '',
   warranty_expiry: r.warranty_expiry || '',
   serial_no: r.serial_no || '',
+  SubAccount: r.sub_account || '',
+  FromSubAccount: r.from_sub_account || '',
+  ToSubAccount: r.to_sub_account || '',
 });
 
 export const getTransactions = async (filters = {}) => {
@@ -59,13 +62,16 @@ export const addTransaction = async (data) => {
   const id  = data.ID || data._id || uuid();
   const now = new Date().toISOString();
   await db.run(
-    `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [id, data.Date||'', data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
      data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
      parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
      data.Currency||'INR', data['Income/Expense']||'Expense', now, now,
      data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'',
-     data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'']
+     data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'',
+     data.SubAccount||data.sub_account||'',
+     data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
+     data.ToSubAccount||data.to_sub_account||'']
   );
   return rowToTxn({
     id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'',
@@ -73,7 +79,10 @@ export const addTransaction = async (data) => {
     inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR',
     type:data['Income/Expense']||'Expense', created_at:now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'',
     tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'',
-    receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||''
+    receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||'',
+    sub_account:data.SubAccount||data.sub_account||'',
+    from_sub_account:data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
+    to_sub_account:data.ToSubAccount||data.to_sub_account||''
   });
 };
 
@@ -227,13 +236,16 @@ export const updateTransaction = async (id, data) => {
   }
 
   await db.run(
-    `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=?,tags=?,split_group_id=?,receipt_image=?,warranty_expiry=?,serial_no=? WHERE id=?`,
+    `UPDATE transactions SET date=?,time=?,account=?,from_account=?,to_account=?,category=?,subcategory=?,note=?,description=?,inr=?,amount=?,currency=?,type=?,updated_at=?,recurring_rule_id=?,tags=?,split_group_id=?,receipt_image=?,warranty_expiry=?,serial_no=?,sub_account=?,from_sub_account=?,to_sub_account=? WHERE id=?`,
     [data.Date, data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
      data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
      parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
      data.Currency||'INR', data['Income/Expense']||'Expense', now,
      data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'',
-     data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'', id]
+     data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'',
+     data.SubAccount||data.sub_account||'',
+     data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
+     data.ToSubAccount||data.to_sub_account||'', id]
   );
   return {
     _id: id, ID: id,
@@ -250,6 +262,9 @@ export const updateTransaction = async (id, data) => {
     receipt_image: data.receipt_image || '',
     warranty_expiry: data.warranty_expiry || '',
     serial_no: data.serial_no || '',
+    SubAccount: data.SubAccount || data.sub_account || '',
+    FromSubAccount: data.FromSubAccount || data.from_sub_account || data.SubAccount || data.sub_account || '',
+    ToSubAccount: data.ToSubAccount || data.to_sub_account || '',
   };
 };
 
@@ -313,6 +328,19 @@ export const normaliseDateStr = (raw) => {
   }
   let s = String(raw).trim();
   if (!s) return '';
+
+  // Excel serial number as a string (from CSV parsed lines)
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const num = parseFloat(s);
+    if (num > 1000) {
+      const ms = (num - 25569) * 86400 * 1000;
+      const d  = new Date(ms);
+      return String(d.getUTCDate()).padStart(2,'0') + '/' +
+             String(d.getUTCMonth()+1).padStart(2,'0') + '/' +
+             d.getUTCFullYear();
+    }
+  }
+
   // Strip time component: "dd/mm/yyyy HH:MM:SS" → "dd/mm/yyyy"
   s = s.replace(/\s+\d{1,2}:\d{2}(:\d{2})?.*$/, '').trim();
   // ISO: yyyy-mm-dd
@@ -502,7 +530,6 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     // Strip 'Default' subcategory — it's a Money Manager placeholder, not a real value.
     const rawSub = String(r.Subcategory || r.subcategory || '').trim();
     const subcategoryVal = rawSub.toLowerCase() === 'default' ? '' : rawSub;
-
     items.push({
       id,
       date:              dateVal,
@@ -526,6 +553,9 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
       receipt_image:     String(r.receipt_image || '').trim(),
       warranty_expiry:   String(r.warranty_expiry || '').trim(),
       serial_no:         String(r.serial_no || '').trim(),
+      sub_account:       String(r.SubAccount || r.sub_account || '').trim(),
+      from_sub_account:  String(r.FromSubAccount || r.from_sub_account || r.SubAccount || r.sub_account || '').trim(),
+      to_sub_account:    String(r.ToSubAccount || r.to_sub_account || '').trim(),
     });
   }
 
@@ -536,12 +566,13 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     skipped += res.skipped;
   } else if (typeof db.executeSet === 'function') {
     const set = items.map(obj => ({
-      statement: `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      statement: `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       values: [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
                obj.category, obj.subcategory, obj.note, obj.description,
                obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
                obj.recurring_rule_id, obj.tags, obj.split_group_id,
-               obj.receipt_image, obj.warranty_expiry, obj.serial_no]
+               obj.receipt_image, obj.warranty_expiry, obj.serial_no,
+               obj.sub_account, obj.from_sub_account, obj.to_sub_account]
     }));
     try {
       const res = await db.executeSet(set);
@@ -553,12 +584,13 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
       for (const obj of items) {
         try {
           const res = await db.run(
-            `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
              obj.category, obj.subcategory, obj.note, obj.description,
              obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
              obj.recurring_rule_id, obj.tags, obj.split_group_id,
-             obj.receipt_image, obj.warranty_expiry, obj.serial_no]
+             obj.receipt_image, obj.warranty_expiry, obj.serial_no,
+             obj.sub_account, obj.from_sub_account, obj.to_sub_account]
           );
           if (res.changes?.changes > 0) imported++; else skipped++;
         } catch { skipped++; }
@@ -568,17 +600,20 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     for (const obj of items) {
       try {
         const res = await db.run(
-          `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
            obj.category, obj.subcategory, obj.note, obj.description,
            obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
            obj.recurring_rule_id, obj.tags, obj.split_group_id,
-           obj.receipt_image, obj.warranty_expiry, obj.serial_no]
+           obj.receipt_image, obj.warranty_expiry, obj.serial_no,
+           obj.sub_account, obj.from_sub_account, obj.to_sub_account]
         );
         if (res.changes?.changes > 0) imported++; else skipped++;
       } catch { skipped++; }
     }
   }
+
+
 
   return { imported, skipped, total: rows.length };
 };

@@ -6,6 +6,7 @@ import WarrantyLocker from '../Accounts/WarrantyLocker.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import { encryptBackupData, decryptBackupData } from '../../utils/cryptoBackup.js';
 import { getDB } from '../../database/db.js';
+import { v4 as uuid } from 'uuid';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -135,8 +136,8 @@ function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, onReorder,
 // Accounts Manager
 // ─────────────────────────────────────────────
 export function AccountsManager({ onBack }) {
-  const { state, updateSettings, renameAccount, deleteAccountTransactions } = useApp();
-  const [accounts, setAccounts] = useState(() => (state.accounts || []).map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, cardLast4: '' } : { ...a, cardLast4: a.cardLast4 || a.card_last4 || '' }));
+  const { state, updateSettings, renameAccount, deleteAccountTransactions, renameSubAccount, deleteSubAccountTransactions } = useApp();
+  const [accounts, setAccounts] = useState(() => (state.accounts || []).map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, cardLast4: '', subAccounts: [] } : { ...a, cardLast4: a.cardLast4 || a.card_last4 || '', subAccounts: a.subAccounts || [] }));
   const [groups, setGroups] = useState(() => state.accountGroups || []);
   const [newAcct, setNewAcct] = useState('');
   const [newGrp, setNewGrp] = useState('');
@@ -157,10 +158,76 @@ export function AccountsManager({ onBack }) {
   const dragIdx = useRef(null);
   const grpDragIdx = useRef(null);
 
+  // Sub Accounts management temporary states
+  const [newSubName, setNewSubName] = useState('');
+  const [editingSubIdx, setEditingSubIdx] = useState(null);
+  const [editSubNameText, setEditSubNameText] = useState('');
+
+  const handleAddSub = (acctIdx) => {
+    const name = newSubName.trim();
+    if (!name) return;
+    const acct = accounts[acctIdx];
+    const existing = acct.subAccounts || [];
+    if (existing.some(s => s.name.toLowerCase() === name.toLowerCase())) return;
+    const nextSubs = [...existing, { id: uuid(), name }];
+    const nextAccts = accounts.map((a, idx) => idx === acctIdx ? { ...a, subAccounts: nextSubs } : a);
+    setAccounts(nextAccts);
+    setNewSubName('');
+    save(nextAccts);
+  };
+
+  const handleSaveRenameSub = async (acctIdx, subIdx) => {
+    const newName = editSubNameText.trim();
+    if (!newName) return;
+    const acct = accounts[acctIdx];
+    const sub = acct.subAccounts[subIdx];
+    if (sub.name === newName) { setEditingSubIdx(null); return; }
+    const nextSubs = acct.subAccounts.map((s, idx) => idx === subIdx ? { ...s, name: newName } : s);
+    const nextAccts = accounts.map((a, idx) => idx === acctIdx ? { ...a, subAccounts: nextSubs } : a);
+    setAccounts(nextAccts);
+    setEditingSubIdx(null);
+    await renameSubAccount(acct.name, sub.name, newName);
+    await save(nextAccts);
+  };
+
+  const handleDeleteSub = (acctIdx, subIdx) => {
+    const acct = accounts[acctIdx];
+    const sub = acct.subAccounts[subIdx];
+    const count = (state.transactions || []).filter(t => t.Account === acct.name && (t.SubAccount === sub.name || t.FromSubAccount === sub.name || t.ToSubAccount === sub.name)).length;
+    if (count > 0) {
+      setConfirmState({
+        title: 'Delete Sub Account?',
+        message: `Sub Account "${sub.name}" has ${count} associated transaction(s).\n\nDeleting it will remove the sub-account mapping from these transactions. Do you want to proceed?`,
+        isWarning: true,
+        onConfirm: async () => {
+          setConfirmState(null);
+          const nextSubs = acct.subAccounts.filter((_, idx) => idx !== subIdx);
+          const nextAccts = accounts.map((a, idx) => idx === acctIdx ? { ...a, subAccounts: nextSubs } : a);
+          setAccounts(nextAccts);
+          await deleteSubAccountTransactions(acct.name, sub.name);
+          await save(nextAccts);
+        }
+      });
+    } else {
+      setConfirmState({
+        title: 'Delete Sub Account?',
+        message: `Are you sure you want to delete sub-account "${sub.name}"?`,
+        isWarning: false,
+        onConfirm: async () => {
+          setConfirmState(null);
+          const nextSubs = acct.subAccounts.filter((_, idx) => idx !== subIdx);
+          const nextAccts = accounts.map((a, idx) => idx === acctIdx ? { ...a, subAccounts: nextSubs } : a);
+          setAccounts(nextAccts);
+          await save(nextAccts);
+        }
+      });
+    }
+  };
+
   // Sync when state.accounts updates
   useEffect(() => {
     if (state.accounts) {
-      setAccounts(state.accounts.map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, cardLast4: '' } : { ...a, cardLast4: a.cardLast4 || a.card_last4 || '' }));
+      setAccounts(state.accounts.map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳', acctType: '', settlementDate: 0, paymentDueDays: 0, cardLast4: '', subAccounts: [] } : { ...a, cardLast4: a.cardLast4 || a.card_last4 || '', subAccounts: a.subAccounts || [] }));
     }
   }, [state.accounts]);
 
@@ -571,6 +638,50 @@ export function AccountsManager({ onBack }) {
                   )}
                   Helps auto-identify this account when parsing SMS or UPI alerts.
                 </div>
+              </div>
+
+              {/* Sub Accounts manager */}
+              <div className="mgr-edit-field" style={{ marginTop: 12 }}>
+                <label className="mgr-edit-field-label">Sub Accounts</label>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                  <input
+                    className="form-input form-input-sm"
+                    style={{ flex: 1 }}
+                    placeholder="Add sub-account (e.g. Zerodha, Groww)"
+                    value={newSubName}
+                    onChange={e => setNewSubName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleAddSub(i))}
+                  />
+                  <button className="btn btn-primary btn-sm" onClick={(e) => { e.preventDefault(); handleAddSub(i); }}>Add</button>
+                </div>
+                
+                {accounts[i]?.subAccounts && accounts[i].subAccounts.length > 0 && (
+                  <div className="mgr-sub-list" style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '4px 8px', background: 'var(--bg-card2)' }}>
+                    {accounts[i].subAccounts.map((sub, si) => (
+                      <div key={sub.id || si} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0', borderBottom: si < accounts[i].subAccounts.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                        {editingSubIdx === si ? (
+                          <div style={{ display: 'flex', gap: 6, flex: 1 }}>
+                            <input
+                              className="form-input form-input-sm"
+                              style={{ flex: 1 }}
+                              value={editSubNameText}
+                              onChange={e => setEditSubNameText(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleSaveRenameSub(i, si))}
+                            />
+                            <button className="btn btn-ghost btn-sm" onClick={(e) => { e.preventDefault(); setEditingSubIdx(null); }}>Cancel</button>
+                            <button className="btn btn-primary btn-sm" onClick={(e) => { e.preventDefault(); handleSaveRenameSub(i, si); }}>Save</button>
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ flex: 1, fontSize: '0.82rem', fontWeight: 600 }}>{sub.name}</div>
+                            <button className="mgr-edit-btn" style={{ padding: '2px 6px' }} onClick={(e) => { e.preventDefault(); setEditingSubIdx(si); setEditSubNameText(sub.name); }}>✏️</button>
+                            <button className="mgr-del-btn" style={{ padding: '2px 6px' }} onClick={(e) => { e.preventDefault(); handleDeleteSub(i, si); }}>✕</button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}
@@ -1464,7 +1575,8 @@ function DataManager({ onBack }) {
       'FromAccount', 'FromAccountGroup', 'FromAccountOrder', 'ToAccount', 'ToAccountGroup', 'ToAccountOrder',
       'Category', 'Subcategory', 'Note', 'Description',
       'INR', 'Amount', 'Currency', 'Income/Expense',
-      'Tags', 'recurring_rule_id', 'warranty_expiry', 'serial_no', 'receipt_image', 'created_at', 'updated_at', 'ID'
+      'Tags', 'recurring_rule_id', 'warranty_expiry', 'serial_no', 'receipt_image', 'created_at', 'updated_at', 'ID',
+      'SubAccount', 'FromSubAccount', 'ToSubAccount'
     ];
     // RFC 4180: quote any field containing comma, double-quote, newline or carriage-return
     const esc = v => { const s = String(v ?? ''); return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
