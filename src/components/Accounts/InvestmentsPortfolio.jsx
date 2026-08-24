@@ -276,20 +276,23 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || '').trim();
       const destSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
 
-      const acctKey = getAssetKeyForTxn(acct, sub);
-      const destKey = getAssetKeyForTxn(dest, destSub);
+      const resolvedSub = sub || (isTargetAccount(acct) ? getAssociatedSubAccount(t, acct) : '');
+      const resolvedDestSub = destSub || (isTargetAccount(dest) ? getAssociatedSubAccount(t, dest) : '');
+
+      const acctKey = getAssetKeyForTxn(acct, resolvedSub);
+      const destKey = getAssetKeyForTxn(dest, resolvedDestSub);
 
       const isAcctInv = isTargetAccount(acct);
       const isDestInv = isTargetAccount(dest);
 
       // Cumulative Balances
       if (type === 'Income') {
-        addToBal(acct, sub, +amt);
+        addToBal(acct, resolvedSub, +amt);
       } else if (type === 'Expense') {
-        addToBal(acct, sub, -amt);
+        addToBal(acct, resolvedSub, -amt);
       } else if (type === 'Transfer-Out') {
-        addToBal(acct, sub, -amt);
-        addToBal(dest, destSub, +amt);
+        addToBal(acct, resolvedSub, -amt);
+        addToBal(dest, resolvedDestSub, +amt);
       }
 
       // Period Investments & Gains
@@ -550,8 +553,11 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || '').trim();
       const destSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
 
-      const acctKey = getAssetKeyForTxn(acct, sub);
-      const destKey = getAssetKeyForTxn(dest, destSub);
+      const resolvedSub = sub || (isInvestmentAccount(acct) ? getAssociatedSubAccount(t, acct) : '');
+      const resolvedDestSub = destSub || (isInvestmentAccount(dest) ? getAssociatedSubAccount(t, dest) : '');
+
+      const acctKey = getAssetKeyForTxn(acct, resolvedSub);
+      const destKey = getAssetKeyForTxn(dest, resolvedDestSub);
 
       let fundName = (t.Note || t.Category || t.Account || 'Unspecified').trim();
       if (destKey) {

@@ -470,6 +470,56 @@ export default function AddTransaction({
   const { state, navigate, addTransaction, updateTransaction, createRecurringRule, updateInstalmentSiblings } = useApp();
   const { accounts, categories, transactions } = state;
   const isEdit = !!editTransaction;
+
+  // Compute sub-account balances to sort them by highest balance
+  const subAcctBalances = useMemo(() => {
+    const map = {};
+    const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(String(s).trim());
+    const txnAmountLocal = (t) => parseFloat(t.INR || t.Amount || t.amount || 0);
+    
+    for (const t of transactions) {
+      const amt = txnAmountLocal(t);
+      const type = String(t['Income/Expense'] || '').trim();
+      const acct = String(t.Account || t.FromAccount || '').trim();
+      const dest = String(t.ToAccount || '').trim();
+      
+      const sub = String(t.SubAccount || t.sub_account || '').trim();
+      const fromSub = String(t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '').trim();
+      const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+
+      if (type === 'Income') {
+        if (acct && sub && !looksNumeric(acct)) {
+          if (!map[acct]) map[acct] = {};
+          map[acct][sub] = (map[acct][sub] || 0) + amt;
+        }
+      } else if (type === 'Expense') {
+        if (acct && sub && !looksNumeric(acct)) {
+          if (!map[acct]) map[acct] = {};
+          map[acct][sub] = (map[acct][sub] || 0) - amt;
+        }
+      } else if (type === 'Transfer-Out') {
+        if (acct && fromSub && !looksNumeric(acct)) {
+          if (!map[acct]) map[acct] = {};
+          map[acct][fromSub] = (map[acct][fromSub] || 0) - amt;
+        }
+        if (dest && toSub && !looksNumeric(dest)) {
+          if (!map[dest]) map[dest] = {};
+          map[dest][toSub] = (map[dest][toSub] || 0) + amt;
+        }
+      }
+    }
+    return map;
+  }, [transactions]);
+
+  const getSortedSubs = useCallback((acctObj) => {
+    if (!acctObj || !acctObj.subAccounts) return [];
+    const name = acctObj.name;
+    return [...acctObj.subAccounts].sort((a, b) => {
+      const balA = subAcctBalances[name]?.[a.name] ?? 0;
+      const balB = subAcctBalances[name]?.[b.name] ?? 0;
+      return balB - balA;
+    });
+  }, [subAcctBalances]);
   const isCopy = !!copyTransaction;
 
   // Reorder overlay state (stays inside AddTransaction — no navigation needed)
@@ -1335,7 +1385,7 @@ export default function AddTransaction({
                       <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>From Sub Account</label>
                       <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.fromSubAccount} onChange={e => set('fromSubAccount', e.target.value)}>
                         <option value="">(Select Sub Account)</option>
-                        {fromAcctObj.subAccounts.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                        {getSortedSubs(fromAcctObj).map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                       </select>
                     </div>
                   ) : <div style={{ flex: 1 }} />}
@@ -1344,7 +1394,7 @@ export default function AddTransaction({
                       <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>To Sub Account</label>
                       <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.toSubAccount} onChange={e => set('toSubAccount', e.target.value)}>
                         <option value="">(Select Sub Account)</option>
-                        {toAcctObj.subAccounts.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                        {getSortedSubs(toAcctObj).map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                       </select>
                     </div>
                   ) : <div style={{ flex: 1 }} />}
@@ -1364,7 +1414,7 @@ export default function AddTransaction({
                   <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>Sub Account</label>
                   <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.subAccount} onChange={e => set('subAccount', e.target.value)}>
                     <option value="">(Select Sub Account)</option>
-                    {selectedAcctObj.subAccounts.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                    {getSortedSubs(selectedAcctObj).map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                   </select>
                 </div>
               )}
