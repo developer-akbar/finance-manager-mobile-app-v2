@@ -170,7 +170,10 @@ export const checkIsRedeemed = (t) => {
   const desc = String(t.Description || t.description || '').toLowerCase();
   const tags = String(t.Tags || t.tags || '').toLowerCase();
   const combined = `${note} ${desc} ${tags}`;
-  return combined.includes('redeemed') || combined.includes('redemption') || combined.includes('from share market');
+  return combined.includes('redeemed') || 
+         combined.includes('redemption') || 
+         combined.includes('from share market') ||
+         combined.includes('sell');
 };
 
 export const nowTimeStr = () => {

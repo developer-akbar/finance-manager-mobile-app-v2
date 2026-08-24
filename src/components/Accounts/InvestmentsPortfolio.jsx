@@ -668,7 +668,23 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       }
     }
 
-    const sortedGroups = Object.values(groups);
+    const sortedGroups = Object.values(groups).filter(g => {
+      const nameLower = g.fundName.toLowerCase();
+      if (nameLower === 'share market' || nameLower === 'share market > zerodha') {
+        return false;
+      }
+      const excludedKeywords = [
+        'demat charges',
+        'zerodha demat amc',
+        'demat credit',
+        'fno',
+        'to zerodha',
+        'from zerodha',
+        'to share market',
+        'unspecified'
+      ];
+      return !excludedKeywords.some(keyword => nameLower.includes(keyword));
+    });
 
     // Group accordions dynamic sorting (Issue 1)
     sortedGroups.sort((a, b) => {
