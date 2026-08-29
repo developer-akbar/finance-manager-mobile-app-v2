@@ -5,21 +5,23 @@
 import { Capacitor } from '@capacitor/core';
 
 const IDB_NAME    = 'finman_v2';
-const IDB_VERSION = 10; // v10 — sub_accounts table
+const IDB_VERSION = 11; // v11 — investment_transactions and brokerages tables
 
 // Each store and its primary key field
 const STORE_DEFS = [
-  { name:'transactions',    key:'id'  },
-  { name:'accounts',        key:'id'  },
-  { name:'account_groups',  key:'id'  },
-  { name:'account_mapping', key:'id'  },
-  { name:'categories',      key:'id'  },
-  { name:'subcategories',   key:'id'  },
-  { name:'sub_accounts',    key:'id'  },
-  { name:'budgets',         key:'id'  },
-  { name:'settings',        key:'key' }, // settings uses 'key' not 'id'
-  { name:'recurring_rules',  key:'id'  },
-  { name:'inventory',       key:'id'  },
+  { name:'transactions',            key:'id'  },
+  { name:'accounts',                key:'id'  },
+  { name:'account_groups',          key:'id'  },
+  { name:'account_mapping',         key:'id'  },
+  { name:'categories',              key:'id'  },
+  { name:'subcategories',           key:'id'  },
+  { name:'sub_accounts',            key:'id'  },
+  { name:'budgets',                 key:'id'  },
+  { name:'settings',                key:'key' }, // settings uses 'key' not 'id'
+  { name:'recurring_rules',          key:'id'  },
+  { name:'inventory',               key:'id'  },
+  { name:'investment_transactions', key:'id'  },
+  { name:'brokerages',              key:'id'  },
 ];
 
 const storeKey = (store) => STORE_DEFS.find(s => s.name === store)?.key ?? 'id';
@@ -264,6 +266,55 @@ const applySchema = async (db) => {
   try { await db.run(`ALTER TABLE inventory ADD COLUMN pack_qty REAL DEFAULT 1`); } catch {}
   try { await db.run(`ALTER TABLE inventory ADD COLUMN discount_type TEXT DEFAULT 'percentage'`); } catch {}
   try { await db.run(`ALTER TABLE inventory ADD COLUMN discount_value REAL DEFAULT 0`); } catch {}
+  await db.execute(`CREATE TABLE IF NOT EXISTS investment_transactions (
+    id TEXT PRIMARY KEY,
+    date TEXT,
+    time TEXT,
+    account TEXT,
+    from_account TEXT,
+    to_account TEXT,
+    category TEXT,
+    subcategory TEXT,
+    note TEXT,
+    description TEXT,
+    inr REAL,
+    amount TEXT,
+    currency TEXT,
+    type TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    recurring_rule_id TEXT,
+    tags TEXT,
+    split_group_id TEXT,
+    receipt_image TEXT,
+    warranty_expiry TEXT,
+    serial_no TEXT,
+    sub_account TEXT,
+    from_sub_account TEXT,
+    to_sub_account TEXT,
+    investment_transaction_type TEXT,
+    brokerage TEXT,
+    security_symbol TEXT,
+    security_isin TEXT,
+    quantity REAL,
+    unit_price REAL,
+    trade_value REAL,
+    cost_basis REAL,
+    cash_impact REAL,
+    position_qty_change REAL,
+    realized_pnl REAL,
+    trade_id TEXT,
+    order_id TEXT,
+    exchange TEXT,
+    segment TEXT,
+    source TEXT
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS brokerages (
+    id TEXT PRIMARY KEY,
+    name TEXT UNIQUE,
+    bank_account TEXT,
+    owner TEXT
+  );`);
 };
 
 let _db = null;
@@ -276,6 +327,20 @@ export const initDB = async () => {
     _db = await openSQLite();
   }
   await applySchema(_db);
+
+  // Seed default brokerages config if empty
+  try {
+    const res = await _db.query('SELECT COUNT(*) as count FROM brokerages');
+    const count = res.values?.[0]?.count ?? 0;
+    if (count === 0) {
+      const { v4: uuid } = await import('uuid');
+      await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, [uuid(), 'Zerodha', 'HDFC', 'Akbar']);
+      await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, [uuid(), 'Groww', 'Canara', 'Fareeda']);
+    }
+  } catch (err) {
+    console.error('Failed to seed brokerages:', err);
+  }
+
   return _db;
 };
 export const getDB = () => { if (!_db) throw new Error('DB not initialised'); return _db; };

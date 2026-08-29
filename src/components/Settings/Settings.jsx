@@ -7,6 +7,7 @@ import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import { encryptBackupData, decryptBackupData } from '../../utils/cryptoBackup.js';
 import { getDB } from '../../database/db.js';
 import { v4 as uuid } from 'uuid';
+import { parseTradebook, parseLedger, parseHoldings, parseDividends } from '../../utils/brokerageAdapters.js';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -1351,6 +1352,19 @@ function DataManager({ onBack }) {
   const [analysing, setAnalysing] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importLoadingMessage, setImportLoadingMessage] = useState('Processing backup file...');
+  const [importTarget, setImportTarget] = useState('generic');
+
+  useEffect(() => {
+    if (pendingRows && pendingRows.length > 0) {
+      setAnalysing(true);
+      analyseImport(pendingRows)
+        .then(res => setAnalysis(res))
+        .catch(err => console.error(err))
+        .finally(() => setAnalysing(false));
+    } else {
+      setAnalysis(null);
+    }
+  }, [pendingRows, analyseImport]);
 
   // Encrypted Backup & Restore State
   const [cryptoModal, setCryptoModal] = useState(null); // null | { mode: 'export' } | { mode: 'import', rawText, fileName }
@@ -1412,45 +1426,116 @@ function DataManager({ onBack }) {
         return;
       }
 
-      // ── Full FinMan backup JSON ─────────────────────────────────────────
-      // Detect by _finman_backup flag. These files contain both transactions
-      // AND settings (accounts, groups, categories, budgets).
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed._finman_backup) {
-        const backup = parsed;
-        const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
-        setPending(txnRows);
-        setPendingNm(file.name);
-        setIsBackup(true);
-        setPendingBackup(backup);
-        setShowMode(true);
-        setImportLoading(false);
-        if (fileRef.current) fileRef.current.value = '';
-        return;
-      }
+      // If user selected generic backup/transactions
+      if (importTarget === 'generic') {
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed._finman_backup) {
+          const backup = parsed;
+          const txnRows = Array.isArray(backup.transactions) ? backup.transactions : [];
+          setPending(txnRows);
+          setPendingNm(file.name);
+          setIsBackup(true);
+          setPendingBackup(backup);
+          setShowMode(true);
+          setImportLoading(false);
+          if (fileRef.current) fileRef.current.value = '';
+          return;
+        }
 
-      // ── Transactions-only file (CSV, XLS, or plain JSON array) ──────────
-      const rows = Array.isArray(parsed) ? parsed : [];
-      if (rows.length === 0) {
-        setStatus({ type: 'error', msg: 'File appears empty or unreadable.' });
-        setImportLoading(false);
-        if (fileRef.current) fileRef.current.value = '';
-        return;
+        const rows = Array.isArray(parsed) ? parsed : [];
+        if (rows.length === 0) {
+          setStatus({ type: 'error', msg: 'File appears empty or unreadable.' });
+          setImportLoading(false);
+          if (fileRef.current) fileRef.current.value = '';
+          return;
+        }
+        const firstRow = rows[0];
+        const hasDate = 'Date' in firstRow || 'date' in firstRow;
+        const hasType = 'Income/Expense' in firstRow || 'type' in firstRow;
+        if (!hasDate || !hasType) {
+          setStatus({ type: 'error', msg: `Missing required columns. Need: Date, Income/Expense, Amount/INR, Account, Category. Found: ${Object.keys(firstRow).slice(0, 6).join(', ')}…` });
+          setImportLoading(false);
+          if (fileRef.current) fileRef.current.value = '';
+          return;
+        }
+        setPending(rows);
+        setPendingNm(file.name);
+        setIsBackup(false);
+        setPendingBackup(null);
+        setShowMode(true);
+      } else if (importTarget === 'zerodha_tradebook') {
+        const rows = Array.isArray(parsed) ? parsed : [];
+        if (rows.length === 0) {
+          setStatus({ type: 'error', msg: 'File appears empty or unreadable.' });
+          return;
+        }
+        const txns = parseTradebook(rows, 'Zerodha');
+        if (txns.length === 0) {
+          setStatus({ type: 'error', msg: 'No tradebook rows successfully parsed. Verify file format.' });
+          return;
+        }
+        setPending(txns);
+        setPendingNm(file.name);
+        setIsBackup(false);
+        setPendingBackup(null);
+        setShowMode(true);
+      } else if (importTarget === 'zerodha_ledger') {
+        const rows = Array.isArray(parsed) ? parsed : [];
+        if (rows.length === 0) {
+          setStatus({ type: 'error', msg: 'File appears empty or unreadable.' });
+          return;
+        }
+        const db = getDB();
+        const res = await db.query('SELECT bank_account FROM brokerages WHERE name = ?', ['Zerodha']);
+        const bankAccount = res.values?.[0]?.bank_account || 'HDFC';
+        const txns = parseLedger(rows, 'Zerodha', bankAccount);
+        if (txns.length === 0) {
+          setStatus({ type: 'error', msg: 'No ledger transactions parsed. Verify file format.' });
+          return;
+        }
+        setPending(txns);
+        setPendingNm(file.name);
+        setIsBackup(false);
+        setPendingBackup(null);
+        setShowMode(true);
+      } else if (importTarget === 'zerodha_holdings') {
+        const rows = Array.isArray(parsed) ? parsed : [];
+        if (rows.length === 0) {
+          setStatus({ type: 'error', msg: 'File appears empty or unreadable.' });
+          return;
+        }
+        const prices = parseHoldings(rows);
+        const count = Object.keys(prices).length;
+        if (count === 0) {
+          setStatus({ type: 'error', msg: 'No holdings prices found in file.' });
+          return;
+        }
+        let existingPrices = {};
+        try {
+          existingPrices = JSON.parse(state.settings?.holdings_prices || '{}');
+        } catch {}
+        const newPrices = { ...existingPrices, ...prices };
+        await updateSettings({ holdings_prices: JSON.stringify(newPrices) });
+        setStatus({ type: 'success', msg: `✓ Successfully updated current market prices for ${count} holdings.` });
+      } else if (importTarget === 'zerodha_dividends') {
+        const rows = Array.isArray(parsed) ? parsed : [];
+        if (rows.length === 0) {
+          setStatus({ type: 'error', msg: 'File appears empty or unreadable.' });
+          return;
+        }
+        const db = getDB();
+        const res = await db.query('SELECT bank_account FROM brokerages WHERE name = ?', ['Zerodha']);
+        const bankAccount = res.values?.[0]?.bank_account || 'HDFC';
+        const txns = parseDividends(rows, 'Zerodha', bankAccount);
+        if (txns.length === 0) {
+          setStatus({ type: 'error', msg: 'No dividend payments parsed. Verify file format.' });
+          return;
+        }
+        setPending(txns);
+        setPendingNm(file.name);
+        setIsBackup(false);
+        setPendingBackup(null);
+        setShowMode(true);
       }
-      // Validate expected columns
-      const firstRow = rows[0];
-      const hasDate = 'Date' in firstRow || 'date' in firstRow;
-      const hasType = 'Income/Expense' in firstRow || 'type' in firstRow;
-      if (!hasDate || !hasType) {
-        setStatus({ type: 'error', msg: `Missing required columns. Need: Date, Income/Expense, Amount/INR, Account, Category. Found: ${Object.keys(firstRow).slice(0, 6).join(', ')}…` });
-        setImportLoading(false);
-        if (fileRef.current) fileRef.current.value = '';
-        return;
-      }
-      setPending(rows);
-      setPendingNm(file.name);
-      setIsBackup(false);
-      setPendingBackup(null);
-      setShowMode(true);
     } catch (err) {
       setStatus({ type: 'error', msg: `Parse error: ${err.message}` });
     } finally {
@@ -1718,6 +1803,21 @@ function DataManager({ onBack }) {
 
         {/* Import section */}
         <div className="dm-section-hdr">Import</div>
+        <div style={{ padding: '0 var(--page-px) 12px' }}>
+          <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>Import Target / Format</label>
+          <select
+            className="form-input"
+            value={importTarget}
+            onChange={e => setImportTarget(e.target.value)}
+            style={{ width: '100%', padding: '8px 12px', borderRadius: 8, background: 'var(--bg-card2)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          >
+            <option value="generic">FinMan CSV/JSON Backup or MM Excel</option>
+            <option value="zerodha_tradebook">Zerodha Tradebook (XLSX / CSV)</option>
+            <option value="zerodha_ledger">Zerodha Ledger (CSV)</option>
+            <option value="zerodha_holdings">Zerodha Holdings Snapshot (CSV)</option>
+            <option value="zerodha_dividends">Zerodha Dividends Statement (CSV)</option>
+          </select>
+        </div>
         <label className={`import-drop ${importProgress ? 'disabled' : ''}`} style={{ margin: '0 0 14px', borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '18px var(--page-px)', display: 'block' }}>
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json,.finman" style={{ display: 'none' }} onChange={handleFile} disabled={!!importProgress} />
           <div className="import-folder-icon">📂</div>

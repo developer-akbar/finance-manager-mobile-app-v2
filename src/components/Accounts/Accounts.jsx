@@ -11,9 +11,10 @@ import StockManager from './StockManager.jsx';
 import InvestmentsPortfolio from './InvestmentsPortfolio.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
+import { activeHoldingsData } from '../../database/holdingsData.js';
 import './Accounts.css';
 
-const MS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MS_S = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // ── Credit Card helpers ───────────────────────────────────────────────────────
 /** Returns { start, end } Date objects for the billing cycle that contains `refDate`.
@@ -22,17 +23,17 @@ const MS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov',
  *  e.g. settlement=18, today=19 Mar → cycle 18 Mar – 17 Apr
  *       settlement=18, today=10 Mar → cycle 18 Feb – 17 Mar  */
 export function ccCycleForDate(settlementDate, refDate = new Date()) {
-  const sd  = settlementDate;
-  const cy  = refDate.getFullYear();
-  const cm  = refDate.getMonth();
-  const cd  = refDate.getDate();
+  const sd = settlementDate;
+  const cy = refDate.getFullYear();
+  const cm = refDate.getMonth();
+  const cd = refDate.getDate();
   let cycleStart, cycleEnd;
   if (cd >= sd) {
-    cycleStart = new Date(cy, cm,     sd);
-    cycleEnd   = new Date(cy, cm + 1, sd - 1);
+    cycleStart = new Date(cy, cm, sd);
+    cycleEnd = new Date(cy, cm + 1, sd - 1);
   } else {
     cycleStart = new Date(cy, cm - 1, sd);
-    cycleEnd   = new Date(cy, cm,     sd - 1);
+    cycleEnd = new Date(cy, cm, sd - 1);
   }
   cycleEnd.setHours(23, 59, 59, 999);
   return { start: cycleStart, end: cycleEnd };
@@ -73,37 +74,37 @@ export function ccBalances(txns, acctName, settlementDate, today = new Date()) {
   const sd = settlementDate;
   const cy = today.getFullYear(), cm = today.getMonth(), cd = today.getDate();
   let currStart;
-  if (cd >= sd) currStart = new Date(cy, cm,     sd);
-  else          currStart = new Date(cy, cm - 1, sd);
+  if (cd >= sd) currStart = new Date(cy, cm, sd);
+  else currStart = new Date(cy, cm - 1, sd);
   currStart.setHours(0, 0, 0, 0);
 
-  let grossPayable     = 0; // charges in all closed cycles
+  let grossPayable = 0; // charges in all closed cycles
   let grossOutstanding = 0; // charges in current open cycle
-  let totalPayments    = 0; // all payments ever made to this card
+  let totalPayments = 0; // all payments ever made to this card
 
   for (const t of txns) {
-    const d    = parseDate(t.Date);
-    const amt  = txnAmount(t);
+    const d = parseDate(t.Date);
+    const amt = txnAmount(t);
     const type = String(t['Income/Expense'] || '').trim();
     const acct = String(t.Account || t.FromAccount || '').trim();
     const dest = String(t.ToAccount || '').trim();
 
-    const isCharge  = (type === 'Expense' && acct === acctName)
-                   || (type === 'Transfer-Out' && acct === acctName);
+    const isCharge = (type === 'Expense' && acct === acctName)
+      || (type === 'Transfer-Out' && acct === acctName);
     // Payment = money going INTO the card account (Income credited, or bank→card transfer)
     const isPayment = (type === 'Income' && acct === acctName)
-                   || (type === 'Transfer-Out' && dest === acctName);
+      || (type === 'Transfer-Out' && dest === acctName);
 
     if (isCharge) {
-      if (d < currStart) grossPayable     += amt;
-      else               grossOutstanding += amt;
+      if (d < currStart) grossPayable += amt;
+      else grossOutstanding += amt;
     }
     if (isPayment) totalPayments += amt;
   }
 
   // Apply payments: reduce payable first, overflow spills into outstanding
-  const netPayable     = Math.max(0, grossPayable - totalPayments);
-  const overpayment    = Math.max(0, totalPayments - grossPayable);
+  const netPayable = Math.max(0, grossPayable - totalPayments);
+  const overpayment = Math.max(0, totalPayments - grossPayable);
   // netOutstanding: positive = you owe on current cycle, negative = credit balance (overpaid)
   const netOutstanding = grossOutstanding - overpayment;
 
@@ -132,7 +133,7 @@ export function ccNextDueDate(acct, today = new Date()) {
   // Last settlement date (the one that has already passed or is today)
   let lastSettlement;
   if (cd >= sd) lastSettlement = new Date(cy, cm, sd);
-  else          lastSettlement = new Date(cy, cm - 1, sd);
+  else lastSettlement = new Date(cy, cm - 1, sd);
   const due = new Date(lastSettlement);
   due.setDate(due.getDate() + pd);
   // If due date already passed this cycle, it means next due is next month's
@@ -161,8 +162,8 @@ export function ccDaysUntilDue(acct, today = new Date()) {
   return diff;
 }
 
-const MS_F = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-const PERIODS = ['Month','Year','FY','All','Custom','CC Cycle'];
+const MS_F = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const PERIODS = ['Month', 'Year', 'FY', 'All', 'Custom', 'CC Cycle'];
 
 /**
  * Compute running balance for a named account from a list of transactions.
@@ -175,12 +176,12 @@ const PERIODS = ['Month','Year','FY','All','Custom','CC Cycle'];
 function computeBalance(txns, acctName) {
   let bal = 0;
   for (const t of txns) {
-    const amt  = txnAmount(t);
+    const amt = txnAmount(t);
     const type = String(t['Income/Expense'] || '').trim();
     const acct = t.Account || t.FromAccount || '';
     const dest = t.ToAccount || '';
 
-    if (type === 'Income')       { if (acct === acctName) bal += amt; }
+    if (type === 'Income') { if (acct === acctName) bal += amt; }
     else if (type === 'Expense') { if (acct === acctName) bal -= amt; }
     else if (type === 'Transfer-Out') {
       if (acct === acctName) bal -= amt;
@@ -198,16 +199,16 @@ function buildBalanceMap(transactions) {
   const map = {};
   const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(String(s).trim());
   const ensure = n => { if (n && !looksNumeric(n) && !map[n]) map[n] = 0; };
-  const addTo  = (n, v) => { if (n && !looksNumeric(n)) { ensure(n); map[n] = (map[n]||0) + v; } };
+  const addTo = (n, v) => { if (n && !looksNumeric(n)) { ensure(n); map[n] = (map[n] || 0) + v; } };
 
   for (const t of transactions) {
-    const amt  = txnAmount(t);
+    const amt = txnAmount(t);
     const type = String(t['Income/Expense'] || '').trim();
     const acct = String(t.Account || t.FromAccount || '').trim();
     const dest = String(t.ToAccount || '').trim();
 
-    if      (type === 'Income')       addTo(acct, +amt);
-    else if (type === 'Expense')      addTo(acct, -amt);
+    if (type === 'Income') addTo(acct, +amt);
+    else if (type === 'Expense') addTo(acct, -amt);
     else if (type === 'Transfer-Out') { addTo(acct, -amt); addTo(dest, +amt); }
     // Transfer-In: skip — Transfer-Out handles both sides
   }
@@ -224,7 +225,7 @@ function buildSubAccountBalanceMap(transactions) {
     const type = String(t['Income/Expense'] || '').trim();
     const acct = String(t.Account || t.FromAccount || '').trim();
     const dest = String(t.ToAccount || '').trim();
-    
+
     const sub = String(t.SubAccount || t.sub_account || '').trim();
     const fromSub = String(t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '').trim();
     const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
@@ -253,23 +254,235 @@ function buildSubAccountBalanceMap(transactions) {
   return map;
 }
 
+export function parseTxnFields(t) {
+  const desc = String(t.Description || '').trim();
+  const type = String(t.InvestmentTransactionType || '').trim();
+  const isShareMarketTxn = 
+    String(t.Account || '').trim() === 'Share Market' ||
+    String(t.FromAccount || '').trim() === 'Share Market' ||
+    String(t.ToAccount || '').trim() === 'Share Market' ||
+    !!(t.Brokerage || t.brokerage);
+
+  if (type) {
+    return {
+      type,
+      brokerage: String(t.Brokerage || '').trim(),
+      symbol: String(t.SecuritySymbol || t.Note || '').trim().toUpperCase(),
+      qty: parseFloat(t.Quantity || 0),
+      cost: parseFloat(t.TradeValue || 0),
+      costBasis: parseFloat(t.CostBasis || 0),
+      cashImpact: parseFloat(t.CashImpact || 0),
+      realizedPnL: parseFloat(t.RealizedPnl || 0),
+      activeHolding: desc.includes('ActiveHolding=NO') || String(t.Note || '').includes('ActiveHolding=NO') ? 'NO' : 'YES'
+    };
+  }
+  
+  const investmentTypes = new Set(['BUY', 'SELL', 'OPENING_LOT', 'BONUS', 'POSITION_STATUS', 'REALIZED_PNL', 'CHARGE', 'OTHER_CREDIT_DEBIT', 'FUNDING', 'WITHDRAWAL', 'DIVIDEND']);
+  
+  if (desc.includes('|')) {
+    const parts = desc.split('|').map(p => p.trim());
+    const parsedType = parts[0];
+    if (investmentTypes.has(parsedType)) {
+      const fields = {};
+      parts.forEach(p => {
+        const m = p.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
+        if (m) fields[m[1]] = m[2].trim();
+      });
+      
+      const broker = fields.Broker || (isShareMarketTxn ? String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim() : '');
+      const symbol = fields.Symbol || String(t.Note || '').trim().toUpperCase();
+      const qty = parseFloat(fields.Qty || fields.Quantity || 0);
+      const cost = parseFloat(fields.Cost || fields.CostBasis || fields.TradeValue || (fields.Price ? qty * parseFloat(fields.Price) : 0) || 0);
+      const costBasis = parseFloat(fields.CostBasis || 0);
+      const realizedPnL = parseFloat(fields.RealizedPL || fields.RealizedPnL || 0);
+      const activeHolding = fields.ActiveHolding || (desc.includes('ActiveHolding=NO') ? 'NO' : 'YES');
+      
+      return {
+        type: parsedType,
+        brokerage: broker,
+        symbol,
+        qty,
+        cost,
+        costBasis,
+        cashImpact: parseFloat(t.INR || t.Amount || 0),
+        realizedPnL,
+        activeHolding
+      };
+    }
+  }
+  
+  const broker = isShareMarketTxn ? String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim() : '';
+  const symbol = isShareMarketTxn ? String(t.Note || '').trim().toUpperCase() : '';
+  return {
+    type: String(t.InvestmentTransactionType || t.Category || '').trim(),
+    brokerage: broker,
+    symbol,
+    qty: 0,
+    cost: 0,
+    costBasis: 0,
+    cashImpact: parseFloat(t.INR || t.Amount || 0),
+    realizedPnL: 0,
+    activeHolding: 'YES'
+  };
+}
+
+export function calculateShareMarketBalances(txns, brokerConfigList = [], settings = {}) {
+  // 1. Identify brokerages dynamically
+  const brokerages = new Set(brokerConfigList.map(b => b.name));
+  txns.forEach(t => {
+    const f = parseTxnFields(t);
+    if (f.brokerage) brokerages.add(f.brokerage);
+  });
+
+  const results = {};
+  
+  // Parse holdings prices from settings
+  let holdingsPrices = {};
+  try {
+    holdingsPrices = JSON.parse(settings.holdings_prices || '{}');
+  } catch {}
+
+  brokerages.forEach(broker => {
+    const config = brokerConfigList.find(b => b.name === broker) || { cash_offset: 0, mv_offset: 0 };
+    const cashOffset = parseFloat(config.cash_offset) || 0;
+    const mvOffset = parseFloat(config.mv_offset) || 0;
+
+    // Filter txns for this broker
+    const brokerTxns = txns.filter(t => {
+      const f = parseTxnFields(t);
+      return f.brokerage === broker;
+    });
+
+    // Compute standardSum of ledger transactions for cash balance
+    let standardSum = 0;
+    brokerTxns.forEach(t => {
+      const f = parseTxnFields(t);
+      const isTrade = f.type === 'BUY' || f.type === 'SELL' || f.type === 'OPENING_LOT' || f.type === 'BONUS' || f.type === 'REALIZED_PNL';
+      if (!isTrade) {
+        const amt = parseFloat(t.INR || t.Amount || 0);
+        const txnType = String(t['Income/Expense'] || '').trim();
+        const isFrom = (String(t.FromAccount || '').trim() === 'Share Market' && String(t.FromSubAccount || '').trim() === broker);
+        const isTo = (String(t.ToAccount || '').trim() === 'Share Market' && String(t.ToSubAccount || '').trim() === broker);
+        const isAcct = (String(t.Account || '').trim() === 'Share Market' && String(t.SubAccount || '').trim() === broker);
+
+        if (txnType === 'Income') {
+          if (isAcct) standardSum += amt;
+        } else if (txnType === 'Expense') {
+          if (isAcct) standardSum -= amt;
+        } else if (txnType === 'Transfer-Out') {
+          if (isFrom && isTo) {
+            // internal
+          } else if (isFrom) {
+            standardSum -= amt;
+          } else if (isTo) {
+            standardSum += amt;
+          }
+        }
+      }
+    });
+
+    // Parse holdings using buy/sell/bonus trades
+    const holdings = {};
+    brokerTxns.forEach(t => {
+      const f = parseTxnFields(t);
+      const isTrade = f.type === 'BUY' || f.type === 'SELL' || f.type === 'OPENING_LOT' || f.type === 'BONUS';
+      if (isTrade) {
+        if (f.symbol) {
+          if (!holdings[f.symbol]) {
+            holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null };
+          }
+          const h = holdings[f.symbol];
+          if (f.type === 'BUY' || f.type === 'OPENING_LOT' || f.type === 'BONUS') {
+            h.qty += f.qty;
+            h.buyCost += f.cost;
+          } else if (f.type === 'SELL') {
+            h.qty -= f.qty;
+            h.soldCostBasis += f.costBasis;
+          }
+        }
+      } else if (f.type === 'POSITION_STATUS') {
+        if (f.symbol) {
+          if (!holdings[f.symbol]) {
+            holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null };
+          }
+          if (f.activeHolding === 'NO') {
+            holdings[f.symbol].activeStatus = 'NO';
+          }
+        }
+      }
+    });
+
+    // Filter active holdings
+    let investedCost = 0;
+    let currentValue = 0;
+    const activeHoldings = [];
+
+    Object.values(holdings).forEach(h => {
+      const isActive = h.qty > 0 && h.activeStatus !== 'NO' && h.symbol !== 'VISESHINFO-Z' && h.symbol !== 'VISESHINFO';
+      if (isActive) {
+        const cost = h.buyCost - h.soldCostBasis;
+        investedCost += cost;
+        
+        // Find price in holdingsPrices or activeHoldingsData fallback
+        let price = holdingsPrices[h.symbol] || 0;
+        if (price === 0) {
+          const dbHold = activeHoldingsData[h.symbol];
+          if (dbHold) {
+            price = dbHold.currentValue / dbHold.quantity;
+          } else {
+            price = cost / h.qty;
+          }
+        }
+
+        const value = h.qty * price;
+        currentValue += value;
+
+        activeHoldings.push({
+          symbol: h.symbol,
+          qty: h.qty,
+          investedCost: cost,
+          currentValue: value
+        });
+      }
+    });
+
+    // Reconcile cash balance using dynamic offset
+    let cash = standardSum - investedCost + cashOffset;
+    
+    // Reconcile market value using dynamic offset
+    currentValue += mvOffset;
+
+    const totalValue = cash + currentValue;
+
+    results[broker] = {
+      cash,
+      investedCost,
+      currentValue,
+      totalValue,
+      activeHoldings
+    };
+  });
+
+  return results;
+}
+
 // ── Account Detail ────────────────────────────────────────────────────────────
 function AccountDetail({ acctName, subAccountName, allTxns, onBack, backInterceptRef, ccConfig }) {
   const now = new Date();
 
   // If this is a CC account, default period to 'CC Cycle'; otherwise 'Month'
   const isCC = ccConfig && ccConfig.settlementDate > 0;
-  const [period,    setPeriod]  = useState(isCC ? 'CC Cycle' : 'Month');
-  const [viewYear,  setViewYear] = useState(now.getFullYear());
-  const [viewMonth, setViewMonth]= useState(now.getMonth());
-  const [viewFY,    setViewFY]  = useState(currentFY());
-  const [customFrom,setFrom]    = useState('');
-  const [customTo,  setTo]      = useState('');
-  const [addDate,   setAddDate] = useState(null);
-  const [showAdd,   setShowAdd] = useState(false);
-  const [selected,  setSelected] = useState(new Set());
+  const [period, setPeriod] = useState(isCC ? 'CC Cycle' : 'Month');
+  const [viewYear, setViewYear] = useState(now.getFullYear());
+  const [viewMonth, setViewMonth] = useState(now.getMonth());
+  const [viewFY, setViewFY] = useState(currentFY());
+  const [customFrom, setFrom] = useState('');
+  const [customTo, setTo] = useState('');
+  const [addDate, setAddDate] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [selected, setSelected] = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
-  const [copyTxn,   setCopyTxn] = useState(null);
+  const [copyTxn, setCopyTxn] = useState(null);
   const [addKey, setAddKey] = useState(0);
 
   // For CC Cycle navigation: which cycle offset (0 = current, -1 = previous, etc.)
@@ -356,45 +569,45 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   }, [isCC, ccConfig, ccCycleOffset]);
 
   const periodTxns = useMemo(() => {
-    if (period==='Month')    return acctTxns.filter(t=>{const d=parseDate(t.Date);return d.getFullYear()===viewYear&&d.getMonth()===viewMonth;});
-    if (period==='Year')     return acctTxns.filter(t=>parseDate(t.Date).getFullYear()===viewYear);
-    if (period==='FY')       return acctTxns.filter(t=>{const d=parseDate(t.Date);return d>=fyStart(viewFY)&&d<=fyEnd(viewFY);});
-    if (period==='CC Cycle' && ccCycleRange) return acctTxns.filter(t=>{const d=parseDate(t.Date);return d>=ccCycleRange.start&&d<=ccCycleRange.end;});
-    if (period==='Custom'&&customFrom&&customTo){const f=new Date(customFrom),to=new Date(customTo+'T23:59:59');return acctTxns.filter(t=>{const d=parseDate(t.Date);return d>=f&&d<=to;});}
+    if (period === 'Month') return acctTxns.filter(t => { const d = parseDate(t.Date); return d.getFullYear() === viewYear && d.getMonth() === viewMonth; });
+    if (period === 'Year') return acctTxns.filter(t => parseDate(t.Date).getFullYear() === viewYear);
+    if (period === 'FY') return acctTxns.filter(t => { const d = parseDate(t.Date); return d >= fyStart(viewFY) && d <= fyEnd(viewFY); });
+    if (period === 'CC Cycle' && ccCycleRange) return acctTxns.filter(t => { const d = parseDate(t.Date); return d >= ccCycleRange.start && d <= ccCycleRange.end; });
+    if (period === 'Custom' && customFrom && customTo) { const f = new Date(customFrom), to = new Date(customTo + 'T23:59:59'); return acctTxns.filter(t => { const d = parseDate(t.Date); return d >= f && d <= to; }); }
     return acctTxns;
-  }, [acctTxns,period,viewYear,viewMonth,viewFY,customFrom,customTo,ccCycleRange]);
+  }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, customTo, ccCycleRange]);
 
   // Opening balance = balance from all transactions BEFORE the period
   const openingBal = useMemo(() => {
     if (period === 'All') return 0;
     const beforePeriod = acctTxns.filter(t => {
       const d = parseDate(t.Date);
-      if (period==='Month')    return !(d.getFullYear()===viewYear && d.getMonth()===viewMonth) && d < new Date(viewYear, viewMonth, 1);
-      if (period==='Year')     return d.getFullYear() < viewYear;
-      if (period==='FY')       return d < fyStart(viewFY);
-      if (period==='CC Cycle' && ccCycleRange) return d < ccCycleRange.start;
-      if (period==='Custom'&&customFrom) return d < new Date(customFrom);
+      if (period === 'Month') return !(d.getFullYear() === viewYear && d.getMonth() === viewMonth) && d < new Date(viewYear, viewMonth, 1);
+      if (period === 'Year') return d.getFullYear() < viewYear;
+      if (period === 'FY') return d < fyStart(viewFY);
+      if (period === 'CC Cycle' && ccCycleRange) return d < ccCycleRange.start;
+      if (period === 'Custom' && customFrom) return d < new Date(customFrom);
       return false;
     });
     return computeBalance(beforePeriod, acctName);
   }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, acctName, ccCycleRange]);
 
   const periodBalance = useMemo(() => computeBalance(periodTxns, acctName), [periodTxns, acctName]);
-  const closingBal    = openingBal + periodBalance;
+  const closingBal = openingBal + periodBalance;
 
   // Income/expense/transfer breakdown for the period
   const totals = useMemo(() => {
-    let income=0, expense=0, xferIn=0, xferOut=0;
+    let income = 0, expense = 0, xferIn = 0, xferOut = 0;
     for (const t of periodTxns) {
-      const amt  = txnAmount(t);
+      const amt = txnAmount(t);
       const type = String(t['Income/Expense'] || '').trim();
       const acct = t.Account || t.FromAccount || '';
       const dest = t.ToAccount || '';
-      if (type==='Income')       income  += amt;
-      else if (type==='Expense') expense += amt;
-      else if (type==='Transfer-Out') {
-        if(acct===acctName) xferOut+=amt;
-        if(dest===acctName) xferIn+=amt;
+      if (type === 'Income') income += amt;
+      else if (type === 'Expense') expense += amt;
+      else if (type === 'Transfer-Out') {
+        if (acct === acctName) xferOut += amt;
+        if (dest === acctName) xferIn += amt;
       }
       // Transfer-In: skip (Transfer-Out already handles both sides)
     }
@@ -402,11 +615,11 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   }, [periodTxns, acctName]);
 
   const barData = useMemo(() => {
-    if (['All','Custom'].includes(period)) return [];
+    if (['All', 'Custom'].includes(period)) return [];
 
     if (period === 'Year') {
       // Last 6 years ending at viewYear
-      return Array.from({length:6}, (_,i) => {
+      return Array.from({ length: 6 }, (_, i) => {
         const yr = viewYear - 5 + i;
         const yearTxns = acctTxns.filter(t => parseDate(t.Date).getFullYear() <= yr);
         return { name: String(yr), value: computeBalance(yearTxns, acctName) };
@@ -415,7 +628,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
 
     if (period === 'FY') {
       // Last 6 FYs ending at viewFY
-      return Array.from({length:6}, (_,i) => {
+      return Array.from({ length: 6 }, (_, i) => {
         const fy = viewFY - 5 + i;
         const upTo = fyEnd(fy);
         const fyTxns = acctTxns.filter(t => parseDate(t.Date) <= upTo);
@@ -424,12 +637,12 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
     }
 
     // Month / CC Cycle — last 6 months ending at viewed month
-    const anchorYear  = period === 'CC Cycle' ? now.getFullYear() + Math.floor((now.getMonth() + ccCycleOffset) / 12) : viewYear;
+    const anchorYear = period === 'CC Cycle' ? now.getFullYear() + Math.floor((now.getMonth() + ccCycleOffset) / 12) : viewYear;
     const anchorMonth = period === 'CC Cycle'
       ? ((now.getMonth() + ccCycleOffset) % 12 + 12) % 12
       : viewMonth;
 
-    return Array.from({length:6}, (_,i) => {
+    return Array.from({ length: 6 }, (_, i) => {
       const d = new Date(anchorYear, anchorMonth - 5 + i, 1);
       const upToMonth = acctTxns.filter(t => {
         const td = parseDate(t.Date);
@@ -440,28 +653,28 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   }, [acctTxns, acctName, period, viewYear, viewMonth, viewFY, ccCycleOffset]);
 
   const chartTitle = useMemo(() => {
-    if (period === 'Year')     return '6-Year Balance Trend';
-    if (period === 'FY')       return '6-FY Balance Trend';
-    if (['All','Custom'].includes(period)) return null;
+    if (period === 'Year') return '6-Year Balance Trend';
+    if (period === 'FY') return '6-FY Balance Trend';
+    if (['All', 'Custom'].includes(period)) return null;
     return '6-Month Balance Trend';
   }, [period]);
 
   const prev = () => {
-    if(period==='Month'){if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1);}
-    if(period==='Year') setViewYear(y=>y-1);
-    if(period==='FY')   setViewFY(y=>y-1);
-    if(period==='CC Cycle') setCcCycleOffset(o=>o-1);
+    if (period === 'Month') { if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); } else setViewMonth(m => m - 1); }
+    if (period === 'Year') setViewYear(y => y - 1);
+    if (period === 'FY') setViewFY(y => y - 1);
+    if (period === 'CC Cycle') setCcCycleOffset(o => o - 1);
   };
   const next = () => {
-    if(period==='Month'){if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);}
-    if(period==='Year') setViewYear(y=>y+1);
-    if(period==='FY')   setViewFY(y=>y+1);
-    if(period==='CC Cycle') setCcCycleOffset(o=>o+1);
+    if (period === 'Month') { if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); } else setViewMonth(m => m + 1); }
+    if (period === 'Year') setViewYear(y => y + 1);
+    if (period === 'FY') setViewFY(y => y + 1);
+    if (period === 'CC Cycle') setCcCycleOffset(o => o + 1);
   };
   const swipe = useSwipe(next, prev);
 
-  const fmtCycleDate = d => d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
-  const periodLabel = period==='Month'?`${MS_F[viewMonth]} ${viewYear}`:period==='Year'?String(viewYear):period==='FY'?fyLabel(viewFY):period==='CC Cycle'&&ccCycleRange?`${fmtCycleDate(ccCycleRange.start)} – ${fmtCycleDate(ccCycleRange.end)}`:period==='Custom'&&customFrom&&customTo?`${customFrom} – ${customTo}`:'All Time';
+  const fmtCycleDate = d => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  const periodLabel = period === 'Month' ? `${MS_F[viewMonth]} ${viewYear}` : period === 'Year' ? String(viewYear) : period === 'FY' ? fyLabel(viewFY) : period === 'CC Cycle' && ccCycleRange ? `${fmtCycleDate(ccCycleRange.start)} – ${fmtCycleDate(ccCycleRange.end)}` : period === 'Custom' && customFrom && customTo ? `${customFrom} – ${customTo}` : 'All Time';
 
   const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
 
@@ -479,7 +692,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   // Running balance map: txn._id → cumulative account balance AFTER that transaction.
   // Built from ALL account transactions in chronological order (oldest first).
   const runningBalMap = useMemo(() => {
-    const sorted = [...acctTxns].sort((a,b) => {
+    const sorted = [...acctTxns].sort((a, b) => {
       const da = parseDate(a.Date), db = parseDate(b.Date);
       if (da - db !== 0) return da - db;
       // same date: sort by time ascending
@@ -488,11 +701,11 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
     let bal = 0;
     const map = {};
     for (const t of sorted) {
-      const amt  = txnAmount(t);
+      const amt = txnAmount(t);
       const type = String(t['Income/Expense'] || '').trim();
       const acct = t.Account || t.FromAccount || '';
       const dest = t.ToAccount || '';
-      if (type === 'Income'       && acct === acctName) bal += amt;
+      if (type === 'Income' && acct === acctName) bal += amt;
       else if (type === 'Expense' && acct === acctName) bal -= amt;
       else if (type === 'Transfer-Out') {
         if (acct === acctName) bal -= amt;
@@ -504,13 +717,13 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   }, [acctTxns, acctName]);
 
   const groups = useMemo(() => {
-    const map={};
-    for(const t of [...periodTxns].sort((a,b)=>{
-      const da=parseDate(a.Date),db=parseDate(b.Date);
-      if(da-db!==0)return db-da; // date descending
-      return (b.Time||'').localeCompare(a.Time||''); // time descending within same date
-    })){
-      if(!map[t.Date])map[t.Date]=[];map[t.Date].push(t);
+    const map = {};
+    for (const t of [...periodTxns].sort((a, b) => {
+      const da = parseDate(a.Date), db = parseDate(b.Date);
+      if (da - db !== 0) return db - da; // date descending
+      return (b.Time || '').localeCompare(a.Time || ''); // time descending within same date
+    })) {
+      if (!map[t.Date]) map[t.Date] = []; map[t.Date].push(t);
     }
     return Object.entries(map);
   }, [periodTxns]);
@@ -519,48 +732,48 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
     <div className="acct-detail-screen">
       <div className="page-hdr">
         <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         </button>
-        <div style={{flex:1}}>
+        <div style={{ flex: 1 }}>
           <div className="page-hdr-title">{acctName}{subAccountName ? ` › ${subAccountName}` : ''}</div>
           <div className="page-hdr-sub">{subAccountName ? 'Sub Account' : 'Account'} · {acctTxns.length} total txns</div>
         </div>
-        <div className="entity-badge" style={{background:closingBal>=0?'var(--income-bg)':'var(--expense-bg)',color:closingBal>=0?'var(--income)':'var(--expense)'}}>
-          {closingBal>=0?'+':''}{formatINRCompact(Math.abs(closingBal))}
+        <div className="entity-badge" style={{ background: closingBal >= 0 ? 'var(--income-bg)' : 'var(--expense-bg)', color: closingBal >= 0 ? 'var(--income)' : 'var(--expense)' }}>
+          {closingBal >= 0 ? '+' : ''}{formatINRCompact(Math.abs(closingBal))}
         </div>
         <button className="add-fab-sm" onClick={() => { setShowAdd(true); setAddKey(k => k + 1); }} title="Add transaction">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M12 5v14M5 12h14"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M12 5v14M5 12h14" /></svg>
         </button>
       </div>
 
       <div className="acct-detail-body" {...(multiMode ? {} : swipe)}>
-        <div style={{padding:'8px var(--page-px) 4px'}}>
+        <div style={{ padding: '8px var(--page-px) 4px' }}>
           <div className="period-tabs">
-            {PERIODS.filter(p => p !== 'CC Cycle' || isCC).map(p=><button key={p} className={`period-tab ${period===p?'active':''}`} onClick={()=>{ setPeriod(p); if(p==='CC Cycle') setCcCycleOffset(0); }}>{p}</button>)}
+            {PERIODS.filter(p => p !== 'CC Cycle' || isCC).map(p => <button key={p} className={`period-tab ${period === p ? 'active' : ''}`} onClick={() => { setPeriod(p); if (p === 'CC Cycle') setCcCycleOffset(0); }}>{p}</button>)}
           </div>
         </div>
-        {!['All','Custom'].includes(period)&&(
+        {!['All', 'Custom'].includes(period) && (
           <div className="period-picker-row">
             <button className="pp-arrow" onClick={prev}>‹</button>
             <div className="pp-label">
               {periodLabel}
-              {period==='CC Cycle'&&isCC&&ccCycleOffset===0&&<span className="cc-cycle-badge">Current</span>}
+              {period === 'CC Cycle' && isCC && ccCycleOffset === 0 && <span className="cc-cycle-badge">Current</span>}
             </div>
             <button className="pp-arrow" onClick={next}>›</button>
           </div>
         )}
-        {period==='CC Cycle'&&isCC&&(
+        {period === 'CC Cycle' && isCC && (
           <div className="cc-cycle-info-strip">
             <span>💳 Billing cycle closes on <strong>
-              {(()=>{const d=new Date(0,0,ccConfig.settlementDate);return d.toLocaleDateString('en-IN',{day:'numeric'});})()}
+              {(() => { const d = new Date(0, 0, ccConfig.settlementDate); return d.toLocaleDateString('en-IN', { day: 'numeric' }); })()}
             </strong> of each month</span>
           </div>
         )}
-        {period==='Custom'&&(
-          <div style={{display:'flex',gap:8,padding:'6px var(--page-px)'}}>
-            <input type="date" className="form-input" style={{flex:1}} value={customFrom} onChange={e=>setFrom(e.target.value)}/>
-            <span style={{alignSelf:'center',color:'var(--text-muted)'}}>–</span>
-            <input type="date" className="form-input" style={{flex:1}} value={customTo} onChange={e=>setTo(e.target.value)}/>
+        {period === 'Custom' && (
+          <div style={{ display: 'flex', gap: 8, padding: '6px var(--page-px)' }}>
+            <input type="date" className="form-input" style={{ flex: 1 }} value={customFrom} onChange={e => setFrom(e.target.value)} />
+            <span style={{ alignSelf: 'center', color: 'var(--text-muted)' }}>–</span>
+            <input type="date" className="form-input" style={{ flex: 1 }} value={customTo} onChange={e => setTo(e.target.value)} />
           </div>
         )}
 
@@ -569,17 +782,17 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           <div className="acct-ob-strip">
             <div className="acct-ob-item">
               <div className="acct-ob-l">Opening</div>
-              <div className={`acct-ob-v ${openingBal>=0?'pos':'neg'}`}>{openingBal>=0?'+':''}{formatINR(Math.abs(openingBal))}</div>
+              <div className={`acct-ob-v ${openingBal >= 0 ? 'pos' : 'neg'}`}>{openingBal >= 0 ? '+' : ''}{formatINR(Math.abs(openingBal))}</div>
             </div>
-            <div className="acct-ob-div"/>
+            <div className="acct-ob-div" />
             <div className="acct-ob-item">
               <div className="acct-ob-l">Net change</div>
-              <div className={`acct-ob-v ${periodBalance>=0?'pos':'neg'}`}>{periodBalance>=0?'+':''}{formatINR(Math.abs(periodBalance))}</div>
+              <div className={`acct-ob-v ${periodBalance >= 0 ? 'pos' : 'neg'}`}>{periodBalance >= 0 ? '+' : ''}{formatINR(Math.abs(periodBalance))}</div>
             </div>
-            <div className="acct-ob-div"/>
+            <div className="acct-ob-div" />
             <div className="acct-ob-item">
               <div className="acct-ob-l">Closing</div>
-              <div className={`acct-ob-v ${closingBal>=0?'pos':'neg'}`}>{closingBal>=0?'+':''}{formatINR(Math.abs(closingBal))}</div>
+              <div className={`acct-ob-v ${closingBal >= 0 ? 'pos' : 'neg'}`}>{closingBal >= 0 ? '+' : ''}{formatINR(Math.abs(closingBal))}</div>
             </div>
           </div>
         )}
@@ -590,113 +803,113 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
             <div className="acct-banking-l">Deposits</div>
             <div className="acct-banking-v income">{formatINR(totals.income + totals.xferIn)}</div>
           </div>
-          <div className="acct-banking-div"/>
+          <div className="acct-banking-div" />
           <div className="acct-banking-item">
             <div className="acct-banking-l">Withdrawals</div>
             <div className="acct-banking-v expense">{formatINR(totals.expense + totals.xferOut)}</div>
           </div>
-          <div className="acct-banking-div"/>
+          <div className="acct-banking-div" />
           <div className="acct-banking-item">
             <div className="acct-banking-l">Txns</div>
             <div className="acct-banking-v">{periodTxns.length}</div>
           </div>
-          <div className="acct-banking-div"/>
+          <div className="acct-banking-div" />
           <div className="acct-banking-item">
             <div className="acct-banking-l">Balance</div>
-            <div className={`acct-banking-v ${closingBal>=0?'income':'expense'}`} style={{fontWeight:900}}>
-              {closingBal>=0?'+':''}{formatINR(closingBal)}
+            <div className={`acct-banking-v ${closingBal >= 0 ? 'income' : 'expense'}`} style={{ fontWeight: 900 }}>
+              {closingBal >= 0 ? '+' : ''}{formatINR(closingBal)}
             </div>
           </div>
         </div>
 
         {chartTitle && (
-        <div className="chart-wrap">
-          <div style={{fontSize:'0.62rem',fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.7px',marginBottom:6}}>{chartTitle}</div>
-          <ResponsiveContainer width="100%" height={130}>
-            <AreaChart data={barData} margin={{top:6,right:4,bottom:0,left:0}}>
-              <defs>
-                <linearGradient id="balGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="#00e5a0" stopOpacity={0.25}/>
-                  <stop offset="95%" stopColor="#00e5a0" stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false}/>
-              <XAxis dataKey="name" tick={{fontSize:9,fill:'var(--text-muted)'}} axisLine={false} tickLine={false}/>
-              <YAxis tick={{fontSize:9,fill:'var(--text-muted)'}} axisLine={false} tickLine={false} tickFormatter={v=>formatINRCompact(Math.abs(v))} width={42}/>
-              <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4"/>
-              <Tooltip
-                formatter={v=>[formatINR(v),'Balance']}
-                labelStyle={{fontSize:11,color:'var(--text-muted)'}}
-                contentStyle={{background:'var(--bg-card2)',border:'1px solid var(--border)',borderRadius:10,fontSize:11,padding:'6px 10px'}}
-              />
-              <Area
-                type="monotone" dataKey="value"
-                stroke="#00e5a0" strokeWidth={2.5}
-                fill="url(#balGrad)"
-                dot={{fill:'#00e5a0',r:4,strokeWidth:0}}
-                activeDot={{r:6,fill:'#00e5a0',stroke:'rgba(0,229,160,0.3)',strokeWidth:4}}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
+          <div className="chart-wrap">
+            <div style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: 6 }}>{chartTitle}</div>
+            <ResponsiveContainer width="100%" height={130}>
+              <AreaChart data={barData} margin={{ top: 6, right: 4, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="balGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#00e5a0" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="#00e5a0" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} tickFormatter={v => formatINRCompact(Math.abs(v))} width={42} />
+                <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" />
+                <Tooltip
+                  formatter={v => [formatINR(v), 'Balance']}
+                  labelStyle={{ fontSize: 11, color: 'var(--text-muted)' }}
+                  contentStyle={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 11, padding: '6px 10px' }}
+                />
+                <Area
+                  type="monotone" dataKey="value"
+                  stroke="#00e5a0" strokeWidth={2.5}
+                  fill="url(#balGrad)"
+                  dot={{ fill: '#00e5a0', r: 4, strokeWidth: 0 }}
+                  activeDot={{ r: 6, fill: '#00e5a0', stroke: 'rgba(0,229,160,0.3)', strokeWidth: 4 }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         )}
 
-        {groups.length===0
+        {groups.length === 0
           ? <div className="empty-state"><div className="empty-icon">📭</div><div className="empty-title">No transactions</div><div className="empty-desc">{periodLabel}</div></div>
           : <>
-              {multiMode && <BulkSelectionBar selected={selected} setSelected={setSelected} selTotals={selTotals} allTxns={periodTxns}
-                onDone={()=>{setMultiMode(false);setSelected(new Set());}}
-                onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
-              {groups.map(([dk,txns], gi)=>{
-                const gt = txns.reduce((acc, t) => {
-                  const amt = txnAmount(t);
-                  const tp  = accountTxnType(t);
-                  if (tp === 'income') acc.income += amt;
-                  else if (tp === 'expense') acc.expense += amt;
-                  return acc;
-                }, { income: 0, expense: 0 });
-                const d=parseDate(txns[0].Date);
-                return(
-                  <div key={dk} className="date-group-container">
-                    <div className="dg-header" onClick={multiMode ? null : ()=>setAddDate(txns[0].Date)}>
-                      <div className="dg-left">
-                        <div className="dg-day">{d.getDate()}</div>
-                        <div className="dg-meta">
-                          <div className="dg-wday">{d.toLocaleDateString('en-IN',{weekday:'short'}).toUpperCase()}</div>
-                          <div className="dg-month">{MS_S[d.getMonth()]} {d.getFullYear()}</div>
-                        </div>
-                      </div>
-                      <div className="dg-totals">
-                        {gt.income>0&&<span className="dg-inc">+{formatINR(gt.income)}</span>}
-                        {gt.expense>0&&<span className="dg-exp">−{formatINR(gt.expense)}</span>}
+            {multiMode && <BulkSelectionBar selected={selected} setSelected={setSelected} selTotals={selTotals} allTxns={periodTxns}
+              onDone={() => { setMultiMode(false); setSelected(new Set()); }}
+              onDeleted={() => { setMultiMode(false); setSelected(new Set()); }} />}
+            {groups.map(([dk, txns], gi) => {
+              const gt = txns.reduce((acc, t) => {
+                const amt = txnAmount(t);
+                const tp = accountTxnType(t);
+                if (tp === 'income') acc.income += amt;
+                else if (tp === 'expense') acc.expense += amt;
+                return acc;
+              }, { income: 0, expense: 0 });
+              const d = parseDate(txns[0].Date);
+              return (
+                <div key={dk} className="date-group-container">
+                  <div className="dg-header" onClick={multiMode ? null : () => setAddDate(txns[0].Date)}>
+                    <div className="dg-left">
+                      <div className="dg-day">{d.getDate()}</div>
+                      <div className="dg-meta">
+                        <div className="dg-wday">{d.toLocaleDateString('en-IN', { weekday: 'short' }).toUpperCase()}</div>
+                        <div className="dg-month">{MS_S[d.getMonth()]} {d.getFullYear()}</div>
                       </div>
                     </div>
-                    <div className="dg-items">{txns.map((t, ti)=>{
-                      const runBal = runningBalMap[t._id];
-                      // Show "(Balance X)" only on the very first transaction of the whole list
-                      // (gi===0 && ti===0) — the newest transaction in the viewed period.
-                      const isOverallNewest = gi === 0 && ti === 0;
-                      return <TransactionItem key={t._id} transaction={t}
-                        selected={selected.has(t._id)}
-                        overrideType={accountTxnType(t)}
-                        backInterceptRef={backInterceptRef}
-                        onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
-                        onTap={multiMode ? toggleSel : null}
-                        onCopy={handleCopy}
-                        runningBalance={runBal !== undefined ? runBal : null}
-                        isNewestInGroup={isOverallNewest}
-                      />;
-                    })}</div>
+                    <div className="dg-totals">
+                      {gt.income > 0 && <span className="dg-inc">+{formatINR(gt.income)}</span>}
+                      {gt.expense > 0 && <span className="dg-exp">−{formatINR(gt.expense)}</span>}
+                    </div>
                   </div>
-                );
-              })}
-            </>
+                  <div className="dg-items">{txns.map((t, ti) => {
+                    const runBal = runningBalMap[t._id];
+                    // Show "(Balance X)" only on the very first transaction of the whole list
+                    // (gi===0 && ti===0) — the newest transaction in the viewed period.
+                    const isOverallNewest = gi === 0 && ti === 0;
+                    return <TransactionItem key={t._id} transaction={t}
+                      selected={selected.has(t._id)}
+                      overrideType={accountTxnType(t)}
+                      backInterceptRef={backInterceptRef}
+                      onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
+                      onTap={multiMode ? toggleSel : null}
+                      onCopy={handleCopy}
+                      runningBalance={runBal !== undefined ? runBal : null}
+                      isNewestInGroup={isOverallNewest}
+                    />;
+                  })}</div>
+                </div>
+              );
+            })}
+          </>
         }
-        <div style={{height:80}}/>
+        <div style={{ height: 80 }} />
       </div>
-      {addDate&&<AddTransaction prefillDate={addDate} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={()=>setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
-      {showAdd&&<AddTransaction key={addKey} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={()=>setShowAdd(false)} onSaveAndContinue={() => {}} backInterceptRef={backInterceptRef}/>}
-      {copyTxn&&<AddTransaction copyTransaction={copyTxn} onClose={()=>setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})} backInterceptRef={backInterceptRef}/>}
+      {addDate && <AddTransaction prefillDate={addDate} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={() => setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef} />}
+      {showAdd && <AddTransaction key={addKey} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={() => setShowAdd(false)} onSaveAndContinue={() => { }} backInterceptRef={backInterceptRef} />}
+      {copyTxn && <AddTransaction copyTransaction={copyTxn} onClose={() => setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({ ...copyTxn, _id: undefined })} backInterceptRef={backInterceptRef} />}
     </div>
   );
 }
@@ -710,8 +923,8 @@ export default function Accounts({ backInterceptRef } = {}) {
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
   const [expandedAccounts, setExpandedAccounts] = useState(new Set());
   const [showDebtTracker, setShowDebtTracker] = useState(false);
-  const [showOptimizer,   setShowOptimizer]   = useState(false);
-  const [showGroups,      setShowGroups]      = useState(false);
+  const [showOptimizer, setShowOptimizer] = useState(false);
+  const [showGroups, setShowGroups] = useState(false);
   const [showStockManager, setShowStockManager] = useState(false);
   const [showInvestments, setShowInvestments] = useState(false);
   const [settlePrefill, setSettlePrefill] = useState(null);
@@ -877,10 +1090,32 @@ export default function Accounts({ backInterceptRef } = {}) {
   }, [showDebtTracker, showInvestments, drill, backInterceptRef]);
 
 
-  const acctBalances = useMemo(() => buildBalanceMap(transactions), [transactions]);
-  const subAcctBalances = useMemo(() => buildSubAccountBalanceMap(transactions), [transactions]);
+  const shareMarketBalances = useMemo(() => calculateShareMarketBalances(transactions, state.brokerages, state.settings), [transactions, state.brokerages, state.settings]);
 
-  const netWorth = useMemo(() => Object.values(acctBalances).reduce((s,v)=>s+v,0), [acctBalances]);
+  const acctBalances = useMemo(() => {
+    const map = buildBalanceMap(transactions);
+    if (map['Share Market'] !== undefined) {
+      let totalSm = 0;
+      Object.values(shareMarketBalances).forEach(b => {
+        totalSm += b.totalValue;
+      });
+      map['Share Market'] = totalSm;
+    }
+    return map;
+  }, [transactions, shareMarketBalances]);
+
+  const subAcctBalances = useMemo(() => {
+    const map = buildSubAccountBalanceMap(transactions);
+    if (map['Share Market']) {
+      map['Share Market'] = {};
+      Object.entries(shareMarketBalances).forEach(([sub, b]) => {
+        map['Share Market'][sub] = b.totalValue;
+      });
+    }
+    return map;
+  }, [transactions, shareMarketBalances]);
+
+  const netWorth = useMemo(() => Object.values(acctBalances).reduce((s, v) => s + v, 0), [acctBalances]);
   const assets = useMemo(() => {
     return Object.entries(acctBalances).reduce((sum, [name, val]) => {
       const a = accounts.find(acc => (acc.name || acc) === name);
@@ -904,22 +1139,22 @@ export default function Accounts({ backInterceptRef } = {}) {
   const uniqueAccounts = useMemo(() => {
     const seen = new Set();
     return accounts.filter(acc => {
-        const duplicate = seen.has(acc.name);
-        seen.add(acc.name);
-        return !duplicate;
+      const duplicate = seen.has(acc.name);
+      seen.add(acc.name);
+      return !duplicate;
     });
   }, [accounts]);
 
   const grouped = useMemo(() => {
-    const groups    = {};
+    const groups = {};
     const ungrouped = [];
     const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(String(s).trim());
-    const normalizedAccts = (uniqueAccounts||[])
-      .map(a=>typeof a==='string'?{name:a,group:'',icon:'💳'}:a)
+    const normalizedAccts = (uniqueAccounts || [])
+      .map(a => typeof a === 'string' ? { name: a, group: '', icon: '💳' } : a)
       .filter(a => a.name && !looksNumeric(a.name)); // skip numeric-named accounts
     for (const a of normalizedAccts) {
       const grp = a.group || '';
-      if (grp && (uniqueAccountGroups||[]).includes(grp)) {
+      if (grp && (uniqueAccountGroups || []).includes(grp)) {
         if (!groups[grp]) groups[grp] = [];
         groups[grp].push(a);
       } else ungrouped.push(a);
@@ -978,30 +1213,33 @@ export default function Accounts({ backInterceptRef } = {}) {
   }
 
   if (drill) {
-    const drillAcct = (uniqueAccounts||[]).find(a => (a.name||a) === drill);
+    const drillAcct = (uniqueAccounts || []).find(a => (a.name || a) === drill);
     const ccCfg = drillAcct && isCreditCard(drillAcct) ? drillAcct : null;
     return <AccountDetail acctName={drill} subAccountName={drillSub} allTxns={transactions} onBack={() => { setDrill(null); setDrillSub(null); }} backInterceptRef={backInterceptRef} ccConfig={ccCfg} />;
   }
 
   const renderAcctRow = (a) => {
-    const name   = a.name || a;
-    const bal    = acctBalances[name] ?? 0;
+    const name = a.name || a;
+    const bal = acctBalances[name] ?? 0;
     const acctObj = typeof a === 'object' ? a : { name };
-    const hasSubs = acctObj.subAccounts && acctObj.subAccounts.length > 0;
+    const isShareMarket = name === 'Share Market';
+    const dynamicSMSubs = isShareMarket ? Object.keys(shareMarketBalances).map(subName => ({ name: subName })) : [];
+    const hasSubs = isShareMarket ? (dynamicSMSubs.length > 0) : (acctObj.subAccounts && acctObj.subAccounts.length > 0);
+    const subAccountsToRender = isShareMarket ? dynamicSMSubs : (acctObj.subAccounts || []);
     const isAcctExpanded = expandedAccounts.has(name);
 
     let parentRow;
     if (isCreditCard(acctObj)) {
-      const now  = new Date();
+      const now = new Date();
       let balancePayable = 0, outstanding = 0;
       if (acctObj.settlementDate > 0) {
         ({ balancePayable, outstanding } = ccBalances(transactions, name, acctObj.settlementDate, now));
       }
 
       // outstanding: positive = you owe (shown as −), negative = credit/overpaid (shown as +)
-      const outAmt  = Math.abs(outstanding);
+      const outAmt = Math.abs(outstanding);
       const outSign = outstanding > 0 ? '−' : outstanding < 0 ? '+' : '';
-      const outCls  = outstanding > 0 ? 'warn' : outstanding < 0 ? 'pos' : '';
+      const outCls = outstanding > 0 ? 'warn' : outstanding < 0 ? 'pos' : '';
 
       const dueDays = ccDaysUntilDue(acctObj, now);
       const showDueDot = !paidDueAlerts.has(name) && dueDays !== null && dueDays <= 7 && balancePayable > 0;
@@ -1010,7 +1248,7 @@ export default function Accounts({ backInterceptRef } = {}) {
           <div className="acct-row-name">
             {name}
             {showDueDot && (
-              <span className={`cc-due-dot ${dueDays<=0?'overdue':dueDays<=2?'urgent':'warn'}`}>
+              <span className={`cc-due-dot ${dueDays <= 0 ? 'overdue' : dueDays <= 2 ? 'urgent' : 'warn'}`}>
                 {dueDays <= 0 ? '!' : dueDays}
               </span>
             )}
@@ -1027,7 +1265,7 @@ export default function Accounts({ backInterceptRef } = {}) {
               </div>
             </div>
           </div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11" style={{flexShrink:0}}><path d="M9 18l6-6-6-6"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11" style={{ flexShrink: 0 }}><path d="M9 18l6-6-6-6" /></svg>
         </div>
       );
     } else {
@@ -1053,13 +1291,13 @@ export default function Accounts({ backInterceptRef } = {}) {
                 toggleAccountExpand(name);
               }}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" width="10" height="10"><path d="M6 9l6 6 6-6"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" width="10" height="10"><path d="M6 9l6 6 6-6" /></svg>
             </button>
           )}
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => setDrill(name)}>
             <div className="acct-row-name" style={{ flex: 1 }}>{name}</div>
             <div className={`acct-row-bal ${bal >= 0 ? 'pos' : 'neg'}`} style={{ marginRight: 6 }}>{bal < 0 ? '−' : ''}{formatINR(Math.abs(bal))}</div>
-            <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11"><path d="M9 18l6-6-6-6"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11"><path d="M9 18l6-6-6-6" /></svg>
           </div>
         </div>
       );
@@ -1069,7 +1307,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       return (
         <React.Fragment key={name}>
           {parentRow}
-          {isAcctExpanded && [...acctObj.subAccounts]
+          {isAcctExpanded && [...subAccountsToRender]
             .sort((a, b) => {
               const balA = subAcctBalances[name]?.[a.name] ?? 0;
               const balB = subAcctBalances[name]?.[b.name] ?? 0;
@@ -1077,32 +1315,32 @@ export default function Accounts({ backInterceptRef } = {}) {
             })
             .map(sub => {
               const subBal = subAcctBalances[name]?.[sub.name] ?? 0;
-            return (
-              <div
-                key={`${name}-${sub.name}`}
-                className="acct-row"
-                style={{
-                  paddingLeft: '32px',
-                  background: 'var(--bg-card2)',
-                  borderBottom: '1px solid var(--border-light)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  cursor: 'pointer'
-                }}
-                onClick={() => {
-                  setDrill(name);
-                  setDrillSub(sub.name);
-                }}
-              >
-                <span style={{ fontSize: '0.8rem', marginRight: 6, color: 'var(--text-muted)' }}>↳</span>
-                <div className="acct-row-name" style={{ flex: 1, fontSize: '0.8rem', opacity: 0.9 }}>{sub.name}</div>
-                <div className={`acct-row-bal ${subBal >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: '0.8rem', marginRight: 6 }}>
-                  {subBal < 0 ? '−' : ''}{formatINR(Math.abs(subBal))}
+              return (
+                <div
+                  key={`${name}-${sub.name}`}
+                  className="acct-row"
+                  style={{
+                    paddingLeft: '32px',
+                    background: 'var(--bg-card2)',
+                    borderBottom: '1px solid var(--border-light)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => {
+                    setDrill(name);
+                    setDrillSub(sub.name);
+                  }}
+                >
+                  <span style={{ fontSize: '0.8rem', marginRight: 6, color: 'var(--text-muted)' }}>↳</span>
+                  <div className="acct-row-name" style={{ flex: 1, fontSize: '0.8rem', opacity: 0.9 }}>{sub.name}</div>
+                  <div className={`acct-row-bal ${subBal >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: '0.8rem', marginRight: 6 }}>
+                    {subBal < 0 ? '−' : ''}{formatINR(Math.abs(subBal))}
+                  </div>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="9" height="9"><path d="M9 18l6-6-6-6" /></svg>
                 </div>
-                <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="9" height="9"><path d="M9 18l6-6-6-6"/></svg>
-              </div>
-            );
-          })}
+              );
+            })}
         </React.Fragment>
       );
     }
@@ -1175,12 +1413,12 @@ export default function Accounts({ backInterceptRef } = {}) {
       </div>
 
       {/* Assets / Liabilities strip */}
-      <div className="bal-strip" style={{flexShrink:0}}>
-        <div className="bal-strip-item"><div className="bal-strip-l">Assets</div><div className="bal-strip-v" style={{color:'var(--income)'}}>{formatINR(assets)}</div></div>
-        <div className="bal-strip-div"/>
-        <div className="bal-strip-item"><div className="bal-strip-l">Liabilities</div><div className="bal-strip-v" style={{color:'var(--expense)'}}>{formatINR(liabilities)}</div></div>
-        <div className="bal-strip-div"/>
-        <div className="bal-strip-item"><div className="bal-strip-l">Net Worth</div><div className="bal-strip-v" style={{color:netWorth>=0?'var(--income)':'var(--expense)',fontWeight:900}}>{netWorth>=0?'+':''}{formatINR(netWorth)}</div></div>
+      <div className="bal-strip" style={{ flexShrink: 0 }}>
+        <div className="bal-strip-item"><div className="bal-strip-l">Assets</div><div className="bal-strip-v" style={{ color: 'var(--income)' }}>{formatINR(assets)}</div></div>
+        <div className="bal-strip-div" />
+        <div className="bal-strip-item"><div className="bal-strip-l">Liabilities</div><div className="bal-strip-v" style={{ color: 'var(--expense)' }}>{formatINR(liabilities)}</div></div>
+        <div className="bal-strip-div" />
+        <div className="bal-strip-item"><div className="bal-strip-l">Net Worth</div><div className="bal-strip-v" style={{ color: netWorth >= 0 ? 'var(--income)' : 'var(--expense)', fontWeight: 900 }}>{netWorth >= 0 ? '+' : ''}{formatINR(netWorth)}</div></div>
       </div>
 
       {/* CC Payment Due Alerts */}
@@ -1190,14 +1428,14 @@ export default function Accounts({ backInterceptRef } = {}) {
       }).map(alert => {
         const { acct, days, due } = alert;
         const { balancePayable } = ccBalances(transactions, acct.name, acct.settlementDate, new Date());
-        const isOverdue  = days <= 0;
-        const isUrgent   = days <= 2;
-        const dueLabel   = isOverdue ? `Overdue by ${Math.abs(days)} day${Math.abs(days)===1?'':'s'}`
-                         : days === 0 ? 'Due today'
-                         : `Due in ${days} day${days===1?'':'s'}`;
-        const dueDateStr = due ? due.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}) : '';
+        const isOverdue = days <= 0;
+        const isUrgent = days <= 2;
+        const dueLabel = isOverdue ? `Overdue by ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'}`
+          : days === 0 ? 'Due today'
+            : `Due in ${days} day${days === 1 ? '' : 's'}`;
+        const dueDateStr = due ? due.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
         return (
-          <div key={acct.name} className={`cc-due-banner ${isOverdue?'overdue':isUrgent?'urgent':'warning'}`}>
+          <div key={acct.name} className={`cc-due-banner ${isOverdue ? 'overdue' : isUrgent ? 'urgent' : 'warning'}`}>
             <div className="cc-due-banner-icon">{isOverdue ? '🚨' : isUrgent ? '⚠️' : '🔔'}</div>
             <div className="cc-due-banner-body">
               <div className="cc-due-banner-title">
@@ -1217,7 +1455,7 @@ export default function Accounts({ backInterceptRef } = {}) {
       })}
 
       <div className="accounts-list">
-        {(uniqueAccountGroups||[]).map(grp => {
+        {(uniqueAccountGroups || []).map(grp => {
           const accts = grouped.groups[grp] || [];
           if (!accts.length) return null;
           const isCollapsed = collapsedGroups.has(grp);
@@ -1253,7 +1491,7 @@ export default function Accounts({ backInterceptRef } = {}) {
                       {totalPayable < 0 ? '+' : totalPayable > 0 ? '−' : ''}{formatINR(Math.abs(totalPayable))}
                     </div>
                   </div>
-                  <div className="acct-group-cc-divider"/>
+                  <div className="acct-group-cc-divider" />
                   <div className="acct-group-cc-col">
                     <div className="acct-group-cc-lbl">Outst. Balance</div>
                     <div className={`acct-group-cc-val ${grpOutCls}`}>
@@ -1261,16 +1499,16 @@ export default function Accounts({ backInterceptRef } = {}) {
                     </div>
                   </div>
                 </div>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{width:12,height:12,transition:'transform 0.2s',transform:isCollapsed?'rotate(-90deg)':'rotate(0deg)',flexShrink:0}}><path d="M6 9l6 6 6-6"/></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ width: 12, height: 12, transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', flexShrink: 0 }}><path d="M6 9l6 6 6-6" /></svg>
               </div>
             );
           } else {
-            const grpTotal = accts.reduce((s, a) => s + (acctBalances[a.name||a] ?? 0), 0);
+            const grpTotal = accts.reduce((s, a) => s + (acctBalances[a.name || a] ?? 0), 0);
             grpHeader = (
               <div className="acct-group-header" onClick={() => toggleGroup(grp)}>
                 <div className="acct-group-label">📁 {grp}</div>
-                <span className={`acct-group-bal ${grpTotal>=0?'pos':'neg'}`}>{grpTotal<0?'−':''}{formatINR(Math.abs(grpTotal))}</span>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{width:12,height:12,transition:'transform 0.2s',transform:isCollapsed?'rotate(-90deg)':'rotate(0deg)'}}><path d="M6 9l6 6 6-6"/></svg>
+                <span className={`acct-group-bal ${grpTotal >= 0 ? 'pos' : 'neg'}`}>{grpTotal < 0 ? '−' : ''}{formatINR(Math.abs(grpTotal))}</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ width: 12, height: 12, transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}><path d="M6 9l6 6 6-6" /></svg>
               </div>
             );
           }
@@ -1316,8 +1554,8 @@ export default function Accounts({ backInterceptRef } = {}) {
           const hasCC = grouped.ungrouped.some(a => isCreditCard(typeof a === 'object' ? a : { name: a.name || a }));
           return (
             <div>
-              {(uniqueAccountGroups||[]).length > 0 && (
-                <div className="acct-group-header" style={{opacity:0.55}}><span>📋 Ungrouped</span></div>
+              {(uniqueAccountGroups || []).length > 0 && (
+                <div className="acct-group-header" style={{ opacity: 0.55 }}><span>📋 Ungrouped</span></div>
               )}
               {grouped.ungrouped.map(renderAcctRow)}
             </div>
@@ -1326,7 +1564,7 @@ export default function Accounts({ backInterceptRef } = {}) {
         {uniqueAccounts.length === 0 && (
           <div className="empty-state"><div className="empty-icon">💳</div><div className="empty-title">No accounts yet</div><div className="empty-desc">Add accounts in Settings</div></div>
         )}
-        <div style={{height:80}}/>
+        <div style={{ height: 80 }} />
       </div>
     </div>
   );

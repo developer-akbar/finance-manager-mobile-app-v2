@@ -3,6 +3,8 @@ import { PieChart, Pie, Cell } from 'recharts';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, formatINRCompact, parseDate, calculateAge, txnAmount, checkIsRedeemed } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
+import { activeHoldingsData } from '../../database/holdingsData.js';
+import { calculateShareMarketBalances, parseTxnFields } from './Accounts.jsx';
 import './InvestmentsPortfolio.css';
 
 const RADIAN = Math.PI / 180;
@@ -119,6 +121,11 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
 
   const isInvestmentTxn = useMemo(() => {
     return (t) => {
+      const f = parseTxnFields(t);
+      if (f.brokerage || f.type === 'BUY' || f.type === 'SELL' || f.type === 'OPENING_LOT' || f.type === 'BONUS' || f.type === 'REALIZED_PNL') {
+        return true;
+      }
+      
       const acct = t.Account || t.FromAccount || '';
       const dest = t.ToAccount || '';
       const isInvAcc = isInvestmentAccount(acct) || isInvestmentAccount(dest);
@@ -196,8 +203,9 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         return f;
       }
     }
-    return null;
   };
+
+
 
   // 5. Calculate Portfolio Stats & Balances (dynamically filtered by selected period and asset)
   const {
@@ -208,7 +216,8 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     gainLossPercent,
     totalDividends,
     dividendsByFund,
-    fundValuationsMap
+    fundValuationsMap,
+    shareMarketBalances
   } = useMemo(() => {
     // Resolve asset key for a transaction
     const getAssetKeyForTxn = (parentName, subName) => {
@@ -233,12 +242,21 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     const realizedMap = {};
     let grandDivs = 0;
 
+    const smBalances = calculateShareMarketBalances(transactions, state.brokerages, state.settings);
+
     const targetAccounts = selectedAsset === 'All'
       ? investmentAccounts
       : investmentAccounts.filter(a => a.name.toLowerCase() === selectedAsset.toLowerCase());
 
     targetAccounts.forEach(a => {
-      if (a.subAccounts && a.subAccounts.length > 0) {
+      if (a.name === 'Share Market') {
+        Object.keys(smBalances).forEach(broker => {
+          const key = `${a.name} > ${broker}`;
+          balances[key] = smBalances[broker].totalValue;
+          invested[key] = smBalances[broker].investedCost;
+          divs[key] = 0;
+        });
+      } else if (a.subAccounts && a.subAccounts.length > 0) {
         a.subAccounts.forEach(sub => {
           const key = `${a.name} > ${sub.name}`;
           balances[key] = 0;
@@ -259,7 +277,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
 
     const addToBal = (n, subName, v) => {
       const key = getAssetKeyForTxn(n, subName);
-      if (key && balances[key] !== undefined) {
+      if (key && balances[key] !== undefined && !key.startsWith('Share Market > ')) {
         balances[key] = (balances[key] || 0) + v;
       }
     };
@@ -329,10 +347,10 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           }
         } else {
           // Regular buy/sell transfers
-          if (isDestInv && destKey) {
+          if (isDestInv && destKey && !destKey.startsWith('Share Market > ')) {
             invested[destKey] = (invested[destKey] || 0) + amt;
           }
-          if (isAcctInv && acctKey) {
+          if (isAcctInv && acctKey && !acctKey.startsWith('Share Market > ')) {
             invested[acctKey] = (invested[acctKey] || 0) - amt;
           }
         }
@@ -417,14 +435,22 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     let totalGainLoss = 0;
     if (periodMode === 'all') {
       Object.keys(balances).forEach(key => {
-        const valObj = getValuationForAssetLocal(key);
-        const groupRealized = realizedMap[key] || 0;
-        if (valObj) {
-          const currentValue = valObj.currentValue;
-          const totalAmount = invested[key] || 0;
-          totalGainLoss += (currentValue - totalAmount) + groupRealized;
+        if (key.startsWith('Share Market > ')) {
+          const broker = key.substring('Share Market > '.length);
+          const details = smBalances[broker];
+          if (details) {
+            totalGainLoss += (details.currentValue - details.investedCost);
+          }
         } else {
-          totalGainLoss += groupRealized;
+          const valObj = getValuationForAssetLocal(key);
+          const groupRealized = realizedMap[key] || 0;
+          if (valObj) {
+            const currentValue = valObj.currentValue;
+            const totalAmount = invested[key] || 0;
+            totalGainLoss += (currentValue - totalAmount) + groupRealized;
+          } else {
+            totalGainLoss += groupRealized;
+          }
         }
       });
     }
@@ -444,7 +470,8 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       gainLossPercent: gainLossPct,
       totalDividends: grandDivs,
       dividendsByFund: divs,
-      fundValuationsMap: valuations
+      fundValuationsMap: valuations,
+      shareMarketBalances: smBalances
     };
   }, [transactions, investmentAccounts, selectedAsset, isInPeriod, periodMode, fundNamesList, getPeriodRange]);
 
@@ -624,7 +651,12 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         const amt = parseFloat(t.INR || t.Amount || 0);
         const cat = String(t.Category || '').toLowerCase();
         const note = String(t.Note || '').toLowerCase();
-        if (note.includes('dividend') || (cat === 'equity' && note === 'dividend')) {
+        const f = parseTxnFields(t);
+        if (f.type === 'REALIZED_PNL') {
+          groupRealized += f.realizedPnL;
+        } else if (f.type === 'DIVIDEND') {
+          groupDividends += f.cashImpact;
+        } else if (note.includes('dividend') || (cat === 'equity' && note === 'dividend')) {
           groupDividends += amt;
         } else if (
           note.includes('profit') || 
@@ -635,14 +667,34 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         }
       }
 
+      // Check if this is a stock holding in Share Market
+      let stockHoldingCost = 0;
+      let stockCurrentVal = 0;
+      let hasStockHolding = false;
+
+      Object.values(shareMarketBalances || {}).forEach(brokerDetails => {
+        const h = brokerDetails.activeHoldings?.find(hold => hold.symbol === g.fundName);
+        if (h) {
+          stockHoldingCost += h.investedCost;
+          stockCurrentVal += h.currentValue;
+          hasStockHolding = true;
+        }
+      });
+
       if (activeTab === 'active') {
-        const valObj = getValuationForAsset(g.fundName);
-        if (valObj) {
-          g.currentValue = valObj.currentValue;
+        if (hasStockHolding) {
+          g.totalAmount = stockHoldingCost;
+          g.currentValue = stockCurrentVal;
           g.gainAmount = (g.currentValue - g.totalAmount) + groupRealized + groupDividends;
         } else {
-          g.currentValue = accountBalances[g.fundName] !== undefined ? accountBalances[g.fundName] : g.totalAmount;
-          g.gainAmount = groupRealized + groupDividends;
+          const valObj = getValuationForAsset(g.fundName);
+          if (valObj) {
+            g.currentValue = valObj.currentValue;
+            g.gainAmount = (g.currentValue - g.totalAmount) + groupRealized + groupDividends;
+          } else {
+            g.currentValue = accountBalances[g.fundName] !== undefined ? accountBalances[g.fundName] : g.totalAmount;
+            g.gainAmount = groupRealized + groupDividends;
+          }
         }
         g.gainPercent = g.totalAmount > 0 ? (g.gainAmount / g.totalAmount) * 100 : 0;
       } else {
@@ -650,16 +702,23 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         let totalBuy = 0;
         let totalSell = 0;
         for (const t of g.transactions) {
-          const amt = parseFloat(t.INR || t.Amount || 0);
-          const type = String(t['Income/Expense'] || '').trim();
-          const acct = String(t.Account || t.FromAccount || '').trim();
-          const dest = String(t.ToAccount || '').trim();
-          const isDestInv = isInvestmentAccount(dest);
-          const isAcctInv = isInvestmentAccount(acct);
-          const isIncome = (type === 'Income');
+          const f = parseTxnFields(t);
+          if (f.type === 'BUY' || f.type === 'OPENING_LOT') {
+            totalBuy += f.cost;
+          } else if (f.type === 'SELL') {
+            totalSell += f.cost;
+          } else {
+            const amt = parseFloat(t.INR || t.Amount || 0);
+            const type = String(t['Income/Expense'] || '').trim();
+            const acct = String(t.Account || t.FromAccount || '').trim();
+            const dest = String(t.ToAccount || '').trim();
+            const isDestInv = isInvestmentAccount(dest);
+            const isAcctInv = isInvestmentAccount(acct);
+            const isIncome = (type === 'Income');
 
-          if (isDestInv && !isIncome) totalBuy += amt;
-          if (isAcctInv && !isIncome) totalSell += amt;
+            if (isDestInv && !isIncome) totalBuy += amt;
+            if (isAcctInv && !isIncome) totalSell += amt;
+          }
         }
         g.currentValue = totalSell;
         g.totalAmount = totalBuy;
@@ -709,7 +768,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     });
 
     return sortedGroups;
-  }, [filteredList, viewMode, isInvestmentAccount, sortBy, activeTab, fundValuationsMap]);
+  }, [filteredList, viewMode, isInvestmentAccount, sortBy, activeTab, fundValuationsMap, shareMarketBalances]);
 
   // 9. Chart Allocation Data
   const chartData = useMemo(() => {
@@ -972,7 +1031,105 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         </div>
 
         {/* Grouped Accordion List or Flat list */}
-        {viewMode === 'grouped' ? (
+        {selectedAsset === 'Share Market' ? (
+          <div className="share-market-dashboard">
+            {Object.entries(shareMarketBalances || {}).map(([broker, details]) => {
+              const hasHoldings = details.activeHoldings && details.activeHoldings.length > 0;
+              const isExpanded = expandedFunds.has(broker);
+              
+              // Calculate dynamic gains
+              const unrealizedGain = details.currentValue - details.investedCost;
+              const unrealizedGainPct = details.investedCost > 0 ? (unrealizedGain / details.investedCost) * 100 : 0;
+              
+              return (
+                <div key={broker} className={`portfolio-group-card ${isExpanded ? 'expanded' : ''}`} style={{ marginBottom: 16 }}>
+                  <div
+                    className="portfolio-group-hdr"
+                    style={{ padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                    onClick={() => {
+                      if (!hasHoldings) return;
+                      setExpandedFunds(prev => {
+                        const newSet = new Set(prev);
+                        if (newSet.has(broker)) {
+                          newSet.delete(broker);
+                        } else {
+                          newSet.add(broker);
+                        }
+                        return newSet;
+                      });
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1.5 }}>
+                      {hasHoldings && <span className={`group-chevron ${isExpanded ? 'expanded' : ''}`}>▼</span>}
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <span className="group-fund-name" style={{ fontWeight: '800', fontSize: '1rem', color: 'var(--text-primary)' }}>{broker}</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                          Cash Balance: {formatINR(details.cash)}
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', flex: 1 }}>
+                      <span className="group-fund-amount" style={{ fontWeight: '800', fontSize: '1rem', color: 'var(--text-primary)' }}>
+                        {formatINR(details.totalValue)}
+                      </span>
+                      <div style={{ display: 'flex', gap: 8, fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                        <span>Invested: {formatINR(details.investedCost)}</span>
+                        {hasHoldings && (
+                          <span style={{ color: unrealizedGain >= 0 ? 'var(--green)' : 'var(--expense)', fontWeight: 'bold' }}>
+                            {unrealizedGain >= 0 ? '▲' : '▼'} {formatINR(Math.abs(unrealizedGain))} ({unrealizedGainPct.toFixed(2)}%)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {isExpanded && hasHoldings && (
+                    <div className="portfolio-group-txns" style={{ padding: '0px 0px 12px 0px', background: 'var(--bg-card2)' }}>
+                      <div style={{ overflowX: 'auto', padding: '12px 16px 4px 16px' }}>
+                        <table className="holdings-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem', minWidth: 500 }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1.5px solid var(--border)', textAlign: 'left', color: 'var(--text-muted)' }}>
+                              <th style={{ padding: '6px 4px', fontWeight: 'bold' }}>Holding</th>
+                              <th style={{ padding: '6px 4px', fontWeight: 'bold', textAlign: 'right' }}>Qty</th>
+                              <th style={{ padding: '6px 4px', fontWeight: 'bold', textAlign: 'right' }}>Avg. Price</th>
+                              <th style={{ padding: '6px 4px', fontWeight: 'bold', textAlign: 'right' }}>Invested Cost</th>
+                              <th style={{ padding: '6px 4px', fontWeight: 'bold', textAlign: 'right' }}>Current Price</th>
+                              <th style={{ padding: '6px 4px', fontWeight: 'bold', textAlign: 'right' }}>Current Value</th>
+                              <th style={{ padding: '6px 4px', fontWeight: 'bold', textAlign: 'right' }}>Returns</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {details.activeHoldings.map(h => {
+                              const hAvgPrice = h.qty > 0 ? h.investedCost / h.qty : 0;
+                              const hCurrentPrice = h.qty > 0 ? h.currentValue / h.qty : 0;
+                              const hReturn = h.currentValue - h.investedCost;
+                              const hReturnPct = h.investedCost > 0 ? (hReturn / h.investedCost) * 100 : 0;
+                              
+                              return (
+                                <tr key={h.symbol} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                                  <td style={{ padding: '10px 4px', fontWeight: 'bold', color: 'var(--text-primary)' }}>{h.symbol}</td>
+                                  <td style={{ padding: '10px 4px', textAlign: 'right', color: 'var(--text-primary)' }}>{h.qty}</td>
+                                  <td style={{ padding: '10px 4px', textAlign: 'right', color: 'var(--text-muted)' }}>{formatINR(hAvgPrice)}</td>
+                                  <td style={{ padding: '10px 4px', textAlign: 'right', color: 'var(--text-primary)' }}>{formatINR(h.investedCost)}</td>
+                                  <td style={{ padding: '10px 4px', textAlign: 'right', color: 'var(--text-muted)' }}>{formatINR(hCurrentPrice)}</td>
+                                  <td style={{ padding: '10px 4px', textAlign: 'right', fontWeight: '700', color: 'var(--text-primary)' }}>{formatINR(h.currentValue)}</td>
+                                  <td style={{ padding: '10px 4px', textAlign: 'right', fontWeight: 'bold', color: hReturn >= 0 ? 'var(--green)' : 'var(--expense)' }}>
+                                    <div>{hReturn >= 0 ? '+' : ''}{formatINR(hReturn)}</div>
+                                    <div style={{ fontSize: '0.66rem', opacity: 0.85, marginTop: 1 }}>{hReturnPct.toFixed(1)}%</div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : viewMode === 'grouped' ? (
           <div className="portfolio-grouped-list">
             {groupedList.map(g => {
               const isExpanded = expandedFunds.has(g.fundName);

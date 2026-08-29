@@ -80,6 +80,7 @@ const INIT = {
   recurringRules: [],
   loading: true, error: null, importProgress: null,
   currentView: 'dashboard',
+  brokerages: [],
 };
 
 function reducer(s, a) {
@@ -120,6 +121,15 @@ export function AppProvider({ children }) {
         getAccountGroups(), getAccountMapping(), getBudgets(), getAllSettings(),
         getAllRecurringRules(),
       ]);
+
+      let brokerages = [];
+      try {
+        const db = getDB();
+        const bRes = await db.query('SELECT * FROM brokerages', []);
+        brokerages = bRes.values || [];
+      } catch (err) {
+        console.warn('Failed to load brokerages:', err);
+      }
 
       // One-time migration for sub-accounts v2
       // Reset migration if accounts exist but sub-accounts are empty (self-healing fallback)
@@ -440,6 +450,7 @@ export function AppProvider({ children }) {
           accountMapping: aMapping || [],
           budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
           recurringRules: recurringRules || [],
+          brokerages: brokerages || [],
         }});
         return;
       }
@@ -466,11 +477,12 @@ export function AppProvider({ children }) {
           accountMapping: aMapping || [],
           budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
           recurringRules: recurringRules || [],
+          brokerages: brokerages || [],
         },
       });
     } catch (e) {
       console.error('AppContext load error:', e);
-      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'regular', recurringRules:[] } });
+      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'regular', recurringRules:[], brokerages:[] } });
     }
   }, []);
 
