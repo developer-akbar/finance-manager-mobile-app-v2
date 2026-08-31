@@ -131,6 +131,47 @@ export function AppProvider({ children }) {
         console.warn('Failed to load brokerages:', err);
       }
 
+      // Seed defaults on fresh install or when accounts/categories are empty
+      if (accts.length === 0 || catsArr.length === 0) {
+        if (accts.length === 0) {
+          await replaceAccountGroups(DEFAULT_ACCOUNT_GROUPS);
+          await replaceAccounts(DEFAULT_ACCOUNTS.map((a,i) => ({ id: uuid(), ...a, sortOrder: i })));
+        }
+        if (catsArr.length === 0) {
+          await replaceCategories(DEFAULT_CATEGORIES.map((c,i) => ({
+            id: uuid(), name: c.name, type: c.type, sortOrder: i,
+            subcategories: c.subcategories.map((s,si) => ({ id: uuid(), name: s, sortOrder: si })),
+          })));
+        }
+        await setSetting('sub_accounts_migrated_v2', 'true');
+        const [seedAccts, seedCats, seedGroups] = await Promise.all([getAccounts(), getCategories(), getAccountGroups()]);
+        const theme     = settings.theme     || 'dark';
+        const fontSize  = parseFloat(settings.fontSize  || '1.0');
+        const fontFamily = settings.fontFamily || 'Sora';
+        const fontDataWeight = settings.fontDataWeight || 'regular';
+        const fwMap = { light: '400', regular: '500', bold: '700' };
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.style.setProperty('--fs-scale', String(fontSize));
+        document.documentElement.style.setProperty('--fw-data', fwMap[fontDataWeight] || '400');
+        document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
+          fontFamily === 'Inter' ? "'Inter', sans-serif" :
+          fontFamily === 'Roboto' ? "'Roboto', sans-serif" :
+          fontFamily === 'Open Sans' ? "'Open Sans', sans-serif" :
+          fontFamily === 'Lato' ? "'Lato', sans-serif" : "'Sora', sans-serif");
+        dispatch({ type: 'INIT', payload: {
+          transactions: txns,
+          accounts: normalizeAccounts(seedAccts),
+          categories: catsArrToObj(seedCats),
+          categoriesArr: seedCats || [],
+          accountGroups: seedGroups || [],
+          accountMapping: aMapping || [],
+          budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
+          recurringRules: recurringRules || [],
+          brokerages: brokerages || [],
+        }});
+        return;
+      }
+
       // One-time migration for sub-accounts v2
       // Reset migration if accounts exist but sub-accounts are empty (self-healing fallback)
       let needsSelfHealing = false;
@@ -415,43 +456,6 @@ export function AppProvider({ children }) {
         await setSetting('sub_accounts_migrated_v2', 'true');
         // Trigger load again to refresh context state
         await load();
-        return;
-      }
-
-      // Seed defaults on very first launch (empty accounts AND categories)
-      if (accts.length === 0 && catsArr.length === 0) {
-        await replaceAccountGroups(DEFAULT_ACCOUNT_GROUPS);
-        await replaceAccounts(DEFAULT_ACCOUNTS.map((a,i) => ({ id: uuid(), ...a, sortOrder: i })));
-        await replaceCategories(DEFAULT_CATEGORIES.map((c,i) => ({
-          id: uuid(), name: c.name, type: c.type, sortOrder: i,
-          subcategories: c.subcategories.map((s,si) => ({ id: uuid(), name: s, sortOrder: si })),
-        })));
-        // Reload after seeding
-        const [seedAccts, seedCats, seedGroups] = await Promise.all([getAccounts(), getCategories(), getAccountGroups()]);
-        const theme     = settings.theme     || 'dark';
-        const fontSize  = parseFloat(settings.fontSize  || '1.0');
-        const fontFamily = settings.fontFamily || 'Sora';
-        const fontDataWeight = settings.fontDataWeight || 'regular';
-        const fwMap = { light: '400', regular: '500', bold: '700' };
-        document.documentElement.setAttribute('data-theme', theme);
-        document.documentElement.style.setProperty('--fs-scale', String(fontSize));
-        document.documentElement.style.setProperty('--fw-data', fwMap[fontDataWeight] || '400');
-        document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
-          fontFamily === 'Inter' ? "'Inter', sans-serif" :
-          fontFamily === 'Roboto' ? "'Roboto', sans-serif" :
-          fontFamily === 'Open Sans' ? "'Open Sans', sans-serif" :
-          fontFamily === 'Lato' ? "'Lato', sans-serif" : "'Sora', sans-serif");
-        dispatch({ type: 'INIT', payload: {
-          transactions: txns,
-          accounts: normalizeAccounts(seedAccts),
-          categories: catsArrToObj(seedCats),
-          categoriesArr: seedCats || [],
-          accountGroups: seedGroups || [],
-          accountMapping: aMapping || [],
-          budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
-          recurringRules: recurringRules || [],
-          brokerages: brokerages || [],
-        }});
         return;
       }
       const theme     = settings.theme     || 'dark';
@@ -1090,6 +1094,7 @@ export function AppProvider({ children }) {
   const clearAllData = async () => {
     const db = getDB();
     await db.run('DELETE FROM transactions');
+    await db.run('DELETE FROM investment_transactions');
     await db.run('DELETE FROM accounts');
     await db.run('DELETE FROM sub_accounts');
     await db.run('DELETE FROM account_groups');
@@ -1099,6 +1104,14 @@ export function AppProvider({ children }) {
     await db.run('DELETE FROM budgets');
     await db.run('DELETE FROM recurring_rules');
     await db.run('DELETE FROM inventory');
+    // Re-seed default metadata for fresh reuse
+    await replaceAccountGroups(DEFAULT_ACCOUNT_GROUPS);
+    await replaceAccounts(DEFAULT_ACCOUNTS.map((a,i) => ({ id: uuid(), ...a, sortOrder: i })));
+    await replaceCategories(DEFAULT_CATEGORIES.map((c,i) => ({
+      id: uuid(), name: c.name, type: c.type, sortOrder: i,
+      subcategories: c.subcategories.map((s,si) => ({ id: uuid(), name: s, sortOrder: si })),
+    })));
+    await setSetting('sub_accounts_migrated_v2', 'true');
     await load();
   };
 

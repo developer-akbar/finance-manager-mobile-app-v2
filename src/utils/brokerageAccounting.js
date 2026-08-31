@@ -2,7 +2,7 @@ import { activeHoldingsData } from '../database/holdingsData.js';
 
 /**
  * Parse individual transaction fields and attributes for investment transactions.
- * Safely extracts tokens from pipe-delimited descriptions, structured fields, or note fallbacks.
+ * Prioritizes canonical investment fields and uses pipe descriptions only as fallback.
  */
 export function parseTxnFields(t) {
   if (!t) return null;
@@ -16,7 +16,7 @@ export function parseTxnFields(t) {
 
   if (type === 'RECONCILIATION' || desc.startsWith('RECONCILIATION')) {
     let broker = String(t.Brokerage || t.brokerage || '').trim();
-    let cashImpact = parseFloat(t.CashImpact || t.cash_impact || t.INR || t.inr || t.Amount || t.amount || 0);
+    let cashImpact = parseFloat(t.CashImpact !== undefined && t.CashImpact !== '' ? t.CashImpact : (t.cash_impact !== undefined && t.cash_impact !== '' ? t.cash_impact : (t.INR || t.inr || t.Amount || t.amount || 0)));
     if (desc.includes('|')) {
       const parts = desc.split('|').map(p => p.trim());
       parts.forEach(p => {
@@ -32,7 +32,7 @@ export function parseTxnFields(t) {
     }
     return {
       type: 'RECONCILIATION',
-      brokerage: broker || 'Zerodha',
+      brokerage: broker,
       symbol: '',
       qty: 0,
       cost: 0,
@@ -48,7 +48,7 @@ export function parseTxnFields(t) {
     const isRecon = desc.includes('EntryDate=UNKNOWN') || desc.includes('historical position closure') || desc.includes('Source=CurrentP&L') || desc.includes('reconciliation');
     return {
       type,
-      brokerage: String(t.Brokerage || t.brokerage || '').trim(),
+      brokerage: String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || '').trim(),
       symbol: String(t.SecuritySymbol || t.security_symbol || t.Note || t.note || '').trim().toUpperCase(),
       qty: parseFloat(t.Quantity || t.quantity || 0),
       cost: parseFloat(t.TradeValue || t.trade_value || 0),
@@ -123,11 +123,10 @@ export function parseTxnFields(t) {
 
 /**
  * Single Authoritative Brokerage Accounting Function
+ * Dynamically aggregates brokerages without hardcoding.
  */
 export function calculateBrokerageState(txns = [], brokerConfigList = [], settings = {}) {
-  const brokerages = new Set(brokerConfigList.map(b => b.name || b));
-  brokerages.add('Zerodha');
-  brokerages.add('Fareeda Groww');
+  const brokerages = new Set(brokerConfigList.map(b => b.name || b).filter(Boolean));
 
   txns.forEach(t => {
     const isSM = String(t.Account || t.account || '').trim() === 'Share Market' ||
@@ -261,7 +260,7 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
     const redeemedHoldings = [];
 
     Object.values(holdings).forEach(h => {
-      const isActive = h.qty > 0 && h.activeStatus !== 'NO' && h.symbol !== 'VISESHINFO-Z' && h.symbol !== 'VISESHINFO' && h.symbol !== 'TATAMTRDVR';
+      const isActive = h.qty > 0 && h.activeStatus !== 'NO';
       if (isActive) {
         const cost = h.buyCost - h.soldCostBasis;
         investedCost += cost;
@@ -297,13 +296,11 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
       }
     });
 
-    // Special fallback valuation for non-equity sub-brokers like Fareeda Groww if present in config/settings
     let totalPortfolioValue = cashBalance + currentMarketValue;
-    if (broker === 'Fareeda Groww' && totalPortfolioValue === 99991) {
-      const config = brokerConfigList.find(b => (b.name || b) === broker);
-      if (config && config.totalValue) {
-        totalPortfolioValue = parseFloat(config.totalValue);
-      }
+
+    const config = brokerConfigList.find(b => (b.name || b) === broker);
+    if (config && config.totalValue) {
+      totalPortfolioValue = parseFloat(config.totalValue);
     }
 
     const unrealizedPnL = currentMarketValue - investedCost;
