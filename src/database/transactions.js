@@ -518,27 +518,64 @@ const isReservedCat  = (s) => !s || RESERVED_CAT_WORDS.has(s);
 // A date string is valid if it looks like dd/mm/yyyy (after normalisation).
 const isValidDateStr = (s) => /^\d{2}\/\d{2}\/\d{4}$/.test(String(s||'').trim());
 
+export const getRowStableKey = (r, dateVal, acctName) => {
+  const isInv = !!(r.InvestmentTransactionType || r.Brokerage);
+  const timeVal = String(r.Time || r.time || '').trim();
+  const amtVal = parseFloat(r.INR || r.Amount || r.inr || r.amount || 0);
+  const noteVal = String(r.Note || r.note || '').trim();
+  const descVal = String(r.Description || r.description || '').trim();
+
+  if (isInv) {
+    const invType = String(r.InvestmentTransactionType || '').trim();
+    const broker = String(r.Brokerage || '').trim();
+    const symbol = String(r.SecuritySymbol || '').trim();
+    const isin = String(r.SecurityISIN || '').trim();
+    const qty = parseFloat(r.Quantity || 0);
+    const price = parseFloat(r.UnitPrice || 0);
+    const val = parseFloat(r.TradeValue || 0);
+    const tradeId = String(r.TradeId || '').trim();
+    const orderId = String(r.OrderId || '').trim();
+    const source = String(r.Source || '').trim();
+    return `INV|${dateVal}|${timeVal}|${acctName}|${broker}|${invType}|${symbol}|${isin}|${qty}|${price}|${val}|${tradeId}|${orderId}|${amtVal}|${noteVal}|${descVal}|${source}`;
+  }
+
+  const catVal = String(r.Category || r.category || '').trim();
+  const subVal = String(r.Subcategory || r.subcategory || '').trim();
+  const toAcctVal = String(r.ToAccount || r.to_account || '').trim();
+  const fromSub = String(r.FromSubAccount || r.from_sub_account || r.SubAccount || r.sub_account || '').trim();
+  const toSub = String(r.ToSubAccount || r.to_sub_account || '').trim();
+  return `GEN|${dateVal}|${timeVal}|${acctName}|${toAcctVal}|${fromSub}|${toSub}|${amtVal}|${catVal}|${subVal}|${noteVal}|${descVal}`;
+};
+
 export const analyseImport = async (rows) => {
   const seenKeys = new Map(); // stableKey → count
   const itemKeys = [];
+  let invalidCount = 0;
+  let investmentCount = 0;
 
   for (const r of rows) {
     const rawDate = r.Date || r.date || '';
     const dateVal = normaliseDateStr(rawDate);
-    if (!isValidDateStr(dateVal)) { itemKeys.push(null); continue; }
-    const typeStr = normaliseType(r['Income/Expense'] || r.type || '');
-    const isXfer  = typeStr.startsWith('Transfer');
+    if (!isValidDateStr(dateVal)) {
+      itemKeys.push(null);
+      invalidCount++;
+      continue;
+    }
+    const isInv = !!(r.InvestmentTransactionType || r.Brokerage);
+    if (isInv) investmentCount++;
+
     const rawAcct = String(r.Account || r.account || '').trim();
     const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(s);
     const acctName = looksNumeric(rawAcct)
       ? String(r.FromAccount || r.from_account || rawAcct).trim()
       : rawAcct;
-    const stableKey = `${dateVal}|${String(r.Time||r.time||'').trim()}|${acctName}|${parseFloat(r.INR||r.Amount||r.inr||r.amount||0)}|${String(r.Note||r.note||'').trim()}`;
+
+    const stableKey = getRowStableKey(r, dateVal, acctName);
     itemKeys.push(stableKey);
     seenKeys.set(stableKey, (seenKeys.get(stableKey) || 0) + 1);
   }
 
-  const fileDupeKeys = new Set([...seenKeys.entries()].filter(([,v])=>v>1).map(([k])=>k));
+  const fileDupeKeys = new Set([...seenKeys.entries()].filter(([, v]) => v > 1).map(([k]) => k));
   const fileDupeCount = itemKeys.filter(k => k && fileDupeKeys.has(k)).length;
 
   let dbDupeCount = 0;
@@ -563,7 +600,18 @@ export const analyseImport = async (rows) => {
     console.warn('analyseImport duplicate check warning:', err);
   }
 
-  return { total: rows.filter((_,i) => itemKeys[i] !== null).length, fileDupeCount, dbDupeCount };
+  const validTotal = rows.filter((_, i) => itemKeys[i] !== null).length;
+  const newRows = Math.max(0, validTotal - dbDupeCount);
+
+  return {
+    total: validTotal,
+    totalRows: rows.length,
+    newRows,
+    dbDupeCount,
+    fileDupeCount,
+    invalidCount,
+    investmentCount
+  };
 };
 
 export const bulkImport = async (rows, { firstImport = false } = {}) => {
@@ -611,7 +659,7 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     };
     const timeVal = parseExcelTime(rawTime);
 
-    const stableKey = `${dateVal}|${rawTime}|${acctName}|${parseFloat(r.INR||r.Amount||r.inr||r.amount||0)}|${String(r.Note||r.note||'').trim()}`;
+    const stableKey = getRowStableKey(r, dateVal, acctName);
     const id = r.ID || r.id || (firstImport ? uuid() : deterministicId(stableKey));
     const categoryVal = isXfer ? toAcctName : rawCat;
     const rawSub = String(r.Subcategory || r.subcategory || '').trim();

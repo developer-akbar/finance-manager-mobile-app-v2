@@ -2042,20 +2042,47 @@ function DataManager({ onBack }) {
                 File: {pendingName}
               </div>
 
-              {/* Duplicate analysis */}
-              {analysis && (analysis.fileDupeCount > 0 || analysis.dbDupeCount > 0) && (
-                <div style={{ background: 'rgba(255,180,0,0.08)', border: '1px solid rgba(255,180,0,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 12 }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--gold)', marginBottom: 6 }}>⚠ Duplicates detected</div>
-                  {analysis.fileDupeCount > 0 && (
-                    <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', marginBottom: 3 }}>
-                      • <b>{analysis.fileDupeCount}</b> rows in the file share an identical date/time/account/amount/note combination
-                    </div>
-                  )}
-                  {analysis.dbDupeCount > 0 && (
-                    <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
-                      • <b>{analysis.dbDupeCount}</b> rows already exist in the app (Merge will skip these)
-                    </div>
-                  )}
+              {/* Breakdown summary */}
+              {analysis && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                  <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>New Transactions</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--green)' }}>{analysis.newRows.toLocaleString()}</div>
+                  </div>
+                  <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Already In Database</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 800, color: analysis.dbDupeCount > 0 ? 'var(--gold)' : 'var(--text-primary)' }}>{analysis.dbDupeCount.toLocaleString()}</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Already existing in database notice */}
+              {analysis && analysis.dbDupeCount > 0 && (
+                <div style={{ background: 'rgba(255,180,0,0.08)', border: '1px solid rgba(255,180,0,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 10 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--gold)', marginBottom: 4 }}>⚠ Existing Database Duplicates</div>
+                  <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                    • <b>{analysis.dbDupeCount.toLocaleString()}</b> rows already exist in the app (Merge mode will skip these to prevent duplication).
+                  </div>
+                </div>
+              )}
+
+              {/* Possible duplicates within file notice */}
+              {analysis && analysis.fileDupeCount > 0 && (
+                <div style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 10 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#60a5fa', marginBottom: 4 }}>ℹ Possible Duplicate Rows Within This File</div>
+                  <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                    • <b>{analysis.fileDupeCount.toLocaleString()}</b> rows in the file share an identical date/time/account/amount/note/desc signature. {analysis.dbDupeCount === 0 ? 'No existing FinMan data exists yet.' : ''}
+                  </div>
+                </div>
+              )}
+
+              {/* Invalid rows notice */}
+              {analysis && analysis.invalidCount > 0 && (
+                <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 10 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--expense)', marginBottom: 4 }}>⚠ Invalid Rows</div>
+                  <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                    • <b>{analysis.invalidCount.toLocaleString()}</b> rows have invalid or unreadable dates and will be skipped.
+                  </div>
                 </div>
               )}
 
