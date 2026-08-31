@@ -1661,7 +1661,10 @@ function DataManager({ onBack }) {
       'Category', 'Subcategory', 'Note', 'Description',
       'INR', 'Amount', 'Currency', 'Income/Expense',
       'Tags', 'recurring_rule_id', 'warranty_expiry', 'serial_no', 'receipt_image', 'created_at', 'updated_at', 'ID',
-      'SubAccount', 'FromSubAccount', 'ToSubAccount'
+      'SubAccount', 'FromSubAccount', 'ToSubAccount',
+      'InvestmentTransactionType', 'Brokerage', 'SecuritySymbol', 'SecurityISIN',
+      'Quantity', 'UnitPrice', 'TradeValue', 'CostBasis', 'CashImpact', 'PositionQuantityChange', 'RealizedPnl',
+      'TradeId', 'OrderId', 'Exchange', 'Segment', 'Source'
     ];
     // RFC 4180: quote any field containing comma, double-quote, newline or carriage-return
     const esc = v => { const s = String(v ?? ''); return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -1689,6 +1692,22 @@ function DataManager({ onBack }) {
           if (h === 'ToAccountGroup') return esc(toAcctObj?.group || '');
           if (h === 'ToAccountOrder') return esc(toAcctIdx !== -1 ? toAcctIdx : '');
           if (h === 'Tags') return esc(t.Tags || t.tags || '');
+          if (h === 'InvestmentTransactionType') return esc(t.InvestmentTransactionType || t.investment_transaction_type || '');
+          if (h === 'Brokerage') return esc(t.Brokerage || t.brokerage || '');
+          if (h === 'SecuritySymbol') return esc(t.SecuritySymbol || t.security_symbol || '');
+          if (h === 'SecurityISIN') return esc(t.SecurityISIN || t.security_isin || '');
+          if (h === 'Quantity') return esc(t.Quantity ?? t.quantity ?? '');
+          if (h === 'UnitPrice') return esc(t.UnitPrice ?? t.unit_price ?? '');
+          if (h === 'TradeValue') return esc(t.TradeValue ?? t.trade_value ?? '');
+          if (h === 'CostBasis') return esc(t.CostBasis ?? t.cost_basis ?? '');
+          if (h === 'CashImpact') return esc(t.CashImpact ?? t.cash_impact ?? '');
+          if (h === 'PositionQuantityChange') return esc(t.PositionQuantityChange ?? t.position_qty_change ?? '');
+          if (h === 'RealizedPnl') return esc(t.RealizedPnl ?? t.realized_pnl ?? '');
+          if (h === 'TradeId') return esc(t.TradeId || t.trade_id || '');
+          if (h === 'OrderId') return esc(t.OrderId || t.order_id || '');
+          if (h === 'Exchange') return esc(t.Exchange || t.exchange || '');
+          if (h === 'Segment') return esc(t.Segment || t.segment || '');
+          if (h === 'Source') return esc(t.Source || t.source || '');
           return esc(t[h] ?? '');
         }).join(',');
       })

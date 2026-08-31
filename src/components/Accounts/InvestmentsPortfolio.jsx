@@ -4,7 +4,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, formatINRCompact, parseDate, calculateAge, txnAmount, checkIsRedeemed } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import { activeHoldingsData } from '../../database/holdingsData.js';
-import { calculateShareMarketBalances, parseTxnFields } from './Accounts.jsx';
+import { calculateBrokerageState as calculateShareMarketBalances, parseTxnFields } from '../../utils/brokerageAccounting.js';
 import './InvestmentsPortfolio.css';
 
 const RADIAN = Math.PI / 180;
@@ -992,13 +992,13 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
                 className={`portfolio-tab-btn ${activeTab === 'active' ? 'active' : ''}`}
                 onClick={() => setActiveTab('active')}
               >
-                Active ({activeTxns.length})
+                Active ({selectedAsset === 'Share Market' ? Object.values(shareMarketBalances || {}).reduce((sum, b) => sum + (b.activeCount ?? b.activeHoldings?.length ?? 0), 0) : activeTxns.length})
               </button>
               <button
                 className={`portfolio-tab-btn ${activeTab === 'redeemed' ? 'active' : ''}`}
                 onClick={() => setActiveTab('redeemed')}
               >
-                Redeemed ({redeemedTxns.length})
+                Redeemed ({selectedAsset === 'Share Market' ? Object.values(shareMarketBalances || {}).reduce((sum, b) => sum + (b.redeemedCount ?? b.redeemedHoldings?.length ?? 0), 0) : redeemedTxns.length})
               </button>
             </div>
           </div>
@@ -1064,13 +1064,13 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
                         <span className="group-fund-name" style={{ fontWeight: '800', fontSize: '1rem', color: 'var(--text-primary)' }}>{broker}</span>
                         <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                          Cash Balance: {formatINR(details.cash)}
+                          Cash Balance: {(details.cashBalance < 0 || details.cash < 0) ? '−' : ''}{formatINR(Math.abs(details.cashBalance !== undefined ? details.cashBalance : details.cash))}
                         </span>
                       </div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', flex: 1 }}>
                       <span className="group-fund-amount" style={{ fontWeight: '800', fontSize: '1rem', color: 'var(--text-primary)' }}>
-                        {formatINR(details.totalValue)}
+                        {formatINR(details.totalPortfolioValue !== undefined ? details.totalPortfolioValue : details.totalValue)}
                       </span>
                       <div style={{ display: 'flex', gap: 8, fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
                         <span>Invested: {formatINR(details.investedCost)}</span>

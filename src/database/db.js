@@ -341,6 +341,14 @@ export const initDB = async () => {
     console.error('Failed to seed brokerages:', err);
   }
 
+  // Ensure idempotent Zerodha opening cash reconciliation transaction if needed
+  try {
+    const { ensureZerodhaReconciliationTransaction } = await import('./transactions.js');
+    await ensureZerodhaReconciliationTransaction(_db);
+  } catch (err) {
+    console.error('Failed to run reconciliation migration:', err);
+  }
+
   return _db;
 };
 export const getDB = () => { if (!_db) throw new Error('DB not initialised'); return _db; };

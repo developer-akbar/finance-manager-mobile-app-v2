@@ -46,6 +46,41 @@ export const rowToTxn = (r) => {
   return base;
 };
 
+export const ensureZerodhaReconciliationTransaction = async (dbInstance) => {
+  const db = dbInstance || getDB();
+  try {
+    const res = await db.query(
+      `SELECT COUNT(*) as count FROM investment_transactions WHERE investment_transaction_type = 'RECONCILIATION' AND brokerage = 'Zerodha'`
+    );
+    const count = res.values?.[0]?.count ?? 0;
+    if (count === 0) {
+      const reconId = 'zerodha_opening_cash_recon_pre_tradebook';
+      const now = new Date().toISOString();
+      await db.run(
+        `INSERT OR IGNORE INTO investment_transactions (
+          id, date, time, account, from_account, to_account, category, subcategory, note, description,
+          inr, amount, currency, type, created_at, updated_at, recurring_rule_id, tags, split_group_id,
+          receipt_image, warranty_expiry, serial_no, sub_account, from_sub_account, to_sub_account,
+          investment_transaction_type, brokerage, security_symbol, security_isin, quantity, unit_price,
+          trade_value, cost_basis, cash_impact, position_qty_change, realized_pnl, trade_id, order_id, exchange, segment, source
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          reconId, '2024-04-01', '00:00:00', 'Share Market', 'Share Market', '', 'Finance', '',
+          'Historical opening cash reconciliation for pre-tradebook activity',
+          'RECONCILIATION | Broker=Zerodha | Amount=-1953.02 | Reason=Historical opening cash reconciliation for pre-tradebook activity',
+          -1953.02, '-1953.02', 'INR', 'Expense', now, now, '', '', '',
+          '', '', '', 'Zerodha', 'Zerodha', '',
+          'RECONCILIATION', 'Zerodha', '', '', 0, 0,
+          0, 0, -1953.02, 0, 0, '', '', '', '', 'Historical Reconciliation'
+        ]
+      );
+    }
+  } catch (err) {
+    console.error('Failed to ensure Zerodha reconciliation transaction:', err);
+  }
+};
+
+
 export const getTransactions = async (filters = {}) => {
   const db = getDB();
   

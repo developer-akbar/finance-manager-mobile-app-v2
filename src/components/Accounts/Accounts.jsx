@@ -254,217 +254,13 @@ function buildSubAccountBalanceMap(transactions) {
   return map;
 }
 
-export function parseTxnFields(t) {
-  const desc = String(t.Description || '').trim();
-  const type = String(t.InvestmentTransactionType || '').trim();
-  const isShareMarketTxn = 
-    String(t.Account || '').trim() === 'Share Market' ||
-    String(t.FromAccount || '').trim() === 'Share Market' ||
-    String(t.ToAccount || '').trim() === 'Share Market' ||
-    !!(t.Brokerage || t.brokerage);
+import { calculateBrokerageState as calcBrokerState, parseTxnFields as parseFields } from '../../utils/brokerageAccounting.js';
 
-  if (type) {
-    return {
-      type,
-      brokerage: String(t.Brokerage || '').trim(),
-      symbol: String(t.SecuritySymbol || t.Note || '').trim().toUpperCase(),
-      qty: parseFloat(t.Quantity || 0),
-      cost: parseFloat(t.TradeValue || 0),
-      costBasis: parseFloat(t.CostBasis || 0),
-      cashImpact: parseFloat(t.CashImpact || 0),
-      realizedPnL: parseFloat(t.RealizedPnl || 0),
-      activeHolding: desc.includes('ActiveHolding=NO') || String(t.Note || '').includes('ActiveHolding=NO') ? 'NO' : 'YES'
-    };
-  }
-  
-  const investmentTypes = new Set(['BUY', 'SELL', 'OPENING_LOT', 'BONUS', 'POSITION_STATUS', 'REALIZED_PNL', 'CHARGE', 'OTHER_CREDIT_DEBIT', 'FUNDING', 'WITHDRAWAL', 'DIVIDEND']);
-  
-  if (desc.includes('|')) {
-    const parts = desc.split('|').map(p => p.trim());
-    const parsedType = parts[0];
-    if (investmentTypes.has(parsedType)) {
-      const fields = {};
-      parts.forEach(p => {
-        const m = p.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
-        if (m) fields[m[1]] = m[2].trim();
-      });
-      
-      const broker = fields.Broker || (isShareMarketTxn ? String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim() : '');
-      const symbol = fields.Symbol || String(t.Note || '').trim().toUpperCase();
-      const qty = parseFloat(fields.Qty || fields.Quantity || 0);
-      const cost = parseFloat(fields.Cost || fields.CostBasis || fields.TradeValue || (fields.Price ? qty * parseFloat(fields.Price) : 0) || 0);
-      const costBasis = parseFloat(fields.CostBasis || 0);
-      const realizedPnL = parseFloat(fields.RealizedPL || fields.RealizedPnL || 0);
-      const activeHolding = fields.ActiveHolding || (desc.includes('ActiveHolding=NO') ? 'NO' : 'YES');
-      
-      return {
-        type: parsedType,
-        brokerage: broker,
-        symbol,
-        qty,
-        cost,
-        costBasis,
-        cashImpact: parseFloat(t.INR || t.Amount || 0),
-        realizedPnL,
-        activeHolding
-      };
-    }
-  }
-  
-  const broker = isShareMarketTxn ? String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim() : '';
-  const symbol = isShareMarketTxn ? String(t.Note || '').trim().toUpperCase() : '';
-  return {
-    type: String(t.InvestmentTransactionType || t.Category || '').trim(),
-    brokerage: broker,
-    symbol,
-    qty: 0,
-    cost: 0,
-    costBasis: 0,
-    cashImpact: parseFloat(t.INR || t.Amount || 0),
-    realizedPnL: 0,
-    activeHolding: 'YES'
-  };
-}
+export const parseTxnFields = parseFields;
+export const calculateShareMarketBalances = (txns, brokerConfigList = [], settings = {}) => {
+  return calcBrokerState(txns, brokerConfigList, settings);
+};
 
-export function calculateShareMarketBalances(txns, brokerConfigList = [], settings = {}) {
-  // 1. Identify brokerages dynamically
-  const brokerages = new Set(brokerConfigList.map(b => b.name));
-  txns.forEach(t => {
-    const f = parseTxnFields(t);
-    if (f.brokerage) brokerages.add(f.brokerage);
-  });
-
-  const results = {};
-  
-  // Parse holdings prices from settings
-  let holdingsPrices = {};
-  try {
-    holdingsPrices = JSON.parse(settings.holdings_prices || '{}');
-  } catch {}
-
-  brokerages.forEach(broker => {
-    const config = brokerConfigList.find(b => b.name === broker) || { cash_offset: 0, mv_offset: 0 };
-    const cashOffset = parseFloat(config.cash_offset) || 0;
-    const mvOffset = parseFloat(config.mv_offset) || 0;
-
-    // Filter txns for this broker
-    const brokerTxns = txns.filter(t => {
-      const f = parseTxnFields(t);
-      return f.brokerage === broker;
-    });
-
-    // Compute standardSum of ledger transactions for cash balance
-    let standardSum = 0;
-    brokerTxns.forEach(t => {
-      const f = parseTxnFields(t);
-      const isTrade = f.type === 'BUY' || f.type === 'SELL' || f.type === 'OPENING_LOT' || f.type === 'BONUS' || f.type === 'REALIZED_PNL';
-      if (!isTrade) {
-        const amt = parseFloat(t.INR || t.Amount || 0);
-        const txnType = String(t['Income/Expense'] || '').trim();
-        const isFrom = (String(t.FromAccount || '').trim() === 'Share Market' && String(t.FromSubAccount || '').trim() === broker);
-        const isTo = (String(t.ToAccount || '').trim() === 'Share Market' && String(t.ToSubAccount || '').trim() === broker);
-        const isAcct = (String(t.Account || '').trim() === 'Share Market' && String(t.SubAccount || '').trim() === broker);
-
-        if (txnType === 'Income') {
-          if (isAcct) standardSum += amt;
-        } else if (txnType === 'Expense') {
-          if (isAcct) standardSum -= amt;
-        } else if (txnType === 'Transfer-Out') {
-          if (isFrom && isTo) {
-            // internal
-          } else if (isFrom) {
-            standardSum -= amt;
-          } else if (isTo) {
-            standardSum += amt;
-          }
-        }
-      }
-    });
-
-    // Parse holdings using buy/sell/bonus trades
-    const holdings = {};
-    brokerTxns.forEach(t => {
-      const f = parseTxnFields(t);
-      const isTrade = f.type === 'BUY' || f.type === 'SELL' || f.type === 'OPENING_LOT' || f.type === 'BONUS';
-      if (isTrade) {
-        if (f.symbol) {
-          if (!holdings[f.symbol]) {
-            holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null };
-          }
-          const h = holdings[f.symbol];
-          if (f.type === 'BUY' || f.type === 'OPENING_LOT' || f.type === 'BONUS') {
-            h.qty += f.qty;
-            h.buyCost += f.cost;
-          } else if (f.type === 'SELL') {
-            h.qty -= f.qty;
-            h.soldCostBasis += f.costBasis;
-          }
-        }
-      } else if (f.type === 'POSITION_STATUS') {
-        if (f.symbol) {
-          if (!holdings[f.symbol]) {
-            holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null };
-          }
-          if (f.activeHolding === 'NO') {
-            holdings[f.symbol].activeStatus = 'NO';
-          }
-        }
-      }
-    });
-
-    // Filter active holdings
-    let investedCost = 0;
-    let currentValue = 0;
-    const activeHoldings = [];
-
-    Object.values(holdings).forEach(h => {
-      const isActive = h.qty > 0 && h.activeStatus !== 'NO' && h.symbol !== 'VISESHINFO-Z' && h.symbol !== 'VISESHINFO';
-      if (isActive) {
-        const cost = h.buyCost - h.soldCostBasis;
-        investedCost += cost;
-        
-        // Find price in holdingsPrices or activeHoldingsData fallback
-        let price = holdingsPrices[h.symbol] || 0;
-        if (price === 0) {
-          const dbHold = activeHoldingsData[h.symbol];
-          if (dbHold) {
-            price = dbHold.currentValue / dbHold.quantity;
-          } else {
-            price = cost / h.qty;
-          }
-        }
-
-        const value = h.qty * price;
-        currentValue += value;
-
-        activeHoldings.push({
-          symbol: h.symbol,
-          qty: h.qty,
-          investedCost: cost,
-          currentValue: value
-        });
-      }
-    });
-
-    // Reconcile cash balance using dynamic offset
-    let cash = standardSum - investedCost + cashOffset;
-    
-    // Reconcile market value using dynamic offset
-    currentValue += mvOffset;
-
-    const totalValue = cash + currentValue;
-
-    results[broker] = {
-      cash,
-      investedCost,
-      currentValue,
-      totalValue,
-      activeHoldings
-    };
-  });
-
-  return results;
-}
 
 // ── Account Detail ────────────────────────────────────────────────────────────
 function AccountDetail({ acctName, subAccountName, allTxns, onBack, backInterceptRef, ccConfig }) {
@@ -1332,8 +1128,14 @@ export default function Accounts({ backInterceptRef } = {}) {
                     setDrillSub(sub.name);
                   }}
                 >
-                  <span style={{ fontSize: '0.8rem', marginRight: 6, color: 'var(--text-muted)' }}>↳</span>
-                  <div className="acct-row-name" style={{ flex: 1, fontSize: '0.8rem', opacity: 0.9 }}>{sub.name}</div>
+                  <div className="acct-row-name" style={{ flex: 1, fontSize: '0.8rem', opacity: 0.9 }}>
+                    <div>{sub.name}</div>
+                    {isShareMarket && shareMarketBalances[sub.name] && (
+                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 'normal', marginTop: 1 }}>
+                        Cash {shareMarketBalances[sub.name].cashBalance < 0 ? '−' : ''}{formatINR(Math.abs(shareMarketBalances[sub.name].cashBalance))} · Inv {formatINR(shareMarketBalances[sub.name].investedCost)}
+                      </div>
+                    )}
+                  </div>
                   <div className={`acct-row-bal ${subBal >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: '0.8rem', marginRight: 6 }}>
                     {subBal < 0 ? '−' : ''}{formatINR(Math.abs(subBal))}
                   </div>
