@@ -135,9 +135,9 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
     if (isSM) {
       const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim();
       if (sub) brokerages.add(sub);
+      const f = parseTxnFields(t);
+      if (f && f.brokerage) brokerages.add(f.brokerage);
     }
-    const f = parseTxnFields(t);
-    if (f && f.brokerage) brokerages.add(f.brokerage);
   });
 
   const results = {};
@@ -154,9 +154,10 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
       const isSM = String(t.Account || t.account || '').trim() === 'Share Market' ||
         String(t.FromAccount || t.from_account || '').trim() === 'Share Market' ||
         String(t.ToAccount || t.to_account || '').trim() === 'Share Market';
+      if (!isSM) return false;
       const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim();
       const f = parseTxnFields(t);
-      return (f && f.brokerage === broker) || (isSM && sub === broker);
+      return (f && f.brokerage === broker) || (sub === broker);
     });
 
     // 1. Brokerage Cash Ledger (Genuine Cash Movements Only)

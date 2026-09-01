@@ -98,8 +98,18 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
   };
 
   const getAssociatedSubAccount = (t, parentAsset) => {
+    // 1. Authoritative explicit platform/brokerage metadata
+    const f = parseTxnFields(t);
+    const broker = String(f?.brokerage || t.Brokerage || t.brokerage || '').trim();
+    if (broker) return broker;
+
+    const src = String(t.Source || t.source || '').trim();
+    if (src.includes('CAS') || src.includes('CAMS')) {
+      return 'Ak ETMoney';
+    }
+
     const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim();
-    if (sub) return sub;
+    if (sub && sub !== 'Default') return sub;
 
     const note = String(t.Note || '').toLowerCase();
     const desc = String(t.Description || '').toLowerCase();
@@ -109,20 +119,36 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       if (combined.includes('groww') || combined.includes('fareeda')) return 'Fareeda Groww';
       return 'Zerodha';
     }
+    if (parentAsset === 'Mutual Funds Tax Saver') {
+      return 'Ak ETMoney';
+    }
     if (parentAsset === 'Liquid Mutual Funds') {
       if (combined.includes('ammi grow') || combined.includes('ammi')) return 'Ammi Groww';
       if (combined.includes('fareeda') && combined.includes('groww')) return 'Fareeda Groww';
       if (combined.includes('fareeda') && combined.includes('etmoney')) return 'Fareeda ETMoney';
       if (combined.includes('scripbox')) return 'Scripbox';
-      return 'Groww';
+      if (combined.includes('groww')) return 'Groww';
+      if (t.InvestmentTransactionType || t.SecurityISIN) return 'Ak ETMoney';
+      return null;
     }
     return null;
   };
 
   const isInvestmentTxn = useMemo(() => {
     return (t) => {
+      if (!t) return false;
       const f = parseTxnFields(t);
-      if (f.brokerage || f.type === 'BUY' || f.type === 'SELL' || f.type === 'OPENING_LOT' || f.type === 'BONUS' || f.type === 'REALIZED_PNL') {
+      if (f.brokerage || f.type === 'BUY' || f.type === 'SELL' || f.type === 'UNIT_ADJUSTMENT' || f.type === 'OPENING_LOT' || f.type === 'BONUS' || f.type === 'REALIZED_PNL' || f.type === 'RECONCILIATION') {
+        return true;
+      }
+
+      const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim();
+      const broker = String(t.Brokerage || t.brokerage || '').trim();
+      const isin = String(t.SecurityISIN || t.security_isin || '').trim();
+      const sym = String(t.SecuritySymbol || t.security_symbol || '').trim();
+      const src = String(t.Source || t.source || '').trim();
+
+      if (invType || broker || isin || sym || src.includes('CAS') || src.includes('CAMS')) {
         return true;
       }
       
@@ -132,23 +158,33 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       
       const cat = String(t.Category || '').toLowerCase();
       const note = String(t.Note || '').toLowerCase();
+      const desc = String(t.Description || '').toLowerCase();
+      const combined = `${note} ${desc}`;
 
       // Ignore generic/inventory stock profit and lending profit on non-investment accounts
       if (!isInvAcc && (note === 'stock profit' || note === 'profit')) {
         return false;
       }
 
-      if (isInvAcc) return true;
-      if (cat === 'equity' || cat === 'investment returns') return true;
-      if (
-        note.includes('dividend') || 
-        note.includes('profit') || 
-        note.includes('loss') ||
-        note === 'motilal oswal asset management' ||
-        note === 'l&t tax advantage'
-      ) {
+      if (cat === 'equity' || cat === 'investment returns' || note.includes('dividend') || note.includes('profit') || note.includes('loss') || note === 'motilal oswal asset management' || note === 'l&t tax advantage') {
         return true;
       }
+
+      if (isInvAcc) {
+        if (
+          combined.includes('groww') || 
+          combined.includes('fareeda') || 
+          combined.includes('ammi') || 
+          combined.includes('scripbox') || 
+          combined.includes('zerodha') ||
+          combined.includes('etmoney') ||
+          combined.includes('tax saver') ||
+          combined.includes('tax advantage')
+        ) {
+          return true;
+        }
+      }
+
       return false;
     };
   }, [isInvestmentAccount]);
@@ -451,7 +487,30 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     };
   }, [transactions, investmentAccounts, selectedAsset, isInPeriod, periodMode, fundNamesList, getPeriodRange]);
 
-  // 6. Filter transactions into Active vs. Redeemed
+  // Precompute net units per scheme/security to determine holding-level active vs redeemed status
+  const schemeUnitsMap = useMemo(() => {
+    const map = {};
+    for (const t of transactions) {
+      const sym = t.SecuritySymbol || t.security_symbol;
+      if (!sym) continue;
+      const posChange = parseFloat(t.PositionQuantityChange || t.position_qty_change || 0);
+      map[sym] = (map[sym] || 0) + posChange;
+    }
+    return map;
+  }, [transactions]);
+
+  const isTransactionForActiveHolding = useMemo(() => {
+    return (t) => {
+      const sym = t.SecuritySymbol || t.security_symbol;
+      if (sym && schemeUnitsMap[sym] !== undefined) {
+        return schemeUnitsMap[sym] > 0.0005;
+      }
+      const isRed = checkIsRedeemed(t);
+      return !isRed;
+    };
+  }, [schemeUnitsMap]);
+
+  // 6. Filter transactions into Active vs. Redeemed based on holding net position
   const { activeTxns, redeemedTxns } = useMemo(() => {
     const active = [];
     const redeemed = [];
@@ -469,11 +528,11 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         continue;
       }
 
-      const isRed = checkIsRedeemed(t);
-      if (isRed) {
-        redeemed.push(t);
-      } else {
+      const isActive = isTransactionForActiveHolding(t);
+      if (isActive) {
         active.push(t);
+      } else {
+        redeemed.push(t);
       }
     }
 
@@ -481,7 +540,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       activeTxns: active,
       redeemedTxns: redeemed
     };
-  }, [allInvestmentTxns, selectedAsset, isInPeriod]);
+  }, [allInvestmentTxns, selectedAsset, isInPeriod, isTransactionForActiveHolding]);
 
   // 7. Filter, Search, and Sort display list
   const filteredList = useMemo(() => {
@@ -524,17 +583,11 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     const getAssetKeyForTxn = (parentName, subName) => {
       if (!parentName) return null;
       const a = investmentAccounts.find(acc => acc.name.toLowerCase() === parentName.toLowerCase());
-      if (!a) return null;
-      if (a.subAccounts && a.subAccounts.length > 0) {
-        const sub = a.subAccounts.find(s => s.name.toLowerCase() === (subName || '').toLowerCase());
-        if (sub) {
-          return `${a.name} > ${sub.name}`;
-        }
-        if (subName) {
-          return `${a.name} > ${subName}`;
-        }
+      const pName = a ? a.name : parentName;
+      if (subName) {
+        return `${pName} > ${subName}`;
       }
-      return a.name;
+      return pName;
     };
 
     const getValuationForAsset = (assetKey) => {
@@ -551,44 +604,21 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     const groups = {};
 
     for (const t of filteredList) {
+      if (!isInvestmentTxn(t)) continue;
+
       const acct = String(t.Account || t.FromAccount || '').trim();
       const dest = String(t.ToAccount || '').trim();
-      const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || '').trim();
-      const destSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+      const isDestInv = isInvestmentAccount(dest);
+      const isAcctInv = isInvestmentAccount(acct);
 
-      const resolvedSub = sub || (isInvestmentAccount(acct) ? getAssociatedSubAccount(t, acct) : '');
-      const resolvedDestSub = destSub || (isInvestmentAccount(dest) ? getAssociatedSubAccount(t, dest) : '');
+      const parent = isDestInv ? dest : (isAcctInv ? acct : getAssociatedInvestmentAsset(t));
+      if (!parent) continue;
 
-      const acctKey = getAssetKeyForTxn(acct, resolvedSub);
-      const destKey = getAssetKeyForTxn(dest, resolvedDestSub);
+      const platform = getAssociatedSubAccount(t, parent);
+      if (!platform) continue;
 
-      let fundName = (t.Note || t.Category || t.Account || 'Unspecified').trim();
-      if (destKey) {
-        fundName = destKey;
-      } else if (acctKey) {
-        fundName = acctKey;
-      } else {
-        // Fallback for bank-deposited dividends or mutual fund profit/loss
-        const cat = String(t.Category || '').toLowerCase();
-        const note = String(t.Note || '').toLowerCase();
-        const isDividend = note.includes('dividend') || (cat === 'equity' && note === 'dividend');
-        const isRealizedGain = !isDividend && (
-          note.includes('profit') || 
-          note.includes('loss') ||
-          (cat === 'equity' && (note === 'motilal oswal asset management' || note === 'l&t tax advantage'))
-        );
-
-        if (isDividend || isRealizedGain) {
-          const parent = getAssociatedInvestmentAsset(t);
-          if (parent) {
-            const sName = getAssociatedSubAccount(t, parent);
-            const key = getAssetKeyForTxn(parent, sName);
-            if (key) {
-              fundName = key;
-            }
-          }
-        }
-      }
+      const fundName = getAssetKeyForTxn(parent, platform);
+      if (!fundName) continue;
 
       if (!groups[fundName]) {
         groups[fundName] = {
@@ -605,8 +635,6 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       // Sum net capital contributions (Rule 7)
       const amt = parseFloat(t.INR || t.Amount || 0);
       const type = String(t['Income/Expense'] || '').trim();
-      const isDestInv = isInvestmentAccount(dest);
-      const isAcctInv = isInvestmentAccount(acct);
       const isIncome = (type === 'Income');
 
       let netVal = 0;

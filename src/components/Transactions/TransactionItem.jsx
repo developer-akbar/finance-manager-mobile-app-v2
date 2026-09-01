@@ -32,6 +32,19 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const type = overrideType || baseType;
   const amount = txnAmount(t);
 
+  // Investment transaction metadata detection
+  const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+  const isInvestment = Boolean(invType === 'BUY' || invType === 'SELL' || invType === 'UNIT_ADJUSTMENT' || invType === 'RECONCILIATION' || (t.SecuritySymbol && t.SecurityISIN));
+
+  const invLabel = t.SecuritySymbol || t.security_symbol || t.Note || t.note || '';
+  const invQty = parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0);
+  const invNav = parseFloat(t.UnitPrice || t.unit_price || 0);
+  const invTradeVal = parseFloat(t.TradeValue || t.trade_value || (invType === 'BUY' || invType === 'SELL' ? (t.CostBasis || t.cost_basis || t.INR || t.inr || t.Amount || t.amount || 0) : 0));
+  const invCostBasis = parseFloat(t.CostBasis || t.cost_basis || 0);
+  const invRealizedPnl = parseFloat(t.RealizedPnl || t.realized_pnl || 0);
+  const invBroker = String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || '').trim();
+  const invIsin = String(t.SecurityISIN || t.security_isin || '').trim();
+
   // Determine actual display type based on the sign of the amount
   let displayType = type;
   if (type === 'income' && amount < 0) {
@@ -40,15 +53,24 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
     displayType = 'income';
   }
 
-  const cls = displayType === 'income' ? 'income' : displayType === 'expense' ? 'expense' : 'transfer';
-  const sign = displayType === 'income' ? '+' : displayType === 'expense' ? '−' : '';
+  const cls = isInvestment
+    ? (invType === 'BUY' ? 'income' : invType === 'SELL' ? 'expense' : 'transfer')
+    : (displayType === 'income' ? 'income' : displayType === 'expense' ? 'expense' : 'transfer');
+
+  const sign = isInvestment
+    ? (invType === 'BUY' ? '+' : '')
+    : (displayType === 'income' ? '+' : displayType === 'expense' ? '−' : '');
+
   const isTransfer = baseType === 'transfer';
-  const label = isTransfer
-    ? (t.Note || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`)
-    : (t.Note || t.Category || '—');
-  const subLabel = !isTransfer ? (t.Category || '') : '';
-  const hasAccount = !isTransfer && t.Account;
-  const xferAccountLabel = isTransfer && t.Note ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}` : '';
+  const label = isInvestment
+    ? (invLabel || t.Note || 'Investment Security')
+    : (isTransfer
+      ? (t.Note || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`)
+      : (t.Note || t.Category || '—'));
+
+  const subLabel = !isTransfer && !isInvestment ? (t.Category || '') : '';
+  const hasAccount = !isTransfer && !isInvestment && t.Account;
+  const xferAccountLabel = !isInvestment && isTransfer && t.Note ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}` : '';
 
   const closeDetail = () => {
     if (showEdit) {
@@ -154,18 +176,69 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
               </span>
             )}
           </div>
-          <div className="txn-sub-l">
-            {t.Time && <span className="txn-time-tag txn-time-first">{formatTime(t.Time)}</span>}
-            {showDate && t.Date && <span className="txn-time-tag" style={{ color: 'var(--text-muted)' }}>{formatDate(t.Date, 'short')}</span>}
-            {subLabel && <span className="txn-cat-tag">{subLabel}</span>}
-            {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && <span className="txn-cat-tag">{t.Subcategory}</span>}
-            {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
-            {xferAccountLabel && <span className="txn-time-tag">{xferAccountLabel}</span>}
+          <div className="txn-sub-l" style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+            {isInvestment ? (
+              <>
+                {invType === 'BUY' && (
+                  <span className="txn-cat-tag" style={{ background: 'rgba(0, 229, 160, 0.15)', color: '#00e5a0', fontWeight: 700, border: '1px solid rgba(0, 229, 160, 0.3)' }}>
+                    BUY
+                  </span>
+                )}
+                {invType === 'SELL' && (
+                  <span className="txn-cat-tag" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', fontWeight: 700, border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+                    SELL
+                  </span>
+                )}
+                {invType === 'UNIT_ADJUSTMENT' && (
+                  <span className="txn-cat-tag" style={{ background: 'rgba(129, 140, 248, 0.15)', color: '#818cf8', fontWeight: 700, border: '1px solid rgba(129, 140, 248, 0.3)' }}>
+                    UNIT ADJ
+                  </span>
+                )}
+                {invType === 'RECONCILIATION' && (
+                  <span className="txn-cat-tag" style={{ background: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', fontWeight: 700, border: '1px solid rgba(6, 182, 212, 0.3)' }}>
+                    RECON
+                  </span>
+                )}
+
+                {invQty !== 0 && (
+                  <span className="txn-time-tag">
+                    {Math.abs(invQty).toFixed(3)} units{invNav > 0 ? ` @ ₹${invNav.toFixed(2)} NAV` : ''}
+                  </span>
+                )}
+
+                {invType === 'SELL' && (invRealizedPnl !== 0 || invCostBasis > 0) && (
+                  <span className="txn-cat-tag" style={{
+                    background: invRealizedPnl >= 0 ? 'rgba(0, 229, 160, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                    color: invRealizedPnl >= 0 ? '#00e5a0' : '#ef4444',
+                    border: `1px solid ${invRealizedPnl >= 0 ? 'rgba(0, 229, 160, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`
+                  }}>
+                    P&L: {invRealizedPnl >= 0 ? '+' : ''}{formatINR(invRealizedPnl)}
+                  </span>
+                )}
+
+                {invBroker && <span className="txn-time-tag">{invBroker}</span>}
+                {t.Time && <span className="txn-time-tag">{formatTime(t.Time)}</span>}
+                {showDate && t.Date && <span className="txn-time-tag" style={{ color: 'var(--text-muted)' }}>{formatDate(t.Date, 'short')}</span>}
+              </>
+            ) : (
+              <>
+                {t.Time && <span className="txn-time-tag txn-time-first">{formatTime(t.Time)}</span>}
+                {showDate && t.Date && <span className="txn-time-tag" style={{ color: 'var(--text-muted)' }}>{formatDate(t.Date, 'short')}</span>}
+                {subLabel && <span className="txn-cat-tag">{subLabel}</span>}
+                {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && <span className="txn-cat-tag">{t.Subcategory}</span>}
+                {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
+                {xferAccountLabel && <span className="txn-time-tag">{xferAccountLabel}</span>}
+              </>
+            )}
           </div>
         </div>
         {/* Amount + running balance */}
         <div className="txn-amt-wrap">
-          <div className={`txn-amt-col ${cls}`}>{sign}{formatINR(amount)}</div>
+          <div className={`txn-amt-col ${cls}`}>
+            {isInvestment
+              ? (invType === 'UNIT_ADJUSTMENT' ? '₹0' : `${sign}${formatINR(invTradeVal || amount)}`)
+              : `${sign}${formatINR(amount)}`}
+          </div>
           {runningBalance !== null && (
             <div className="txn-running-bal">
               {isNewestInGroup
@@ -193,6 +266,19 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
 
   const type = txnType(t);
   const amount = txnAmount(t);
+
+  // Investment transaction metadata detection
+  const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+  const isInvestment = Boolean(invType === 'BUY' || invType === 'SELL' || invType === 'UNIT_ADJUSTMENT' || invType === 'RECONCILIATION' || (t.SecuritySymbol && t.SecurityISIN));
+
+  const invLabel = t.SecuritySymbol || t.security_symbol || t.Note || t.note || '';
+  const invQty = parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0);
+  const invNav = parseFloat(t.UnitPrice || t.unit_price || 0);
+  const invTradeVal = parseFloat(t.TradeValue || t.trade_value || (invType === 'BUY' || invType === 'SELL' ? (t.CostBasis || t.cost_basis || t.INR || t.inr || t.Amount || t.amount || 0) : 0));
+  const invCostBasis = parseFloat(t.CostBasis || t.cost_basis || 0);
+  const invRealizedPnl = parseFloat(t.RealizedPnl || t.realized_pnl || 0);
+  const invBroker = String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || '').trim();
+  const invIsin = String(t.SecurityISIN || t.security_isin || '').trim();
 
   // Determine actual display type based on the sign of the amount
   let displayType = type;
@@ -295,12 +381,37 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
 
         {/* Hero */}
         <div className="dp-hero" onClick={() => setShowEdit(true)} style={{ cursor: 'pointer' }}>
-          <div className={`dp-amount ${cls}`}>{sign}{formatINR(amount)}</div>
+          <div className={`dp-amount ${isInvestment ? (invType === 'BUY' ? 'income' : invType === 'SELL' ? 'expense' : 'transfer') : cls}`}>
+            {isInvestment ? (invType === 'UNIT_ADJUSTMENT' ? '₹0' : `${invType === 'BUY' ? '+' : ''}${formatINR(invTradeVal || amount)}`) : `${sign}${formatINR(amount)}`}
+          </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <div className="dp-badge" style={{
-              background: type === 'income' ? 'var(--income-bg)' : type === 'expense' ? 'var(--expense-bg)' : 'var(--transfer-bg)',
-              color: type === 'income' ? 'var(--income)' : type === 'expense' ? 'var(--expense)' : 'var(--transfer)',
-            }}>{t['Income/Expense'] || type}</div>
+            {isInvestment ? (
+              <>
+                <div className="dp-badge" style={{
+                  background: invType === 'BUY' ? 'rgba(0,229,160,0.15)' : invType === 'SELL' ? 'rgba(245,158,11,0.15)' : 'rgba(129,140,248,0.15)',
+                  color: invType === 'BUY' ? '#00e5a0' : invType === 'SELL' ? '#f59e0b' : '#818cf8',
+                  fontWeight: 800,
+                  border: `1px solid ${invType === 'BUY' ? 'rgba(0,229,160,0.3)' : invType === 'SELL' ? 'rgba(245,158,11,0.3)' : 'rgba(129,140,248,0.3)'}`
+                }}>
+                  {invType}
+                </div>
+                {invBroker && (
+                  <div className="dp-badge" style={{ background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)' }}>
+                    Platform: {invBroker}
+                  </div>
+                )}
+                {invIsin && (
+                  <div className="dp-badge" style={{ background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)' }}>
+                    ISIN: {invIsin}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="dp-badge" style={{
+                background: type === 'income' ? 'var(--income-bg)' : type === 'expense' ? 'var(--expense-bg)' : 'var(--transfer-bg)',
+                color: type === 'income' ? 'var(--income)' : type === 'expense' ? 'var(--expense)' : 'var(--transfer)',
+              }}>{t['Income/Expense'] || type}</div>
+            )}
             {isInstalment && partLabel && (
               <div className="dp-badge" style={{ background: 'rgba(99,179,237,0.15)', color: '#63b3ed' }}>
                 📋 Instalment {partLabel}
@@ -327,31 +438,49 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
         <div className="dp-fields" onClick={() => setShowEdit(true)} style={{ cursor: 'pointer' }}>
           <DPRow label="Date" value={formatDate(t.Date, 'short')} />
           {t.Time && <DPRow label="Time" value={formatTime(t.Time)} />}
-          {ageStr && <DPRow label="Age" value={ageStr} />}
-          {isInvested && isRedeemed && <DPRow label="Portfolio Status" value="Redeemed (Inactive)" />}
-          {isXfer ? <>
-            <DPRow label="From" value={t.Account || t.FromAccount || '—'} />
-            <DPRow label="To" value={t.ToAccount || '—'} />
-          </> : <>
-            <DPRow label="Account" value={t.Account || '—'} />
-            <DPRow label="Category" value={t.Category || '—'} />
-            {t.Subcategory && t.Subcategory !== 'Default' && <DPRow label="Subcategory" value={t.Subcategory} />}
-          </>}
-          {t.Note && <DPRow label="Note" value={t.Note} />}
-          {t.Description && <DPRow label="Description" value={t.Description} />}
-          {t.Tags && <DPRow label="Tags" value={t.Tags} />}
-          {isInstalment && instalmentStats && (
-            <DPRow
-              label="Instalment Info"
-              value={`Part ${instalmentStats.part} of ${instalmentStats.totalParts} (Total: ${formatINR(instalmentStats.totalAmount)} · Bal: ${formatINR(instalmentStats.balanceRemaining)})`}
-            />
-          )}
-          {t.serial_no && <DPRow label="Invoice/SN" value={t.serial_no} />}
-          {t.warranty_expiry && (
-            <DPRow
-              label="Warranty"
-              value={`Until ${t.warranty_expiry} ${new Date(t.warranty_expiry) < new Date() ? '(Expired)' : '(Active)'}`}
-            />
+          {isInvestment ? (
+            <>
+              <DPRow label="Security" value={invLabel} />
+              {invQty !== 0 && <DPRow label="Units" value={`${Math.abs(invQty).toFixed(3)} units`} />}
+              {invNav > 0 && <DPRow label="NAV / Price" value={`₹${invNav.toFixed(4)}`} />}
+              {invTradeVal > 0 && <DPRow label="Trade Value" value={formatINR(invTradeVal)} />}
+              {invCostBasis > 0 && <DPRow label="Cost Basis" value={formatINR(invCostBasis)} />}
+              {invType === 'SELL' && <DPRow label="Realized P&L" value={`${invRealizedPnl >= 0 ? '+' : ''}${formatINR(invRealizedPnl)}`} />}
+              {t.CashImpact !== undefined && <DPRow label="Cash Impact" value={formatINR(parseFloat(t.CashImpact || t.cash_impact || 0))} />}
+              <DPRow label="From" value={t.Account || t.FromAccount || '—'} />
+              <DPRow label="To" value={t.ToAccount || '—'} />
+              {t.Source && <DPRow label="Source" value={t.Source || t.source} />}
+              {t.Description && <DPRow label="Description" value={t.Description} />}
+            </>
+          ) : (
+            <>
+              {ageStr && <DPRow label="Age" value={ageStr} />}
+              {isInvested && isRedeemed && <DPRow label="Portfolio Status" value="Redeemed (Inactive)" />}
+              {isXfer ? <>
+                <DPRow label="From" value={t.Account || t.FromAccount || '—'} />
+                <DPRow label="To" value={t.ToAccount || '—'} />
+              </> : <>
+                <DPRow label="Account" value={t.Account || '—'} />
+                <DPRow label="Category" value={t.Category || '—'} />
+                {t.Subcategory && t.Subcategory !== 'Default' && <DPRow label="Subcategory" value={t.Subcategory} />}
+              </>}
+              {t.Note && <DPRow label="Note" value={t.Note} />}
+              {t.Description && <DPRow label="Description" value={t.Description} />}
+              {t.Tags && <DPRow label="Tags" value={t.Tags} />}
+              {isInstalment && instalmentStats && (
+                <DPRow
+                  label="Instalment Info"
+                  value={`Part ${instalmentStats.part} of ${instalmentStats.totalParts} (Total: ${formatINR(instalmentStats.totalAmount)} · Bal: ${formatINR(instalmentStats.balanceRemaining)})`}
+                />
+              )}
+              {t.serial_no && <DPRow label="Invoice/SN" value={t.serial_no} />}
+              {t.warranty_expiry && (
+                <DPRow
+                  label="Warranty"
+                  value={`Until ${t.warranty_expiry} ${new Date(t.warranty_expiry) < new Date() ? '(Expired)' : '(Active)'}`}
+                />
+              )}
+            </>
           )}
         </div>
 
