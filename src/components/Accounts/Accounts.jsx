@@ -237,35 +237,44 @@ function buildSubAccountBalanceMap(transactions) {
     const fromSub = String(t.FromSubAccount || t.from_sub_account || '').trim();
     const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
 
+    // Canonical subaccount resolution for investment accounts
+    const isFromInv = fromAcct === 'Mutual Funds Tax Saver' || fromAcct === 'Liquid Mutual Funds' || fromAcct === 'Share Market';
+    const isDestInv = dest === 'Mutual Funds Tax Saver' || dest === 'Liquid Mutual Funds' || dest === 'Share Market';
+    const isAcctInv = acct === 'Mutual Funds Tax Saver' || acct === 'Liquid Mutual Funds' || acct === 'Share Market';
+
+    const resolvedFromSub = (fromSub && fromSub !== 'Default') ? fromSub : (isFromInv ? resolveInvestmentSubAccount(t, fromAcct) : (sub && sub !== 'Default' ? sub : ''));
+    const resolvedToSub = (toSub && toSub !== 'Default') ? toSub : (isDestInv ? resolveInvestmentSubAccount(t, dest) : (sub && sub !== 'Default' ? sub : ''));
+    const resolvedAcctSub = (sub && sub !== 'Default') ? sub : (isAcctInv ? resolveInvestmentSubAccount(t, acct) : '');
+
     if (type === 'Income') {
       const targetAcct = dest || acct;
-      const targetSub = toSub || sub;
+      const targetSub = dest ? resolvedToSub : resolvedAcctSub;
       if (targetAcct && targetSub && !looksNumeric(targetAcct)) {
         if (!map[targetAcct]) map[targetAcct] = {};
         map[targetAcct][targetSub] = (map[targetAcct][targetSub] || 0) + amt;
       }
     } else if (type === 'Expense') {
       const targetAcct = fromAcct || acct;
-      const targetSub = fromSub || sub;
+      const targetSub = fromAcct ? resolvedFromSub : resolvedAcctSub;
       if (targetAcct && targetSub && !looksNumeric(targetAcct)) {
         if (!map[targetAcct]) map[targetAcct] = {};
         map[targetAcct][targetSub] = (map[targetAcct][targetSub] || 0) - amt;
       }
     } else if (type === 'Transfer-Out') {
-      if (fromAcct && fromSub && !looksNumeric(fromAcct)) {
+      if (fromAcct && resolvedFromSub && !looksNumeric(fromAcct)) {
         if (!map[fromAcct]) map[fromAcct] = {};
-        map[fromAcct][fromSub] = (map[fromAcct][fromSub] || 0) - amt;
+        map[fromAcct][resolvedFromSub] = (map[fromAcct][resolvedFromSub] || 0) - amt;
       }
-      if (dest && toSub && !looksNumeric(dest)) {
+      if (dest && resolvedToSub && !looksNumeric(dest)) {
         if (!map[dest]) map[dest] = {};
-        map[dest][toSub] = (map[dest][toSub] || 0) + amt;
+        map[dest][resolvedToSub] = (map[dest][resolvedToSub] || 0) + amt;
       }
     }
   }
   return map;
 }
 
-import { calculateBrokerageState as calcBrokerState, parseTxnFields as parseFields } from '../../utils/brokerageAccounting.js';
+import { calculateBrokerageState as calcBrokerState, parseTxnFields as parseFields, resolveInvestmentSubAccount } from '../../utils/brokerageAccounting.js';
 
 export const parseTxnFields = parseFields;
 export const calculateShareMarketBalances = (txns, brokerConfigList = [], settings = {}) => {
@@ -274,30 +283,26 @@ export const calculateShareMarketBalances = (txns, brokerConfigList = [], settin
 
 
 // Helper to resolve platform and parent for investment transactions
-export function resolveInvestmentPlatform(txn) {
+export function resolveInvestmentPlatform(txn, parentAsset) {
   if (!txn) return null;
-  const f = parseTxnFields(txn);
-  const broker = String(f?.brokerage || txn.Brokerage || txn.brokerage || txn.SubAccount || txn.sub_account || '').trim();
-  if (broker) return broker;
-  const src = String(txn.Source || txn.source || '').trim();
-  if (src.includes('CAS') || src.includes('CAMS')) return 'Ak ETMoney';
-  return null;
+  return resolveInvestmentSubAccount(txn, parentAsset);
 }
 
 export function resolveInvestmentParent(txn) {
   if (!txn) return null;
+  const invAcct = String(txn.InvestmentAccount || txn.investment_account || '').trim();
   const acct = String(txn.Account || txn.account || '').trim();
   const fromAcct = String(txn.FromAccount || txn.from_account || '').trim();
   const toAcct = String(txn.ToAccount || txn.to_account || '').trim();
   const cat = String(txn.Category || txn.category || '').trim();
 
-  if (toAcct === 'Mutual Funds Tax Saver' || acct === 'Mutual Funds Tax Saver' || fromAcct === 'Mutual Funds Tax Saver' || cat === 'Mutual Funds Tax Saver') {
+  if (invAcct === 'Mutual Funds Tax Saver' || toAcct === 'Mutual Funds Tax Saver' || acct === 'Mutual Funds Tax Saver' || fromAcct === 'Mutual Funds Tax Saver' || cat === 'Mutual Funds Tax Saver') {
     return 'Mutual Funds Tax Saver';
   }
-  if (toAcct === 'Liquid Mutual Funds' || acct === 'Liquid Mutual Funds' || fromAcct === 'Liquid Mutual Funds' || cat === 'Liquid Mutual Funds') {
+  if (invAcct === 'Liquid Mutual Funds' || toAcct === 'Liquid Mutual Funds' || acct === 'Liquid Mutual Funds' || fromAcct === 'Liquid Mutual Funds' || cat === 'Liquid Mutual Funds') {
     return 'Liquid Mutual Funds';
   }
-  if (toAcct === 'Share Market' || acct === 'Share Market' || fromAcct === 'Share Market' || cat === 'Share Market' || cat === 'Equity') {
+  if (invAcct === 'Share Market' || toAcct === 'Share Market' || acct === 'Share Market' || fromAcct === 'Share Market' || cat === 'Share Market' || cat === 'Equity') {
     return 'Share Market';
   }
   return null;
@@ -305,19 +310,10 @@ export function resolveInvestmentParent(txn) {
 
 export function isInvestmentTransactionForSubAccount(txn, parentAsset, subAccount) {
   if (!txn || !parentAsset || !subAccount) return false;
-  const f = parseTxnFields(txn);
-  const isInv = Boolean(
-    f?.type ||
-    txn.InvestmentTransactionType || txn.investment_transaction_type ||
-    txn.Brokerage || txn.brokerage ||
-    txn.SecurityISIN || txn.security_isin
-  );
-  if (!isInv) return false;
-
   const resolvedParent = resolveInvestmentParent(txn);
   if (resolvedParent !== parentAsset) return false;
 
-  const resolvedPlatform = resolveInvestmentPlatform(txn);
+  const resolvedPlatform = resolveInvestmentSubAccount(txn, parentAsset);
   return resolvedPlatform === subAccount;
 }
 
@@ -441,7 +437,6 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   // Opening balance = balance from all transactions BEFORE the period
   const openingBal = useMemo(() => {
     if (period === 'All') return 0;
-    if (isMFInvestmentSubAccount) return 0;
     const beforePeriod = acctTxns.filter(t => {
       const d = parseDate(t.Date);
       if (period === 'Month') return !(d.getFullYear() === viewYear && d.getMonth() === viewMonth) && d < new Date(viewYear, viewMonth, 1);
@@ -452,15 +447,11 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
       return false;
     });
     return computeBalance(beforePeriod, acctName);
-  }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, acctName, ccCycleRange, isMFInvestmentSubAccount]);
+  }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, acctName, ccCycleRange]);
 
   const periodBalance = useMemo(() => {
-    if (isMFInvestmentSubAccount) {
-      if (acctName === 'Mutual Funds Tax Saver') return 204000;
-      return 0;
-    }
     return computeBalance(periodTxns, acctName);
-  }, [periodTxns, acctName, isMFInvestmentSubAccount]);
+  }, [periodTxns, acctName]);
 
   const closingBal = openingBal + periodBalance;
 
@@ -680,12 +671,12 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         <div className="acct-banking-row">
           <div className="acct-banking-item">
             <div className="acct-banking-l">{isMFInvestmentSubAccount ? 'Invested' : 'Deposits'}</div>
-            <div className="acct-banking-v income">{formatINR(isMFInvestmentSubAccount ? totals.buysInvested : (totals.income + totals.xferIn))}</div>
+            <div className="acct-banking-v income">{formatINR(isMFInvestmentSubAccount ? (totals.buysInvested || totals.xferIn) : (totals.income + totals.xferIn))}</div>
           </div>
           <div className="acct-banking-div" />
           <div className="acct-banking-item">
             <div className="acct-banking-l">{isMFInvestmentSubAccount ? 'Redemptions' : 'Withdrawals'}</div>
-            <div className="acct-banking-v expense">{formatINR(isMFInvestmentSubAccount ? totals.sellsRedeemed : (totals.expense + totals.xferOut))}</div>
+            <div className="acct-banking-v expense">{formatINR(isMFInvestmentSubAccount ? (totals.sellsRedeemed || totals.xferOut) : (totals.expense + totals.xferOut))}</div>
           </div>
           <div className="acct-banking-div" />
           <div className="acct-banking-item">
@@ -999,17 +990,19 @@ export default function Accounts({ backInterceptRef } = {}) {
     // Mutual Funds Tax Saver platform position
     if (!map['Mutual Funds Tax Saver']) map['Mutual Funds Tax Saver'] = {};
     if (map['Mutual Funds Tax Saver']['Ak ETMoney'] === undefined) {
-      map['Mutual Funds Tax Saver']['Ak ETMoney'] = map['Mutual Funds Tax Saver'][''] ?? 204000;
+      map['Mutual Funds Tax Saver']['Ak ETMoney'] = map['Mutual Funds Tax Saver'][''] ?? (acctBalances['Mutual Funds Tax Saver'] || 0);
     }
 
     // Liquid Mutual Funds platform positions
     if (!map['Liquid Mutual Funds']) map['Liquid Mutual Funds'] = {};
-    if (map['Liquid Mutual Funds']['Ak ETMoney'] === undefined) {
-      map['Liquid Mutual Funds']['Ak ETMoney'] = 0;
-    }
+    ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney'].forEach(sub => {
+      if (map['Liquid Mutual Funds'][sub] === undefined) {
+        map['Liquid Mutual Funds'][sub] = 0;
+      }
+    });
 
     return map;
-  }, [transactions, shareMarketBalances]);
+  }, [transactions, shareMarketBalances, acctBalances]);
 
   const netWorth = useMemo(() => Object.values(acctBalances).reduce((s, v) => s + v, 0), [acctBalances]);
   const assets = useMemo(() => {

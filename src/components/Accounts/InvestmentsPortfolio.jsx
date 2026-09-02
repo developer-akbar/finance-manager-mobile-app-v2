@@ -4,7 +4,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, formatINRCompact, parseDate, calculateAge, txnAmount, checkIsRedeemed } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import { activeHoldingsData } from '../../database/holdingsData.js';
-import { calculateBrokerageState as calculateShareMarketBalances, parseTxnFields } from '../../utils/brokerageAccounting.js';
+import { calculateBrokerageState as calculateShareMarketBalances, parseTxnFields, resolveInvestmentSubAccount } from '../../utils/brokerageAccounting.js';
 import './InvestmentsPortfolio.css';
 
 const RADIAN = Math.PI / 180;
@@ -98,40 +98,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
   };
 
   const getAssociatedSubAccount = (t, parentAsset) => {
-    // 1. Authoritative explicit platform/brokerage metadata
-    const f = parseTxnFields(t);
-    const broker = String(f?.brokerage || t.Brokerage || t.brokerage || '').trim();
-    if (broker) return broker;
-
-    const src = String(t.Source || t.source || '').trim();
-    if (src.includes('CAS') || src.includes('CAMS')) {
-      return 'Ak ETMoney';
-    }
-
-    const sub = String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim();
-    if (sub && sub !== 'Default') return sub;
-
-    const note = String(t.Note || '').toLowerCase();
-    const desc = String(t.Description || '').toLowerCase();
-    const combined = `${note} ${desc}`;
-
-    if (parentAsset === 'Share Market') {
-      if (combined.includes('groww') || combined.includes('fareeda')) return 'Fareeda Groww';
-      return 'Zerodha';
-    }
-    if (parentAsset === 'Mutual Funds Tax Saver') {
-      return 'Ak ETMoney';
-    }
-    if (parentAsset === 'Liquid Mutual Funds') {
-      if (combined.includes('ammi grow') || combined.includes('ammi')) return 'Ammi Groww';
-      if (combined.includes('fareeda') && combined.includes('groww')) return 'Fareeda Groww';
-      if (combined.includes('fareeda') && combined.includes('etmoney')) return 'Fareeda ETMoney';
-      if (combined.includes('scripbox')) return 'Scripbox';
-      if (combined.includes('groww')) return 'Groww';
-      if (t.InvestmentTransactionType || t.SecurityISIN) return 'Ak ETMoney';
-      return null;
-    }
-    return null;
+    return resolveInvestmentSubAccount(t, parentAsset);
   };
 
   const isInvestmentTxn = useMemo(() => {

@@ -430,7 +430,7 @@ export function resolveInvestmentAccounts(t, accounts = []) {
   const matchedBank = (accounts || []).find(a => (a.name || '').toLowerCase() === bankAccount.toLowerCase());
   if (matchedBank) bankAccount = matchedBank.name;
 
-  const subAccount = String(
+  const subAccount = resolveInvestmentSubAccount(t, investmentAccount) || String(
     t.SubAccount || t.sub_account ||
     (invType === 'BUY' ? (t.ToSubAccount || t.to_sub_account) : (t.FromSubAccount || t.from_sub_account)) ||
     t.Brokerage || t.brokerage ||
@@ -439,4 +439,59 @@ export function resolveInvestmentAccounts(t, accounts = []) {
   ).trim();
 
   return { investmentAccount, bankAccount, subAccount, invType };
+}
+
+/**
+ * Canonical resolution of platform/subaccount for investment transactions.
+ * Resolves explicit fields first, then CAS/platform markers, then heuristics.
+ */
+export function resolveInvestmentSubAccount(t, parentAsset) {
+  if (!t) return null;
+  const parent = parentAsset || String(t.InvestmentAccount || t.investment_account || t.Account || t.ToAccount || t.FromAccount || '').trim();
+
+  const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+  const sub = String(
+    t.SubAccount || t.sub_account ||
+    (invType === 'BUY' ? (t.ToSubAccount || t.to_sub_account) : (t.FromSubAccount || t.from_sub_account)) ||
+    t.Brokerage || t.brokerage ||
+    t.ToSubAccount || t.to_sub_account ||
+    t.FromSubAccount || t.from_sub_account || ''
+  ).trim();
+  if (sub && sub !== 'Default') return sub;
+
+  const f = parseTxnFields(t);
+  const broker = String(f?.brokerage || '').trim();
+  if (broker && broker !== 'Default') return broker;
+
+  const src = String(t.Source || t.source || '').trim();
+  if (src.includes('CAS') || src.includes('CAMS')) {
+    return 'Ak ETMoney';
+  }
+
+  const note = String(t.Note || t.note || '').toLowerCase();
+  const desc = String(t.Description || t.description || '').toLowerCase();
+  const combined = `${note} ${desc}`;
+
+  const parentLower = String(parent || '').toLowerCase();
+
+  if (parentLower.includes('share market') || parentLower === 'share market') {
+    if (combined.includes('groww') || combined.includes('fareeda')) return 'Fareeda Groww';
+    return 'Zerodha';
+  }
+
+  if (parentLower.includes('tax saver') || parentLower === 'mutual funds tax saver') {
+    return 'Ak ETMoney';
+  }
+
+  if (parentLower.includes('liquid') || parentLower === 'liquid mutual funds') {
+    if (combined.includes('ammi grow') || combined.includes('ammi')) return 'Ammi Groww';
+    if (combined.includes('fareeda') && combined.includes('groww')) return 'Fareeda Groww';
+    if (combined.includes('fareeda') && combined.includes('etmoney')) return 'Fareeda ETMoney';
+    if (combined.includes('scripbox')) return 'Scripbox';
+    if (combined.includes('groww')) return 'Fareeda Groww';
+    if (t.InvestmentTransactionType || t.SecurityISIN) return 'Ak ETMoney';
+    return 'Fareeda Groww';
+  }
+
+  return null;
 }
