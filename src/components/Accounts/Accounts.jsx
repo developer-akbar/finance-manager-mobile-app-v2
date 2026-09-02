@@ -173,7 +173,68 @@ const PERIODS = ['Month', 'Year', 'FY', 'All', 'Custom', 'CC Cycle'];
  *   Transfer-Out → fromAccount -= INR; toAccount (= ToAccount || Category) += INR
  *   Transfer-In  → toAccount += INR (credit side)
  */
-function computeBalance(txns, acctName) {
+function computeBalance(txns, acctName, subAccountName = null) {
+  if (subAccountName) {
+    let bal = 0;
+    const looksNumeric = (s) => s !== '' && !isNaN(parseFloat(s)) && isFinite(String(s).trim());
+
+    for (const t of txns) {
+      const amt = txnAmount(t);
+      const type = String(t['Income/Expense'] || '').trim();
+      const acct = String(t.Account || '').trim();
+      const fromAcct = String(t.FromAccount || t.Account || '').trim();
+      const dest = String(t.ToAccount || '').trim();
+      const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+      const tradeVal = parseFloat(t.TradeValue || t.trade_value || amt);
+
+      const sub = String(t.SubAccount || t.sub_account || '').trim();
+      const fromSub = String(t.FromSubAccount || t.from_sub_account || '').trim();
+      const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+
+      const isFromInv = fromAcct === 'Mutual Funds Tax Saver' || fromAcct === 'Liquid Mutual Funds' || fromAcct === 'Share Market';
+      const isDestInv = dest === 'Mutual Funds Tax Saver' || dest === 'Liquid Mutual Funds' || dest === 'Share Market';
+      const isAcctInv = acct === 'Mutual Funds Tax Saver' || acct === 'Liquid Mutual Funds' || acct === 'Share Market';
+
+      const resolvedFromSub = (fromSub && fromSub !== 'Default') ? fromSub : (isFromInv ? resolveInvestmentSubAccount(t, fromAcct) : (sub && sub !== 'Default' ? sub : ''));
+      const resolvedToSub = (toSub && toSub !== 'Default') ? toSub : (isDestInv ? resolveInvestmentSubAccount(t, dest) : (sub && sub !== 'Default' ? sub : ''));
+      const resolvedAcctSub = (sub && sub !== 'Default') ? sub : (isAcctInv ? resolveInvestmentSubAccount(t, acct) : '');
+
+      if (invType === 'BUY') {
+        const targetAcct = dest || acct;
+        const targetSub = dest ? resolvedToSub : resolvedAcctSub;
+        if (targetAcct === acctName && targetSub === subAccountName) {
+          bal += (tradeVal || amt);
+        }
+      } else if (invType === 'SELL') {
+        const targetAcct = fromAcct || acct;
+        const targetSub = fromAcct ? resolvedFromSub : resolvedAcctSub;
+        if (targetAcct === acctName && targetSub === subAccountName) {
+          bal -= (tradeVal || amt);
+        }
+      } else if (type === 'Income') {
+        const targetAcct = dest || acct;
+        const targetSub = dest ? resolvedToSub : resolvedAcctSub;
+        if (targetAcct === acctName && targetSub === subAccountName) {
+          bal += amt;
+        }
+      } else if (type === 'Expense') {
+        const targetAcct = fromAcct || acct;
+        const targetSub = fromAcct ? resolvedFromSub : resolvedAcctSub;
+        if (targetAcct === acctName && targetSub === subAccountName) {
+          bal -= amt;
+        }
+      } else if (type === 'Transfer-Out') {
+        if (fromAcct === acctName && resolvedFromSub === subAccountName) {
+          bal -= amt;
+        }
+        if (dest === acctName && resolvedToSub === subAccountName) {
+          bal += amt;
+        }
+      }
+    }
+    return bal;
+  }
+
   let bal = 0;
   for (const t of txns) {
     const amt = txnAmount(t);
@@ -232,6 +293,8 @@ function buildSubAccountBalanceMap(transactions) {
     const acct = String(t.Account || '').trim();
     const fromAcct = String(t.FromAccount || t.Account || '').trim();
     const dest = String(t.ToAccount || '').trim();
+    const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+    const tradeVal = parseFloat(t.TradeValue || t.trade_value || amt);
 
     const sub = String(t.SubAccount || t.sub_account || '').trim();
     const fromSub = String(t.FromSubAccount || t.from_sub_account || '').trim();
@@ -246,7 +309,21 @@ function buildSubAccountBalanceMap(transactions) {
     const resolvedToSub = (toSub && toSub !== 'Default') ? toSub : (isDestInv ? resolveInvestmentSubAccount(t, dest) : (sub && sub !== 'Default' ? sub : ''));
     const resolvedAcctSub = (sub && sub !== 'Default') ? sub : (isAcctInv ? resolveInvestmentSubAccount(t, acct) : '');
 
-    if (type === 'Income') {
+    if (invType === 'BUY') {
+      const targetAcct = dest || acct;
+      const targetSub = dest ? resolvedToSub : resolvedAcctSub;
+      if (targetAcct && targetSub && !looksNumeric(targetAcct)) {
+        if (!map[targetAcct]) map[targetAcct] = {};
+        map[targetAcct][targetSub] = (map[targetAcct][targetSub] || 0) + (tradeVal || amt);
+      }
+    } else if (invType === 'SELL') {
+      const targetAcct = fromAcct || acct;
+      const targetSub = fromAcct ? resolvedFromSub : resolvedAcctSub;
+      if (targetAcct && targetSub && !looksNumeric(targetAcct)) {
+        if (!map[targetAcct]) map[targetAcct] = {};
+        map[targetAcct][targetSub] = (map[targetAcct][targetSub] || 0) - (tradeVal || amt);
+      }
+    } else if (type === 'Income') {
       const targetAcct = dest || acct;
       const targetSub = dest ? resolvedToSub : resolvedAcctSub;
       if (targetAcct && targetSub && !looksNumeric(targetAcct)) {
@@ -446,12 +523,12 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
       if (period === 'Custom' && customFrom) return d < new Date(customFrom);
       return false;
     });
-    return computeBalance(beforePeriod, acctName);
-  }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, acctName, ccCycleRange]);
+    return computeBalance(beforePeriod, acctName, subAccountName);
+  }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, acctName, subAccountName, ccCycleRange]);
 
   const periodBalance = useMemo(() => {
-    return computeBalance(periodTxns, acctName);
-  }, [periodTxns, acctName]);
+    return computeBalance(periodTxns, acctName, subAccountName);
+  }, [periodTxns, acctName, subAccountName]);
 
   const closingBal = openingBal + periodBalance;
 
@@ -492,7 +569,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
       return Array.from({ length: 6 }, (_, i) => {
         const yr = viewYear - 5 + i;
         const yearTxns = acctTxns.filter(t => parseDate(t.Date).getFullYear() <= yr);
-        return { name: String(yr), value: computeBalance(yearTxns, acctName) };
+        return { name: String(yr), value: computeBalance(yearTxns, acctName, subAccountName) };
       });
     }
 
@@ -502,7 +579,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         const fy = viewFY - 5 + i;
         const upTo = fyEnd(fy);
         const fyTxns = acctTxns.filter(t => parseDate(t.Date) <= upTo);
-        return { name: `FY${String(fy).slice(-2)}`, value: computeBalance(fyTxns, acctName) };
+        return { name: `FY${String(fy).slice(-2)}`, value: computeBalance(fyTxns, acctName, subAccountName) };
       });
     }
 
@@ -518,9 +595,9 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         const td = parseDate(t.Date);
         return td <= new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
       });
-      return { name: MS_S[d.getMonth()], value: computeBalance(upToMonth, acctName) };
+      return { name: MS_S[d.getMonth()], value: computeBalance(upToMonth, acctName, subAccountName) };
     });
-  }, [acctTxns, acctName, period, viewYear, viewMonth, viewFY, ccCycleOffset]);
+  }, [acctTxns, acctName, subAccountName, period, viewYear, viewMonth, viewFY, ccCycleOffset]);
 
   const chartTitle = useMemo(() => {
     if (period === 'Year') return '6-Year Balance Trend';
@@ -571,20 +648,24 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
     let bal = 0;
     const map = {};
     for (const t of sorted) {
-      const amt = txnAmount(t);
-      const type = String(t['Income/Expense'] || '').trim();
-      const acct = t.Account || t.FromAccount || '';
-      const dest = t.ToAccount || '';
-      if (type === 'Income' && acct === acctName) bal += amt;
-      else if (type === 'Expense' && acct === acctName) bal -= amt;
-      else if (type === 'Transfer-Out') {
-        if (acct === acctName) bal -= amt;
-        if (dest === acctName) bal += amt;
+      if (subAccountName) {
+        bal += computeBalance([t], acctName, subAccountName);
+      } else {
+        const amt = txnAmount(t);
+        const type = String(t['Income/Expense'] || '').trim();
+        const acct = t.Account || t.FromAccount || '';
+        const dest = t.ToAccount || '';
+        if (type === 'Income' && acct === acctName) bal += amt;
+        else if (type === 'Expense' && acct === acctName) bal -= amt;
+        else if (type === 'Transfer-Out') {
+          if (acct === acctName) bal -= amt;
+          if (dest === acctName) bal += amt;
+        }
       }
       map[t._id] = bal;
     }
     return map;
-  }, [acctTxns, acctName]);
+  }, [acctTxns, acctName, subAccountName]);
 
   const groups = useMemo(() => {
     const map = {};

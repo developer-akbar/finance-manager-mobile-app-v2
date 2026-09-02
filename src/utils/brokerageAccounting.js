@@ -490,7 +490,7 @@ export function resolveInvestmentSubAccount(t, parentAsset) {
     if (combined.includes('scripbox')) return 'Scripbox';
     if (combined.includes('groww')) return 'Fareeda Groww';
     if (t.InvestmentTransactionType || t.SecurityISIN) return 'Ak ETMoney';
-    return 'Fareeda Groww';
+    return null;
   }
 
   return null;
