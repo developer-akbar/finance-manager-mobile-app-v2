@@ -174,16 +174,29 @@ export function AppProvider({ children }) {
 
       // One-time migration for sub-accounts v2
       // Reset migration if accounts exist but sub-accounts are empty (self-healing fallback)
-      let needsSelfHealing = false;
+      // One-time migration for sub-accounts v2
+      // Reset migration if accounts exist but canonical sub-accounts are missing (self-healing fallback)
+      const checkMissingSub = (acct, neededNames) => {
+        if (!acct) return true;
+        const subs = Array.isArray(acct.subAccounts) ? acct.subAccounts : [];
+        if (subs.length === 0) return true;
+        const existing = new Set(subs.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
+        return neededNames.some(n => !existing.has(n.toLowerCase()));
+      };
+
       const sm = accts.find(a => (a.name || '').toLowerCase() === 'share market');
       const lmf = accts.find(a => (a.name || '').toLowerCase() === 'liquid mutual funds');
       const amzn = accts.find(a => (a.name || '').toLowerCase() === 'amazon');
+      const mfts = accts.find(a => (a.name || '').toLowerCase() === 'mutual funds tax saver');
+
+      let needsSelfHealing = false;
       if (
-        (sm && (!sm.subAccounts || sm.subAccounts.length === 0)) ||
-        (lmf && (!lmf.subAccounts || lmf.subAccounts.length === 0)) ||
-        (amzn && (!amzn.subAccounts || amzn.subAccounts.length === 0))
+        checkMissingSub(sm, ['Zerodha', 'Fareeda Groww']) ||
+        checkMissingSub(lmf, ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney']) ||
+        checkMissingSub(mfts, ['Ak ETMoney']) ||
+        checkMissingSub(amzn, ['My Amazon'])
       ) {
-        console.log('Detected empty sub-accounts on main parent accounts, forcing self-healing migration...');
+        console.log('Detected missing sub-accounts on main parent accounts, forcing self-healing migration...');
         needsSelfHealing = true;
       }
 
@@ -194,20 +207,41 @@ export function AppProvider({ children }) {
         const nextAccts = accts.filter(a => !['zerodha', 'groww', 'fareeda groww', 'ammi groww'].includes((a.name || '').toLowerCase()));
         let lmfAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'liquid mutual funds');
         if (lmfAcct) {
-          if (!lmfAcct.subAccounts || lmfAcct.subAccounts.length === 0) {
-            lmfAcct.subAccounts = [ { id: uuid(), name: 'Groww' } ];
+          if (!lmfAcct.subAccounts) lmfAcct.subAccounts = [];
+          const existing = new Set(lmfAcct.subAccounts.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
+          const needed = ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney'];
+          for (const n of needed) {
+            if (!existing.has(n.toLowerCase())) {
+              lmfAcct.subAccounts.push({ id: uuid(), name: n });
+            }
           }
         } else {
-          nextAccts.push({ id: uuid(), name: 'Liquid Mutual Funds', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Groww' } ] });
+          nextAccts.push({ id: uuid(), name: 'Liquid Mutual Funds', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Fareeda Groww' }, { id: uuid(), name: 'Ammi Groww' }, { id: uuid(), name: 'Ak ETMoney' } ] });
+        }
+
+        let mftsAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'mutual funds tax saver');
+        if (mftsAcct) {
+          if (!mftsAcct.subAccounts) mftsAcct.subAccounts = [];
+          const existing = new Set(mftsAcct.subAccounts.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
+          if (!existing.has('ak etmoney')) {
+            mftsAcct.subAccounts.push({ id: uuid(), name: 'Ak ETMoney' });
+          }
+        } else {
+          nextAccts.push({ id: uuid(), name: 'Mutual Funds Tax Saver', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Ak ETMoney' } ] });
         }
         
         let smAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'share market');
         if (smAcct) {
-          if (!smAcct.subAccounts || smAcct.subAccounts.length === 0) {
-            smAcct.subAccounts = [ { id: uuid(), name: 'Zerodha' }, { id: uuid(), name: 'Groww' } ];
+          if (!smAcct.subAccounts) smAcct.subAccounts = [];
+          const existing = new Set(smAcct.subAccounts.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
+          const needed = ['Zerodha', 'Fareeda Groww'];
+          for (const n of needed) {
+            if (!existing.has(n.toLowerCase())) {
+              smAcct.subAccounts.push({ id: uuid(), name: n });
+            }
           }
         } else {
-          nextAccts.push({ id: uuid(), name: 'Share Market', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Zerodha' }, { id: uuid(), name: 'Groww' } ] });
+          nextAccts.push({ id: uuid(), name: 'Share Market', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Zerodha' }, { id: uuid(), name: 'Fareeda Groww' } ] });
         }
         
         let amazonAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'amazon');
@@ -911,7 +945,7 @@ export function AppProvider({ children }) {
           if (paymentDueDays && !existing.paymentDueDays) existing.paymentDueDays = paymentDueDays;
           if (acctOrd !== undefined && existing.sortOrder === undefined) existing.sortOrder = acctOrd;
         }
-        const sVal = rawSubAcct || rawFromSub;
+        const sVal = rawSubAcct || rawFromSub || String(r.Brokerage || r.brokerage || '').trim();
         if (sVal) acctMap.get(realAcct).subAccounts.add(sVal);
         if (acctGroup) {
           groupSet.add(acctGroup);
@@ -935,7 +969,8 @@ export function AppProvider({ children }) {
             if (toGroup && !existing.group) existing.group = toGroup;
             if (toOrd !== undefined && existing.sortOrder === undefined) existing.sortOrder = toOrd;
           }
-          if (rawToSub) acctMap.get(destAcct).subAccounts.add(rawToSub);
+          const sValDest = rawToSub || String(r.Brokerage || r.brokerage || '').trim();
+          if (sValDest) acctMap.get(destAcct).subAccounts.add(sValDest);
           if (toGroup) groupSet.add(toGroup);
         }
       } else {
@@ -963,11 +998,17 @@ export function AppProvider({ children }) {
 
     const newAcctsList = Array.from(acctMap.values()).map(a => {
       const subs = new Set(a.subAccounts || []);
-      if ((a.name || '').toLowerCase() === 'liquid mutual funds') {
-        subs.add('Groww');
-      } else if ((a.name || '').toLowerCase() === 'share market') {
+      const acctLower = (a.name || '').toLowerCase();
+      if (acctLower === 'liquid mutual funds') {
+        subs.add('Fareeda Groww');
+        subs.add('Ammi Groww');
+        subs.add('Ak ETMoney');
+      } else if (acctLower === 'mutual funds tax saver') {
+        subs.add('Ak ETMoney');
+      } else if (acctLower === 'share market') {
         subs.add('Zerodha');
-      } else if ((a.name || '').toLowerCase() === 'amazon') {
+        subs.add('Fareeda Groww');
+      } else if (acctLower === 'amazon') {
         subs.add('My Amazon');
       }
       return {

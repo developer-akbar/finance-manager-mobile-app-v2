@@ -233,9 +233,10 @@ select option {
 .add-close:hover { background:var(--bg-hover); }
 .type-tabs { display:flex; gap:6px; padding:10px var(--page-px) 8px; flex-shrink:0; }
 .type-tab { flex:1; padding:8px 4px; border-radius:var(--r-md); border:1.5px solid var(--border); background:var(--bg-input); font-size:0.78rem; font-weight:700; font-family:var(--font); color:var(--text-muted); cursor:pointer; transition:var(--transition); }
-.type-tab.expense.active  { background:var(--expense-bg);  border-color:var(--expense);  color:var(--expense); }
-.type-tab.income.active   { background:var(--income-bg);   border-color:var(--income);   color:var(--income); }
-.type-tab.transfer.active { background:var(--transfer-bg); border-color:var(--transfer); color:var(--transfer); }
+.type-tab.expense.active    { background:var(--expense-bg);  border-color:var(--expense);  color:var(--expense); }
+.type-tab.income.active     { background:var(--income-bg);   border-color:var(--income);   color:var(--income); }
+.type-tab.transfer.active   { background:var(--transfer-bg); border-color:var(--transfer); color:var(--transfer); }
+.type-tab.investment.active { background:rgba(129,140,248,0.15); border-color:#818cf8; color:#818cf8; }
 .amount-row { display:flex; align-items:center; gap:6px; padding:8px var(--page-px) 6px; flex-shrink:0; }
 .amount-prefix { font-size:1.5rem; font-weight:700; color:var(--text-muted); font-family:var(--font); }
 .form-input-amount { flex:1; background:none; border:none; border-bottom:2px solid var(--green); outline:none; font-size:2rem; font-weight:800; font-family:var(--font); color:var(--text-primary); padding:4px 0; }

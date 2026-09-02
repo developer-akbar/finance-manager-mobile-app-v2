@@ -204,12 +204,18 @@ function buildBalanceMap(transactions) {
   for (const t of transactions) {
     const amt = txnAmount(t);
     const type = String(t['Income/Expense'] || '').trim();
-    const acct = String(t.Account || t.FromAccount || '').trim();
+    const acct = String(t.Account || '').trim();
+    const fromAcct = String(t.FromAccount || t.Account || '').trim();
     const dest = String(t.ToAccount || '').trim();
 
-    if (type === 'Income') addTo(acct, +amt);
-    else if (type === 'Expense') addTo(acct, -amt);
-    else if (type === 'Transfer-Out') { addTo(acct, -amt); addTo(dest, +amt); }
+    if (type === 'Income') {
+      addTo(dest || acct, +amt);
+    } else if (type === 'Expense') {
+      addTo(fromAcct || acct, -amt);
+    } else if (type === 'Transfer-Out') {
+      addTo(fromAcct, -amt);
+      addTo(dest, +amt);
+    }
     // Transfer-In: skip — Transfer-Out handles both sides
   }
   return map;
@@ -223,27 +229,32 @@ function buildSubAccountBalanceMap(transactions) {
   for (const t of transactions) {
     const amt = txnAmount(t);
     const type = String(t['Income/Expense'] || '').trim();
-    const acct = String(t.Account || t.FromAccount || '').trim();
+    const acct = String(t.Account || '').trim();
+    const fromAcct = String(t.FromAccount || t.Account || '').trim();
     const dest = String(t.ToAccount || '').trim();
 
     const sub = String(t.SubAccount || t.sub_account || '').trim();
-    const fromSub = String(t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '').trim();
+    const fromSub = String(t.FromSubAccount || t.from_sub_account || '').trim();
     const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
 
     if (type === 'Income') {
-      if (acct && sub && !looksNumeric(acct)) {
-        if (!map[acct]) map[acct] = {};
-        map[acct][sub] = (map[acct][sub] || 0) + amt;
+      const targetAcct = dest || acct;
+      const targetSub = toSub || sub;
+      if (targetAcct && targetSub && !looksNumeric(targetAcct)) {
+        if (!map[targetAcct]) map[targetAcct] = {};
+        map[targetAcct][targetSub] = (map[targetAcct][targetSub] || 0) + amt;
       }
     } else if (type === 'Expense') {
-      if (acct && sub && !looksNumeric(acct)) {
-        if (!map[acct]) map[acct] = {};
-        map[acct][sub] = (map[acct][sub] || 0) - amt;
+      const targetAcct = fromAcct || acct;
+      const targetSub = fromSub || sub;
+      if (targetAcct && targetSub && !looksNumeric(targetAcct)) {
+        if (!map[targetAcct]) map[targetAcct] = {};
+        map[targetAcct][targetSub] = (map[targetAcct][targetSub] || 0) - amt;
       }
     } else if (type === 'Transfer-Out') {
-      if (acct && fromSub && !looksNumeric(acct)) {
-        if (!map[acct]) map[acct] = {};
-        map[acct][fromSub] = (map[acct][fromSub] || 0) - amt;
+      if (fromAcct && fromSub && !looksNumeric(fromAcct)) {
+        if (!map[fromAcct]) map[fromAcct] = {};
+        map[fromAcct][fromSub] = (map[fromAcct][fromSub] || 0) - amt;
       }
       if (dest && toSub && !looksNumeric(dest)) {
         if (!map[dest]) map[dest] = {};

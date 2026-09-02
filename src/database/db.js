@@ -307,8 +307,11 @@ const applySchema = async (db) => {
     order_id TEXT,
     exchange TEXT,
     segment TEXT,
-    source TEXT
+    source TEXT,
+    investment_account TEXT
   );`);
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN investment_account TEXT`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN investment_account TEXT`); } catch {}
   await db.execute(`CREATE TABLE IF NOT EXISTS brokerages (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE,

@@ -135,12 +135,18 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
     for (const t of transactions) {
       const amt = txnAmount(t);
       const type = String(t['Income/Expense'] || '').trim();
-      const acct = String(t.Account || t.FromAccount || '').trim();
+      const acct = String(t.Account || '').trim();
+      const fromAcct = String(t.FromAccount || t.Account || '').trim();
       const dest = String(t.ToAccount || '').trim();
 
-      if (type === 'Income') addTo(acct, +amt);
-      else if (type === 'Expense') addTo(acct, -amt);
-      else if (type === 'Transfer-Out') { addTo(acct, -amt); addTo(dest, +amt); }
+      if (type === 'Income') {
+        addTo(dest || acct, +amt);
+      } else if (type === 'Expense') {
+        addTo(fromAcct || acct, -amt);
+      } else if (type === 'Transfer-Out') {
+        addTo(fromAcct, -amt);
+        addTo(dest, +amt);
+      }
     }
     return map;
   }, [transactions]);

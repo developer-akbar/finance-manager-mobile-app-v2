@@ -336,3 +336,107 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
 
   return results;
 }
+
+/**
+ * Deterministically resolves the investment holding account, funding/settlement bank account,
+ * and platform/subaccount for an investment transaction.
+ *
+ * BUY:
+ * - Investment Account: holding account (ToAccount / investment parent)
+ * - Funding Account: bank/cash source account (FromAccount)
+ * - Platform / Subaccount: SubAccount / Brokerage / ToSubAccount
+ *
+ * SELL:
+ * - Investment Account: holding account (FromAccount / investment parent)
+ * - Settlement Account: bank/cash destination account (ToAccount)
+ * - Platform / Subaccount: SubAccount / Brokerage / FromSubAccount
+ */
+export function resolveInvestmentAccounts(t, accounts = []) {
+  if (!t) return { investmentAccount: '', bankAccount: '', subAccount: '', invType: 'BUY' };
+
+  const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase() || 'BUY';
+
+  // 1. If explicit investment account is already stored, it is authoritative!
+  let explicitInvAcct = String(t.InvestmentAccount || t.investment_account || '').trim();
+
+  const invAcctNames = new Set(
+    (accounts || [])
+      .filter(a => a.group?.toLowerCase() === 'investments' || ['mutual funds tax saver', 'liquid mutual funds', 'share market'].includes((a.name || '').toLowerCase()))
+      .map(a => (a.name || '').toLowerCase())
+  );
+  if (invAcctNames.size === 0) {
+    invAcctNames.add('mutual funds tax saver');
+    invAcctNames.add('liquid mutual funds');
+    invAcctNames.add('share market');
+  }
+
+  const toAcct = String(t.ToAccount || t.to_account || '').trim();
+  const fromAcct = String(t.FromAccount || t.from_account || '').trim();
+  const acct = String(t.Account || t.account || '').trim();
+  const cat = String(t.Category || t.category || '').trim();
+
+  let investmentAccount = explicitInvAcct;
+  let bankAccount = ''; // fundingAccount for BUY, settlementAccount for SELL
+
+  if (!investmentAccount) {
+    if (invType === 'BUY') {
+      // In BUY: ToAccount is the holding asset account
+      if (toAcct && invAcctNames.has(toAcct.toLowerCase())) {
+        investmentAccount = toAcct;
+      } else if (acct && invAcctNames.has(acct.toLowerCase())) {
+        investmentAccount = acct;
+      } else if (fromAcct && invAcctNames.has(fromAcct.toLowerCase())) {
+        investmentAccount = fromAcct;
+      } else if (cat && invAcctNames.has(cat.toLowerCase())) {
+        investmentAccount = cat;
+      } else {
+        investmentAccount = toAcct || acct || fromAcct || 'Liquid Mutual Funds';
+      }
+    } else {
+      // In SELL: FromAccount is the holding asset account
+      if (fromAcct && invAcctNames.has(fromAcct.toLowerCase())) {
+        investmentAccount = fromAcct;
+      } else if (acct && invAcctNames.has(acct.toLowerCase())) {
+        investmentAccount = acct;
+      } else if (toAcct && invAcctNames.has(toAcct.toLowerCase())) {
+        investmentAccount = toAcct;
+      } else if (cat && invAcctNames.has(cat.toLowerCase())) {
+        investmentAccount = cat;
+      } else {
+        investmentAccount = fromAcct || acct || toAcct || 'Liquid Mutual Funds';
+      }
+    }
+  }
+
+  // Resolve funding/settlement bank account
+  if (invType === 'BUY') {
+    if (fromAcct && fromAcct.toLowerCase() !== investmentAccount.toLowerCase() && !invAcctNames.has(fromAcct.toLowerCase())) {
+      bankAccount = fromAcct;
+    } else if (acct && acct.toLowerCase() !== investmentAccount.toLowerCase() && !invAcctNames.has(acct.toLowerCase())) {
+      bankAccount = acct;
+    }
+  } else {
+    if (toAcct && toAcct.toLowerCase() !== investmentAccount.toLowerCase() && !invAcctNames.has(toAcct.toLowerCase())) {
+      bankAccount = toAcct;
+    } else if (acct && acct.toLowerCase() !== investmentAccount.toLowerCase() && !invAcctNames.has(acct.toLowerCase())) {
+      bankAccount = acct;
+    }
+  }
+
+  // Exact casing match from accounts configuration
+  const matchedInv = (accounts || []).find(a => (a.name || '').toLowerCase() === investmentAccount.toLowerCase());
+  if (matchedInv) investmentAccount = matchedInv.name;
+
+  const matchedBank = (accounts || []).find(a => (a.name || '').toLowerCase() === bankAccount.toLowerCase());
+  if (matchedBank) bankAccount = matchedBank.name;
+
+  const subAccount = String(
+    t.SubAccount || t.sub_account ||
+    (invType === 'BUY' ? (t.ToSubAccount || t.to_sub_account) : (t.FromSubAccount || t.from_sub_account)) ||
+    t.Brokerage || t.brokerage ||
+    t.ToSubAccount || t.to_sub_account ||
+    t.FromSubAccount || t.from_sub_account || ''
+  ).trim();
+
+  return { investmentAccount, bankAccount, subAccount, invType };
+}

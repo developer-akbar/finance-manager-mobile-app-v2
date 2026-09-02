@@ -20,11 +20,13 @@ export const rowToTxn = (r) => {
     SubAccount: r.sub_account || '',
     FromSubAccount: r.from_sub_account || '',
     ToSubAccount: r.to_sub_account || '',
+    InvestmentAccount: r.investment_account || '',
   };
   
   if (r.investment_transaction_type || r.brokerage) {
     return {
       ...base,
+      InvestmentAccount: r.investment_account || (r.investment_transaction_type === 'SELL' ? (r.from_account || r.account) : (r.to_account || r.account || r.category)) || '',
       InvestmentTransactionType: r.investment_transaction_type || '',
       Brokerage: r.brokerage || '',
       SecuritySymbol: r.security_symbol || '',
@@ -148,8 +150,9 @@ export const addTransaction = async (data) => {
   const isInv = !!(data.InvestmentTransactionType || data.Brokerage);
   
   if (isInv) {
+    const invAcct = data.InvestmentAccount || data.investment_account || data.Category || '';
     await db.run(
-      `INSERT OR IGNORE INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT OR IGNORE INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source,investment_account) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [id, data.Date||'', data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
        data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
        parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
@@ -162,7 +165,8 @@ export const addTransaction = async (data) => {
        data.InvestmentTransactionType||'', data.Brokerage||'', data.SecuritySymbol||'', data.SecurityISIN||'',
        parseFloat(data.Quantity||0), parseFloat(data.UnitPrice||0), parseFloat(data.TradeValue||0),
        parseFloat(data.CostBasis||0), parseFloat(data.CashImpact||0), parseFloat(data.PositionQuantityChange||0),
-       parseFloat(data.RealizedPnl||0), data.TradeId||'', data.OrderId||'', data.Exchange||'', data.Segment||'', data.Source||'']
+       parseFloat(data.RealizedPnl||0), data.TradeId||'', data.OrderId||'', data.Exchange||'', data.Segment||'', data.Source||'',
+       invAcct]
     );
     return rowToTxn({
       id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'',
@@ -177,7 +181,8 @@ export const addTransaction = async (data) => {
       investment_transaction_type:data.InvestmentTransactionType||'', brokerage:data.Brokerage||'', security_symbol:data.SecuritySymbol||'', security_isin:data.SecurityISIN||'',
       quantity:parseFloat(data.Quantity||0), unit_price:parseFloat(data.UnitPrice||0), trade_value:parseFloat(data.TradeValue||0),
       cost_basis:parseFloat(data.CostBasis||0), cash_impact:parseFloat(data.CashImpact||0), position_qty_change:parseFloat(data.PositionQuantityChange||0),
-      realized_pnl:parseFloat(data.RealizedPnl||0), trade_id:data.TradeId||'', order_id:data.OrderId||'', exchange:data.Exchange||'', segment:data.Segment||'', source:data.Source||''
+      realized_pnl:parseFloat(data.RealizedPnl||0), trade_id:data.TradeId||'', order_id:data.OrderId||'', exchange:data.Exchange||'', segment:data.Segment||'', source:data.Source||'',
+      investment_account:invAcct
     });
   } else {
     await db.run(

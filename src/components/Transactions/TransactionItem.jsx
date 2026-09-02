@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage, calculateAge, checkIsRedeemed } from '../../utils/format.js';
 import { parseInstalmentInfo, getInstalmentSeriesStats } from '../../database/recurring.js';
+import { resolveInvestmentAccounts } from '../../utils/brokerageAccounting.js';
 import AddTransaction from './AddTransaction.jsx';
 import ReceiptViewer from '../Common/ReceiptViewer.jsx';
 import './TransactionItem.css';
@@ -36,7 +37,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
   const isInvestment = Boolean(invType === 'BUY' || invType === 'SELL' || invType === 'UNIT_ADJUSTMENT' || invType === 'RECONCILIATION' || (t.SecuritySymbol && t.SecurityISIN));
 
-  const invLabel = t.SecuritySymbol || t.security_symbol || t.Note || t.note || '';
+  const invLabel = (t.Note || t.note || '').trim() || (t.SecuritySymbol || t.security_symbol || '').trim() || '';
   const invQty = parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0);
   const invNav = parseFloat(t.UnitPrice || t.unit_price || 0);
   const invTradeVal = parseFloat(t.TradeValue || t.trade_value || (invType === 'BUY' || invType === 'SELL' ? (t.CostBasis || t.cost_basis || t.INR || t.inr || t.Amount || t.amount || 0) : 0));
@@ -271,7 +272,9 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
   const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
   const isInvestment = Boolean(invType === 'BUY' || invType === 'SELL' || invType === 'UNIT_ADJUSTMENT' || invType === 'RECONCILIATION' || (t.SecuritySymbol && t.SecurityISIN));
 
-  const invLabel = t.SecuritySymbol || t.security_symbol || t.Note || t.note || '';
+  const securityName = (t.SecuritySymbol || t.security_symbol || '').trim();
+  const noteText = (t.Note || t.note || '').trim();
+  const invSecurityDisplay = securityName || noteText || 'Investment Security';
   const invQty = parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0);
   const invNav = parseFloat(t.UnitPrice || t.unit_price || 0);
   const invTradeVal = parseFloat(t.TradeValue || t.trade_value || (invType === 'BUY' || invType === 'SELL' ? (t.CostBasis || t.cost_basis || t.INR || t.inr || t.Amount || t.amount || 0) : 0));
@@ -279,6 +282,11 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
   const invRealizedPnl = parseFloat(t.RealizedPnl || t.realized_pnl || 0);
   const invBroker = String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || '').trim();
   const invIsin = String(t.SecurityISIN || t.security_isin || '').trim();
+
+  const invDetails = React.useMemo(() => {
+    if (!isInvestment) return null;
+    return resolveInvestmentAccounts(t, state.accounts || []);
+  }, [isInvestment, t, state.accounts]);
 
   // Determine actual display type based on the sign of the amount
   let displayType = type;
@@ -440,17 +448,25 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
           {t.Time && <DPRow label="Time" value={formatTime(t.Time)} />}
           {isInvestment ? (
             <>
-              <DPRow label="Security" value={invLabel} />
+              <DPRow label="Investment Account" value={t.InvestmentAccount || t.investment_account || invDetails?.investmentAccount || t.Category || t.ToAccount || t.Account || '—'} />
+              {(t.SubAccount || t.sub_account || invDetails?.subAccount || invBroker) && (
+                <DPRow label="Platform / Subaccount" value={t.SubAccount || t.sub_account || invDetails?.subAccount || invBroker} />
+              )}
+              {invType === 'BUY' && invDetails?.bankAccount && (
+                <DPRow label="Funding Account" value={invDetails.bankAccount} />
+              )}
+              {invType === 'SELL' && invDetails?.bankAccount && (
+                <DPRow label="Settlement Account" value={invDetails.bankAccount} />
+              )}
+              <DPRow label="Security / Fund" value={invSecurityDisplay} />
+              {noteText && noteText !== securityName && <DPRow label="Note" value={noteText} />}
               {invQty !== 0 && <DPRow label="Units" value={`${Math.abs(invQty).toFixed(3)} units`} />}
               {invNav > 0 && <DPRow label="NAV / Price" value={`₹${invNav.toFixed(4)}`} />}
               {invTradeVal > 0 && <DPRow label="Trade Value" value={formatINR(invTradeVal)} />}
               {invCostBasis > 0 && <DPRow label="Cost Basis" value={formatINR(invCostBasis)} />}
               {invType === 'SELL' && <DPRow label="Realized P&L" value={`${invRealizedPnl >= 0 ? '+' : ''}${formatINR(invRealizedPnl)}`} />}
-              {t.CashImpact !== undefined && <DPRow label="Cash Impact" value={formatINR(parseFloat(t.CashImpact || t.cash_impact || 0))} />}
-              <DPRow label="From" value={t.Account || t.FromAccount || '—'} />
-              <DPRow label="To" value={t.ToAccount || '—'} />
-              {t.Source && <DPRow label="Source" value={t.Source || t.source} />}
               {t.Description && <DPRow label="Description" value={t.Description} />}
+              {t.Tags && <DPRow label="Tags" value={t.Tags} />}
             </>
           ) : (
             <>

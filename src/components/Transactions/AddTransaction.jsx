@@ -1,6 +1,7 @@
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { inputToStorage, toInputDate, nowTimeStr, formatINR } from '../../utils/format.js';
+import { resolveInvestmentAccounts } from '../../utils/brokerageAccounting.js';
 import './AddTransaction.css';
 import { AccountsManager, CategoriesManager } from '../Settings/Settings.jsx';
 import {
@@ -11,9 +12,10 @@ import { parseBankSMS } from '../../utils/smsParser.js';
 import ReceiptViewer from '../Common/ReceiptViewer.jsx';
 
 const TYPES = [
-  { id: 'Income', label: 'Income', cls: 'income' },
   { id: 'Expense', label: 'Expense', cls: 'expense' },
+  { id: 'Income', label: 'Income', cls: 'income' },
   { id: 'Transfer-Out', label: 'Transfer', cls: 'transfer' },
+  { id: 'Investment', label: 'Investment', cls: 'investment' },
 ];
 
 const todayVal = () => {
@@ -468,8 +470,43 @@ export default function AddTransaction({
   backInterceptRef = null, onSaveInstalment = null
 }) {
   const { state, navigate, addTransaction, updateTransaction, createRecurringRule, updateInstalmentSiblings } = useApp();
-  const { accounts, categories, transactions } = state;
+  const { accounts = [], categories = {}, transactions = [] } = state || {};
   const isEdit = !!editTransaction;
+
+  // Helper to check if an account belongs to Investments group
+  const isInvestmentAccount = useCallback((name) => {
+    if (!name) return false;
+    const a = (accounts || []).find(acc => (acc.name || acc || '').toLowerCase() === String(name).toLowerCase());
+    return a?.group?.toLowerCase() === 'investments';
+  }, [accounts]);
+
+  // Robust helper to extract and deduplicate subaccount string names regardless of data shape or source
+  const getSubAccountNames = useCallback((acctObj) => {
+    if (!acctObj) return [];
+    const subs = Array.isArray(acctObj.subAccounts) ? acctObj.subAccounts : (acctObj.subAccounts ? Array.from(acctObj.subAccounts) : []);
+    const extracted = subs.map(s => (typeof s === 'string' ? s : (s?.name || s?.id || '')).trim()).filter(Boolean);
+
+    // Guaranteed canonical defaults for parent accounts
+    const acctName = String(acctObj.name || acctObj || '').trim().toLowerCase();
+    let canonicalDefaults = [];
+    if (acctName === 'mutual funds tax saver') canonicalDefaults = ['Ak ETMoney'];
+    else if (acctName === 'liquid mutual funds') canonicalDefaults = ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney'];
+    else if (acctName === 'share market') canonicalDefaults = ['Zerodha', 'Fareeda Groww'];
+
+    const rawList = [...extracted, ...canonicalDefaults];
+
+    // Universal case-insensitive deduplication preserving clean display casing
+    const seen = new Set();
+    const unique = [];
+    for (const name of rawList) {
+      const key = name.trim().toLowerCase();
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        unique.push(name.trim());
+      }
+    }
+    return unique;
+  }, []);
 
   // Compute sub-account balances to sort them by highest balance
   const subAcctBalances = useMemo(() => {
@@ -480,27 +517,32 @@ export default function AddTransaction({
     for (const t of transactions) {
       const amt = txnAmountLocal(t);
       const type = String(t['Income/Expense'] || '').trim();
-      const acct = String(t.Account || t.FromAccount || '').trim();
+      const acct = String(t.Account || '').trim();
+      const fromAcct = String(t.FromAccount || t.Account || '').trim();
       const dest = String(t.ToAccount || '').trim();
       
       const sub = String(t.SubAccount || t.sub_account || '').trim();
-      const fromSub = String(t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '').trim();
+      const fromSub = String(t.FromSubAccount || t.from_sub_account || '').trim();
       const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
 
       if (type === 'Income') {
-        if (acct && sub && !looksNumeric(acct)) {
-          if (!map[acct]) map[acct] = {};
-          map[acct][sub] = (map[acct][sub] || 0) + amt;
+        const targetAcct = dest || acct;
+        const targetSub = toSub || sub;
+        if (targetAcct && targetSub && !looksNumeric(targetAcct)) {
+          if (!map[targetAcct]) map[targetAcct] = {};
+          map[targetAcct][targetSub] = (map[targetAcct][targetSub] || 0) + amt;
         }
       } else if (type === 'Expense') {
-        if (acct && sub && !looksNumeric(acct)) {
-          if (!map[acct]) map[acct] = {};
-          map[acct][sub] = (map[acct][sub] || 0) - amt;
+        const targetAcct = fromAcct || acct;
+        const targetSub = fromSub || sub;
+        if (targetAcct && targetSub && !looksNumeric(targetAcct)) {
+          if (!map[targetAcct]) map[targetAcct] = {};
+          map[targetAcct][targetSub] = (map[targetAcct][targetSub] || 0) - amt;
         }
       } else if (type === 'Transfer-Out') {
-        if (acct && fromSub && !looksNumeric(acct)) {
-          if (!map[acct]) map[acct] = {};
-          map[acct][fromSub] = (map[acct][fromSub] || 0) - amt;
+        if (fromAcct && fromSub && !looksNumeric(fromAcct)) {
+          if (!map[fromAcct]) map[fromAcct] = {};
+          map[fromAcct][fromSub] = (map[fromAcct][fromSub] || 0) - amt;
         }
         if (dest && toSub && !looksNumeric(dest)) {
           if (!map[dest]) map[dest] = {};
@@ -512,14 +554,28 @@ export default function AddTransaction({
   }, [transactions]);
 
   const getSortedSubs = useCallback((acctObj) => {
-    if (!acctObj || !acctObj.subAccounts) return [];
-    const name = acctObj.name;
-    return [...acctObj.subAccounts].sort((a, b) => {
-      const balA = subAcctBalances[name]?.[a.name] ?? 0;
-      const balB = subAcctBalances[name]?.[b.name] ?? 0;
+    if (!acctObj) return [];
+    const names = getSubAccountNames(acctObj);
+    if (!names.length) return [];
+    const name = acctObj.name || acctObj;
+    const sorted = [...names].sort((a, b) => {
+      const balA = subAcctBalances[name]?.[a] ?? 0;
+      const balB = subAcctBalances[name]?.[b] ?? 0;
       return balB - balA;
     });
-  }, [subAcctBalances]);
+
+    // Universal deduplication guarantee
+    const seen = new Set();
+    const result = [];
+    for (const s of sorted) {
+      const key = s.trim().toLowerCase();
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        result.push(s);
+      }
+    }
+    return result;
+  }, [getSubAccountNames, subAcctBalances]);
   const isCopy = !!copyTransaction;
 
   // Reorder overlay state (stays inside AddTransaction — no navigation needed)
@@ -556,22 +612,76 @@ export default function AddTransaction({
   const [form, setForm] = useState(() => {
     if (isEdit) {
       const t = editTransaction;
+      const isInv = Boolean(
+        t.InvestmentTransactionType ||
+        t.investment_transaction_type ||
+        t.Brokerage ||
+        t.brokerage ||
+        (t.SecuritySymbol && t.SecurityISIN)
+      );
+      const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+
       let rt = t['Income/Expense'] || 'Expense';
       if (rt === 'Transfer') rt = 'Transfer-Out';
+      if (isInv && (invType === 'BUY' || invType === 'SELL')) {
+        rt = invType;
+      }
+
       // Strip (x/x) instalment suffix from Note so user sees clean note in edit form
-      const cleanNote = stripInstalmentSuffix(t.Note);
+      const cleanNote = stripInstalmentSuffix(t.Note || t.note || '');
+      const dispAmt = String(t.TradeValue || t.trade_value || t.INR || t.Amount || t.amount || '');
+
+      let initialAccount = rt.startsWith('Transfer') ? '' : (t.Account || t.FromAccount || '');
+      let initialInvestmentAccount = '';
+      let initialSubAccount = t.SubAccount || t.sub_account || t.FromSubAccount || t.to_sub_account || t.Brokerage || t.brokerage || '';
+      let initialFundingAccount = (t.FromAccount && t.FromAccount !== t.Account ? t.FromAccount : '') || (t.ToAccount && t.ToAccount !== t.Account ? t.ToAccount : '');
+      let initialSettlementAccount = '';
+
+      if (isInv) {
+        const res = resolveInvestmentAccounts(t, accounts);
+        initialInvestmentAccount = res.investmentAccount || t.InvestmentAccount || t.Category || t.ToAccount || '';
+        initialAccount = initialInvestmentAccount;
+        if (res.invType === 'BUY') {
+          initialFundingAccount = res.bankAccount;
+        } else {
+          initialSettlementAccount = res.bankAccount;
+        }
+        if (res.subAccount) initialSubAccount = res.subAccount;
+      }
+
       return {
-        type: rt, amount: String(t.INR || t.Amount || ''), date: toInputDate(t.Date) || todayVal(), time: t.Time || lastTime,
-        account: rt.startsWith('Transfer') ? '' : (t.Account || ''), fromAccount: rt.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
-        toAccount: rt.startsWith('Transfer') ? (t.ToAccount || '') : '', category: t.Category || '',
-        subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '', note: cleanNote, description: t.Description || '',
+        type: isInv ? 'Investment' : rt,
+        amount: dispAmt,
+        date: toInputDate(t.Date) || todayVal(),
+        time: t.Time || lastTime,
+        investmentAccount: initialInvestmentAccount,
+        account: initialAccount,
+        fromAccount: rt.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
+        toAccount: rt.startsWith('Transfer') ? (t.ToAccount || '') : '',
+        category: t.Category || '',
+        subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '',
+        note: cleanNote,
+        description: t.Description || t.description || '',
         tags: t.Tags || t.tags || '',
         receipt_image: t.receipt_image || '',
         warranty_expiry: t.warranty_expiry || '',
         serial_no: t.serial_no || '',
-        subAccount: t.SubAccount || t.sub_account || '',
-        fromSubAccount: t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '',
-        toSubAccount: t.ToSubAccount || t.to_sub_account || ''
+        subAccount: initialSubAccount,
+        fromSubAccount: t.FromSubAccount || t.from_sub_account || '',
+        toSubAccount: t.ToSubAccount || t.to_sub_account || '',
+        fundingAccount: initialFundingAccount,
+        settlementAccount: initialSettlementAccount,
+        // Investment specific state
+        investmentTransactionType: invType || (rt === 'BUY' || rt === 'SELL' ? rt : 'BUY'),
+        securitySymbol: t.SecuritySymbol || t.security_symbol || '',
+        securityISIN: t.SecurityISIN || t.security_isin || '',
+        quantity: String(Math.abs(parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0)) || ''),
+        unitPrice: String(t.UnitPrice || t.unit_price || ''),
+        tradeValue: String(t.TradeValue || t.trade_value || dispAmt || ''),
+        costBasis: String(t.CostBasis || t.cost_basis || ''),
+        realizedPnl: String(t.RealizedPnl || t.realized_pnl || ''),
+        brokerage: initialSubAccount,
+        source: t.Source || t.source || ''
       };
     }
     if (isCopy) {
@@ -589,7 +699,20 @@ export default function AddTransaction({
         serial_no: t.serial_no || '',
         subAccount: t.SubAccount || t.sub_account || '',
         fromSubAccount: t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '',
-        toSubAccount: t.ToSubAccount || t.to_sub_account || ''
+        toSubAccount: t.ToSubAccount || t.to_sub_account || '',
+        investmentAccount: '',
+        fundingAccount: '',
+        settlementAccount: '',
+        investmentTransactionType: 'BUY',
+        securitySymbol: '',
+        securityISIN: '',
+        quantity: '',
+        unitPrice: '',
+        tradeValue: '',
+        costBasis: '',
+        realizedPnl: '',
+        brokerage: '',
+        source: ''
       };
     }
     return {
@@ -597,6 +720,7 @@ export default function AddTransaction({
       amount: prefillAmount ? String(prefillAmount) : '',
       date: prefillDate ? (toInputDate(prefillDate) || todayVal()) : todayVal(),
       time: prefillDate && lastTimeForDate ? lastTimeForDate : nowTimeStr(),
+      investmentAccount: '',
       account: prefillAccount || '',
       fromAccount: prefillFromAccount || '',
       toAccount: prefillToAccount || '',
@@ -610,7 +734,19 @@ export default function AddTransaction({
       serial_no: '',
       subAccount: prefillSubAccount || '',
       fromSubAccount: prefillSubAccount || '',
-      toSubAccount: ''
+      toSubAccount: '',
+      fundingAccount: '',
+      settlementAccount: '',
+      investmentTransactionType: 'BUY',
+      securitySymbol: '',
+      securityISIN: '',
+      quantity: '',
+      unitPrice: '',
+      tradeValue: '',
+      costBasis: '',
+      realizedPnl: '',
+      brokerage: '',
+      source: ''
     };
   });
 
@@ -704,6 +840,7 @@ export default function AddTransaction({
         return n;
       }
       if (k === 'category') return { ...p, [k]: v, subcategory: '' };
+      if (k === 'investmentAccount') return { ...p, investmentAccount: v, account: v };
       return { ...p, [k]: v };
     });
     if (errors[k]) setErrors(p => ({ ...p, [k]: '' }));
@@ -731,8 +868,9 @@ export default function AddTransaction({
   const isTransfer = form.type === 'Transfer-Out';
 
   const selectedAcctObj = useMemo(() => {
-    return (accounts || []).find(a => a.name === form.account);
-  }, [accounts, form.account]);
+    const acctName = form.investmentAccount || form.account || '';
+    return (accounts || []).find(a => (a.name || '').toLowerCase() === acctName.toLowerCase()) || { name: acctName, subAccounts: [] };
+  }, [accounts, form.investmentAccount, form.account]);
 
   const fromAcctObj = useMemo(() => {
     return (accounts || []).find(a => a.name === form.fromAccount);
@@ -995,43 +1133,307 @@ export default function AddTransaction({
     return result;
   };
 
+  // State & Ref for Security Autocomplete and Note tracking
+  const [secFocused, setSecFocused] = useState(false);
+  const [secSugs, setSecSugs] = useState([]);
+  const noteUserEditedRef = useRef(Boolean(isEdit));
+  const lastEditedInvInputRef = useRef('quantity');
+
+  // Extract distinct investment securities from transactions
+  const investmentSecurities = useMemo(() => {
+    const map = new Map();
+    for (const t of transactions) {
+      const sym = String(t.SecuritySymbol || t.security_symbol || '').trim();
+      const note = stripInstalmentSuffix(t.Note || t.note || '').trim();
+      const isin = String(t.SecurityISIN || t.security_isin || '').trim();
+      const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim();
+      const isInv = Boolean(invType || isin || t.Brokerage || t.brokerage);
+
+      const candidateKey = sym || (isInv ? note : '');
+      if (!candidateKey) continue;
+
+      const cleanDisplay = sym || note;
+      // Strip technical scheme codes / plan suffixes for the clean Note
+      let cleanNote = note;
+      if (!cleanNote || cleanNote.includes('- Regular Plan') || cleanNote.includes('- Direct Plan') || /^[0-9A-Za-z]+[-_]/.test(cleanNote)) {
+        cleanNote = cleanSecurityToNote(sym || note);
+      }
+
+      if (!map.has(candidateKey.toLowerCase())) {
+        map.set(candidateKey.toLowerCase(), {
+          symbol: cleanDisplay,
+          note: cleanNote || cleanDisplay,
+          count: 1,
+          date: t.Date || ''
+        });
+      } else {
+        const item = map.get(candidateKey.toLowerCase());
+        item.count += 1;
+        if (!item.note && cleanNote) item.note = cleanNote;
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  }, [transactions]);
+
+  // Clean canonical security name into short human-readable Note
+  function cleanSecurityToNote(securityStr) {
+    if (!securityStr) return '';
+    let s = String(securityStr).trim();
+    // Strip leading technical code prefix (e.g. "127LTGPG-", "166TPDGG-", "119ETTSD-")
+    s = s.replace(/^[0-9A-Za-z]+[-_]\s*/, '');
+    // Strip common technical fund suffixes
+    s = s.replace(/\s*-\s*(Direct|Regular)\s+Plan.*$/i, '');
+    s = s.replace(/\s*\((Non Demat|Demat)\)/gi, '');
+    s = s.replace(/\s*-\s*Growth.*$/i, '');
+    s = s.replace(/\s+Growth(\s+Plan)?/gi, '');
+    // Clean trailing punctuation / whitespace
+    s = s.replace(/[\s\-_]+$/, '').trim();
+    return s;
+  }
+
+  const handleSecurityChange = (v) => {
+    set('securitySymbol', v);
+    if (v.trim().length > 0) {
+      const q = v.toLowerCase();
+      const filtered = investmentSecurities.filter(s =>
+        s.symbol.toLowerCase().includes(q) || (s.note && s.note.toLowerCase().includes(q))
+      ).slice(0, 10);
+      setSecSugs(filtered);
+    } else {
+      setSecSugs([]);
+    }
+  };
+
+  const handleSelectSecurity = (item) => {
+    set('securitySymbol', item.symbol);
+    // If user has not manually customized their Note, auto-fill Note with clean human-readable name
+    if (!noteUserEditedRef.current && (!form.note || !form.note.trim())) {
+      const cleanName = item.note || cleanSecurityToNote(item.symbol) || item.symbol;
+      set('note', cleanName);
+    }
+    setSecSugs([]);
+    setSecFocused(false);
+  };
+
+  const roundNum = (n, maxDec = 2) => {
+    if (isNaN(n) || n === null || n === '') return '';
+    const factor = Math.pow(10, maxDec);
+    return String(Math.round((Number(n) + Number.EPSILON) * factor) / factor);
+  };
+
+  const calcPnl = (tradeValStr, costBasisStr) => {
+    if (tradeValStr === '' || tradeValStr === null || tradeValStr === undefined) return '';
+    if (costBasisStr === '' || costBasisStr === null || costBasisStr === undefined) return '';
+    const v = parseFloat(tradeValStr);
+    const cb = parseFloat(costBasisStr);
+    if (!isNaN(v) && !isNaN(cb)) {
+      return roundNum(v - cb, 2);
+    }
+    return '';
+  };
+
+  // Controlled 2-of-3 calculation model for Units, Price, Trade Value & SELL Realized P&L
+  const handleUnitsChange = (val) => {
+    lastEditedInvInputRef.current = 'quantity';
+    setForm(prev => {
+      const q = parseFloat(val);
+      const p = parseFloat(prev.unitPrice);
+      const invType = (prev.investmentTransactionType || 'BUY').toUpperCase();
+
+      let nextTradeVal = prev.tradeValue;
+
+      // Rule: Editing Units only derives Trade Value if BOTH Units and NAV are valid positive numbers.
+      // Editing Units NEVER mutates NAV.
+      if (!isNaN(q) && q > 0 && !isNaN(p) && p > 0) {
+        nextTradeVal = roundNum(q * p, 2);
+      }
+
+      const nextPnl = invType === 'SELL' ? calcPnl(nextTradeVal, prev.costBasis) : prev.realizedPnl;
+
+      return {
+        ...prev,
+        quantity: val,
+        tradeValue: nextTradeVal,
+        amount: nextTradeVal,
+        realizedPnl: nextPnl
+      };
+    });
+    if (errors.quantity) setErrors(p => ({ ...p, quantity: '' }));
+  };
+
+  const handlePriceChange = (val) => {
+    lastEditedInvInputRef.current = 'unitPrice';
+    setForm(prev => {
+      const p = parseFloat(val);
+      const q = parseFloat(prev.quantity);
+      const invType = (prev.investmentTransactionType || 'BUY').toUpperCase();
+
+      let nextTradeVal = prev.tradeValue;
+
+      // Rule: Editing NAV only derives Trade Value if BOTH Units and NAV are valid positive numbers.
+      // Editing NAV NEVER mutates Units.
+      if (!isNaN(p) && p > 0 && !isNaN(q) && q > 0) {
+        nextTradeVal = roundNum(q * p, 2);
+      }
+
+      const nextPnl = invType === 'SELL' ? calcPnl(nextTradeVal, prev.costBasis) : prev.realizedPnl;
+
+      return {
+        ...prev,
+        unitPrice: val,
+        tradeValue: nextTradeVal,
+        amount: nextTradeVal,
+        realizedPnl: nextPnl
+      };
+    });
+    if (errors.unitPrice) setErrors(p => ({ ...p, unitPrice: '' }));
+  };
+
+  const handleTradeValueChange = (val) => {
+    setForm(prev => {
+      const v = parseFloat(val);
+      const q = parseFloat(prev.quantity);
+      const p = parseFloat(prev.unitPrice);
+      const invType = (prev.investmentTransactionType || 'BUY').toUpperCase();
+
+      let nextUnitPrice = prev.unitPrice;
+      let nextQuantity = prev.quantity;
+
+      // Rule: Editing Trade Value derives either NAV or Units only when Trade Value is a valid positive number.
+      if (!isNaN(v) && v > 0) {
+        if (!isNaN(q) && q > 0) {
+          nextUnitPrice = roundNum(v / q, 4);
+        } else if (!isNaN(p) && p > 0) {
+          nextQuantity = roundNum(v / p, 3);
+        }
+      }
+
+      const nextPnl = invType === 'SELL' ? calcPnl(val, prev.costBasis) : prev.realizedPnl;
+
+      return {
+        ...prev,
+        tradeValue: val,
+        amount: val,
+        unitPrice: nextUnitPrice,
+        quantity: nextQuantity,
+        realizedPnl: nextPnl
+      };
+    });
+    if (errors.tradeValue) setErrors(p => ({ ...p, tradeValue: '' }));
+    if (errors.amount) setErrors(p => ({ ...p, amount: '' }));
+  };
+
+  const handleCostBasisChange = (val) => {
+    setForm(prev => {
+      const currentTradeVal = prev.tradeValue || prev.amount;
+      const nextPnl = calcPnl(currentTradeVal, val);
+      return {
+        ...prev,
+        costBasis: val,
+        realizedPnl: nextPnl
+      };
+    });
+    if (errors.costBasis) setErrors(p => ({ ...p, costBasis: '' }));
+  };
+
   const handleNoteChange = (v) => {
+    noteUserEditedRef.current = true;
     set('note', v);
     if (v.trim().length > 0) {
       const q = v.toLowerCase(), seen = new Set();
-      const matchedTxns = transactions.filter(t => {
-        const isTargetXfer = form.type.toLowerCase().startsWith('transfer');
-        const tType = (t['Income/Expense'] || 'Expense').toLowerCase();
-        if (isTargetXfer) return tType.startsWith('transfer');
-        return tType === form.type.toLowerCase();
-      });
-      const sugs = matchedTxns.map(t => stripInstalmentSuffix(t.Note || '')).filter(n => {
-        if (!n || seen.has(n) || !n.toLowerCase().includes(q)) return false;
-        seen.add(n);
-        return true;
-      }).slice(0, 15);
-      setNoteSugs(sugs);
+      if (isInvMode) {
+        const sugs = investmentSecurities
+          .map(s => s.note || cleanSecurityToNote(s.symbol) || s.symbol)
+          .filter(n => {
+            if (!n || seen.has(n.toLowerCase()) || !n.toLowerCase().includes(q)) return false;
+            seen.add(n.toLowerCase());
+            return true;
+          }).slice(0, 10);
+        setNoteSugs(sugs);
+      } else {
+        const matchedTxns = transactions.filter(t => {
+          const isTargetXfer = form.type.toLowerCase().startsWith('transfer');
+          const tType = (t['Income/Expense'] || 'Expense').toLowerCase();
+          if (isTargetXfer) return tType.startsWith('transfer');
+          return tType === form.type.toLowerCase();
+        });
+        const sugs = matchedTxns.map(t => stripInstalmentSuffix(t.Note || '')).filter(n => {
+          if (!n || seen.has(n.toLowerCase()) || !n.toLowerCase().includes(q)) return false;
+          seen.add(n.toLowerCase());
+          return true;
+        }).slice(0, 15);
+        setNoteSugs(sugs);
+      }
     } else {
-      setNoteSugs(getRecentAndMostUsedNotes());
+      setNoteSugs([]);
     }
   };
 
   const handleNoteFocus = () => {
     setPickerState(null);
     setNoteFocused(true);
+    // Never show suggestions on empty Note field
     if (!form.note || !form.note.trim()) {
-      setNoteSugs(getRecentAndMostUsedNotes());
+      setNoteSugs([]);
+    } else {
+      handleNoteChange(form.note);
     }
   };
 
+  const isInvEdit = Boolean(
+    editTransaction?.InvestmentTransactionType ||
+    editTransaction?.investment_transaction_type ||
+    editTransaction?.Brokerage ||
+    editTransaction?.brokerage ||
+    (editTransaction?.SecuritySymbol && editTransaction?.SecurityISIN)
+  );
+  const isInvMode = Boolean(form.type === 'Investment' || form.type === 'BUY' || form.type === 'SELL' || isInvEdit);
+
+  const currentTypes = TYPES;
+
   const validate = () => {
     const e = {};
-    if (form.amount === '' || form.amount === undefined || isNaN(parseFloat(form.amount))) e.amount = 'Enter a valid amount';
     if (!form.date) e.date = 'Required';
-    if (isTransfer) {
+
+    if (isInvMode && !isTransfer) {
+      const invType = (form.investmentTransactionType || 'BUY').toUpperCase();
+      if (!form.account) e.account = 'Select investment account';
+      if (!form.securitySymbol && !form.note) e.securitySymbol = 'Enter security name or note';
+
+      const q = parseFloat(form.quantity);
+      const p = parseFloat(form.unitPrice);
+      const v = parseFloat(form.tradeValue || form.amount);
+
+      const hasQ = !isNaN(q) && q > 0;
+      const hasP = !isNaN(p) && p > 0;
+      const hasV = !isNaN(v) && v > 0;
+
+      const suppliedCount = [hasQ, hasP, hasV].filter(Boolean).length;
+      if (suppliedCount < 2) {
+        e.tradeValue = 'Enter at least 2 of: Units, Price/NAV, Trade Value';
+        if (!hasQ) e.quantity = 'Required (or enter Price + Trade Value)';
+        if (!hasP) e.unitPrice = 'Required (or enter Units + Trade Value)';
+      } else if (hasQ && hasP && hasV) {
+        const expectedV = q * p;
+        const diff = Math.abs(expectedV - v);
+        const tolerance = Math.max(0.50, v * 0.01); // 50 paisa or 1% tolerance
+        if (diff > tolerance) {
+          e.tradeValue = `Trade Value (₹${v.toFixed(2)}) inconsistent with Units (${q}) × Price (₹${p}) = ₹${expectedV.toFixed(2)}`;
+        }
+      }
+
+      if (invType === 'SELL') {
+        const cb = parseFloat(form.costBasis);
+        if (isNaN(cb) || cb < 0) {
+          e.costBasis = 'Enter cost basis for SELL transaction';
+        }
+      }
+    } else if (isTransfer) {
+      if (form.amount === '' || form.amount === undefined || isNaN(parseFloat(form.amount))) e.amount = 'Enter a valid amount';
       if (!form.fromAccount) e.fromAccount = 'Select from account';
       if (!form.toAccount) e.toAccount = 'Select to account';
     } else if (isSplit) {
+      if (form.amount === '' || form.amount === undefined || isNaN(parseFloat(form.amount))) e.amount = 'Enter a valid amount';
       if (!form.account) e.account = 'Select account';
       if (form.amount && !isNaN(parseFloat(form.amount)) && Math.abs(splitRemaining) >= 0.01) {
         e.splits = `Allocated sum (₹${allocatedSplitSum}) must match entered total (₹${form.amount})`;
@@ -1042,6 +1444,7 @@ export default function AddTransaction({
         if (!splits[i].note || !splits[i].note.trim()) e.splits = `Enter note for split part ${i + 1}`;
       }
     } else {
+      if (form.amount === '' || form.amount === undefined || isNaN(parseFloat(form.amount))) e.amount = 'Enter a valid amount';
       if (!form.account) e.account = 'Select account';
       if (!form.category) e.category = 'Select category';
     }
@@ -1087,33 +1490,28 @@ export default function AddTransaction({
       }
 
       if (!isEdit && recurringConfig) {
-        // form.date is YYYY-MM-DD (HTML date input format)
-        // inputToStorage converts to DD/MM/YYYY for transaction storage
-        // recurring rule stores start_date/next_date in YYYY-MM-DD internally
-        const isoDate = form.date; // YYYY-MM-DD — used for recurring rule storage
-        const txnDate = inputToStorage(form.date); // DD/MM/YYYY — used for transaction records
+        const isoDate = form.date;
+        const txnDate = inputToStorage(form.date);
 
         if (recurringConfig.type === 'instalment') {
-          // Rule stores start_date in YYYY-MM-DD so buildInstalmentSchedule can parse it
           const rule = {
-            rule_type: 'instalment', status: 'completed', // all parts created upfront
+            rule_type: 'instalment', status: 'completed',
             txn_type: form.type,
             account: form.account, from_account: form.fromAccount || '', to_account: form.toAccount || '',
             category: form.category, subcategory: form.subcategory || '',
             base_note: baseNote, description: form.description || '',
             currency: 'INR', total_amount: totalAmount,
             total_days: recurringConfig.totalDays,
-            start_date: isoDate,                // YYYY-MM-DD
+            start_date: isoDate,
             schedule_mode: recurringConfig.scheduleMode,
           };
           const schedule = buildInstalmentSchedule(rule);
           rule.total_parts = schedule.length;
-          rule.completed_parts = schedule.length; // all created now
-          rule.next_date = '';               // no pending parts
+          rule.completed_parts = schedule.length;
+          rule.next_date = '';
           rule.end_date = schedule[schedule.length - 1]?.date || '';
           rule.amount_per_part = schedule[0]?.amount || 0;
           const saved = await createRecurringRule(rule);
-          // Create all instalment transactions — inst.date is YYYY-MM-DD, convert to DD/MM/YYYY
           for (const inst of schedule) {
             const [iy, im, id2] = inst.date.split('-');
             const instTxnDate = `${id2}/${im}/${iy}`;
@@ -1133,7 +1531,6 @@ export default function AddTransaction({
             });
           }
         } else if (recurringConfig.type === 'repeat') {
-          // next_date stored as YYYY-MM-DD
           const nextDate = computeNextRepeatDate(isoDate, recurringConfig.frequency, recurringConfig.scheduleMode);
           const rule = {
             rule_type: 'repeat', status: 'active',
@@ -1142,14 +1539,13 @@ export default function AddTransaction({
             category: form.category, subcategory: form.subcategory || '',
             base_note: baseNote, description: form.description || '',
             currency: 'INR', amount_per_part: totalAmount,
-            start_date: isoDate,             // YYYY-MM-DD
-            next_date: nextDate,            // YYYY-MM-DD
+            start_date: isoDate,
+            next_date: nextDate,
             schedule_mode: recurringConfig.scheduleMode,
             frequency: recurringConfig.frequency,
             completed_parts: 1,
           };
           const saved = await createRecurringRule(rule);
-          // Save first transaction
           await addTransaction({
             Date: txnDate, Time: form.time || '',
             Account: form.account, FromAccount: form.fromAccount || '', ToAccount: form.toAccount || '',
@@ -1166,39 +1562,142 @@ export default function AddTransaction({
           });
         }
       } else {
-        // Normal single transaction or instalment edit
-        const instInfo = parseInstalmentInfo(editTransaction?.Note);
-        const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!instInfo);
-        const thisNote = isInstalmentEdit && instInfo
-          ? `${baseNote} (${instInfo.part}/${instInfo.total})`.trim()
-          : baseNote;
-        const data = {
-          Date: inputToStorage(form.date), Time: form.time || '',
-          Account: isTransfer ? form.fromAccount : form.account,
-          FromAccount: isTransfer ? form.fromAccount : '', ToAccount: isTransfer ? form.toAccount : '',
-          Category: isTransfer ? 'Transfer' : form.category,
-          Subcategory: form.subcategory || 'Default',
-          Note: thisNote, Description: form.description || '',
-          INR: totalAmount, Amount: form.amount,
-          Currency: 'INR', 'Income/Expense': form.type,
-          // Preserve recurring_rule_id so instalment link is never lost
-          recurring_rule_id: editTransaction?.recurring_rule_id || '',
-          Tags: combinedTags,
-          receipt_image: form.receipt_image || '',
-          warranty_expiry: form.warranty_expiry || '',
-          serial_no: form.serial_no || '',
-          _id: editTransaction?._id,
-          SubAccount: isTransfer ? form.fromSubAccount : form.subAccount,
-          FromSubAccount: isTransfer ? form.fromSubAccount : '',
-          ToSubAccount: isTransfer ? form.toSubAccount : '',
-        };
-        if (isInstalmentEdit) {
-          // Bulk update the entire series (including this transaction) in a single atomic call
-          await updateInstalmentSiblings(editTransaction.recurring_rule_id, data, editTransaction);
-        } else if (isEdit) {
-          await updateTransaction(editTransaction._id, data);
+        // Check if saving an investment transaction
+        const isInvSave = Boolean(
+          form.type === 'Investment' ||
+          form.type === 'BUY' ||
+          form.type === 'SELL' ||
+          form.investmentTransactionType ||
+          (isEdit && (editTransaction?.InvestmentTransactionType || editTransaction?.Brokerage))
+        );
+
+        if (isInvSave && !isTransfer) {
+          const invType = form.type === 'BUY' || form.type === 'SELL' ? form.type : (form.investmentTransactionType || 'BUY');
+          let qty = parseFloat(form.quantity) || 0;
+          let price = parseFloat(form.unitPrice) || 0;
+          let tradeVal = parseFloat(form.tradeValue) || (qty * price) || parseFloat(form.amount) || 0;
+
+          if (tradeVal > 0 && qty > 0 && (!price || price <= 0)) {
+            price = parseFloat(roundNum(tradeVal / qty, 4));
+          } else if (tradeVal > 0 && price > 0 && (!qty || qty <= 0)) {
+            qty = parseFloat(roundNum(tradeVal / price, 3));
+          } else if (qty > 0 && price > 0 && (!tradeVal || tradeVal <= 0)) {
+            tradeVal = parseFloat(roundNum(qty * price, 2));
+          }
+
+          const costBasis = parseFloat(form.costBasis) || 0;
+          const realizedPnl = parseFloat(form.realizedPnl) || 0;
+
+          const currentInvAcct = form.investmentAccount || form.account || '';
+          const currentSubAcct = form.subAccount || '';
+          const fundingBankAcct = (invType === 'BUY' ? form.fundingAccount : (form.settlementAccount || form.fundingAccount)) || '';
+          const isFundedFromBank = Boolean(fundingBankAcct && fundingBankAcct.toLowerCase() !== currentInvAcct.toLowerCase());
+
+          // For BUY: money leaves fundingBankAcct (FromAccount) and enters currentInvAcct (ToAccount)
+          // For SELL: money leaves currentInvAcct (FromAccount) and enters fundingBankAcct (ToAccount)
+          const fromAcct = invType === 'BUY'
+            ? (isFundedFromBank ? fundingBankAcct : currentInvAcct)
+            : currentInvAcct;
+
+          const toAcct = invType === 'BUY'
+            ? currentInvAcct
+            : (isFundedFromBank ? fundingBankAcct : currentInvAcct);
+
+          // Preserve exact Amount & INR semantics for historical CAS vs other investment records:
+          const isCasSell = isEdit && invType === 'SELL' && (parseFloat(editTransaction?.INR || 0) === 0 || String(editTransaction?.Amount || '') === '0.0') && !isFundedFromBank;
+          const savedInr = isCasSell ? 0 : tradeVal;
+          const savedAmount = isCasSell ? (editTransaction?.Amount || '0.0') : String(tradeVal);
+
+          const fromSub = invType === 'BUY'
+            ? (isFundedFromBank ? '' : currentSubAcct)
+            : currentSubAcct;
+
+          const toSub = invType === 'BUY'
+            ? currentSubAcct
+            : (isFundedFromBank ? '' : currentSubAcct);
+
+          // In double-entry, Account represents the primary source / outflow account:
+          const primaryAcct = isFundedFromBank && invType === 'BUY' ? fundingBankAcct : currentInvAcct;
+
+          const invData = {
+            Date: inputToStorage(form.date),
+            Time: form.time || '',
+            Account: primaryAcct,
+            FromAccount: fromAcct,
+            ToAccount: toAcct,
+            Category: currentInvAcct,
+            Subcategory: form.subcategory || 'Default',
+            Note: baseNote || form.securitySymbol || '',
+            Description: form.description || (isEdit ? (editTransaction?.Description || '') : ''),
+            INR: savedInr,
+            Amount: savedAmount,
+            Currency: 'INR',
+            'Income/Expense': isEdit ? (editTransaction?.['Income/Expense'] || 'Transfer-Out') : 'Transfer-Out',
+            recurring_rule_id: editTransaction?.recurring_rule_id || '',
+            Tags: combinedTags,
+            receipt_image: form.receipt_image || '',
+            warranty_expiry: form.warranty_expiry || '',
+            serial_no: form.serial_no || '',
+            _id: editTransaction?._id,
+            ID: editTransaction?.ID || editTransaction?.id || editTransaction?._id,
+            InvestmentAccount: currentInvAcct,
+            investment_account: currentInvAcct,
+            SubAccount: currentSubAcct,
+            FromSubAccount: fromSub,
+            ToSubAccount: toSub,
+            InvestmentTransactionType: invType,
+            Brokerage: currentSubAcct,
+            SecuritySymbol: form.securitySymbol || baseNote || '',
+            SecurityISIN: form.securityISIN || (isEdit ? (editTransaction?.SecurityISIN || '') : ''),
+            Quantity: qty,
+            UnitPrice: price,
+            TradeValue: tradeVal,
+            CostBasis: costBasis,
+            RealizedPnl: realizedPnl,
+            CashImpact: isCasSell ? 0 : (invType === 'BUY' ? -tradeVal : tradeVal),
+            PositionQuantityChange: invType === 'SELL' ? -Math.abs(qty) : Math.abs(qty),
+            Source: isEdit ? (editTransaction?.Source || 'Manual') : 'Manual',
+            AccountingClassification: isEdit ? (editTransaction?.AccountingClassification || 'REAL_INVESTMENT_TRANSACTION') : 'REAL_INVESTMENT_TRANSACTION'
+          };
+
+          if (isEdit) {
+            await updateTransaction(editTransaction._id || editTransaction.id || editTransaction.ID, invData);
+          } else {
+            await addTransaction(invData);
+          }
         } else {
-          await addTransaction(data);
+          // Normal single transaction or instalment edit
+          const instInfo = parseInstalmentInfo(editTransaction?.Note);
+          const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!instInfo);
+          const thisNote = isInstalmentEdit && instInfo
+            ? `${baseNote} (${instInfo.part}/${instInfo.total})`.trim()
+            : baseNote;
+          const data = {
+            Date: inputToStorage(form.date), Time: form.time || '',
+            Account: isTransfer ? form.fromAccount : form.account,
+            FromAccount: isTransfer ? form.fromAccount : '', ToAccount: isTransfer ? form.toAccount : '',
+            Category: isTransfer ? 'Transfer' : form.category,
+            Subcategory: form.subcategory || 'Default',
+            Note: thisNote, Description: form.description || '',
+            INR: totalAmount, Amount: form.amount,
+            Currency: 'INR', 'Income/Expense': form.type,
+            recurring_rule_id: editTransaction?.recurring_rule_id || '',
+            Tags: combinedTags,
+            receipt_image: form.receipt_image || '',
+            warranty_expiry: form.warranty_expiry || '',
+            serial_no: form.serial_no || '',
+            _id: editTransaction?._id,
+            SubAccount: isTransfer ? form.fromSubAccount : form.subAccount,
+            FromSubAccount: isTransfer ? form.fromSubAccount : '',
+            ToSubAccount: isTransfer ? form.toSubAccount : '',
+          };
+          if (isInstalmentEdit) {
+            await updateInstalmentSiblings(editTransaction.recurring_rule_id, data, editTransaction);
+          } else if (isEdit) {
+            await updateTransaction(editTransaction._id, data);
+          } else {
+            await addTransaction(data);
+          }
         }
       }
       if (shouldContinue) {
@@ -1302,7 +1801,7 @@ export default function AddTransaction({
           </div>
         )}
         <div className="type-tabs">
-          {TYPES.map(tp => (
+          {currentTypes.map(tp => (
             <button key={tp.id} className={`type-tab ${tp.cls} ${form.type === tp.id ? 'active' : ''}`} onClick={() => {
               set('type', tp.id);
               if (noteFocused) {
@@ -1328,101 +1827,384 @@ export default function AddTransaction({
         </div>
 
         <div className="add-form">
-          {/* Row 1: Date + Time */}
-          <div className="form-group date-time-group">
-            <label className="form-label">Date</label>
-            <div className="date-time-row">
-              <div className="date-time-inputs">
-                <input className={`form-input ${errors.date ? 'err' : ''}`} type="date" value={form.date} onChange={e => set('date', e.target.value)} onFocus={() => setPickerState(null)} />
-                <input className="form-input" type="time" value={form.time} onChange={e => set('time', e.target.value)} onFocus={() => setPickerState(null)} />
-              </div>
-              {!isEdit && (
-                <button type="button" className="recurring-button" onClick={() => setShowRecurring(true)}>
-                  <span>{recurringConfig ? (recurringConfig.type === 'instalment' ? '📋' : '🔁') : '🔁'}</span>
-                  <span>{recurringConfig ? (recurringConfig.type === 'instalment' ? 'Instalment' : 'Repeat') : 'Rep/Inst'}</span>
-                </button>
-              )}
-            </div>
-          </div>
-          {/* Recurring summary for selected config */}
-          {!isEdit && recurringConfig && (
-            <div className="recurring-summary">
-              <span>
-                {recurringConfig.type === 'instalment'
-                  ? `📋 Instalment · ${recurringConfig.totalDays} days · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On the day'}`
-                  : `🔁 Repeat ${recurringConfig.frequency} · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On date'}`}
-              </span>
-              <button type="button" onClick={() => setRecurringConfig(null)} className="recurring-clear">✕</button>
-            </div>
-          )}
-
-          {/* Row 2: Account(s) */}
-          {isTransfer ? (
+          {isInvMode ? (
             <>
-              <div className="transfer-swap-row">
-                <PickerFieldFR ref={fromRef} setPickerState={setPickerState} label="From" value={form.fromAccount} placeholder="Select"
-                  error={errors.fromAccount} items={accountList} recent={recentAccounts}
-                  onSelect={v => { set('fromAccount', v); goNextEmpty({ key: 'fromAccount', val: v }); }}
-                  onAfterSelect={() => setPickerState(null)}
-                  onReorder={() => setReorderScreen('accounts')}
-                  active={pickerState && pickerState.type === 'from'} />
-                <button type="button" className="swap-btn" title="Swap"
-                  onClick={() => setForm(p => ({ ...p, fromAccount: p.toAccount, toAccount: p.fromAccount, fromSubAccount: p.toSubAccount, toSubAccount: p.fromSubAccount }))}>
-                  ⇅
+              {/* Investment Mode Toggle Pills */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <button
+                  type="button"
+                  style={{
+                    flex: 1, padding: '8px 12px', borderRadius: 'var(--r-md)', fontWeight: 800, fontSize: '0.82rem',
+                    background: (form.investmentTransactionType || 'BUY') === 'BUY' ? 'rgba(0,229,160,0.2)' : 'var(--bg-input)',
+                    color: (form.investmentTransactionType || 'BUY') === 'BUY' ? 'var(--income)' : 'var(--text-muted)',
+                    border: `1.5px solid ${(form.investmentTransactionType || 'BUY') === 'BUY' ? 'var(--income)' : 'var(--border)'}`,
+                    cursor: 'pointer', transition: 'var(--transition)'
+                  }}
+                  onClick={() => set('investmentTransactionType', 'BUY')}
+                >
+                  🟢 BUY
                 </button>
-                <PickerFieldFR ref={toRef} setPickerState={setPickerState} label="To" value={form.toAccount} placeholder="Select"
-                  error={errors.toAccount} items={accountList} recent={recentAccounts}
-                  onSelect={v => { set('toAccount', v); goNextEmpty({ key: 'toAccount', val: v }); }}
-                  onAfterSelect={() => setPickerState(null)}
-                  onReorder={() => setReorderScreen('accounts')}
-                  active={pickerState && pickerState.type === 'to'} />
+                <button
+                  type="button"
+                  style={{
+                    flex: 1, padding: '8px 12px', borderRadius: 'var(--r-md)', fontWeight: 800, fontSize: '0.82rem',
+                    background: form.investmentTransactionType === 'SELL' ? 'rgba(255,77,106,0.2)' : 'var(--bg-input)',
+                    color: form.investmentTransactionType === 'SELL' ? 'var(--expense)' : 'var(--text-muted)',
+                    border: `1.5px solid ${form.investmentTransactionType === 'SELL' ? 'var(--expense)' : 'var(--border)'}`,
+                    cursor: 'pointer', transition: 'var(--transition)'
+                  }}
+                  onClick={() => {
+                    setForm(prev => {
+                      const nextPnl = calcPnl(prev.tradeValue || prev.amount, prev.costBasis);
+                      return {
+                        ...prev,
+                        investmentTransactionType: 'SELL',
+                        realizedPnl: nextPnl || prev.realizedPnl
+                      };
+                    });
+                  }}
+                >
+                  🔴 SELL
+                </button>
               </div>
-              {((fromAcctObj && fromAcctObj.subAccounts && fromAcctObj.subAccounts.length > 0) ||
-                (toAcctObj && toAcctObj.subAccounts && toAcctObj.subAccounts.length > 0)) && (
-                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                  {fromAcctObj && fromAcctObj.subAccounts && fromAcctObj.subAccounts.length > 0 ? (
-                    <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                      <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>From Sub Account</label>
-                      <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.fromSubAccount} onChange={e => set('fromSubAccount', e.target.value)}>
-                        <option value="">(Select Sub Account)</option>
-                        {getSortedSubs(fromAcctObj).map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                      </select>
+
+              {/* 1. Date & Time */}
+              <div className="form-group date-time-group">
+                <label className="form-label">Date</label>
+                <div className="date-time-row">
+                  <div className="date-time-inputs">
+                    <input className={`form-input ${errors.date ? 'err' : ''}`} type="date" value={form.date} onChange={e => set('date', e.target.value)} onFocus={() => setPickerState(null)} />
+                    <input className="form-input" type="time" value={form.time} onChange={e => set('time', e.target.value)} onFocus={() => setPickerState(null)} />
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Investment Account */}
+              <PickerFieldFR
+                setPickerState={setPickerState}
+                ref={accountRef}
+                label="Investment Account"
+                value={form.investmentAccount || form.account}
+                placeholder="Select investment account"
+                error={errors.account}
+                items={accountList}
+                recent={recentAccounts}
+                onSelect={v => {
+                  setForm(prev => {
+                    const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === v.toLowerCase()) || { name: v, subAccounts: [] };
+                    const subs = getSortedSubs(matched);
+                    const nextSub = subs.length > 0 ? (subs.includes(prev.subAccount) ? prev.subAccount : subs[0]) : '';
+                    return {
+                      ...prev,
+                      investmentAccount: v,
+                      account: v,
+                      subAccount: nextSub
+                    };
+                  });
+                }}
+                onAfterSelect={() => setPickerState(null)}
+                onReorder={() => setReorderScreen('accounts')}
+                active={pickerState && pickerState.type === 'investmentaccount'}
+              />
+
+              {/* 3. Platform / Subaccount */}
+              <div className="form-group" style={{ marginTop: 8 }}>
+                <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>Platform / Subaccount</label>
+                <select
+                  className="form-input"
+                  style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }}
+                  value={form.subAccount}
+                  onChange={e => set('subAccount', e.target.value)}
+                >
+                  <option value="">(Select Platform / Subaccount)</option>
+                  {selectedAcctObj && getSortedSubs(selectedAcctObj).map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+
+              {/* 4. Funding Account (BUY) or Settlement Account (SELL) */}
+              <div className="form-group" style={{ marginTop: 8 }}>
+                <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>
+                  {(form.investmentTransactionType || 'BUY') === 'BUY' ? 'Funding Account' : 'Settlement Account'}
+                </label>
+                <select
+                  className="form-input"
+                  style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }}
+                  value={(form.investmentTransactionType || 'BUY') === 'BUY' ? form.fundingAccount : (form.settlementAccount || form.fundingAccount)}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setForm(p => ({ ...p, fundingAccount: val, settlementAccount: val }));
+                  }}
+                >
+                  <option value="">(None / Direct Portfolio Cash)</option>
+                  {accountList.filter(a => a.toLowerCase() !== (form.investmentAccount || form.account || '').toLowerCase()).map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </div>
+
+              {/* 5. Security / Fund */}
+              <div className="form-group" style={{ marginTop: 8, position: 'relative' }}>
+                <label className="form-label">Security / Fund</label>
+                <input
+                  className={`form-input ${errors.securitySymbol ? 'err' : ''}`}
+                  type="text"
+                  placeholder="e.g. Motilal Oswal ELSS or TCS"
+                  value={form.securitySymbol}
+                  onFocus={() => {
+                    setSecFocused(true);
+                    if (form.securitySymbol && form.securitySymbol.trim()) {
+                      handleSecurityChange(form.securitySymbol);
+                    } else {
+                      setSecSugs([]);
+                    }
+                  }}
+                  onChange={e => handleSecurityChange(e.target.value)}
+                  onBlur={() => {
+                    setTimeout(() => setSecFocused(false), 200);
+                    if (!noteUserEditedRef.current && (!form.note || !form.note.trim()) && form.securitySymbol?.trim()) {
+                      set('note', cleanSecurityToNote(form.securitySymbol) || form.securitySymbol.trim());
+                    }
+                  }}
+                />
+                {errors.securitySymbol && <div className="field-error" style={{ color: 'var(--expense)', fontSize: '0.7rem', marginTop: 3 }}>{errors.securitySymbol}</div>}
+                {secFocused && secSugs.length > 0 && (
+                  <div style={{
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+                    background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.4)', maxHeight: 200, overflowY: 'auto', marginTop: 4
+                  }}>
+                    {secSugs.map((s, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                        }}
+                        onMouseDown={() => handleSelectSecurity(s)}
+                      >
+                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>{s.symbol}</span>
+                        {s.note && s.note !== s.symbol && (
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{s.note}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 6. Note */}
+              <div className="form-group" style={{ marginTop: 8 }}>
+                <label className="form-label">Note</label>
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <input
+                    ref={el => { textInputRef(el); noteRef.current = el; }}
+                    className="form-input"
+                    type="text"
+                    value={form.note}
+                    placeholder="e.g. Motilal Oswal ELSS"
+                    style={{ paddingRight: (form.note || noteFocused) ? '30px' : undefined }}
+                    autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
+                    onChange={e => handleNoteChange(e.target.value)}
+                    onFocus={handleNoteFocus}
+                    onBlur={() => { setNoteFocused(false); setTimeout(() => setNoteSugs([]), 180); }}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); descriptionRef.current?.focus(); } }}
+                  />
+                  {noteFocused && (
+                    <button
+                      type="button"
+                      onMouseDown={e => { e.preventDefault(); set('note', ''); setNoteSugs([]); setNoteFocused(false); }}
+                      style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem', lineHeight: 1, padding: '4px', borderRadius: '50%', zIndex: 1 }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                  {noteSugs.length > 0 && (
+                    <div className="note-sug-list">
+                      {noteSugs.map(s => {
+                        const isObj = typeof s === 'object';
+                        const label = isObj ? s.note : s;
+                        return (
+                          <div key={label} className="note-sug-item" onMouseDown={() => { set('note', label); setNoteSugs([]); }} style={{ display: 'flex', alignItems: 'center' }}>
+                            <span className="note-sug-text">{label}</span>
+                          </div>
+                        );
+                      })}
                     </div>
-                  ) : <div style={{ flex: 1 }} />}
-                  {toAcctObj && toAcctObj.subAccounts && toAcctObj.subAccounts.length > 0 ? (
-                    <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                      <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>To Sub Account</label>
-                      <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.toSubAccount} onChange={e => set('toSubAccount', e.target.value)}>
-                        <option value="">(Select Sub Account)</option>
-                        {getSortedSubs(toAcctObj).map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                      </select>
-                    </div>
-                  ) : <div style={{ flex: 1 }} />}
+                  )}
+                </div>
+              </div>
+
+              {/* 7. Controlled 2-of-3 inputs: Units, NAV/Price, Trade Value */}
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                  <label className="form-label">Units / Quantity</label>
+                  <input
+                    className={`form-input ${errors.quantity ? 'err' : ''}`}
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0.000"
+                    value={form.quantity}
+                    onChange={e => handleUnitsChange(e.target.value)}
+                  />
+                  {errors.quantity && <div className="field-error" style={{ color: 'var(--expense)', fontSize: '0.7rem', marginTop: 3 }}>{errors.quantity}</div>}
+                </div>
+                <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                  <label className="form-label">NAV / Price (₹)</label>
+                  <input
+                    className={`form-input ${errors.unitPrice ? 'err' : ''}`}
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0.0000"
+                    value={form.unitPrice}
+                    onChange={e => handlePriceChange(e.target.value)}
+                  />
+                  {errors.unitPrice && <div className="field-error" style={{ color: 'var(--expense)', fontSize: '0.7rem', marginTop: 3 }}>{errors.unitPrice}</div>}
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginTop: 8 }}>
+                <label className="form-label">Trade Value (₹)</label>
+                <input
+                  className={`form-input ${errors.tradeValue || errors.amount ? 'err' : ''}`}
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={form.tradeValue || form.amount}
+                  onChange={e => handleTradeValueChange(e.target.value)}
+                />
+                {errors.tradeValue && <div className="field-error" style={{ color: 'var(--expense)', fontSize: '0.7rem', marginTop: 3 }}>{errors.tradeValue}</div>}
+              </div>
+
+              {/* 8. SELL-specific: Cost Basis & Realized P&L */}
+              {(form.investmentTransactionType || 'BUY') === 'SELL' && (
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                    <label className="form-label">Cost Basis (₹)</label>
+                    <input
+                      className={`form-input ${errors.costBasis ? 'err' : ''}`}
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={form.costBasis}
+                      onChange={e => handleCostBasisChange(e.target.value)}
+                    />
+                    {errors.costBasis && <div className="field-error" style={{ color: 'var(--expense)', fontSize: '0.7rem', marginTop: 3 }}>{errors.costBasis}</div>}
+                  </div>
+                  <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                    <label className="form-label">Realized P&L (₹)</label>
+                    <input
+                      className="form-input"
+                      type="text"
+                      readOnly
+                      placeholder="0.00"
+                      value={form.realizedPnl}
+                      style={{
+                        fontWeight: 700,
+                        color: parseFloat(form.realizedPnl) >= 0 ? 'var(--income)' : 'var(--expense)',
+                        background: 'var(--bg-card)'
+                      }}
+                    />
+                  </div>
                 </div>
               )}
             </>
           ) : (
             <>
-              <PickerFieldFR setPickerState={setPickerState} ref={accountRef} label="Account" value={form.account} placeholder="Select account"
-                error={errors.account} items={accountList} recent={recentAccounts}
-                onSelect={v => { set('account', v); goNextEmpty({ key: 'account', val: v }); }}
-                onAfterSelect={() => setPickerState(null)}
-                onReorder={() => setReorderScreen('accounts')}
-                active={pickerState && pickerState.type === 'account'} />
-              {selectedAcctObj && selectedAcctObj.subAccounts && selectedAcctObj.subAccounts.length > 0 && (
-                <div className="form-group" style={{ marginTop: 8 }}>
-                  <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>Sub Account</label>
-                  <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.subAccount} onChange={e => set('subAccount', e.target.value)}>
-                    <option value="">(Select Sub Account)</option>
-                    {getSortedSubs(selectedAcctObj).map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                  </select>
+              {/* Row 1: Date + Time */}
+              <div className="form-group date-time-group">
+                <label className="form-label">Date</label>
+                <div className="date-time-row">
+                  <div className="date-time-inputs">
+                    <input className={`form-input ${errors.date ? 'err' : ''}`} type="date" value={form.date} onChange={e => set('date', e.target.value)} onFocus={() => setPickerState(null)} />
+                    <input className="form-input" type="time" value={form.time} onChange={e => set('time', e.target.value)} onFocus={() => setPickerState(null)} />
+                  </div>
+                  {!isEdit && (
+                    <button type="button" className="recurring-button" onClick={() => setShowRecurring(true)}>
+                      <span>{recurringConfig ? (recurringConfig.type === 'instalment' ? '📋' : '🔁') : '🔁'}</span>
+                      <span>{recurringConfig ? (recurringConfig.type === 'instalment' ? 'Instalment' : 'Repeat') : 'Rep/Inst'}</span>
+                    </button>
+                  )}
                 </div>
+              </div>
+              {/* Recurring summary for selected config */}
+              {!isEdit && recurringConfig && (
+                <div className="recurring-summary">
+                  <span>
+                    {recurringConfig.type === 'instalment'
+                      ? `📋 Instalment · ${recurringConfig.totalDays} days · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On the day'}`
+                      : `🔁 Repeat ${recurringConfig.frequency} · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On date'}`}
+                  </span>
+                  <button type="button" onClick={() => setRecurringConfig(null)} className="recurring-clear">✕</button>
+                </div>
+              )}
+
+              {/* Row 2: Account(s) */}
+              {isTransfer ? (
+                <>
+                  <div className="transfer-swap-row">
+                    <PickerFieldFR ref={fromRef} setPickerState={setPickerState} label="From" value={form.fromAccount} placeholder="Select"
+                      error={errors.fromAccount} items={accountList} recent={recentAccounts}
+                      onSelect={v => { set('fromAccount', v); goNextEmpty({ key: 'fromAccount', val: v }); }}
+                      onAfterSelect={() => setPickerState(null)}
+                      onReorder={() => setReorderScreen('accounts')}
+                      active={pickerState && pickerState.type === 'from'} />
+                    <button type="button" className="swap-btn" title="Swap"
+                      onClick={() => setForm(p => ({ ...p, fromAccount: p.toAccount, toAccount: p.fromAccount, fromSubAccount: p.toSubAccount, toSubAccount: p.fromSubAccount }))}>
+                      ⇅
+                    </button>
+                    <PickerFieldFR ref={toRef} setPickerState={setPickerState} label="To" value={form.toAccount} placeholder="Select"
+                      error={errors.toAccount} items={accountList} recent={recentAccounts}
+                      onSelect={v => { set('toAccount', v); goNextEmpty({ key: 'toAccount', val: v }); }}
+                      onAfterSelect={() => setPickerState(null)}
+                      onReorder={() => setReorderScreen('accounts')}
+                      active={pickerState && pickerState.type === 'to'} />
+                  </div>
+                  {((fromAcctObj && getSortedSubs(fromAcctObj).length > 0) ||
+                    (toAcctObj && getSortedSubs(toAcctObj).length > 0)) && (
+                    <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                      {fromAcctObj && getSortedSubs(fromAcctObj).length > 0 ? (
+                        <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                          <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>From Sub Account</label>
+                          <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.fromSubAccount} onChange={e => set('fromSubAccount', e.target.value)}>
+                            <option value="">(Select Sub Account)</option>
+                            {getSortedSubs(fromAcctObj).map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        </div>
+                      ) : <div style={{ flex: 1 }} />}
+                      {toAcctObj && getSortedSubs(toAcctObj).length > 0 ? (
+                        <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                          <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>To Sub Account</label>
+                          <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.toSubAccount} onChange={e => set('toSubAccount', e.target.value)}>
+                            <option value="">(Select Sub Account)</option>
+                            {getSortedSubs(toAcctObj).map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        </div>
+                      ) : <div style={{ flex: 1 }} />}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <PickerFieldFR setPickerState={setPickerState} ref={accountRef} label="Account" value={form.account} placeholder="Select account"
+                    error={errors.account} items={accountList} recent={recentAccounts}
+                    onSelect={v => { set('account', v); goNextEmpty({ key: 'account', val: v }); }}
+                    onAfterSelect={() => setPickerState(null)}
+                    onReorder={() => setReorderScreen('accounts')}
+                    active={pickerState && pickerState.type === 'account'} />
+                  {selectedAcctObj && getSortedSubs(selectedAcctObj).length > 0 && (
+                    <div className="form-group" style={{ marginTop: 8 }}>
+                      <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>Sub Account / Platform</label>
+                      <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.subAccount} onChange={e => set('subAccount', e.target.value)}>
+                        <option value="">(Select Sub Account)</option>
+                        {getSortedSubs(selectedAcctObj).map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
 
-          {/* Row 3: Category + Subcategory (hidden when isSplit) */}
-          {!isTransfer && !isSplit && (
+          {/* Row 3: Category + Subcategory (hidden when isTransfer or isInvestmentTrade) */}
+          {!isTransfer && !isSplit && !isInvMode && (
             <div className="form-group category-subcat-group">
               <label className="form-label">Category</label>
               <div className="category-subcat-wrap">
@@ -1447,25 +2229,26 @@ export default function AddTransaction({
             </div>
           )}
 
-          {/* Row 4: Amount + Split Toggle button next to input */}
-          <div className="form-group">
-            <label className="form-label">Amount</label>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
-                <span style={{ position: 'absolute', left: 10, fontSize: '0.9rem', color: 'var(--text-muted)', pointerEvents: 'none', zIndex: 1 }}>₹</span>
-                <input ref={amountRef}
-                  className={`form-input ${errors.amount ? 'err' : ''}`}
-                  style={{ paddingLeft: 24 }}
-                  type="text" inputMode="decimal" pattern="^-?[0-9]*([.,][0-9]+)?"
-                  autoComplete="off" autoCorrect="off" spellCheck="false"
-                  placeholder="0"
-                  onFocus={e => { setPickerState(null); e.target.select(); }}
-                  value={form.amount} onChange={e => set('amount', e.target.value)} />
-              </div>
-              {!isTransfer && !isEdit && (
-                <button
-                  type="button"
-                  onClick={() => setIsSplit(v => !v)}
+          {/* Row 4: Amount for Non-Investment Transactions */}
+          {!isInvMode && (
+            <div className="form-group">
+              <label className="form-label">{isTransfer ? 'Amount' : 'Amount'}</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
+                  <span style={{ position: 'absolute', left: 10, fontSize: '0.9rem', color: 'var(--text-muted)', pointerEvents: 'none', zIndex: 1 }}>₹</span>
+                  <input ref={amountRef}
+                    className={`form-input ${errors.amount ? 'err' : ''}`}
+                    style={{ paddingLeft: 24 }}
+                    type="text" inputMode="decimal" pattern="^-?[0-9]*([.,][0-9]+)?"
+                    autoComplete="off" autoCorrect="off" spellCheck="false"
+                    placeholder="0"
+                    onFocus={e => { setPickerState(null); e.target.select(); }}
+                    value={form.amount} onChange={e => set('amount', e.target.value)} />
+                </div>
+                {!isTransfer && !isEdit && (
+                  <button
+                    type="button"
+                    onClick={() => setIsSplit(v => !v)}
                   style={{
                     padding: '8px 12px',
                     borderRadius: 12,
@@ -1500,6 +2283,7 @@ export default function AddTransaction({
               </div>
             )}
           </div>
+        )}
 
           {/* Split Allocation Section */}
           {isSplit && !isTransfer && (
@@ -1713,8 +2497,8 @@ export default function AddTransaction({
             </div>
           )}
 
-          {/* Row 5: Note (hidden when isSplit) */}
-          {!isSplit && (
+          {/* Row 5: Note (hidden when isSplit or isInvMode) */}
+          {!isSplit && !isInvMode && (
             <div className="form-group">
               <label className="form-label">Note</label>
               <div style={{ position: 'relative', flex: 1 }}>
