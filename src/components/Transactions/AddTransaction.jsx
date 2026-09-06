@@ -613,10 +613,8 @@ export default function AddTransaction({
     if (isEdit) {
       const t = editTransaction;
       const isInv = Boolean(
-        t.InvestmentTransactionType ||
-        t.investment_transaction_type ||
-        t.Brokerage ||
-        t.brokerage ||
+        (t.InvestmentTransactionType && String(t.InvestmentTransactionType).trim()) ||
+        (t.investment_transaction_type && String(t.investment_transaction_type).trim()) ||
         (t.SecuritySymbol && t.SecurityISIN)
       );
       const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
@@ -672,7 +670,7 @@ export default function AddTransaction({
         fundingAccount: initialFundingAccount,
         settlementAccount: initialSettlementAccount,
         // Investment specific state
-        investmentTransactionType: invType || (rt === 'BUY' || rt === 'SELL' ? rt : 'BUY'),
+        investmentTransactionType: isInv ? (invType || (rt === 'BUY' || rt === 'SELL' ? rt : 'BUY')) : '',
         securitySymbol: t.SecuritySymbol || t.security_symbol || '',
         securityISIN: t.SecurityISIN || t.security_isin || '',
         quantity: String(Math.abs(parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0)) || ''),
@@ -680,7 +678,7 @@ export default function AddTransaction({
         tradeValue: String(t.TradeValue || t.trade_value || dispAmt || ''),
         costBasis: String(t.CostBasis || t.cost_basis || ''),
         realizedPnl: String(t.RealizedPnl || t.realized_pnl || ''),
-        brokerage: initialSubAccount,
+        brokerage: isInv ? initialSubAccount : '',
         source: t.Source || t.source || ''
       };
     }
@@ -1563,12 +1561,12 @@ export default function AddTransaction({
         }
       } else {
         // Check if saving an investment transaction
-        const isInvSave = Boolean(
+        const isGenericType = form.type === 'Expense' || form.type === 'Income' || form.type.startsWith('Transfer');
+        const isInvSave = !isGenericType && Boolean(
           form.type === 'Investment' ||
           form.type === 'BUY' ||
           form.type === 'SELL' ||
-          form.investmentTransactionType ||
-          (isEdit && (editTransaction?.InvestmentTransactionType || editTransaction?.Brokerage))
+          (isEdit && (editTransaction?.InvestmentTransactionType || editTransaction?.investment_transaction_type))
         );
 
         if (isInvSave && !isTransfer) {

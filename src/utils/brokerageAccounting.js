@@ -1,5 +1,13 @@
 import { activeHoldingsData } from '../database/holdingsData.js';
 
+export function normalizeSymbol(sym) {
+  let s = String(sym || '').trim().toUpperCase();
+  if (s.includes('ESDD')) {
+    s = s.replace('ESDD', 'ESDS');
+  }
+  return s;
+}
+
 /**
  * Parse individual transaction fields and attributes for investment transactions.
  * Prioritizes canonical investment fields and uses pipe descriptions only as fallback.
@@ -48,12 +56,12 @@ export function parseTxnFields(t) {
     const isRecon = desc.includes('EntryDate=UNKNOWN') || desc.includes('historical position closure') || desc.includes('Source=CurrentP&L') || desc.includes('reconciliation');
     return {
       type,
-      brokerage: String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || '').trim(),
-      symbol: String(t.SecuritySymbol || t.security_symbol || t.Note || t.note || '').trim().toUpperCase(),
+      brokerage: String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim(),
+      symbol: normalizeSymbol(t.SecuritySymbol || t.security_symbol || t.Note || t.note || ''),
       qty: parseFloat(t.Quantity || t.quantity || 0),
       cost: parseFloat(t.TradeValue || t.trade_value || 0),
       costBasis: parseFloat(t.CostBasis || t.cost_basis || 0),
-      cashImpact: isRecon ? 0 : parseFloat(t.CashImpact || t.cash_impact || t.INR || t.inr || t.Amount || t.amount || 0),
+      cashImpact: isRecon ? 0 : parseFloat(t.CashImpact !== undefined && t.CashImpact !== '' ? t.CashImpact : (t.cash_impact !== undefined && t.cash_impact !== '' ? t.cash_impact : (t.INR || t.inr || t.Amount || t.amount || 0))),
       realizedPnL: parseFloat(t.RealizedPnl || t.realized_pnl || 0),
       activeHolding: desc.includes('ActiveHolding=NO') || String(t.Note || t.note || '').includes('ActiveHolding=NO') ? 'NO' : 'YES',
       isRecon
@@ -73,7 +81,7 @@ export function parseTxnFields(t) {
       });
       
       const broker = fields.Broker || fields.Brokerage || (isShareMarketTxn ? String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim() : '');
-      const symbol = fields.Symbol || String(t.Note || t.note || '').trim().toUpperCase();
+      const symbol = normalizeSymbol(fields.Symbol || String(t.Note || t.note || ''));
       const qty = parseFloat(fields.Qty || fields.Quantity || 0);
       const cost = parseFloat(fields.Cost || fields.CostBasis || fields.TradeValue || (fields.Price ? qty * parseFloat(fields.Price) : 0) || 0);
       const costBasis = parseFloat(fields.CostBasis || 0);
@@ -104,7 +112,7 @@ export function parseTxnFields(t) {
   }
   
   const broker = isShareMarketTxn ? String(t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim() : '';
-  const symbol = isShareMarketTxn ? String(t.Note || t.note || '').trim().toUpperCase() : '';
+  const symbol = isShareMarketTxn ? normalizeSymbol(t.Note || t.note || '') : '';
   const isRecon = desc.includes('reconciliation') || desc.includes('BUY_RECON') || desc.includes('EntryDate=UNKNOWN');
 
   return {
@@ -197,6 +205,9 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
       } else if (f.type === 'CHARGE' || note === 'Zerodha Charges' || desc.includes('trading charges')) {
         charges += inr;
         cashBalance += inr;
+      } else if (type === 'Expense') {
+        charges -= inr;
+        cashBalance -= inr;
       } else if (f.type === 'OTHER_CREDIT_DEBIT' || note === 'Other Credit & Debit') {
         otherCreditDebit += inr;
         cashBalance += inr;
@@ -214,6 +225,12 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
       if (f.type === 'REALIZED_PNL') {
         if (f.realizedPnL > 0) grossRealizedGains += f.realizedPnL;
         else grossRealizedLosses += f.realizedPnL;
+      } else if (f.type === 'SELL') {
+        const pnl = f.realizedPnL !== undefined && f.realizedPnL !== 0
+          ? f.realizedPnL
+          : ((f.cashImpact || inr) - f.costBasis);
+        if (pnl > 0) grossRealizedGains += pnl;
+        else if (pnl < 0) grossRealizedLosses += pnl;
       } else if (note === 'Zerodha Gains') {
         grossRealizedGains += inr;
       } else if (note === 'Zerodha Losses') {
@@ -235,7 +252,7 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
       const isTrade = f.type === 'BUY' || f.type === 'BUY_RECON' || f.type === 'SELL' || f.type === 'OPENING_LOT' || f.type === 'BONUS';
       if (isTrade && f.symbol) {
         if (!holdings[f.symbol]) {
-          holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null };
+          holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null, realizedPnL: 0, totalProceeds: 0 };
         }
         const h = holdings[f.symbol];
         if (f.type === 'BUY' || f.type === 'BUY_RECON' || f.type === 'OPENING_LOT' || f.type === 'BONUS') {
@@ -244,10 +261,14 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
         } else if (f.type === 'SELL') {
           h.qty -= f.qty;
           h.soldCostBasis += f.costBasis;
+          const netProceeds = f.cashImpact || f.cost || parseFloat(t.INR || t.inr || t.Amount || t.amount || 0);
+          const pnl = f.realizedPnL !== undefined && f.realizedPnL !== 0 ? f.realizedPnL : (netProceeds - f.costBasis);
+          h.realizedPnL = (h.realizedPnL || 0) + pnl;
+          h.totalProceeds = (h.totalProceeds || 0) + netProceeds;
         }
       } else if (f.type === 'POSITION_STATUS' && f.symbol) {
         if (!holdings[f.symbol]) {
-          holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null };
+          holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null, realizedPnL: 0, totalProceeds: 0 };
         }
         if (f.activeHolding === 'NO') {
           holdings[f.symbol].activeStatus = 'NO';
@@ -290,9 +311,11 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
       } else {
         redeemedHoldings.push({
           symbol: h.symbol,
-          qty: h.qty,
+          qty: 0,
           buyCost: h.buyCost,
-          soldCostBasis: h.soldCostBasis
+          soldCostBasis: h.soldCostBasis,
+          realizedPnL: h.realizedPnL || 0,
+          totalProceeds: h.totalProceeds || 0
         });
       }
     });

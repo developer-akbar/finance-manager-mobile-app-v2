@@ -1,0 +1,589 @@
+
+--- Page 1 ---
+CAMSCASWS-310826205040 Version:V3.5 Live-1018
+Consolidated Account Statement
+01-Jan-2018 To 31-Aug-2026
+Page 1 of 8
+Email Id: mail.fareedamulla@gmail.com
+MULLA FAREEDA
+W O MULLA AKBAR 5 58 DARGA STREET PULLAMPETA
+MANDAL PULLAMPETA PULLAMPETA CUDDAPAH ANDHRA
+PRADESH
+KADAPA - 516107
+ANDHRA PRADESH
+INDIA
+Mobile: 8341154305
+This Consolidated Account Statement is brought to you as an investor
+friendly initiative by CAMS and KFintech, and lists the transactions,
+balances and valuation of Mutual Funds in which you are holding
+investments. The consolidation has been carried out based on the email id
+entered by you. If you have not entered a PAN Number and if the email id
+is common to several members of your family, this statement will
+consolidate all those investments as well.
+If you find any folios missing from this consolidation, you have not
+registered your email id against those folios.
+This statement may not reflect the complete information on your DEMAT
+holdings. Please check with your DP for details on DEMAT holdings.
+Mutual Fund Cost Value
+(INR)
+Market Value
+(INR)
+PORTFOLIO SUMMARY
+      DSP Mutual Fund 135,000.00 144,665.92
+      PPFAS Mutual Fund 84,000.00 83,388.93
+      HDFC Mutual Fund 24,000.00 25,542.44
+      Quant MF 0.00 0.00
+      Mirae Asset Mutual Fund 12,000.00 12,597.96
+      MOTILAL OSWAL MUTUAL FUND 93,200.00 96,896.94
+      Nippon India Mutual Fund 80,000.00 83,036.42
+Total 428,200.00 446,128.61
+Date Amount PriceUnitsTransaction                      Unit
+(INR) (INR) Balance
+DSP Mutual Fund
+PAN: AEXPF6326H KYC: OK  PAN: OK
+D869-DSP Nifty Next 50 Index Fund - Dir - Growth (Non -Demat ) - ISIN: INF740KA1MG9(Advisor: INZ000208032) Registrar : CAMS
+Folio No: 10185451 / 05
+Mulla Fareeda
+ Nominee 1: MULLA AKBAR  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+19-May-2025 4,999.75 26.4717188.872SIP Purchase-BSE - Instalment No - 1 - INZ000208032 188.872
+19-May-2025 0.25*** Stamp Duty ***
+20-May-2025 ***Address Updated from KRA Data - First Holder***
+20-May-2025 ***Registration of Nominee***
+12-Jun-2025 ***Systematic Cancellation***
+18-Jun-2025 4,999.75 26.2419190.525SIP Purchase-BSE - Instalment No - 1 - INZ000208032 379.397
+18-Jun-2025 0.25*** Stamp Duty ***
+18-Jul-2025 4,999.75 26.8229186.399SIP Purchase-BSE - Instalment No - 2/999 - INZ000208032 565.796
+18-Jul-2025 0.25*** Stamp Duty ***
+18-Aug-2025 4,999.75 26.5760188.130SIP Purchase-BSE - Instalment No - 3/999 - INZ000208032 753.926
+18-Aug-2025 0.25*** Stamp Duty ***
+18-Sep-2025 4,999.75 27.3509182.800SIP Purchase-BSE - Instalment No - 4/999 - INZ000208032 936.726
+18-Sep-2025 0.25*** Stamp Duty ***
+20-Oct-2025 4,999.75 27.3934182.517SIP Purchase-BSE - Instalment No - 5/999 - INZ000208032 1,119.243
+20-Oct-2025 0.25*** Stamp Duty ***
+18-Nov-2025 4,999.75 27.4868181.896SIP Purchase-BSE - Instalment No - 6/999 - INZ000208032 1,301.139
+18-Nov-2025 0.25*** Stamp Duty ***
+18-Dec-2025 4,999.75 26.7766186.721SIP Purchase-BSE - Instalment No - 7/999 - INZ000208032 1,487.860
+18-Dec-2025 0.25*** Stamp Duty ***
+19-Jan-2026 4,999.75 27.1104184.422SIP Purchase-BSE - Instalment No - 8/999 - INZ000208032 1,672.282
+19-Jan-2026 0.25*** Stamp Duty ***
+18-Feb-2026 4,999.75 27.7759180.003SIP Purchase-BSE - Instalment No - 9/999 - INZ000208032 1,852.285
+18-Feb-2026 0.25*** Stamp Duty ***
+18-Mar-2026 4,999.75 25.9518192.655SIP Purchase-BSE - Instalment No - 10/999 - INZ000208032 2,044.940
+18-Mar-2026 0.25*** Stamp Duty ***
+20-Mar-2026 ***Systematic Cancellation***
+NAV on 28-Aug-2026: INR 29.4244 Market Value on 28-Aug-2026: INR 60,171.13
+Exit Load: Nil.   "Please ensure that your account information is up to date. If there are any changes to your KYC details like address, contact details, occupation,
+income, PEP status, FATCA/CRS information etc. kindly update them immediately."
+Closing Unit Balance: 2,044.940 Total Cost Value: 55,000.00
+--- Page 2 ---
+CAMSCASWS-310826205040 Version:V3.5 Live-1018
+Consolidated Account Statement
+01-Jan-2018 To 31-Aug-2026
+Page 2 of 8
+Date Amount PriceUnitsTransaction                      Unit
+(INR) (INR) Balance
+PAN: AEXPF6326H   PAN: OK
+D869-DSP Nifty Next 50 Index Fund - Dir - Growth (Demat ) - ISIN: INF740KA1MG9(Advisor: INZ000208032) Registrar : CAMS
+Folio No: 11056452 / 85
+Mulla Fareeda
+ Nominee 1:  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+20-Apr-2026 5,999.70 27.8138215.709SIP Purchase Instalment No - 1 - INZ000208032 215.709
+20-Apr-2026 0.30*** Stamp Duty ***
+18-May-2026 5,999.70 27.1402221.063SIP Purchase Instalment No - 2/999 - INZ000208032 436.772
+18-May-2026 0.30*** Stamp Duty ***
+18-Jun-2026 5,999.70 28.7208208.897SIP Purchase Instalment No - 3/999 - INZ000208032 645.669
+18-Jun-2026 0.30*** Stamp Duty ***
+20-Jul-2026 5,999.70 28.6701209.267SIP Purchase Instalment No - 4/999 - INZ000208032 854.936
+20-Jul-2026 0.30*** Stamp Duty ***
+18-Aug-2026 5,999.70 29.4768203.540SIP Purchase Instalment No - 5/999 - INZ000208032 1,058.476
+18-Aug-2026 0.30*** Stamp Duty ***
+NAV on 28-Aug-2026: INR 29.4244 Market Value on 28-Aug-2026: INR 31,145.02
+Exit Load: Nil.   "Please ensure that your account information is up to date. If there are any changes to your KYC details like address, contact details, occupation,
+income, PEP status, FATCA/CRS information etc. kindly update them immediately."
+Closing Unit Balance: 1,058.476 Total Cost Value: 30,000.00
+PAN: AEXPF6326H KYC: OK  PAN: OK
+D842-DSP Nifty 50 Equal Weight Index Fund - Dir - Growth (Non -Demat ) - ISIN: INF740KA1CR7(Advisor: CAT-1-EOP-0002) Registrar : CAMS
+Folio No: 8470103 / 05
+Mulla Fareeda
+ Nominee 1: Akbar Mulla  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+03-Jul-2023 4,999.75 18.4601270.841Purchase - INA100006898 270.841
+03-Jul-2023 0.25*** Stamp Duty ***
+04-Jul-2023 ***Registration of Nominee***
+04-Jul-2023 ***Address Updated from KRA Data - First Holder***
+04-Aug-2023 4,999.75 18.7435266.746Purchase - INA100006898 537.587
+04-Aug-2023 0.25*** Stamp Duty ***
+05-Sep-2023 4,999.75 19.1395261.227Purchase - INA100006898 798.814
+05-Sep-2023 0.25*** Stamp Duty ***
+03-Oct-2023 4,999.75 19.2595259.599Purchase - INA100006898 1,058.413
+03-Oct-2023 0.25*** Stamp Duty ***
+09-Nov-2023 4,999.75 19.3828257.948Purchase - INA100006898 1,316.361
+09-Nov-2023 0.25*** Stamp Duty ***
+04-Dec-2023 4,999.75 20.8289240.039Purchase - INA100006898 1,556.400
+04-Dec-2023 0.25*** Stamp Duty ***
+08-Jan-2024 4,999.75 21.8342228.987Purchase - INA100006898 1,785.387
+08-Jan-2024 0.25*** Stamp Duty ***
+05-Feb-2024 4,999.75 22.5055222.157Purchase - INA100006898 2,007.544
+05-Feb-2024 0.25*** Stamp Duty ***
+07-Mar-2024 4,999.75 23.3904213.752Purchase - INA100006898 2,221.296
+07-Mar-2024 0.25*** Stamp Duty ***
+03-Apr-2024 4,999.75 23.3545214.081Purchase - INA100006898 2,435.377
+03-Apr-2024 0.25*** Stamp Duty ***
+03-May-2024 4,999.75 23.3919213.739Purchase - INA100006898 2,649.116
+03-May-2024 0.25*** Stamp Duty ***
+05-Jun-2024 9,999.50 23.6691422.471Purchase - INA100006898 3,071.587
+05-Jun-2024 0.50*** Stamp Duty ***
+03-Jul-2024 9,999.50 25.1690397.294Purchase - CAT-1-EOP-0002 3,468.881
+03-Jul-2024 0.50*** Stamp Duty ***
+29-Jul-2024 49,997.50 26.19131,908.935Purchase - CAT-1-EOP-0002 5,377.816
+29-Jul-2024 2.50*** Stamp Duty ***
+27-Aug-2024 99,995.00 26.55613,765.425Purchase - CAT-1-EOP-0002 9,143.241
+27-Aug-2024 5.00*** Stamp Duty ***
+23-Sep-2024 49,997.50 27.45281,821.217Purchase - CAT-1-EOP-0002 10,964.458
+23-Sep-2024 2.50*** Stamp Duty ***
+08-Oct-2024 22,998.85 26.6546862.847Purchase - CAT-1-EOP-0002 11,827.305
+08-Oct-2024 1.15*** Stamp Duty ***
+14-Nov-2024 (288,738.30) 24.4131(11,827.305)Redemption Less STT  - UTR # CITIH24324702938 , less STT 0.000
+14-Nov-2024 2.89*** STT Paid ***
+NAV on 28-Aug-2026: INR 27.7248 Market Value on 28-Aug-2026: INR 0.00
+Exit Load: Nil.   "Please ensure that your account information is up to date. If there are any changes to your KYC details like address, contact details, occupation,
+income, PEP status, FATCA/CRS information etc. kindly update them immediately."
+Closing Unit Balance: 0.000 Total Cost Value: 0.00
+--- Page 3 ---
+CAMSCASWS-310826205040 Version:V3.5 Live-1018
+Consolidated Account Statement
+01-Jan-2018 To 31-Aug-2026
+Page 3 of 8
+Date Amount PriceUnitsTransaction                      Unit
+(INR) (INR) Balance
+PAN: AEXPF6326H KYC: OK  PAN: OK
+D869-DSP Nifty Next 50 Index Fund - Dir - Growth (Non -Demat ) - ISIN: INF740KA1MG9(Advisor: CAT-1-EOP-0002) Registrar : CAMS
+Folio No: 8470103 / 05
+Mulla Fareeda
+ Nominee 1: Akbar Mulla  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+12-Jun-2024 29,998.50 27.49761,090.950Purchase - INA100006898 1,090.950
+12-Jun-2024 1.50*** Stamp Duty ***
+14-Nov-2024 (28,859.26) 26.4536(1,090.950)Redemption Less STT  - UTR # CITIN24556434047 , less STT 0.000
+14-Nov-2024 0.29*** STT Paid ***
+28-Nov-2024 49,997.50 27.57551,813.113Purchase - CAT-1-EOP-0002 1,813.113
+28-Nov-2024 2.50*** Stamp Duty ***
+NAV on 28-Aug-2026: INR 29.4244 Market Value on 28-Aug-2026: INR 53,349.76
+Exit Load: Nil.   "Please ensure that your account information is up to date. If there are any changes to your KYC details like address, contact details, occupation,
+income, PEP status, FATCA/CRS information etc. kindly update them immediately."
+Closing Unit Balance: 1,813.113 Total Cost Value: 50,000.00
+HDFC Mutual Fund
+PAN: AEXPF6326H   PAN: OK
+HMCOGT -HDFC Mid Cap Fund - Direct Plan - Growth Option (Demat ) - ISIN: INF179K01XQ0(Advisor: INZ000208032) Registrar : CAMS
+Folio No: 41564472 / 84
+Mulla Fareeda
+ Nominee 1:  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+18-Mar-2026 3,999.80 209.62319.081SIP Purchase Instalment No - 1 Online 19.081
+18-Mar-2026 0.20*** Stamp Duty ***
+20-Apr-2026 3,999.80 219.67418.208SIP Purchase Instalment No - 2/999 Online 37.289
+20-Apr-2026 0.20*** Stamp Duty ***
+18-May-2026 3,999.80 217.97818.350SIP Purchase Instalment No - 3/999 Online 55.639
+18-May-2026 0.20*** Stamp Duty ***
+18-Jun-2026 3,999.80 225.63017.727SIP Purchase Instalment No - 4/999 Online 73.366
+18-Jun-2026 0.20*** Stamp Duty ***
+20-Jul-2026 3,999.80 229.59917.421SIP Purchase Instalment No - 5/999 Online 90.787
+20-Jul-2026 0.20*** Stamp Duty ***
+18-Aug-2026 3,999.80 235.87316.957SIP Purchase Instalment No - 6/999 Online 107.744
+18-Aug-2026 0.20*** Stamp Duty ***
+NAV on 28-Aug-2026: INR 237.066 Market Value on 28-Aug-2026: INR 25,542.44
+*Due to change in fundamental attributes of the Scheme w.e.f.  May 23, 2018, the type of the Scheme has been changed to an Open-ended Equity Scheme
+predominantly investing in mid cap stocks w.e.f. 25.06.10, w.e.f 27.06.25 the scheme name changed to HDFC Mid Cap Fund  - Current Load Structure : Entry Load:
+Not Applicable. Exit Load: Redemption/Switch-out within 1 Year of allotment - 1%.  The rate of exit load levied on units redeemed will be the rate prevailing at the
+time of allotment of the units. For further details visit www.hdfcfund.com (under Investor Corner) or contact any of our Investor Service Centre.  GST Identification
+Number : 27AAATH1809A1Z9 "Please ensure that your account information is up to date. If there are any changes to your KYC details like address, contact details,
+occupation, income, PEP status, FATCA/CRS information etc. kindly update them immediately."
+Closing Unit Balance: 107.744 Total Cost Value: 24,000.00
+Mirae Asset Mutual Fund
+KYC: NOT OK  PAN: NOT OK
+117EBD1G-Mirae Asset Large and Midcap Fund (formerly Mirae Asset Emerging Bluechip Fund ) - Direct Plan (Demat ) - ISIN: INF769K01BI1
+(Advisor: INZ000208032)
+Registrar :
+KFINTECH
+Folio No: 78887871745 / 0
+MULLA FAREEDA
+ Nominee 1: MULLA AKBAR .  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+18-Mar-2026 1,999.90 164.38612.166Systematic Investment New Purchase with SIP (1/1000) 12.166
+18-Mar-2026 0.10*** Stamp Duty ***
+20-Apr-2026 1,999.90 171.47211.663Systematic Investment (1) 23.829
+20-Apr-2026 0.10*** Stamp Duty ***
+18-May-2026 1,999.90 169.62211.790Systematic Investment (1) 35.619
+18-May-2026 0.10*** Stamp Duty ***
+18-Jun-2026 1,999.90 174.91011.434Systematic Investment (1) 47.053
+18-Jun-2026 0.10*** Stamp Duty ***
+20-Jul-2026 1,999.90 178.38411.211Systematic Investment (1) 58.264
+20-Jul-2026 0.10*** Stamp Duty ***
+18-Aug-2026 1,999.90 179.95811.113Systematic Investment (1) 69.377
+18-Aug-2026 0.10*** Stamp Duty ***
+NAV on 28-Aug-2026: INR 181.587 Market Value on 28-Aug-2026: INR 12,597.96
+Entry Load: Nil and Exit Load :  For SWP 15% of the units allotted (including Switch-in/STP-in) on or before completion of 365 days from the date of allotment of units
+is NIL. Any redemption in excess of such limit, on FIFO basis, or other redemptionsof investor who have not opted for SWP(Inc Switch out, STP out) and If redeemed
+within 1 year (365 Days) from the date of allotment Exit load is 1%  and after 365 days from the date of allotment Exit load is NIL .
+Closing Unit Balance: 69.377 Total Cost Value: 12,000.00
+--- Page 4 ---
+CAMSCASWS-310826205040 Version:V3.5 Live-1018
+Consolidated Account Statement
+01-Jan-2018 To 31-Aug-2026
+Page 4 of 8
+Date Amount PriceUnitsTransaction                      Unit
+(INR) (INR) Balance
+MOTILAL OSWAL MUTUAL FUND
+PAN: AEXPF6326H KYC: OK  PAN: OK
+127FMGDG-Motilal Oswal Midcap Fund - Direct Plan Growth (Non Demat ) - ISIN: INF247L01445(Advisor: INZ000208032) Registrar :
+KFINTECH
+Folio No: 910118443576 / 0
+MULLA FAREEDA
+ Nominee 1: MULLA AKBAR  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+21-May-2025 2,999.85 112.758026.604Systematic Investment Existing Folio with SIP (1) 26.604
+21-May-2025 0.15*** Stamp Duty ***
+18-Jun-2025 2,999.85 115.294426.019Systematic Investment Existing Folio with SIP (1) 52.623
+18-Jun-2025 0.15*** Stamp Duty ***
+18-Jul-2025 2,999.85 117.833625.458Systematic Investment (1) 78.081
+18-Jul-2025 0.15*** Stamp Duty ***
+18-Aug-2025 2,999.85 117.697125.488Systematic Investment (1) 103.569
+18-Aug-2025 0.15*** Stamp Duty ***
+18-Sep-2025 2,999.85 122.513024.486Systematic Investment (1) 128.055
+18-Sep-2025 0.15*** Stamp Duty ***
+20-Oct-2025 2,999.85 120.284024.940Systematic Investment (1) 152.995
+20-Oct-2025 0.15*** Stamp Duty ***
+18-Nov-2025 2,999.85 118.265725.365Systematic Investment (1) 178.360
+18-Nov-2025 0.15*** Stamp Duty ***
+18-Dec-2025 2,999.85 114.126926.285Systematic Investment (1) 204.645
+18-Dec-2025 0.15*** Stamp Duty ***
+19-Jan-2026 2,999.85 111.764226.841Systematic Investment (1) 231.486
+19-Jan-2026 0.15*** Stamp Duty ***
+18-Feb-2026 2,999.85 107.588927.883Systematic Investment (1) 259.369
+18-Feb-2026 0.15*** Stamp Duty ***
+NAV on 28-Aug-2026: INR 122.7784 Market Value on 28-Aug-2026: INR 31,844.91
+Entry Load: Nil, Exit Load : 1% - If redeemed on or before 365 days from the date of allotment for Subscription received  Wef 18-Mar-2024Nil - If redeemed after 365
+days from the date of allotment.Entry Load: Nil, Exit Load: 1% -If redeemed or switched out on or before 15 days from the date of allotment for  Subscription
+received  till 17-Mar-2024.Nil - If redeemed after 15 days from the date of allotment.
+Closing Unit Balance: 259.369 Total Cost Value: 30,000.00
+PAN: AEXPF6326H KYC: OK  PAN: OK
+127NNGDG-Motilal Oswal Nifty Next 50 Index Fund - Direct Growth (Non Demat ) - ISIN: INF247L01AC1(Advisor: INZ000208032) Registrar :
+KFINTECH
+Folio No: 910118443576 / 0
+MULLA FAREEDA
+ Nominee 1: MULLA AKBAR  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+08-May-2025 599.97 22.347826.847Purchase 26.847
+08-May-2025 0.03*** Stamp Duty ***
+NAV on 28-Aug-2026: INR 26.6778 Market Value on 28-Aug-2026: INR 716.22
+Exit Load W.E.F from 18/06/2024 1% - If redeemed or switched out on or before 15 days from the date of allotment for Subscription received after 18-Jun-2024.Entry
+Load: Nil
+Closing Unit Balance: 26.847 Total Cost Value: 600.00
+KYC: NOT OK  PAN: NOT OK
+127NNGDG-Motilal Oswal Nifty Next 50 Index Fund - Direct Growth (Demat ) - ISIN: INF247L01AC1(Advisor: INZ000208032) Registrar :
+KFINTECH
+Folio No: 910121381854 / 0
+MULLA FAREEDA
+ Nominee 1: MULLA AKBAR .  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+02-Jun-2025 599.97 23.876425.128Purchase 25.128
+02-Jun-2025 0.03*** Stamp Duty ***
+09-Jul-2025 599.97 24.490324.498Purchase 49.626
+09-Jul-2025 0.03*** Stamp Duty ***
+05-Aug-2025 599.97 23.862225.143Purchase 74.769
+05-Aug-2025 0.03*** Stamp Duty ***
+04-Sep-2025 599.97 24.031724.966Purchase 99.735
+04-Sep-2025 0.03*** Stamp Duty ***
+07-Oct-2025 599.97 24.566124.423Purchase 124.158
+07-Oct-2025 0.03*** Stamp Duty ***
+04-Nov-2025 599.97 25.112423.891Purchase 148.049
+04-Nov-2025 0.03*** Stamp Duty ***
+08-Dec-2025 599.97 24.091724.904Purchase 172.953
+08-Dec-2025 0.03*** Stamp Duty ***
+05-Jan-2026 599.97 25.198423.810Purchase 196.763
+05-Jan-2026 0.03*** Stamp Duty ***
+04-Feb-2026 599.97 24.796324.196Purchase 220.959
+--- Page 5 ---
+CAMSCASWS-310826205040 Version:V3.5 Live-1018
+Consolidated Account Statement
+01-Jan-2018 To 31-Aug-2026
+Page 5 of 8
+Date Amount PriceUnitsTransaction                      Unit
+(INR) (INR) Balance
+04-Feb-2026 0.03*** Stamp Duty ***
+18-Mar-2026 599.97 23.523625.505Purchase 246.464
+18-Mar-2026 0.03*** Stamp Duty ***
+27-Apr-2026 599.97 25.386623.633Purchase 270.097
+27-Apr-2026 0.03*** Stamp Duty ***
+04-May-2026 599.97 25.208223.801Purchase 293.898
+04-May-2026 0.03*** Stamp Duty ***
+09-Jun-2026 599.97 25.091223.912Purchase 317.810
+09-Jun-2026 0.03*** Stamp Duty ***
+14-Jul-2026 599.97 25.779023.274Purchase 341.084
+14-Jul-2026 0.03*** Stamp Duty ***
+12-Aug-2026 599.97 26.872922.326Purchase 363.410
+12-Aug-2026 0.03*** Stamp Duty ***
+NAV on 28-Aug-2026: INR 26.6778 Market Value on 28-Aug-2026: INR 9,694.98
+Exit Load W.E.F from 18/06/2024 1% - If redeemed or switched out on or before 15 days from the date of allotment for Subscription received after 18-Jun-2024.Entry
+Load: Nil
+Closing Unit Balance: 363.410 Total Cost Value: 9,000.00
+PAN: AEXPF6326H KYC: OK  PAN: OK
+127FMGDG-Motilal Oswal Midcap Fund - Direct Plan Growth (Non Demat ) - ISIN: INF247L01445(Advisor: EOP-0002) Registrar :
+KFINTECH
+Folio No: 91055029576 / 0
+Mulla Fareeda
+ Nominee 1: Akbar Mulla  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+28-Nov-2024 49,997.50 121.6274411.071Purchase 411.071
+28-Nov-2024 2.50*** Stamp Duty ***
+NAV on 28-Aug-2026: INR 122.7784 Market Value on 28-Aug-2026: INR 50,470.64
+Entry Load: Nil, Exit Load : 1% - If redeemed on or before 365 days from the date of allotment for Subscription received  Wef 18-Mar-2024Nil - If redeemed after 365
+days from the date of allotment.Entry Load: Nil, Exit Load: 1% -If redeemed or switched out on or before 15 days from the date of allotment for  Subscription
+received  till 17-Mar-2024.Nil - If redeemed after 15 days from the date of allotment.
+Closing Unit Balance: 411.071 Total Cost Value: 50,000.00
+PAN: AEXPF6326H KYC: OK  PAN: OK
+127LMGDG-Motilal Oswal Large and Midcap Fund - Direct Plan Growth (Non Demat ) - ISIN: INF247L01999(Advisor: EOP-0002) Registrar :
+KFINTECH
+Folio No: 91055029576 / 0
+Mulla Fareeda
+ Nominee 1: Akbar Mulla  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+12-Jun-2024 29,998.50 30.6477978.817Purchase 978.817
+12-Jun-2024 1.50*** Stamp Duty ***
+05-Jul-2024 7,999.60 32.6042245.355Purchase 1,224.172
+05-Jul-2024 0.40*** Stamp Duty ***
+14-Nov-2024 (41,457.15) 33.8658(1,224.172)Redemption less TDS, STT 0.000
+14-Nov-2024 0.41*** STT Paid ***
+NAV on 28-Aug-2026: INR 41.7091 Market Value on 28-Aug-2026: INR 0.00
+Entry Load: Nil, Exit Load : 1% - If redeemed on or before 365 days from the date of allotment for Subscription received  Wef 10-Jul-2024.Nil - If redeemed after 365
+days  from the date of allotment.Entry Load: Nil, Exit Load: 1% -If redeemed or switched out on or before 15 days from the date of allotment for  Subscription
+received  till 09-July-2024.Nil - If redeemed after 15 days from the date of allotment.
+Closing Unit Balance: 0.000 Total Cost Value: 0.00
+PAN: AEXPF6326H KYC: OK  PAN: OK
+127NNGDG-Motilal Oswal Nifty Next 50 Index Fund - Direct Growth (Non Demat ) - ISIN: INF247L01AC1(Advisor: EOP-0002) Registrar :
+KFINTECH
+Folio No: 91055029576 / 0
+Mulla Fareeda
+ Nominee 1: Akbar Mulla  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+28-Nov-2024 599.97 24.958524.039Purchase 24.039
+28-Nov-2024 0.03*** Stamp Duty ***
+17-Dec-2024 599.97 25.641823.398Purchase 47.437
+17-Dec-2024 0.03*** Stamp Duty ***
+29-Jan-2025 599.97 22.117527.126Purchase 74.563
+29-Jan-2025 0.03*** Stamp Duty ***
+17-Feb-2025 599.97 21.173828.335Purchase 102.898
+17-Feb-2025 0.03*** Stamp Duty ***
+25-Mar-2025 599.97 22.347426.847Purchase 129.745
+25-Mar-2025 0.03*** Stamp Duty ***
+15-Apr-2025 599.97 22.578926.572Purchase 156.317
+15-Apr-2025 0.03*** Stamp Duty ***
+--- Page 6 ---
+CAMSCASWS-310826205040 Version:V3.5 Live-1018
+Consolidated Account Statement
+01-Jan-2018 To 31-Aug-2026
+Page 6 of 8
+Date Amount PriceUnitsTransaction                      Unit
+(INR) (INR) Balance
+NAV on 28-Aug-2026: INR 26.6778 Market Value on 28-Aug-2026: INR 4,170.19
+Exit Load W.E.F from 18/06/2024 1% - If redeemed or switched out on or before 15 days from the date of allotment for Subscription received after 18-Jun-2024.Entry
+Load: Nil
+Closing Unit Balance: 156.317 Total Cost Value: 3,600.00
+Nippon India Mutual Fund
+PAN: AEXPF6326H KYC: OK  PAN: OK
+RMFEAAGG-NIPPON INDIA LARGE CAP FUND - DIRECT GROWTH PLAN GROWTH OPTION (Non Demat ) - ISIN: INF204K01XI3(Advisor: INZ000208032) Registrar :
+KFINTECH
+Folio No: 477405385771 / 0
+MULLA FAREEDA
+ Nominee 1: MULLA AKBAR  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+21-May-2025 4,999.75 98.603850.705Sys. Investment New Purchase with SIP (1/1000) 50.705
+21-May-2025 0.25*** Stamp Duty ***
+18-Jun-2025 4,999.75 99.744850.125Sys. Investment Existing Folio with SIP (1/1000) 100.830
+18-Jun-2025 0.25*** Stamp Duty ***
+18-Jul-2025 4,999.75 100.928649.537Sys. Investment (2/1000) 150.367
+18-Jul-2025 0.25*** Stamp Duty ***
+18-Aug-2025 4,999.75 101.686749.168Sys. Investment (3/1000) 199.535
+18-Aug-2025 0.25*** Stamp Duty ***
+18-Sep-2025 4,999.75 104.553147.820Sys. Investment (4/1000) 247.355
+18-Sep-2025 0.25*** Stamp Duty ***
+20-Oct-2025 4,999.75 104.880047.671Sys. Investment (5/1000) 295.026
+20-Oct-2025 0.25*** Stamp Duty ***
+18-Nov-2025 4,999.75 104.608747.795Sys. Investment (6/1000) 342.821
+18-Nov-2025 0.25*** Stamp Duty ***
+18-Dec-2025 4,999.75 104.067848.043Sys. Investment (7/1000) 390.864
+18-Dec-2025 0.25*** Stamp Duty ***
+19-Jan-2026 4,999.75 102.922648.578Sys. Investment (8/1000) 439.442
+19-Jan-2026 0.25*** Stamp Duty ***
+18-Feb-2026 4,999.75 105.255947.501Sys. Investment (9/1000) 486.943
+18-Feb-2026 0.25*** Stamp Duty ***
+NAV on 28-Aug-2026: INR 101.3819 Market Value on 28-Aug-2026: INR 49,367.21
+For subscriptions received w.e.f. May 22nd, 2020, 1% exit load shall be applicable for units redeemed on or before completion of 7 days from the date of allotment of
+units.And Nil thereafter. Redemption of units would be done on First in First out Basis (FIFO).For subscriptions prior to May 22nd, 2020, Exit load levied on the Units
+redeemed will be the rate prevailing at the time of the allotment of the Units.For Special products registrations, load for each transaction is based on the load
+structure applicable as on the registration date.
+Closing Unit Balance: 486.943 Total Cost Value: 50,000.00
+PAN: AEXPF6326H KYC: OK  PAN: OK
+RMFSCAGG -NIPPON INDIA SMALL CAP FUND - DIRECT GROWTH PLAN GROWTH OPTION (Non Demat ) - ISIN: INF204K01K15(Advisor: INZ000208032) Registrar :
+KFINTECH
+Folio No: 477405389157 / 0
+MULLA FAREEDA
+ Nominee 1: MULLA AKBAR  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+21-May-2025 2,999.85 183.185016.376Sys. Investment New Purchase with SIP (1/1000) 16.376
+21-May-2025 0.15*** Stamp Duty ***
+18-Jun-2025 2,999.85 187.847115.970Sys. Investment Existing Folio with SIP (1/1000) 32.346
+18-Jun-2025 0.15*** Stamp Duty ***
+18-Jul-2025 2,999.85 195.091715.377Sys. Investment (2/1000) 47.723
+18-Jul-2025 0.15*** Stamp Duty ***
+18-Aug-2025 2,999.85 187.592515.991Sys. Investment (3/1000) 63.714
+18-Aug-2025 0.15*** Stamp Duty ***
+18-Sep-2025 2,999.85 193.382015.513Sys. Investment (4/1000) 79.227
+18-Sep-2025 0.15*** Stamp Duty ***
+20-Oct-2025 2,999.85 190.809415.722Sys. Investment (5/1000) 94.949
+20-Oct-2025 0.15*** Stamp Duty ***
+18-Nov-2025 2,999.85 191.569715.659Sys. Investment (6/1000) 110.608
+18-Nov-2025 0.15*** Stamp Duty ***
+18-Dec-2025 2,999.85 183.578916.341Sys. Investment (7/1000) 126.949
+18-Dec-2025 0.15*** Stamp Duty ***
+19-Jan-2026 2,999.85 179.738716.690Sys. Investment (8/1000) 143.639
+19-Jan-2026 0.15*** Stamp Duty ***
+18-Feb-2026 2,999.85 185.105116.206Sys. Investment (9/1000) 159.845
+18-Feb-2026 0.15*** Stamp Duty ***
+--- Page 7 ---
+CAMSCASWS-310826205040 Version:V3.5 Live-1018
+Consolidated Account Statement
+01-Jan-2018 To 31-Aug-2026
+Page 7 of 8
+Date Amount PriceUnitsTransaction                      Unit
+(INR) (INR) Balance
+NAV on 28-Aug-2026: INR 210.6366 Market Value on 28-Aug-2026: INR 33,669.21
+For subscriptions received w.e.f. Mar 22nd, 2024, 1% exit load shall be applicable for units redeemed on or before completion of one year from the date of allotment
+of units.And Nil thereafter. Redemption of units would be done on First in First out Basis (FIFO).For subscriptions prior to Mar 21st, 2024, Exit load levied on the Units
+redeemed will be the rate prevailing at the time of the allotment of the Units.For Special products registrations, load for each transaction is based on the load
+structure applicable as on the registration date.
+Closing Unit Balance: 159.845 Total Cost Value: 30,000.00
+PPFAS Mutual Fund
+PAN: AEXPF6326H KYC: OK  PAN: OK
+PP001ZG-Parag Parikh Flexi Cap Fund - Direct Plan Growth (formerly Parag Parikh Long Term Value Fund ) (Non -Demat ) - ISIN: INF879O01027
+(Advisor: INZ000208032)
+Registrar : CAMS
+Folio No: 17087524
+Mulla Fareeda
+ Nominee 1: MULLA AKBAR  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+21-May-2025 3,999.80 89.865744.509Purchase Systematic-BSE - Instalment No - 1 44.509
+21-May-2025 0.20*** Stamp Duty ***
+22-May-2025 ***Registration of Nominee***
+22-May-2025 ***Address Updated from KRA Data***
+12-Jun-2025 ***Cancelled***
+18-Jun-2025 3,999.80 90.994443.957Purchase Systematic-BSE - Instalment No - 1 88.466
+18-Jun-2025 0.20*** Stamp Duty ***
+18-Jul-2025 3,999.80 91.942843.503Purchase Systematic-BSE - Instalment No - 2/999 131.969
+18-Jul-2025 0.20*** Stamp Duty ***
+18-Aug-2025 3,999.80 92.941643.036Purchase Systematic-BSE - Instalment No - 3/999 175.005
+18-Aug-2025 0.20*** Stamp Duty ***
+18-Sep-2025 3,999.80 94.708442.233Purchase Systematic-BSE - Instalment No - 4/999 217.238
+18-Sep-2025 0.20*** Stamp Duty ***
+20-Oct-2025 3,999.80 94.806542.189Purchase Systematic-BSE - Instalment No - 5/999 259.427
+20-Oct-2025 0.20*** Stamp Duty ***
+18-Nov-2025 3,999.80 94.062942.523Purchase Systematic-BSE - Instalment No - 6/999 301.950
+18-Nov-2025 0.20*** Stamp Duty ***
+18-Dec-2025 3,999.80 94.170342.474Purchase Systematic-BSE - Instalment No - 7/999 344.424
+18-Dec-2025 0.20*** Stamp Duty ***
+19-Jan-2026 3,999.80 93.850442.619Purchase Systematic-BSE - Instalment No - 8/999 387.043
+19-Jan-2026 0.20*** Stamp Duty ***
+18-Feb-2026 3,999.80 93.408142.821Purchase Systematic-BSE - Instalment No - 9/999 429.864
+18-Feb-2026 0.20*** Stamp Duty ***
+18-Mar-2026 3,999.80 89.375644.753Purchase Systematic-BSE - Instalment No - 10/999 474.617
+18-Mar-2026 0.20*** Stamp Duty ***
+20-Mar-2026 ***Cancelled***
+NAV on 28-Aug-2026: INR 91.1767 Market Value on 28-Aug-2026: INR 43,274.01
+Exit Load:
+Investors are requested to note that with effect from November 15, 2021, all new/prospective investments (including SIP/STP and SWP registered) in respect of each
+purchase / switch-in of units, 10% of the units may be redeemed without any exit load from the date of allotment made on or after the aforesaid effective date.
+Please refer Notice cum addendum dated November 11, 2021 available on website https://amc.ppfas.com/downloads/addendum/
+Any redemption or switch out in excess of the aforesaid limit shall be subject to the following exit load :
+Exit Load of 2% is applicable, if Units are redeemed/switched-out on or before 365 days from the date of allotment, 1% if redeemed/Switched-out after 365 days but
+on or before 730 days from the date allotment and thereafter there is no exit load. "Effective from July 01, 2020, stamp duty @ 0.005% will be deducted from the Net
+investment amount. Units will be allotted for the balance amount. "Please ensure that your account information is up to date. If there are any changes to your KYC
+details like address, contact details, occupation, income, PEP status, FATCA/CRS information etc. kindly update them immediately."
+Closing Unit Balance: 474.617 Total Cost Value: 44,000.00
+PAN: AEXPF6326H   PAN: OK
+PP001ZG-Parag Parikh Flexi Cap Fund - Direct Plan Growth (formerly Parag Parikh Long Term Value Fund ) (Demat ) - ISIN: INF879O01027
+(Advisor: INZ000208032)
+Registrar : CAMS
+Folio No: 19824545
+Mulla Fareeda
+ Nominee 1:  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+20-Apr-2026 7,999.60 91.671687.264Purchase Systematic Instalment No - 1 87.264
+20-Apr-2026 0.40*** Stamp Duty ***
+18-May-2026 7,999.60 90.657988.239Purchase Systematic Instalment No - 2/999 175.503
+18-May-2026 0.40*** Stamp Duty ***
+18-Jun-2026 7,999.60 90.522088.372Purchase Systematic Instalment No - 3/999 263.875
+18-Jun-2026 0.40*** Stamp Duty ***
+20-Jul-2026 7,999.60 91.216887.699Purchase Systematic Instalment No - 4/999 351.574
+20-Jul-2026 0.40*** Stamp Duty ***
+18-Aug-2026 7,999.60 90.498288.395Purchase Systematic Instalment No - 5/999 439.969
+18-Aug-2026 0.40*** Stamp Duty ***
+--- Page 8 ---
+CAMSCASWS-310826205040 Version:V3.5 Live-1018
+Consolidated Account Statement
+01-Jan-2018 To 31-Aug-2026
+Page 8 of 8
+Date Amount PriceUnitsTransaction                      Unit
+(INR) (INR) Balance
+NAV on 28-Aug-2026: INR 91.1767 Market Value on 28-Aug-2026: INR 40,114.92
+Exit Load:
+Investors are requested to note that with effect from November 15, 2021, all new/prospective investments (including SIP/STP and SWP registered) in respect of each
+purchase / switch-in of units, 10% of the units may be redeemed without any exit load from the date of allotment made on or after the aforesaid effective date.
+Please refer Notice cum addendum dated November 11, 2021 available on website https://amc.ppfas.com/downloads/addendum/
+Any redemption or switch out in excess of the aforesaid limit shall be subject to the following exit load :
+Exit Load of 2% is applicable, if Units are redeemed/switched-out on or before 365 days from the date of allotment, 1% if redeemed/Switched-out after 365 days but
+on or before 730 days from the date allotment and thereafter there is no exit load. "Effective from July 01, 2020, stamp duty @ 0.005% will be deducted from the Net
+investment amount. Units will be allotted for the balance amount. "Please ensure that your account information is up to date. If there are any changes to your KYC
+details like address, contact details, occupation, income, PEP status, FATCA/CRS information etc. kindly update them immediately."
+Closing Unit Balance: 439.969 Total Cost Value: 40,000.00
+Quant MF
+PAN: AEXPF6326H KYC: OK  PAN: OK
+166PEDGG-quant Flexi Cap Fund - Direct Plan - Growth (Non Demat ) - ISIN: INF966L01911 Registrar :
+KFINTECH
+Folio No: 51075496274 / 0
+MULLA FAREEDA
+ Nominee 1: MULLA AKBAR  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+18-Jun-2024 20,000.00***Refund Primary KYC invalid(KYC Modification not Done)***
+19-Jun-2024 ******Address Updated from CVL Data******
+22-Jun-2024 ******Address Updated from CVL Data******
+07-Jul-2024 ******Address Updated from CVL Data******
+NAV on 28-Aug-2026: INR 123.5828 Market Value on 28-Aug-2026: INR 0.00
+Entry Load NIL, Exit Load - 1% if redeemed within 15 days of allotment of units on all redemptions/switchouts including STP
+Closing Unit Balance: 0.000 Total Cost Value: 0.00
+PAN: AEXPF6326H KYC: OK  PAN: OK
+166PEDGG-quant Flexi Cap Fund - Direct Plan - Growth (Non Demat ) - ISIN: INF966L01911 Registrar :
+KFINTECH
+Folio No: 51075828702 / 0
+Mulla Fareeda
+ Nominee 1: Akbar Mulla  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+20-Jun-2024 40,000.00***Refund Primary KYC invalid(KYC Modification not Done)***
+22-Jun-2024 ******Address Updated from CVL Data******
+07-Jul-2024 ******Address Updated from CVL Data******
+NAV on 28-Aug-2026: INR 123.5828 Market Value on 28-Aug-2026: INR 0.00
+Entry Load NIL, Exit Load - 1% if redeemed within 15 days of allotment of units on all redemptions/switchouts including STP
+Closing Unit Balance: 0.000 Total Cost Value: 0.00
+PAN: AEXPF6326H KYC: OK  PAN: OK
+166PEDGG-quant Flexi Cap Fund - Direct Plan - Growth (Non Demat ) - ISIN: INF966L01911 Registrar :
+KFINTECH
+Folio No: 51077542025 / 0
+Mulla Fareeda
+ Nominee 1: Akbar Mulla  Nominee 2:  Nominee 3:
+ Opening Unit Balance: 0.000
+05-Jul-2024 40,000.00***Refund Primary KYC invalid(KYC Modification not Done)***
+07-Jul-2024 ******Address Updated from CVL Data******
+NAV on 28-Aug-2026: INR 123.5828 Market Value on 28-Aug-2026: INR 0.00
+Entry Load NIL, Exit Load - 1% if redeemed within 15 days of allotment of units on all redemptions/switchouts including STP
+Closing Unit Balance: 0.000 Total Cost Value: 0.00
