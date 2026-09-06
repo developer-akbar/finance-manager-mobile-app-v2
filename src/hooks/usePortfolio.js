@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { getUnifiedPortfolioData } from '../utils/portfolioSelector.js';
 import { defaultValuationProvider } from '../utils/valuationProvider.js';
 
@@ -7,8 +7,13 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
     scopeFilter = 'personal', // 'personal' | 'all' | 'father'
     platformFilter = 'all',   // 'all' | subaccount name
     accountFilter = 'all',    // 'all' | account name
-    valuationProvider = defaultValuationProvider
+    valuationProvider = defaultValuationProvider,
+    autoFetchValuations = true
   } = filters;
+
+  const [isFetchingValuations, setIsFetchingValuations] = useState(false);
+  const [lastValuedAt, setLastValuedAt] = useState(null);
+  const [valuationVersion, setValuationVersion] = useState(0);
 
   // 1. Unified raw positions & cash extraction
   const rawPortfolio = useMemo(() => {
@@ -37,9 +42,12 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
 
   // Available filter dropdown options
   const availablePlatforms = useMemo(() => {
-    const subs = new Set(scopedPositions.map(p => p.subAccount).filter(Boolean));
+    const filtered = accountFilter === 'all' 
+      ? scopedPositions 
+      : scopedPositions.filter(p => p.investmentAccount === accountFilter);
+    const subs = new Set(filtered.map(p => p.subAccount).filter(Boolean));
     return Array.from(subs);
-  }, [scopedPositions]);
+  }, [scopedPositions, accountFilter]);
 
   const availableAccounts = useMemo(() => {
     const accts = new Set(scopedPositions.map(p => p.investmentAccount).filter(Boolean));
@@ -58,6 +66,42 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
   const dataIssues = useMemo(() => {
     return displayedPositions.filter(p => p.status === 'LEGACY_DATA_ISSUE');
   }, [displayedPositions]);
+
+  // Manual & Auto Refresh Trigger
+  const isFetchingRef = useRef(false);
+
+  const refreshValuations = useCallback(async (forceRefresh = false) => {
+    if (isFetchingRef.current) return;
+    if (!valuationProvider || typeof valuationProvider.fetchAllValuations !== 'function') return;
+
+    isFetchingRef.current = true;
+    setIsFetchingValuations(true);
+    try {
+      const res = await valuationProvider.fetchAllValuations(activeHoldings, { forceRefresh });
+      if (res && res.fetchedAt) {
+        setLastValuedAt(res.fetchedAt);
+      }
+    } catch (err) {
+      console.warn('Valuation refresh error:', err);
+    } finally {
+      isFetchingRef.current = false;
+      setIsFetchingValuations(false);
+      setValuationVersion(v => v + 1);
+    }
+  }, [activeHoldings, valuationProvider]);
+
+  // Active holdings identity signature for cold load and filter transition detection
+  const activeKeysSignature = useMemo(() => {
+    return activeHoldings.map(p => `${p.positionKey || p.isin || p.security}:${p.currentUnits}`).join('|');
+  }, [activeHoldings]);
+
+  // Auto fetch on initial render or position list change ONLY
+  useEffect(() => {
+    if (autoFetchValuations && activeHoldings.length > 0) {
+      refreshValuations(false);
+    }
+  }, [activeKeysSignature, autoFetchValuations]);
+
 
   // Segregated Brokerage Cash Calculation
   const relevantBrokerageCash = useMemo(() => {
@@ -135,7 +179,7 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
       dataIssuesCount: dataIssues.length,
       platformCount: uniquePlatforms.size
     };
-  }, [activeHoldings, redeemedHoldings, dataIssues, displayedPositions, relevantBrokerageCash, valuationProvider]);
+  }, [activeHoldings, redeemedHoldings, dataIssues, displayedPositions, relevantBrokerageCash, valuationProvider, valuationVersion]);
 
   // Trade Statistics
   const tradeStats = useMemo(() => {
@@ -174,7 +218,7 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
       bestPerformer,
       worstPerformer
     };
-  }, [displayedPositions, activeHoldings, redeemedHoldings, valuationProvider]);
+  }, [displayedPositions, activeHoldings, redeemedHoldings, valuationProvider, valuationVersion]);
 
   return {
     allPositions: rawPortfolio.allPositions,
@@ -188,6 +232,10 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
     summaryMetrics,
     tradeStats,
     brokerageCashMap: rawPortfolio.brokerageCashMap,
-    totalBrokerageCash: rawPortfolio.totalBrokerageCash
+    totalBrokerageCash: rawPortfolio.totalBrokerageCash,
+    isFetchingValuations,
+    lastValuedAt,
+    refreshValuations,
+    valuationVersion
   };
 }
