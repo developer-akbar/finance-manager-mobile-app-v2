@@ -49,7 +49,11 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     availablePlatforms,
     availableAccounts,
     summaryMetrics,
-    tradeStats
+    tradeStats,
+    isFetchingValuations,
+    lastValuedAt,
+    refreshValuations,
+    valuationVersion
   } = usePortfolio(transactions, settings, {
     scopeFilter,
     platformFilter,
@@ -57,8 +61,41 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     valuationProvider: defaultValuationProvider
   });
 
+  // Cascading Filter Handlers
+  const handleScopeChange = (newScope) => {
+    setScopeFilter(newScope);
+    setAccountFilter('all');
+    setPlatformFilter('all');
+  };
+
+  const handleAccountChange = (newAccount) => {
+    setAccountFilter(newAccount);
+    setPlatformFilter('all');
+  };
+
+  const isFilterActive = scopeFilter !== 'personal' || accountFilter !== 'all' || platformFilter !== 'all';
+
+  const handleClearFilters = () => {
+    setScopeFilter('personal');
+    setAccountFilter('all');
+    setPlatformFilter('all');
+  };
+
+  // If position detail is selected, render full-page Investment Details view
+  if (selectedPosition) {
+    return (
+      <HoldingDetailSheet
+        position={selectedPosition}
+        valuationProvider={defaultValuationProvider}
+        valuationVersion={valuationVersion}
+        onClose={() => setSelectedPosition(null)}
+      />
+    );
+  }
+
   return (
     <div className="investments-portfolio-screen">
+
       {/* Portfolio Top Bar */}
       <div className="portfolio-top-bar">
         <button className="portfolio-back-btn" onClick={onBack} title="Back to Accounts">
@@ -70,20 +107,45 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           <h2 className="portfolio-main-title">Investment Portfolio</h2>
           <div className="portfolio-main-subtitle">Mutual Funds, Share Market & ETFs</div>
         </div>
-        <div className="portfolio-valuation-badge" title="Valuation Abstraction Boundary">
-          <span>{summaryMetrics.isFullyValued ? '🟢 Live Valuation' : summaryMetrics.hasPartialValuation ? '🟡 Partial Valuation' : '⚪ Cost Basis View'}</span>
+        <div className="portfolio-header-actions">
+          <button 
+            className="portfolio-refresh-btn"
+            onClick={() => refreshValuations(true)}
+            disabled={isFetchingValuations}
+            title="Refresh live market & NAV prices"
+          >
+            <svg 
+              className={isFetchingValuations ? 'spinning' : ''} 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor" 
+              strokeWidth="2.5" 
+              width="14" 
+              height="14"
+            >
+              <path d="M23 4v6h-6M1 20v-6h6" />
+              <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+            </svg>
+            <span>{isFetchingValuations ? 'Refreshing...' : 'Prices'}</span>
+          </button>
+          <div className="portfolio-valuation-badge" title="Valuation Abstraction Boundary">
+            <span>
+              {summaryMetrics.isFullyValued ? '🟢 Available' : summaryMetrics.hasPartialValuation ? '🟡 Partial' : '⚪ Cost Basis'}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Sleek Compact Inline Filter Bar (Direct Dropdowns In-Place) */}
+      {/* Filter Bar — Cascading Order: Scope -> Account -> Platform */}
       <div className="portfolio-compact-filter-bar">
+        {/* 1. Scope Filter */}
         <div className="compact-filter-item">
           <label className="compact-filter-lbl">Scope</label>
           <div className="compact-select-wrapper">
             <select 
               className="compact-filter-select"
               value={scopeFilter}
-              onChange={e => setScopeFilter(e.target.value)}
+              onChange={e => handleScopeChange(e.target.value)}
             >
               <option value="personal">My Portfolio</option>
               <option value="father">Father's Holdings</option>
@@ -93,6 +155,25 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           </div>
         </div>
 
+        {/* 2. Account Filter */}
+        <div className="compact-filter-item account-item">
+          <label className="compact-filter-lbl">Account</label>
+          <div className="compact-select-wrapper">
+            <select 
+              className="compact-filter-select"
+              value={accountFilter}
+              onChange={e => handleAccountChange(e.target.value)}
+            >
+              <option value="all">All Accounts</option>
+              {availableAccounts.map(a => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+            <span className="compact-select-arrow">▼</span>
+          </div>
+        </div>
+
+        {/* 3. Platform Filter */}
         <div className="compact-filter-item">
           <label className="compact-filter-lbl">Platform</label>
           <div className="compact-select-wrapper">
@@ -110,22 +191,16 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           </div>
         </div>
 
-        <div className="compact-filter-item account-item">
-          <label className="compact-filter-lbl">Account</label>
-          <div className="compact-select-wrapper">
-            <select 
-              className="compact-filter-select"
-              value={accountFilter}
-              onChange={e => setAccountFilter(e.target.value)}
-            >
-              <option value="all">All Accounts</option>
-              {availableAccounts.map(a => (
-                <option key={a} value={a}>{a}</option>
-              ))}
-            </select>
-            <span className="compact-select-arrow">▼</span>
-          </div>
-        </div>
+        {/* Clear Filters Action */}
+        {isFilterActive && (
+          <button 
+            className="compact-clear-filters-btn"
+            onClick={handleClearFilters}
+            title="Reset filters to default"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {/* Scrollable Dashboard Body */}
@@ -145,6 +220,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           hasPartialValuation={summaryMetrics.hasPartialValuation}
           valuedCount={summaryMetrics.valuedCount}
           totalActiveCount={summaryMetrics.totalActiveCount}
+          isFetchingValuations={isFetchingValuations}
           brokerageCash={summaryMetrics.brokerageCash}
           totalFinancialAssets={summaryMetrics.totalFinancialAssets}
           activeHoldingsCount={summaryMetrics.activeHoldingsCount}
@@ -153,6 +229,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           platformCount={summaryMetrics.platformCount}
           onOpenDataIssues={() => setActiveTab('issues')}
         />
+
 
         {/* View Navigation Tabs */}
         <div className="portfolio-nav-tabs">
@@ -196,6 +273,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
             <HoldingsTable 
               positions={displayedPositions}
               valuationProvider={defaultValuationProvider}
+              valuationVersion={valuationVersion}
               onSelectPosition={pos => setSelectedPosition(pos)}
             />
             <div style={{ height: 16 }} />
@@ -223,6 +301,9 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         {activeTab === 'activity' && (
           <InvestmentActivity 
             transactions={transactions}
+            scopeFilter={scopeFilter}
+            accountFilter={accountFilter}
+            platformFilter={platformFilter}
             onSelectTxn={txn => {}}
           />
         )}
@@ -236,15 +317,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
 
         <div style={{ height: 40 }} />
       </div>
-
-      {/* Position Detail Sheet */}
-      {selectedPosition && (
-        <HoldingDetailSheet
-          position={selectedPosition}
-          valuation={defaultValuationProvider.getValuation(selectedPosition)}
-          onClose={() => setSelectedPosition(null)}
-        />
-      )}
     </div>
   );
 }
+

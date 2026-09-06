@@ -67,7 +67,7 @@ export function getUnifiedPortfolioData(transactions = [], settings = {}) {
         buyLots: [
           {
             transactionId: `${positionKey}-lot-1`,
-            date: '',
+            date: h.firstBuyDate || '',
             units: currentUnits,
             remainingUnits: currentUnits,
             unitCost: avgCost,
@@ -76,7 +76,19 @@ export function getUnifiedPortfolioData(transactions = [], settings = {}) {
           }
         ],
         sellRecords: [],
-        txns: [],
+        txns: (h.txns && h.txns.length > 0) ? h.txns : [
+          {
+            id: `${positionKey}-txn-1`,
+            date: h.firstBuyDate || '',
+            action: 'BUY',
+            units: currentUnits,
+            unitPrice: avgCost,
+            tradeValue: remainingCostBasis,
+            investmentAccount: 'Share Market',
+            subAccount: broker,
+            security: h.symbol
+          }
+        ],
         snapshotPrice: currentPrice,
         snapshotMarketValue: currentValue
       });

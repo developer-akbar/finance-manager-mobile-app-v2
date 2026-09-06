@@ -1,5 +1,6 @@
 import React from 'react';
 import { formatINR } from '../../../utils/format.js';
+import { formatSignedCurrency, formatSignedPercent } from '../../../utils/portfolioAggregation.js';
 
 export default function PortfolioSummary({ 
   activeCostBasis = 0,
@@ -15,6 +16,7 @@ export default function PortfolioSummary({
   hasPartialValuation = false,
   valuedCount = 0,
   totalActiveCount = 0,
+  isFetchingValuations = false,
   brokerageCash = 0,
   totalFinancialAssets = 0,
   activeHoldingsCount = 0,
@@ -23,6 +25,13 @@ export default function PortfolioSummary({
   platformCount = 0,
   onOpenDataIssues = null
 }) {
+
+  const getPnlClass = (val) => {
+    if (val > 0) return 'pos';
+    if (val < 0) return 'neg';
+    return '';
+  };
+
   return (
     <div className="portfolio-summary-section">
       {/* Primary KPI Hero Grid */}
@@ -30,29 +39,31 @@ export default function PortfolioSummary({
         {/* Card 1: Active Invested Cost */}
         <div className="hero-kpi-card">
           <div className="hero-kpi-lbl">ACTIVE INVESTED COST</div>
-          <div className="hero-kpi-val primary">{formatINR(activeCostBasis)}</div>
+          <div className="hero-kpi-val primary num-tabular">{formatINR(activeCostBasis)}</div>
           <div className="hero-kpi-sub">
-            Cost basis of current holdings · {activeHoldingsCount} positions ({activeUnits.toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} units)
+            Cost basis of current holdings · {activeHoldingsCount} schemes ({activeUnits.toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} units)
           </div>
         </div>
 
         {/* Card 2: Current Market Value */}
         <div className="hero-kpi-card">
           <div className="hero-kpi-lbl">CURRENT MARKET VALUE</div>
-          <div className="hero-kpi-val">
-            {hasPartialValuation && totalValuedAmount !== null ? (
+          <div className="hero-kpi-val num-tabular">
+            {isFetchingValuations && totalValuedAmount === null ? (
+              <span className="kpi-val-na">Loading...</span>
+            ) : hasPartialValuation && totalValuedAmount !== null ? (
               formatINR(totalValuedAmount)
             ) : (
-              <span className="kpi-val-na">Price / NAV unavailable</span>
+              <span className="kpi-val-na">NAV / LTP unavailable</span>
             )}
           </div>
           <div className="hero-kpi-sub">
             {isFullyValued ? (
               '100% Valuation coverage'
             ) : hasPartialValuation ? (
-              <span className="badge-partial-val">Partial valuation · {valuedCount} of {totalActiveCount} positions valued</span>
+              <span className="badge-partial-val">Partial valuation · {valuedCount} of {totalActiveCount} schemes valued</span>
             ) : (
-              'Only positions with available NAV/price are included'
+              'Awaiting live market prices & NAV'
             )}
           </div>
         </div>
@@ -60,36 +71,38 @@ export default function PortfolioSummary({
         {/* Card 3: Unrealized P&L */}
         <div className="hero-kpi-card">
           <div className="hero-kpi-lbl">UNREALIZED P&L</div>
-          <div className="hero-kpi-val">
-            {hasPartialValuation && valuedUnrealizedPnl !== null ? (
-              <span className={valuedUnrealizedPnl >= 0 ? 'pos' : 'neg'}>
-                {valuedUnrealizedPnl >= 0 ? '+' : ''}{formatINR(valuedUnrealizedPnl)}
+          <div className="hero-kpi-val num-tabular">
+            {isFetchingValuations && valuedUnrealizedPnl === null ? (
+              <span className="kpi-val-na">Loading...</span>
+            ) : hasPartialValuation && valuedUnrealizedPnl !== null ? (
+              <span className={getPnlClass(valuedUnrealizedPnl)}>
+                {formatSignedCurrency(valuedUnrealizedPnl)}
               </span>
             ) : (
               <span className="kpi-val-na">—</span>
             )}
           </div>
-          <div className="hero-kpi-sub">
+          <div className="hero-kpi-sub num-tabular">
             {isFullyValued && unrealizedReturnPercent !== null ? (
-              <span className={unrealizedReturnPercent >= 0 ? 'pos' : 'neg'}>
-                {unrealizedReturnPercent >= 0 ? '+' : ''}{unrealizedReturnPercent}% total return
+              <span className={getPnlClass(unrealizedReturnPercent)}>
+                {formatSignedPercent(unrealizedReturnPercent)} total return
               </span>
             ) : hasPartialValuation && valuedReturnPercent !== null ? (
-              <span className={valuedReturnPercent >= 0 ? 'pos' : 'neg'}>
-                {valuedReturnPercent >= 0 ? '+' : ''}{valuedReturnPercent}% (Across {valuedCount} valued positions)
+              <span className={getPnlClass(valuedReturnPercent)}>
+                {formatSignedPercent(valuedReturnPercent)} (across {valuedCount} valued schemes)
               </span>
             ) : (
-              'Awaiting market prices/NAV'
+              'Awaiting market prices / NAV'
             )}
           </div>
         </div>
 
-        {/* Card 4: Historical Realized P&L */}
+        {/* Card 4: Historical Realized P&L (Always available immediately from ledger) */}
         <div className="hero-kpi-card">
           <div className="hero-kpi-lbl">HISTORICAL REALIZED P&L</div>
-          <div className="hero-kpi-val">
-            <span className={totalRealizedPnl > 0 ? 'pos' : (totalRealizedPnl < 0 ? 'neg' : '')}>
-              {totalRealizedPnl > 0 ? '+' : ''}{formatINR(totalRealizedPnl)}
+          <div className="hero-kpi-val num-tabular">
+            <span className={getPnlClass(totalRealizedPnl)}>
+              {formatSignedCurrency(totalRealizedPnl)}
             </span>
           </div>
           <div className="hero-kpi-sub">
@@ -101,7 +114,7 @@ export default function PortfolioSummary({
         {brokerageCash > 0 && (
           <div className="hero-kpi-card cash-card secondary-kpi">
             <div className="hero-kpi-lbl">UNINVESTED BROKERAGE CASH</div>
-            <div className="hero-kpi-val cash">{formatINR(brokerageCash)}</div>
+            <div className="hero-kpi-val cash num-tabular">{formatINR(brokerageCash)}</div>
             <div className="hero-kpi-sub">
               Available cash outside invested positions
             </div>
@@ -113,7 +126,7 @@ export default function PortfolioSummary({
       <div className="portfolio-status-strip">
         <div className="status-strip-pill">
           <span className="status-dot green" />
-          <span>Active Positions: <strong>{activeHoldingsCount}</strong></span>
+          <span>Active Schemes: <strong>{activeHoldingsCount}</strong></span>
         </div>
         <div className="status-strip-pill">
           <span className="status-dot gray" />
@@ -143,3 +156,4 @@ export default function PortfolioSummary({
     </div>
   );
 }
+

@@ -1,4 +1,9 @@
-/* Investments Portfolio Dashboard — Modern Fintech UI */
+/* Investments Portfolio Dashboard — Phase 4D UX Rework */
+
+.num-tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
 
 .investments-portfolio-screen {
   display: flex;
@@ -8,6 +13,7 @@
   color: var(--text-primary, #f8fafc);
   box-sizing: border-box;
   overflow: hidden;
+  font-family: inherit;
 }
 
 /* Top Navigation Bar */
@@ -15,7 +21,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 10px 16px;
   background: var(--bg-card, #1e293b);
   border-bottom: 1px solid var(--border, #334155);
   flex-shrink: 0;
@@ -26,9 +32,9 @@
   background: var(--bg-input, rgba(255, 255, 255, 0.05));
   border: 1px solid var(--border-light, rgba(255, 255, 255, 0.1));
   color: var(--text-primary, #f8fafc);
-  border-radius: 10px;
-  width: 36px;
-  height: 36px;
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -46,35 +52,78 @@
 
 .portfolio-main-title {
   margin: 0;
-  font-size: 1.15rem;
-  font-weight: 800;
-  letter-spacing: -0.3px;
+  font-size: 1.1rem; /* 18px */
+  font-weight: 700;
+  letter-spacing: -0.2px;
   color: var(--text-primary, #f8fafc);
 }
 
 .portfolio-main-subtitle {
-  font-size: 0.72rem;
+  font-size: 0.7rem; /* 11px */
   color: var(--text-muted, #94a3b8);
   font-weight: 500;
-  margin-top: 2px;
+  margin-top: 1px;
+}
+
+.portfolio-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.portfolio-refresh-btn {
+  background: var(--bg-input, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.1));
+  color: var(--text-primary, #f8fafc);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 0.7rem; /* 11px */
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.portfolio-refresh-btn:hover:not(:disabled) {
+  background: var(--bg-card2, rgba(255, 255, 255, 0.1));
+  border-color: var(--accent, #6366f1);
+}
+
+.portfolio-refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.portfolio-refresh-btn svg.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .portfolio-valuation-badge {
-  font-size: 0.68rem;
-  font-weight: 700;
+  font-size: 0.68rem; /* 11px */
+  font-weight: 600;
   padding: 4px 8px;
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--bg-input, rgba(255, 255, 255, 0.05));
   border: 1px solid var(--border-light, rgba(255, 255, 255, 0.1));
   color: var(--text-muted, #94a3b8);
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
-/* Filter Controls Bar — Compact Inline Dropdowns */
+/* Filter Controls Bar — Cascading Order & Clear Filters Button */
 .portfolio-compact-filter-bar {
   display: flex;
   align-items: center;
   gap: 8px 12px;
-  padding: 8px 16px;
+  padding: 6px 16px;
   background: var(--bg-card2, #182234);
   border-bottom: 1px solid var(--border-light, rgba(255, 255, 255, 0.06));
   flex-shrink: 0;
@@ -84,15 +133,15 @@
 
 .compact-filter-item {
   display: flex;
-  align-items: start;
-  gap: 6px;
-  flex: 1 1 140px;
+  align-items: flex-start;
+  gap: 3px;
+  flex: 1 1 130px;
   min-width: 0;
   flex-direction: column;
 }
 
 .compact-filter-lbl {
-  font-size: 0.68rem;
+  font-size: 0.65rem; /* 10-11px */
   font-weight: 700;
   color: var(--text-muted, #94a3b8);
   text-transform: uppercase;
@@ -105,7 +154,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  flex: 1;
+  width: 100%;
   min-width: 0;
 }
 
@@ -115,10 +164,10 @@
   -webkit-appearance: none;
   background: var(--bg-card, #1e293b);
   border: 1px solid var(--border, #334155);
-  border-radius: 8px;
-  padding: 5px 22px 5px 10px;
+  border-radius: 6px;
+  padding: 4px 20px 4px 8px;
   color: var(--text-primary, #f8fafc);
-  font-size: 0.82rem;
+  font-size: 0.78rem; /* 12px */
   font-weight: 600;
   outline: none;
   cursor: pointer;
@@ -136,18 +185,38 @@
 
 .compact-select-arrow {
   position: absolute;
-  right: 8px;
+  right: 6px;
   pointer-events: none;
-  font-size: 0.55rem;
+  font-size: 0.52rem;
   color: var(--text-muted, #94a3b8);
+}
+
+.compact-clear-filters-btn {
+  background: none;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
+  font-size: 0.7rem; /* 11px */
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-top: 14px;
+  transition: all 0.15s;
+}
+
+.compact-clear-filters-btn:hover {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: #ef4444;
 }
 
 /* Scrollable Body */
 .portfolio-scrollable-content {
   flex: 1;
   overflow-y: auto;
-  padding: 14px 16px;
+  padding: 12px 16px;
 }
+
 
 /* KPI Hero Grid */
 .portfolio-hero-grid {
@@ -1122,7 +1191,7 @@
   }
 
   .hero-kpi-card.cash-card {
-    grid-column: span 2;
+    /* grid-column: span 2; */
   }
 
   /* Mobile Filter Bar (Pills) */
@@ -1394,4 +1463,554 @@
 [data-theme="light"] .radio-opt.selected {
   background: #e0e7ff;
   border-color: #6366f1;
+}
+
+/* Scheme Display Aggregation UI Styles */
+.folio-expand-badge-btn {
+  background: var(--bg-input, rgba(99, 102, 241, 0.12));
+  border: 1px solid var(--accent, #6366f1);
+  color: var(--accent, #818cf8);
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.folio-expand-badge-btn:hover {
+  background: var(--accent, #6366f1);
+  color: #ffffff;
+}
+
+.aggregated-row {
+  border-left: 3px solid var(--accent, #6366f1);
+}
+
+.folio-sub-row {
+  background: rgba(15, 23, 42, 0.5) !important;
+  font-size: 0.82rem;
+  border-left: 3px dashed var(--accent, rgba(99, 102, 241, 0.4));
+}
+
+.sub-row-cell {
+  padding-left: 24px !important;
+}
+
+.sub-row-indent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted, #94a3b8);
+  font-weight: 600;
+}
+
+.sub-row-platform {
+  color: var(--text-primary, #f8fafc);
+}
+
+.row-view-btn.sub-btn {
+  padding: 2px 8px;
+  font-size: 0.65rem;
+  opacity: 0.85;
+}
+
+/* Folio Selector Grid in HoldingDetailSheet */
+.folio-selector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.folio-selector-card {
+  background: var(--bg-card2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.folio-selector-card:hover {
+  border-color: var(--accent, #6366f1);
+  background: var(--bg-input, rgba(255, 255, 255, 0.08));
+}
+
+.folio-selector-card.selected {
+  border-color: var(--accent, #6366f1);
+  background: rgba(99, 102, 241, 0.15);
+  box-shadow: 0 0 0 1px var(--accent, #6366f1);
+}
+
+.mobile-sub-cards-drawer {
+  padding: 8px 12px 12px 24px;
+  background: rgba(15, 23, 42, 0.4);
+  border-left: 2px dashed var(--accent, rgba(99, 102, 241, 0.4));
+  border-radius: 0 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mobile-sub-card {
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+/* Phase 4B — Money-First Investor UX Styles */
+.card-money-banner {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-card2, rgba(255, 255, 255, 0.03));
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+.money-lbl {
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+
+.money-val {
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: var(--text-primary, #f8fafc);
+}
+
+.money-val.current-val {
+  font-size: 0.98rem;
+  color: var(--accent-light, #818cf8);
+}
+
+.money-val.invested-val {
+  font-weight: 700;
+}
+
+.pnl-pct-inline {
+  font-size: 0.72rem;
+  margin-left: 4px;
+  font-weight: 600;
+}
+
+.card-supporting-bar {
+  padding: 6px 12px 0 12px;
+  margin-top: 4px;
+  border-top: 1px dashed var(--border-light, rgba(255, 255, 255, 0.06));
+}
+
+.nav-lbl {
+  font-weight: 700;
+  color: var(--text-muted, #94a3b8);
+  margin-right: 4px;
+}
+
+.as-of-date {
+  font-size: 0.68rem;
+}
+
+/* Groww Fund Detail Sheet Styles */
+.groww-summary-card {
+  background: var(--bg-card2, #182234);
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.summary-grid-2x2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+}
+
+.summary-cell {
+  display: flex;
+  flex-direction: column;
+}
+
+.summary-hero-val {
+  font-size: 1.12rem;
+  font-weight: 800;
+  margin-top: 2px;
+}
+
+.summary-hero-pnl {
+  font-size: 1.12rem;
+  font-weight: 800;
+  margin-top: 2px;
+}
+
+.summary-sub-grid {
+  border-top: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+  padding-top: 10px;
+}
+
+.sub-lbl {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+}
+
+.sub-val {
+  display: block;
+  font-size: 0.9rem;
+  margin-top: 2px;
+}
+
+.groww-nav-bar {
+  background: var(--bg-input, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+
+.folio-selector-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-top: 8px;
+}
+
+.folio-tab-btn {
+  background: var(--bg-input, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.1));
+  color: var(--text-muted, #94a3b8);
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.folio-tab-btn.active {
+  background: var(--accent, #6366f1);
+  color: #ffffff;
+  border-color: var(--accent, #6366f1);
+}
+
+.folio-breakdown-card {
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.folio-breakdown-card.selected {
+  border-color: var(--accent, #6366f1);
+  background: rgba(99, 102, 241, 0.1);
+  box-shadow: 0 0 0 1px var(--accent, #6366f1);
+}
+
+.folio-selected-tag {
+  background: var(--accent, #6366f1);
+  color: #ffffff;
+  font-size: 0.64rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.fifo-helper-header {
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 3px solid var(--accent, #6366f1);
+  padding: 6px 10px;
+  border-radius: 0 6px 6px 0;
+  font-size: 0.75rem;
+}
+
+.fifo-lot-card {
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.detail-tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--border, #334155);
+  margin-top: 16px;
+  margin-bottom: 12px;
+  gap: 4px;
+}
+
+.detail-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted, #94a3b8);
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.detail-tab.active {
+  color: var(--accent-light, #818cf8);
+  border-bottom-color: var(--accent, #6366f1);
+}
+
+.groww-txn-table th {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  color: var(--text-muted, #94a3b8);
+}
+
+.txn-type-pill {
+  font-size: 0.62rem;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.txn-type-pill.buy {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.txn-type-pill.sell {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+/* Phase 4C — Groww-Aligned Visual Polish Styles */
+.num-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.card-primary-hero {
+  padding: 6px 0 4px 0;
+}
+
+.hero-lbl {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--text-muted, #64748b);
+  letter-spacing: 0.4px;
+}
+
+.card-primary-hero .hero-val {
+  font-size: 1rem;
+  color: var(--text-primary, #f8fafc);
+  margin-top: 1px;
+}
+
+.card-secondary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-light, rgba(255, 255, 255, 0.05));
+  margin-top: 6px;
+}
+
+.sec-lbl {
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: var(--text-muted, #64748b);
+  letter-spacing: 0.3px;
+  display: block;
+}
+
+.sec-val {
+  font-size: 0.88rem;
+  color: var(--text-primary, #e2e8f0);
+  display: block;
+  margin-top: 1px;
+}
+
+.mobile-txn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mobile-txn-card {
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.txn-action-tag {
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.txn-action-tag.buy {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.txn-action-tag.sell {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.txn-amount {
+  font-size: 0.92rem;
+}
+
+/* Phase 4G — Final Portfolio Card & Detail Polish Rules */
+.holding-mobile-card {
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.holding-card-name {
+  font-size: 0.92rem; /* 14-15px */
+  font-weight: 600;
+  color: var(--text-primary, #f8fafc);
+  line-height: 1.3;
+}
+
+.platform-tag {
+  background: rgba(99, 102, 241, 0.1);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.68rem; /* 10-11px */
+  font-weight: 500;
+}
+
+.platform-tag.mixed-tag {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.folio-expand-badge-btn {
+  font-size: 0.68rem; /* 10-11px */
+  font-weight: 500;
+}
+
+.flex-gap-xs {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.card-primary-hero {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.card-primary-hero .hero-lbl {
+  font-size: 0.65rem; /* 10-11px */
+  font-weight: 500;
+  color: var(--text-muted, #94a3b8);
+  display: block;
+  letter-spacing: 0.3px;
+}
+
+.card-primary-hero .hero-val {
+  font-size: 1rem; /* 20-22px */
+  font-weight: 700;
+  color: var(--text-primary, #f8fafc);
+  line-height: 1.2;
+  margin-top: 1px;
+}
+
+.card-secondary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-light, rgba(255, 255, 255, 0.06));
+}
+
+.card-secondary-grid.grid-3 {
+  grid-template-columns: 0.85fr 1.65fr 0.65fr;
+  gap: 8px;
+}
+
+.pos, .positive-value {
+  color: var(--semantic-positive, #10b981) !important;
+}
+
+.neg, .negative-value {
+  color: var(--semantic-negative, #ef4444) !important;
+}
+
+.sec-lbl {
+  font-size: 0.68rem; /* 10-11px */
+  font-weight: 500;
+  color: var(--text-muted, #94a3b8);
+  display: block;
+}
+
+.sec-val {
+  font-size: 0.88rem; /* 13-14px */
+  font-weight: 600;
+  display: block;
+  margin-top: 1px;
+}
+
+.card-metadata-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-light, rgba(255, 255, 255, 0.05));
+}
+
+.meta-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.meta-lbl {
+  font-size: 0.65rem; /* 10-11px */
+  color: var(--text-muted, #94a3b8);
+  font-weight: 500;
+}
+
+.meta-val {
+  font-size: 0.78rem; /* 11-12px */
+  margin-top: 1px;
+}
+
+.meta-sub-date {
+  font-size: 0.64rem; /* 10-11px */
+  color: var(--text-muted, #94a3b8);
+  margin-top: 1px;
 }
