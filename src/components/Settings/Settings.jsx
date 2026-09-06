@@ -1548,20 +1548,39 @@ function DataManager({ onBack }) {
     setShowMode(false);
     setImportLoadingMessage('Importing transactions & reloading database...');
     setImportLoading(true);
+    const startT = Date.now();
     try {
       const result = await importData(pendingRows, mode, pendingBackup);
-      setStatus(result.cancelled
-        ? { type: 'error', msg: 'Import cancelled.' }
-        : { type: 'success', msg: `✓ Imported ${result.imported.toLocaleString()} transactions${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''}.` }
-      );
+      if (result && !result.cancelled) {
+        const elapsed = ((Date.now() - startT) / 1000).toFixed(1);
+        const fileName = pendingName || 'imported_file.csv';
+        const lastImportInfo = {
+          date: new Date().toISOString(),
+          fileName,
+          importedCount: result.imported,
+          skippedCount: result.skipped,
+          durationSeconds: elapsed
+        };
+        await updateSettings({ lastImportInfo: JSON.stringify(lastImportInfo) });
+        setStatus({ type: 'success', msg: `✓ Imported ${result.imported.toLocaleString()} transactions in ${elapsed}s${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''} [${fileName}].` });
+      } else {
+        setStatus({ type: 'error', msg: 'Import cancelled.' });
+      }
     } catch (err) {
       setStatus({ type: 'error', msg: `Import failed: ${err.message}` });
     } finally {
       setPending(null);
+      setPendingNm('');
       setPendingBackup(null);
       setImportLoading(false);
     }
   };
+
+  const parsedLastImport = useMemo(() => {
+    try {
+      return state.settings?.lastImportInfo ? JSON.parse(state.settings.lastImportInfo) : null;
+    } catch { return null; }
+  }, [state.settings?.lastImportInfo]);
 
   // ── Capacitor-aware file save (no @capacitor/share — avoids Android 14 crash) ──
   // ── Backup helpers ─────────────────────────────────────────────────────────
@@ -1814,14 +1833,25 @@ function DataManager({ onBack }) {
             <div className="dm-progress-bar">
               <div className="dm-progress-fill" style={{ width: `${pct}%` }} />
             </div>
-            <div className="dm-progress-txt">
-              {importProgress.processed.toLocaleString()} / {importProgress.total.toLocaleString()} ({pct}%)
+            <div className="dm-progress-txt" style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+              <span>{importProgress.processed.toLocaleString()} / {importProgress.total.toLocaleString()} ({pct}%)</span>
+              <span>⏱️ {((Date.now() - (importProgress.startTime || Date.now())) / 1000).toFixed(1)}s</span>
             </div>
           </div>
         )}
 
         {/* Import section */}
         <div className="dm-section-hdr">Import</div>
+        {parsedLastImport && (
+          <div style={{ margin: '0 var(--page-px) 10px', padding: '10px 14px', borderRadius: 8, background: 'var(--bg-card2)', border: '1px solid var(--border)', fontSize: '0.78rem' }}>
+            <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 2 }}>
+              📁 Last Import: {parsedLastImport.fileName}
+            </div>
+            <div style={{ color: 'var(--text-muted)' }}>
+              {parsedLastImport.importedCount.toLocaleString()} imported ({parsedLastImport.durationSeconds}s) • {new Date(parsedLastImport.date).toLocaleString()}
+            </div>
+          </div>
+        )}
         <div style={{ padding: '0 var(--page-px) 12px' }}>
           <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>Import Target / Format</label>
           <select

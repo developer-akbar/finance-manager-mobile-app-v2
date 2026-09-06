@@ -110,10 +110,15 @@ export const getTransactions = async (filters = {}) => {
     db.query(sql2, vals2)
   ]);
 
-  const txns = [
-    ...(res1.values || []).map(rowToTxn),
-    ...(res2.values || []).map(rowToTxn)
-  ];
+  const txnMap = new Map();
+  (res1.values || []).map(rowToTxn).forEach(t => {
+    if (t._id) txnMap.set(t._id, t);
+  });
+  (res2.values || []).map(rowToTxn).forEach(t => {
+    if (t._id) txnMap.set(t._id, t);
+  });
+  const txns = Array.from(txnMap.values());
+
 
   const parseDateToTime = (dStr) => {
     if (!dStr) return 0;
@@ -748,11 +753,23 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
   }
 
   if (genItems.length > 0) {
+    try {
+      const resInv = await db.query('SELECT id FROM investment_transactions', []);
+      const invIdSet = new Set((resInv.values || []).map(r => r.id));
+      const conflicts = genItems.filter(item => invIdSet.has(item.id));
+      if (conflicts.length > 0) {
+        for (const c of conflicts) {
+          try { await db.run('DELETE FROM investment_transactions WHERE id=?', [c.id]); } catch {}
+        }
+      }
+    } catch {}
+
     if (typeof db.bulkInsertIgnore === 'function') {
       const res = await db.bulkInsertIgnore('transactions', genItems);
       imported += res.added;
       skipped += res.skipped;
     } else {
+      try { await db.run('BEGIN TRANSACTION;'); } catch {}
       for (const obj of genItems) {
         try {
           const res = await db.run(
@@ -767,15 +784,28 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
           if (res.changes?.changes > 0) imported++; else skipped++;
         } catch { skipped++; }
       }
+      try { await db.run('COMMIT;'); } catch {}
     }
   }
 
   if (invItems.length > 0) {
+    try {
+      const resGen = await db.query('SELECT id FROM transactions', []);
+      const genIdSet = new Set((resGen.values || []).map(r => r.id));
+      const conflicts = invItems.filter(item => genIdSet.has(item.id));
+      if (conflicts.length > 0) {
+        for (const c of conflicts) {
+          try { await db.run('DELETE FROM transactions WHERE id=?', [c.id]); } catch {}
+        }
+      }
+    } catch {}
+
     if (typeof db.bulkInsertIgnore === 'function') {
       const res = await db.bulkInsertIgnore('investment_transactions', invItems);
       imported += res.added;
       skipped += res.skipped;
     } else {
+      try { await db.run('BEGIN TRANSACTION;'); } catch {}
       for (const obj of invItems) {
         try {
           const res = await db.run(
@@ -793,8 +823,10 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
           if (res.changes?.changes > 0) imported++; else skipped++;
         } catch { skipped++; }
       }
+      try { await db.run('COMMIT;'); } catch {}
     }
   }
+
 
   return { imported, skipped, total: rows.length };
 };

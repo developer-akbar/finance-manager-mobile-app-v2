@@ -1196,17 +1196,24 @@ export default function Accounts({ backInterceptRef } = {}) {
     const isMFTaxSaver = name === 'Mutual Funds Tax Saver';
     const isLiquidMF = name === 'Liquid Mutual Funds';
 
+    const KNOWN_INVESTMENT_PLATFORMS_SET = new Set(['Fareeda Groww', 'Ammi Groww', 'Fareeda ETMoney', 'Ak ETMoney', 'Zerodha', 'Groww', 'ETMoney', 'Scripbox']);
+
     let subAccountsToRender = acctObj.subAccounts || [];
     if (isShareMarket) {
       subAccountsToRender = Object.keys(shareMarketBalances).map(subName => ({ name: subName }));
     } else if (isMFTaxSaver) {
-      const existingSubs = (acctObj.subAccounts || []).map(s => s.name || s);
+      const existingSubs = (acctObj.subAccounts || []).map(s => typeof s === 'string' ? s : (s?.name || s));
       const allSubs = new Set([...existingSubs, 'Ak ETMoney']);
       subAccountsToRender = Array.from(allSubs).map(s => ({ name: s }));
     } else if (isLiquidMF) {
-      const existingSubs = (acctObj.subAccounts || []).map(s => s.name || s);
+      const existingSubs = (acctObj.subAccounts || []).map(s => typeof s === 'string' ? s : (s?.name || s));
       const allSubs = new Set([...existingSubs, 'Fareeda Groww', 'Ammi Groww', 'Ak ETMoney']);
       subAccountsToRender = Array.from(allSubs).filter(s => s !== 'Groww' || existingSubs.includes('Groww')).map(s => ({ name: s }));
+    } else {
+      subAccountsToRender = (acctObj.subAccounts || []).filter(s => {
+        const sName = typeof s === 'string' ? s : (s?.name || '');
+        return !KNOWN_INVESTMENT_PLATFORMS_SET.has(sName);
+      });
     }
 
     const hasSubs = subAccountsToRender.length > 0;

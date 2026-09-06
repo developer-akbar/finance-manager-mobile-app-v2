@@ -227,9 +227,51 @@ const openSQLite = async () => {
   // execute() on Android maps to execSQL() which rejects any SELECT-returning statement
   try { await db.query('PRAGMA journal_mode=WAL;'); } catch (e) { console.warn('WAL pragma skipped:', e?.message); }
 
-  db.bulkInsertIgnore = null; // SQLite falls back to row-by-row insert path
+  db.bulkInsertIgnore = async (store, items) => {
+    if (!items.length) return { added: 0, skipped: 0 };
+    const sample = items[0];
+    const cols = Object.keys(sample);
+    const colCount = cols.length;
+
+    // Use multi-row INSERT OR IGNORE batching
+    // Standard SQLite parameter limit is 999
+    const ROWS_PER_BATCH = Math.max(1, Math.floor(900 / colCount));
+    let added = 0;
+
+    try { await db.run('BEGIN TRANSACTION;'); } catch {}
+
+    for (let i = 0; i < items.length; i += ROWS_PER_BATCH) {
+      const chunk = items.slice(i, i + ROWS_PER_BATCH);
+      const placeholders = chunk.map(() => `(${cols.map(() => '?').join(',')})`).join(',');
+      const sql = `INSERT OR IGNORE INTO ${store} (${cols.join(',')}) VALUES ${placeholders}`;
+      const vals = [];
+      for (const row of chunk) {
+        for (const col of cols) {
+          vals.push(row[col] ?? null);
+        }
+      }
+      try {
+        const res = await db.run(sql, vals);
+        added += (res.changes?.changes ?? chunk.length);
+      } catch (err) {
+        console.warn(`bulkInsertIgnore batch failed for ${store}, falling back to single-row:`, err);
+        const singleSql = `INSERT OR IGNORE INTO ${store} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`;
+        for (const row of chunk) {
+          try {
+            const r = await db.run(singleSql, cols.map(c => row[c] ?? null));
+            if (r.changes?.changes > 0) added++;
+          } catch {}
+        }
+      }
+    }
+
+    try { await db.run('COMMIT;'); } catch {}
+    return { added, skipped: items.length - added };
+  };
+
   return db;
 };
+
 
 const applySchema = async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY,date TEXT NOT NULL,time TEXT DEFAULT '',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',note TEXT DEFAULT '',description TEXT DEFAULT '',inr REAL DEFAULT 0,amount TEXT DEFAULT '0',currency TEXT DEFAULT 'INR',type TEXT DEFAULT 'Expense',created_at TEXT,updated_at TEXT,recurring_rule_id TEXT DEFAULT '',tags TEXT DEFAULT '',split_group_id TEXT DEFAULT '',receipt_image TEXT DEFAULT '',warranty_expiry TEXT DEFAULT '',serial_no TEXT DEFAULT '',sub_account TEXT DEFAULT '',from_sub_account TEXT DEFAULT '',to_sub_account TEXT DEFAULT '');`);

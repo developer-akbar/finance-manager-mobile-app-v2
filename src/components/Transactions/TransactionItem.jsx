@@ -35,7 +35,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
 
   // Investment transaction metadata detection
   const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
-  const isInvestment = Boolean(invType === 'BUY' || invType === 'SELL' || invType === 'UNIT_ADJUSTMENT' || invType === 'RECONCILIATION' || (t.SecuritySymbol && t.SecurityISIN));
+  const isInvestment = Boolean((invType === 'BUY' || invType === 'SELL' || invType === 'UNIT_ADJUSTMENT' || invType === 'RECONCILIATION') || (invType && t.SecuritySymbol && t.SecurityISIN));
 
   const invLabel = (t.Note || t.note || '').trim() || (t.SecuritySymbol || t.security_symbol || '').trim() || '';
   const invQty = parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0);
@@ -270,7 +270,7 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
 
   // Investment transaction metadata detection
   const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
-  const isInvestment = Boolean(invType === 'BUY' || invType === 'SELL' || invType === 'UNIT_ADJUSTMENT' || invType === 'RECONCILIATION' || (t.SecuritySymbol && t.SecurityISIN));
+  const isInvestment = Boolean((invType === 'BUY' || invType === 'SELL' || invType === 'UNIT_ADJUSTMENT' || invType === 'RECONCILIATION') || (invType && t.SecuritySymbol && t.SecurityISIN));
 
   const securityName = (t.SecuritySymbol || t.security_symbol || '').trim();
   const noteText = (t.Note || t.note || '').trim();

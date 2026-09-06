@@ -25,7 +25,17 @@ export const useApp = () => { const c = useContext(Ctx); if (!c) throw new Error
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const sortTransactions = (txns) => {
-  return [...txns].sort((a, b) => {
+  const seen = new Set();
+  const unique = [];
+  for (const t of (txns || [])) {
+    const id = t._id || t.id || t.ID;
+    if (id) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+    }
+    unique.push(t);
+  }
+  return unique.sort((a, b) => {
     const da = parseDate(a.Date).getTime();
     const db = parseDate(b.Date).getTime();
     if (da !== db) return db - da;
@@ -39,6 +49,7 @@ const sortTransactions = (txns) => {
     return cb.localeCompare(ca);
   });
 };
+
 
 // Categories in state: { CatName: { type:'Expense'|'Income', subcategories:['sub1',...] } }
 const catsArrToObj = (arr) => {
@@ -476,14 +487,14 @@ export function AppProvider({ children }) {
           } else {
             console.log(`SQLite transaction migrating ${changedTxns.length} transactions...`);
             const sdb = getDB();
-            await sdb.execute('BEGIN TRANSACTION;');
+            try { await sdb.run('BEGIN TRANSACTION;'); } catch {}
             for (const row of changedTxns) {
               await sdb.run(
                 `UPDATE transactions SET account=?,from_account=?,to_account=?,sub_account=?,from_sub_account=?,to_sub_account=?,updated_at=? WHERE id=?`,
                 [row.account, row.from_account, row.to_account, row.sub_account, row.from_sub_account, row.to_sub_account, row.updated_at, row.id]
               );
             }
-            await sdb.execute('COMMIT;');
+            try { await sdb.run('COMMIT;'); } catch {}
           }
         }
 
@@ -932,6 +943,9 @@ export function AppProvider({ children }) {
       const grpOrdRaw = r.AccountGroupOrder ?? r.account_group_order;
       const grpOrd = (grpOrdRaw !== undefined && grpOrdRaw !== '') ? parseInt(grpOrdRaw) : undefined;
 
+      const KNOWN_INVESTMENT_PLATFORMS = new Set(['Fareeda Groww', 'Ammi Groww', 'Fareeda ETMoney', 'Ak ETMoney', 'Zerodha', 'Groww', 'ETMoney', 'Scripbox']);
+      const isBankAcct = (n, g) => (g && g.includes('Bank')) || ['HDFC', 'SBI', 'Canara', 'Cash'].includes(n);
+
       if (realAcct && !RESERVED_ACCT.has(realAcct) && !looksNumeric(realAcct) && !looksLikeUUID(realAcct)) {
         if (!acctMap.has(realAcct)) {
           acctMap.set(realAcct, { name: realAcct, group: acctGroup, icon: '💳', acctType, cardLast4, settlementDate, paymentDueDays, isAsset, sortOrder: acctOrd, subAccounts: new Set() });
@@ -945,8 +959,11 @@ export function AppProvider({ children }) {
           if (paymentDueDays && !existing.paymentDueDays) existing.paymentDueDays = paymentDueDays;
           if (acctOrd !== undefined && existing.sortOrder === undefined) existing.sortOrder = acctOrd;
         }
+
         const sVal = rawSubAcct || rawFromSub || String(r.Brokerage || r.brokerage || '').trim();
-        if (sVal) acctMap.get(realAcct).subAccounts.add(sVal);
+        if (sVal && (!isBankAcct(realAcct, acctGroup) || !KNOWN_INVESTMENT_PLATFORMS.has(sVal))) {
+          acctMap.get(realAcct).subAccounts.add(sVal);
+        }
         if (acctGroup) {
           groupSet.add(acctGroup);
           if (grpOrd !== undefined && !groupOrderMap.has(acctGroup)) {
@@ -970,7 +987,9 @@ export function AppProvider({ children }) {
             if (toOrd !== undefined && existing.sortOrder === undefined) existing.sortOrder = toOrd;
           }
           const sValDest = rawToSub || String(r.Brokerage || r.brokerage || '').trim();
-          if (sValDest) acctMap.get(destAcct).subAccounts.add(sValDest);
+          if (sValDest && (!isBankAcct(destAcct, toGroup) || !KNOWN_INVESTMENT_PLATFORMS.has(sValDest))) {
+            acctMap.get(destAcct).subAccounts.add(sValDest);
+          }
           if (toGroup) groupSet.add(toGroup);
         }
       } else {
