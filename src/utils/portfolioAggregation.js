@@ -225,27 +225,54 @@ export function formatSignedPercent(percent) {
   return pct > 0 ? `+${absFormatted}%` : `-${absFormatted}%`;
 }
 
+export function parseDateToTimestamp(dateStr) {
+  if (!dateStr) return NaN;
+  if (dateStr instanceof Date) return dateStr.getTime();
+  const str = String(dateStr).trim();
+  const parts = str.split(/[/|-]/);
+  if (parts.length === 3) {
+    if (parts[0].length === 4) {
+      return new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)).getTime();
+    } else if (parts[2].length === 4) {
+      return new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)).getTime();
+    }
+  }
+  return new Date(str).getTime();
+}
+
 /**
  * Newton-Raphson XIRR calculation algorithm for investment cash flows
  */
 export function calculateXIRR(cashFlows) {
   if (!Array.isArray(cashFlows) || cashFlows.length < 2) return null;
   
-  const validFlows = cashFlows.filter(cf => cf && cf.date && typeof cf.amount === 'number' && !isNaN(cf.amount));
+  const validFlows = [];
+  for (const cf of cashFlows) {
+    if (!cf || !cf.date || typeof cf.amount !== 'number' || isNaN(cf.amount) || cf.amount === 0) continue;
+    const t = parseDateToTimestamp(cf.date);
+    if (!isNaN(t)) {
+      validFlows.push({ amount: cf.amount, time: t });
+    }
+  }
   if (validFlows.length < 2) return null;
 
-  const d0 = new Date(validFlows[0].date).getTime();
-  if (isNaN(d0)) return null;
+  validFlows.sort((a, b) => a.time - b.time);
+  const d0 = validFlows[0].time;
 
+  let hasNegative = false;
+  let hasPositive = false;
   const flows = [];
+
   for (const cf of validFlows) {
-    const t = new Date(cf.date).getTime();
-    if (isNaN(t)) return null;
+    if (cf.amount < 0) hasNegative = true;
+    if (cf.amount > 0) hasPositive = true;
     flows.push({
       amount: cf.amount,
-      years: (t - d0) / (1000 * 3600 * 24 * 365.25)
+      years: (cf.time - d0) / (1000 * 3600 * 24 * 365.25)
     });
   }
+
+  if (!hasNegative || !hasPositive) return null;
 
   let r = 0.1; // Initial guess: 10%
   for (let iter = 0; iter < 100; iter++) {
@@ -272,6 +299,123 @@ export function calculateXIRR(cashFlows) {
   }
 
   return null;
+}
+
+/**
+ * Computes dated cash flow XIRR for a single position or aggregate group.
+ */
+export function computePositionXIRR(position, valuation = null) {
+  if (!position) return null;
+  const isRedeemed = position.status === 'REDEEMED' || position.currentUnits === 0;
+
+  const val = valuation || position.valuation;
+  const currentValue = isRedeemed ? 0 : (val && val.isValued && val.currentValue > 0 ? val.currentValue : 0);
+
+  const txns = (position.txns && position.txns.length > 0) 
+    ? position.txns 
+    : (position.buyLots && position.buyLots.length > 0 ? position.buyLots : []);
+  if (!Array.isArray(txns) || txns.length === 0) return null;
+
+  const cashFlows = [];
+  for (const t of txns) {
+    const d = t.date || t.Date || t.firstBuyDate;
+    if (!d) continue;
+
+    const rawAction = String(t.action || t.InvestmentTransactionType || t.type || '').toUpperCase();
+    const isBuy = rawAction.includes('BUY') || rawAction.includes('INVEST') || rawAction === 'OPENING_LOT' || (t.units > 0 && !rawAction.includes('SELL'));
+
+    let amount = 0;
+    const valCandidates = [t.tradeValue, t.TradeValue, t.costBasis, t.CostBasis, t.cashImpact, t.INR, t.inr, t.Amount, t.amount];
+    for (const cand of valCandidates) {
+      if (cand !== undefined && cand !== null && cand !== '') {
+        const p = Math.abs(parseFloat(cand));
+        if (!isNaN(p) && p > 0) {
+          amount = p;
+          break;
+        }
+      }
+    }
+    if (amount === 0 && t.units && t.unitCost) {
+      amount = Math.abs(t.units * t.unitCost);
+    }
+
+    if (amount > 0) {
+      if (isBuy) {
+        cashFlows.push({ date: d, amount: -amount });
+      } else {
+        cashFlows.push({ date: d, amount: +amount });
+      }
+    }
+  }
+
+  if (!isRedeemed && currentValue > 0) {
+    const asOfDate = (val && val.asOf) ? val.asOf : '2026-09-06';
+    cashFlows.push({ date: asOfDate, amount: currentValue });
+  }
+
+  return calculateXIRR(cashFlows);
+}
+
+/**
+ * Computes portfolio-level dated cash flow XIRR across active holdings.
+ */
+export function computePortfolioXIRR(activePositions = [], valuationProvider = null) {
+  if (!Array.isArray(activePositions) || activePositions.length === 0) {
+    return null;
+  }
+
+  const cashFlows = [];
+  let totalTerminalValue = 0;
+  let hasAnyValuation = false;
+  let latestAsOf = '2026-09-06';
+
+  for (const p of activePositions) {
+    const val = valuationProvider ? valuationProvider.getValuation(p) : p.valuation;
+    if (val && val.isValued && val.currentValue > 0) {
+      hasAnyValuation = true;
+      totalTerminalValue += val.currentValue;
+      if (val.asOf) latestAsOf = val.asOf;
+
+      const txns = (p.txns && p.txns.length > 0) ? p.txns : (p.buyLots || []);
+      for (const t of txns) {
+        const d = t.date || t.Date || t.firstBuyDate;
+        if (!d) continue;
+
+        const rawAction = String(t.action || t.InvestmentTransactionType || t.type || '').toUpperCase();
+        const isBuy = rawAction.includes('BUY') || rawAction.includes('INVEST') || rawAction === 'OPENING_LOT' || (t.units > 0 && !rawAction.includes('SELL'));
+
+        let amount = 0;
+        const valCandidates = [t.tradeValue, t.TradeValue, t.costBasis, t.CostBasis, t.cashImpact, t.INR, t.inr, t.Amount, t.amount];
+        for (const cand of valCandidates) {
+          if (cand !== undefined && cand !== null && cand !== '') {
+            const p = Math.abs(parseFloat(cand));
+            if (!isNaN(p) && p > 0) {
+              amount = p;
+              break;
+            }
+          }
+        }
+        if (amount === 0 && t.units && t.unitCost) {
+          amount = Math.abs(t.units * t.unitCost);
+        }
+
+        if (amount > 0) {
+          if (isBuy) {
+            cashFlows.push({ date: d, amount: -amount });
+          } else {
+            cashFlows.push({ date: d, amount: +amount });
+          }
+        }
+      }
+    }
+  }
+
+  if (!hasAnyValuation || cashFlows.length === 0 || totalTerminalValue <= 0) {
+    return null;
+  }
+
+  cashFlows.push({ date: latestAsOf, amount: totalTerminalValue });
+  return calculateXIRR(cashFlows);
 }
 
 export function calculateInvestmentAge(earliestDateStr, referenceDate = new Date('2026-09-06')) {
@@ -351,14 +495,20 @@ export function getInvestmentDisplayMetrics(position, valuation = null) {
     };
   }
 
-  const isShareMarket = position.investmentAccount === 'Share Market' || 
-                        position.holdingMode === 'DEMAT' || 
-                        position.assetType === 'EQUITY' || 
-                        position.assetType === 'ETF';
   const nameUpper = String(position.note || position.security || '').toUpperCase();
-  const isEtf = isShareMarket && (nameUpper.includes('ETF') || nameUpper.includes('BEES'));
+  const isinUpper = String(position.isin || '').toUpperCase();
+  const acctLower = String(position.investmentAccount || '').toLowerCase();
+  const modeLower = String(position.holdingMode || '').toLowerCase();
 
-  const assetType = isEtf ? 'ETF' : (isShareMarket ? 'EQUITY' : 'MUTUAL_FUND');
+  let assetType = 'MUTUAL_FUND';
+  if (nameUpper.includes('ETF') || nameUpper.includes('BEES') || nameUpper.includes('GOLD') || nameUpper.includes('SILVER')) {
+    assetType = 'ETF';
+  } else if (isinUpper.startsWith('INF') || acctLower.includes('mutual fund')) {
+    assetType = 'MUTUAL_FUND';
+  } else if (acctLower === 'share market' || modeLower === 'demat' || position.assetType === 'EQUITY') {
+    assetType = 'EQUITY';
+  }
+
   const isMf = assetType === 'MUTUAL_FUND';
 
   const units = position.currentUnits || 0;

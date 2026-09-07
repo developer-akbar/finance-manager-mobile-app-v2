@@ -1,54 +1,108 @@
 import React, { useState, useMemo } from 'react';
 import { formatINR } from '../../../utils/format.js';
 import { defaultValuationProvider } from '../../../utils/valuationProvider.js';
+import { parseTxnFields } from '../../../utils/brokerageAccounting.js';
 import { 
   getInvestmentDisplayMetrics, 
   formatAsOfDate, 
   formatSignedCurrency, 
   formatSignedPercent,
-  calculateInvestmentAge,
-  getPnlClass
+  getPnlClass,
+  computePositionXIRR
 } from '../../../utils/portfolioAggregation.js';
+
+function extractTxnDetails(t, isMf) {
+  if (!t) return { isBuy: true, actionLbl: 'BOUGHT', parsedUnits: 0, parsedPrice: 0, parsedVal: 0, date: '' };
+  
+  const f = parseTxnFields(t);
+  
+  const rawType = String(
+    f?.type || 
+    t.action || 
+    t.InvestmentTransactionType || 
+    t.investment_transaction_type || 
+    t.type || 
+    ''
+  ).toUpperCase();
+  
+  const isBuy = rawType.includes('BUY') || rawType.includes('INVEST') || rawType === 'OPENING_LOT';
+  const actionLbl = isMf ? (isBuy ? 'INVESTED' : 'REDEEMED') : (isBuy ? 'BOUGHT' : 'SOLD');
+
+  let parsedUnits = 0;
+  if (f && f.qty > 0) {
+    parsedUnits = f.qty;
+  } else {
+    const qVal = t.units ?? t.Units ?? t.quantity ?? t.Quantity ?? t.PositionQuantityChange ?? t.sellUnits ?? t.buyUnits ?? 0;
+    parsedUnits = Math.abs(parseFloat(qVal) || 0);
+  }
+
+  let parsedPrice = 0;
+  if (t.unitPrice !== undefined && t.unitPrice !== null && t.unitPrice !== '') {
+    parsedPrice = parseFloat(t.unitPrice) || 0;
+  } else if (t.UnitPrice !== undefined && t.UnitPrice !== null && t.UnitPrice !== '') {
+    parsedPrice = parseFloat(t.UnitPrice) || 0;
+  } else if (t.price !== undefined && t.price !== null && t.price !== '') {
+    parsedPrice = parseFloat(t.price) || 0;
+  } else if (f && f.cost > 0 && f.qty > 0) {
+    parsedPrice = f.cost / f.qty;
+  }
+
+  let parsedVal = 0;
+  if (f && (f.cost > 0 || f.cashImpact > 0)) {
+    parsedVal = f.cost || f.cashImpact;
+  } else {
+    const valCandidates = [t.tradeValue, t.TradeValue, t.costBasis, t.CostBasis, t.cashImpact, t.INR, t.inr, t.Amount, t.amount];
+    for (const cand of valCandidates) {
+      if (cand !== undefined && cand !== null && cand !== '') {
+        const p = Math.abs(parseFloat(cand));
+        if (!isNaN(p) && p > 0) {
+          parsedVal = p;
+          break;
+        }
+      }
+    }
+  }
+
+  if (parsedPrice === 0 && parsedVal > 0 && parsedUnits > 0) {
+    parsedPrice = parsedVal / parsedUnits;
+  }
+  if (parsedVal === 0 && parsedPrice > 0 && parsedUnits > 0) {
+    parsedVal = parsedPrice * parsedUnits;
+  }
+
+  const date = t.date || t.Date || t.firstBuyDate || '';
+
+  return {
+    isBuy,
+    actionLbl,
+    parsedUnits,
+    parsedPrice,
+    parsedVal,
+    date
+  };
+}
 
 export default function HoldingDetailSheet({ position, valuationProvider, valuationVersion, valuation, onClose, onSelectTxn }) {
   if (!position) return null;
 
-  // Resolve the valuation provider instance reliably
   const provider = valuationProvider || (valuation && typeof valuation.getValuation === 'function' ? valuation : defaultValuationProvider);
 
   const isAggregated = position.isAggregateGroup && Array.isArray(position.underlyingPositions) && position.underlyingPositions.length > 1;
   const underlyingPositions = isAggregated ? position.underlyingPositions : [position];
 
-  // Folio selector index: 'all' or numeric string index of underlyingPositions
   const [selectedFolioKey, setSelectedFolioKey] = useState('all');
   const [activeTab, setActiveTab] = useState('txns'); // 'txns' | 'fifo' | 'accounting'
 
-  // Determine active view object (either aggregated scheme position or single selected folio)
   const isViewingAll = selectedFolioKey === 'all' || !isAggregated;
   const activeFolioPos = isViewingAll 
     ? null 
     : underlyingPositions[parseInt(selectedFolioKey, 10)];
 
   const displayPos = activeFolioPos || position;
-
-  // Fetch valuation for the currently active view position
   const activeValuation = provider ? provider.getValuation(displayPos) : displayPos.valuation;
   const isValued = activeValuation && activeValuation.isValued;
   const metrics = getInvestmentDisplayMetrics(displayPos, activeValuation);
 
-  // Compute investment age for current holding / selected folio
-  const earliestDate = useMemo(() => {
-    const txns = isViewingAll
-      ? (position.txns || underlyingPositions.flatMap(p => p.txns || p.transactions || p.allTransactions || []))
-      : (activeFolioPos?.txns || activeFolioPos?.transactions || activeFolioPos?.allTransactions || []);
-    if (!txns || txns.length === 0) return null;
-    const dates = txns.map(t => t.date || t.Date).filter(Boolean);
-    return dates.sort()[0] || null;
-  }, [isViewingAll, position, underlyingPositions, activeFolioPos]);
-
-  const ageInfo = calculateInvestmentAge(earliestDate);
-
-  // Filter transactions and FIFO lots
   const displayTxns = useMemo(() => {
     if (isViewingAll) {
       if (Array.isArray(position.txns) && position.txns.length > 0) {
@@ -80,121 +134,231 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
         }
         return new Date(str || 0).getTime() || 0;
       };
-      return parseD(b.date) - parseD(a.date);
+      return parseD(b.date || b.Date) - parseD(a.date || a.Date);
     });
   }, [displayTxns]);
 
+  const ageInfo = useMemo(() => {
+    if (!sortedTxns || sortedTxns.length === 0) return { fullStr: '' };
+    
+    const parseD = (str) => {
+      if (!str) return null;
+      const pts = String(str).split(/[-/]/);
+      if (pts.length === 3) {
+        if (pts[0].length === 4) return new Date(parseInt(pts[0], 10), parseInt(pts[1], 10) - 1, parseInt(pts[2], 10));
+        return new Date(parseInt(pts[2], 10), parseInt(pts[1], 10) - 1, parseInt(pts[0], 10));
+      }
+      return new Date(str);
+    };
+
+    const dates = sortedTxns.map(t => parseD(t.date || t.Date)).filter(d => d && !isNaN(d.getTime())).sort((a, b) => a - b);
+    if (dates.length === 0) return { fullStr: '' };
+
+    const startD = dates[0];
+    const isRedeemed = displayPos.status === 'REDEEMED';
+    const endD = isRedeemed ? dates[dates.length - 1] : new Date('2026-09-06');
+    
+    if (isRedeemed && startD.getFullYear() === endD.getFullYear() && startD.getMonth() === endD.getMonth() && startD.getDate() === endD.getDate()) {
+      return { fullStr: 'Held: Same day' };
+    }
+
+    let years = endD.getFullYear() - startD.getFullYear();
+    let months = endD.getMonth() - startD.getMonth();
+    if (months < 0) {
+      years -= 1;
+      months += 12;
+    }
+    if (endD.getDate() < startD.getDate()) {
+      months -= 1;
+      if (months < 0) {
+        years -= 1;
+        months += 12;
+      }
+    }
+
+    const partsArr = [];
+    if (years > 0) partsArr.push(`${years} ${years === 1 ? 'year' : 'years'}`);
+    if (months > 0 || years === 0) partsArr.push(`${months} ${months === 1 ? 'month' : 'months'}`);
+    
+    const prefix = isRedeemed ? 'Held for' : 'Invested for';
+    return { fullStr: `${prefix} ${partsArr.join(' ')}` };
+  }, [sortedTxns, displayPos.status]);
+
+  const exitedUnits = displayPos.sellUnits || displayPos.buyUnits || displayPos.exitedQty || 0;
+  const isRedeemed = displayPos.status === 'REDEEMED';
+
+  const avgBuyPriceStr = useMemo(() => {
+    if (isRedeemed) {
+      const totalCost = displayPos.buyCost || displayPos.soldCostBasis || 0;
+      if (totalCost > 0 && exitedUnits > 0) {
+        return `₹${(totalCost / exitedUnits).toFixed(2)}`;
+      }
+      return '—';
+    }
+    return metrics.formattedAvgPrice ? metrics.formattedAvgPrice.replace(/^(Avg NAV|Avg Price)\s*/, '') : '—';
+  }, [isRedeemed, displayPos, exitedUnits, metrics.formattedAvgPrice]);
+
   return (
     <div className="investments-portfolio-screen fund-detail-fullpage">
-      {/* Full Page Top Navigation Bar */}
+      {/* Header Bar */}
       <div className="portfolio-top-bar">
         <button className="portfolio-back-btn" onClick={onClose} title="Back to Portfolio">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="20" height="20">
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
-        <div className="portfolio-top-titles">
-          <h2 className="portfolio-main-title">{position.note || position.security}</h2>
-          <div className="portfolio-main-subtitle text-muted flex-gap-xs align-center">
-            {ageInfo.fullStr && <span className="age-text">{ageInfo.fullStr} · </span>}
+        <div className="portfolio-top-titles" style={{ minWidth: 0, flex: 1 }}>
+          <h2 className="portfolio-main-title holding-card-name" title={position.note || position.security}>
+            {position.note || position.security}
+          </h2>
+          <div className="portfolio-header-chips flex-gap-xs align-center mt-1">
+            {ageInfo.fullStr && <span className="age-text text-muted font-xs">{ageInfo.fullStr}</span>}
             <span className="platform-tag">{displayPos.subAccount || position.subAccount}</span>
             {(displayPos.ownershipTag === 'MIXED_HOLDING' || position.ownershipTag === 'MIXED_HOLDING') && (
-              <span className="platform-tag mixed-tag">MIXED HOLDING</span>
+              <span className="platform-tag mixed-tag">Mixed Holding</span>
             )}
-            {!isAggregated && displayPos.folioNumber && (
-              <span className="folio-text mono text-muted">Folio {displayPos.folioNumber}</span>
+            {isRedeemed && (
+              <span className="coverage-badge gray">Closed / Redeemed</span>
             )}
           </div>
         </div>
       </div>
 
       <div className="portfolio-scrollable-content">
-        {/* Groww-Inspired 2x2 Performance Summary Hero */}
-        <div className="groww-summary-card">
-          <div className="summary-grid-2x2">
-            <div className="summary-cell">
-              <div className="summary-lbl text-muted uppercase">{metrics.valueLabel}</div>
-              <div className={`summary-hero-val font-bold num-tabular mt-1 ${isValued ? getPnlClass(activeValuation.currentValue - displayPos.remainingCostBasis) : ''}`}>
-                {isValued ? formatINR(activeValuation.currentValue) : <span className="val-na text-muted">{metrics.unvaluedLabel}</span>}
+        {/* Performance Summary Card (2x2 Grid matching Holdings Cards) */}
+        <div className="portfolio-card detail-hero-card mb-2.5">
+          <div className="detail-hero-grid grid-2">
+            {/* Cell 1: CURRENT VALUE */}
+            <div className="detail-hero-cell">
+              <span className="detail-metric-lbl text-muted uppercase">CURRENT VALUE</span>
+              <div className={`detail-metric-val font-bold num-tabular mt-1 ${isRedeemed ? 'text-muted' : ''}`}>
+                {isRedeemed ? '₹0 (Closed)' : (isValued ? formatINR(activeValuation.currentValue) : <span className="val-na text-muted">{metrics.unvaluedLabel}</span>)}
               </div>
             </div>
-            <div className="summary-cell text-right">
-              <div className="summary-lbl text-muted uppercase">{metrics.returnLabel}</div>
-              {isValued ? (
-                <div className={`summary-hero-val font-bold num-tabular mt-1 ${getPnlClass(activeValuation.unrealizedPnl)}`}>
+
+            {/* Cell 2: UNREALIZED P&L / REALIZED P&L */}
+            <div className="detail-hero-cell text-right">
+              <span className="detail-metric-lbl text-muted uppercase">{isRedeemed ? 'REALIZED P&L' : 'UNREALIZED P&L'}</span>
+              {isRedeemed ? (
+                <div className={`detail-metric-val font-bold num-tabular mt-1 ${getPnlClass(displayPos.realizedPnl)}`}>
+                  {formatSignedCurrency(displayPos.realizedPnl)}
+                </div>
+              ) : isValued ? (
+                <div className={`detail-metric-val font-bold num-tabular mt-1 ${getPnlClass(activeValuation.unrealizedPnl)}`}>
                   {formatSignedCurrency(activeValuation.unrealizedPnl)}
                   <span className="pnl-pct-badge font-semibold ml-1">
                     ({formatSignedPercent(activeValuation.returnPercent)})
                   </span>
                 </div>
               ) : (
-                <div className="summary-hero-val text-muted mt-1">—</div>
+                <div className="detail-metric-val text-muted mt-1">—</div>
               )}
             </div>
 
-            <div className="summary-cell mt-3">
-              <div className="summary-lbl text-muted uppercase">{metrics.costLabel}</div>
-              <div className="summary-val font-bold num-tabular mt-1">{formatINR(displayPos.remainingCostBasis)}</div>
+            {/* Cell 3: INVESTED / COST BASIS */}
+            <div className="detail-hero-cell mt-2.5">
+              <span className="detail-metric-lbl text-muted uppercase">{isRedeemed ? 'COST BASIS' : 'INVESTED'}</span>
+              <div className="detail-metric-val font-bold num-tabular mt-1 text-primary">
+                {formatINR(isRedeemed ? (displayPos.buyCost || displayPos.soldCostBasis || displayPos.remainingCostBasis) : displayPos.remainingCostBasis)}
+              </div>
             </div>
-            <div className="summary-cell text-right mt-3">
-              <div className="summary-lbl text-muted uppercase">XIRR</div>
-              <div className={`summary-val font-bold num-tabular mt-1 ${isValued && metrics.isMf && typeof activeValuation.returnPercent === 'number' ? getPnlClass(activeValuation.returnPercent) : 'text-muted'}`}>
-                {isValued && metrics.isMf && typeof activeValuation.returnPercent === 'number' 
-                  ? formatSignedPercent(activeValuation.returnPercent)
-                  : '—'}
+
+            {/* Cell 4: XIRR */}
+            <div className="detail-hero-cell text-right mt-2.5">
+              <span className="detail-metric-lbl text-muted uppercase">XIRR</span>
+              <div className="detail-metric-val font-bold num-tabular mt-1">
+                {(() => {
+                  const detailXirr = computePositionXIRR(displayPos, activeValuation);
+                  return detailXirr !== null ? (
+                    <span className={getPnlClass(detailXirr)}>
+                      {formatSignedPercent(detailXirr)}
+                    </span>
+                  ) : (
+                    <span className="text-muted">—</span>
+                  );
+                })()}
               </div>
             </div>
           </div>
         </div>
 
-        {/* 3-Column Primary Metadata Grid */}
-        <div className="groww-nav-bar grid-3">
-          <div className="nav-col">
-            <span className="nav-lbl text-muted block">{metrics.priceLabel}</span>
-            <span className="nav-val font-bold text-primary block num-tabular mt-1">
-              {isValued && typeof activeValuation.nav === 'number' ? `₹${activeValuation.nav.toFixed(2)}` : '—'}
-            </span>
-            {isValued && activeValuation?.asOf && (
-              <span className="nav-date block text-muted font-xs mt-1.5">
-                As of {formatAsOfDate(activeValuation.asOf)}{activeValuation?.asOfTime ? `, ${activeValuation.asOfTime}` : ''}
+        {/* Price / NAV Metadata Card (3-Column Grid) */}
+        <div className="portfolio-card detail-meta-card mb-2.5">
+          <div className="detail-meta-grid grid-3">
+            {/* Column 1: Current NAV / LTP */}
+            <div className="detail-meta-col">
+              <span className="detail-meta-lbl text-muted uppercase">{isRedeemed ? 'Status' : metrics.priceLabel}</span>
+              <span className="detail-meta-val font-bold text-primary num-tabular mt-1">
+                {isRedeemed ? 'Closed / Exited' : (isValued && typeof activeValuation.nav === 'number' ? `₹${activeValuation.nav.toFixed(2)}` : '—')}
               </span>
-            )}
-          </div>
+              {isValued && activeValuation?.asOf && !isRedeemed && (
+                <div className="detail-meta-sub text-muted font-xs mt-0.5">
+                  As of {formatAsOfDate(activeValuation.asOf)}{activeValuation?.asOfTime ? `, ${activeValuation.asOfTime}` : ''}
+                </div>
+              )}
+            </div>
 
-          <div className="nav-col">
-            <span className="nav-lbl text-muted block">{metrics.avgPriceLabel}</span>
-            <span className="nav-val font-semibold block num-tabular mt-1">
-              {metrics.formattedAvgPrice.replace(/^(Avg NAV|Avg Price)\s*/, '')}
-            </span>
-          </div>
+            {/* Column 2: Avg NAV / Avg Price */}
+            <div className="detail-meta-col">
+              <span className="detail-meta-lbl text-muted uppercase">{isRedeemed ? 'Avg Acq NAV' : metrics.avgPriceLabel}</span>
+              <span className="detail-meta-val font-semibold num-tabular mt-1">
+                {avgBuyPriceStr}
+              </span>
+            </div>
 
-          <div className="nav-col text-right">
-            <span className="nav-lbl text-muted block">{metrics.qtyLabel}</span>
-            <span className="nav-val font-semibold block num-tabular mt-1">
-              {metrics.rawQty || metrics.formattedQty}
-            </span>
+            {/* Column 3: Total Units / Qty */}
+            <div className="detail-meta-col text-right">
+              <span className="detail-meta-lbl text-muted uppercase">{isRedeemed ? 'Qty Exited' : metrics.qtyLabel}</span>
+              <span className="detail-meta-val font-semibold num-tabular mt-1">
+                {isRedeemed ? (
+                  (displayPos.investmentAccount === 'Share Market' || displayPos.holdingMode === 'DEMAT')
+                    ? `${Math.round(exitedUnits)} shares`
+                    : `${exitedUnits.toFixed(3)} units`
+                ) : (
+                  metrics.rawQty || metrics.formattedQty
+                )}
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Folios Selector ("All folios" vs Individual Folio for Multi-Folio schemes) */}
-        {isAggregated ? (
-          <div className="sheet-card-section">
-            <div className="sheet-section-title flex-between">
-              <span className="font-bold text-muted uppercase font-xs">FOLIOS ({underlyingPositions.length})</span>
-              <span className="font-xs text-muted">Select to view individual folio</span>
+        {/* Single Folio Metadata Bar (if not aggregated) */}
+        {!isAggregated && position.folioNumber && (
+          <div className="portfolio-card detail-folio-single-card mb-2.5">
+            <div className="card-secondary-grid grid-2">
+              <div>
+                <span className="sec-lbl text-muted uppercase">FOLIO</span>
+                <span className="sec-val font-semibold mono text-primary">{position.folioNumber}</span>
+              </div>
+              <div className="text-right">
+                <span className="sec-lbl text-muted uppercase">PLATFORM</span>
+                <span className="sec-val font-semibold text-primary">{position.subAccount}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Folios Section (if aggregated / multiple folios) */}
+        {isAggregated && (
+          <div className="portfolio-card detail-folios-card mb-2.5">
+            <div className="portfolio-card-header flex-between mb-2">
+              <h4 className="portfolio-card-title font-xs text-muted uppercase">
+                FOLIOS ({underlyingPositions.length})
+              </h4>
+              <span className="font-xs text-muted">Select to filter details</span>
             </div>
 
-            <div className="folio-selector-tabs mt-2">
+            <div className="portfolio-pill-selector folio-pills-bar mb-2.5">
               <button
-                className={`folio-tab-btn ${selectedFolioKey === 'all' ? 'active' : ''}`}
+                className={`portfolio-pill ${selectedFolioKey === 'all' ? 'active' : ''}`}
                 onClick={() => setSelectedFolioKey('all')}
               >
-                All folios · {formatINR(position.remainingCostBasis)}
+                All folios ({formatINR(position.remainingCostBasis)})
               </button>
               {underlyingPositions.map((p, idx) => (
                 <button
                   key={p.positionKey || idx}
-                  className={`folio-tab-btn ${selectedFolioKey === String(idx) ? 'active' : ''}`}
+                  className={`portfolio-pill ${selectedFolioKey === String(idx) ? 'active' : ''}`}
                   onClick={() => setSelectedFolioKey(String(idx))}
                 >
                   Folio {p.folioNumber}
@@ -202,41 +366,44 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
               ))}
             </div>
 
-            {/* Folio Breakdown Cards */}
-            <div className="folio-breakdown-list mt-3">
+            <div className="folio-cards-grid">
               {underlyingPositions.map((p, idx) => {
                 const isSelected = selectedFolioKey === String(idx);
                 const pVal = provider ? provider.getValuation(p) : p.valuation;
                 const pIsValued = pVal && pVal.isValued;
-                const pMetrics = getInvestmentDisplayMetrics(p);
 
                 return (
                   <div
                     key={p.positionKey || idx}
-                    className={`folio-breakdown-card ${isSelected ? 'selected' : ''}`}
+                    className={`folio-item-card ${isSelected ? 'selected' : ''}`}
                     onClick={() => setSelectedFolioKey(String(idx))}
                   >
-                    <div className="folio-card-top flex-between mb-2">
+                    <div className="folio-item-head flex-between mb-1.5">
                       <div>
-                        <div className="font-bold text-sm">Folio {p.folioNumber}</div>
-                        <div className="text-muted font-xs mt-0.5">{p.subAccount}</div>
+                        <div className="font-bold text-sm text-primary mono">Folio {p.folioNumber}</div>
+                        <div className="text-muted font-xs mt-0.5">Platform: {p.subAccount}</div>
                       </div>
-                      {isSelected && <span className="folio-selected-tag font-xs">Active View</span>}
+                      {isSelected && (
+                        <span className="folio-selected-tag">Selected</span>
+                      )}
                     </div>
-                    
-                    {/* 3-Column Folio Details Grid */}
-                    <div className="folio-card-metrics grid-3 font-xs pt-2 border-top">
+
+                    <div className="card-secondary-grid grid-3 mt-1.5 pt-1.5">
                       <div>
-                        <span className="text-muted block">Units</span>
-                        <span className="font-semibold num-tabular block mt-0.5">{pMetrics.rawQty}</span>
+                        <span className="sec-lbl text-muted uppercase">UNITS</span>
+                        <span className="sec-val font-semibold num-tabular">
+                          {p.currentUnits ? p.currentUnits.toFixed(3) : '0.000'}
+                        </span>
                       </div>
-                      <div>
-                        <span className="text-muted block">Invested</span>
-                        <span className="font-semibold num-tabular block mt-0.5">{formatINR(p.remainingCostBasis)}</span>
+                      <div className="text-center">
+                        <span className="sec-lbl text-muted uppercase">INVESTED</span>
+                        <span className="sec-val font-semibold num-tabular">
+                          {formatINR(p.remainingCostBasis)}
+                        </span>
                       </div>
                       <div className="text-right">
-                        <span className="text-muted block">Current Value</span>
-                        <span className="font-bold num-tabular block mt-0.5 text-primary">
+                        <span className="sec-lbl text-muted uppercase">CURRENT VALUE</span>
+                        <span className="sec-val font-bold num-tabular text-primary">
                           {pIsValued ? formatINR(pVal.currentValue) : '—'}
                         </span>
                       </div>
@@ -246,35 +413,24 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
               })}
             </div>
           </div>
-        ) : (
-          <div className="sheet-card-section grid-2 font-xs">
-            <div>
-              <span className="text-muted block uppercase">Folio Number</span>
-              <span className="font-semibold text-primary mono block mt-1">{position.folioNumber || 'Single Folio'}</span>
-            </div>
-            <div className="text-right">
-              <span className="text-muted block uppercase">Platform</span>
-              <span className="font-semibold text-primary block mt-1">{position.subAccount}</span>
-            </div>
-          </div>
         )}
 
-        {/* Content Navigation Tabs: Transaction History | FIFO Lots | Accounting */}
-        <div className="detail-tab-bar">
+        {/* Navigation Tabs Bar — Cohesive Pill Selector */}
+        <div className="portfolio-pill-selector detail-pill-selector mb-2.5">
           <button 
-            className={`detail-tab ${activeTab === 'txns' ? 'active' : ''}`}
+            className={`portfolio-pill ${activeTab === 'txns' ? 'active' : ''}`}
             onClick={() => setActiveTab('txns')}
           >
             Transaction History ({sortedTxns.length})
           </button>
           <button 
-            className={`detail-tab ${activeTab === 'fifo' ? 'active' : ''}`}
+            className={`portfolio-pill ${activeTab === 'fifo' ? 'active' : ''}`}
             onClick={() => setActiveTab('fifo')}
           >
             FIFO Lots ({displayLots.length})
           </button>
           <button 
-            className={`detail-tab ${activeTab === 'accounting' ? 'active' : ''}`}
+            className={`portfolio-pill ${activeTab === 'accounting' ? 'active' : ''}`}
             onClick={() => setActiveTab('accounting')}
           >
             Accounting
@@ -283,54 +439,37 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
 
         {/* Tab 1: Transaction History */}
         {activeTab === 'txns' && (
-          <div className="sheet-card-section">
+          <div className="detail-tab-content">
             {sortedTxns.length === 0 ? (
-              <div className="portfolio-empty-state font-xs text-muted">No transactions recorded for this view.</div>
+              <div className="portfolio-card portfolio-empty-state font-xs text-muted">
+                No transactions recorded for this view.
+              </div>
             ) : (
               <>
                 {/* Desktop Table View */}
-                <div className="sheet-lots-table-wrap desktop-only">
+                <div className="portfolio-card sheet-lots-table-wrap desktop-only">
                   <table className="sheet-lots-table groww-txn-table">
                     <thead>
                       <tr>
+                        <th>Action</th>
                         <th>Date</th>
-                        <th>Type</th>
                         <th style={{ textAlign: 'right' }}>{metrics.qtyLabel}</th>
-                        <th style={{ textAlign: 'right' }}>{metrics.priceLabel} / Unit Price</th>
-                        <th style={{ textAlign: 'right' }}>Amount / Value</th>
+                        <th style={{ textAlign: 'right' }}>{metrics.priceLabel}</th>
+                        <th style={{ textAlign: 'right' }}>Amount</th>
                       </tr>
                     </thead>
                     <tbody>
                       {sortedTxns.map((t, idx) => {
-                        const isBuy = t.action === 'BUY' || String(t.InvestmentTransactionType || '').toUpperCase() === 'BUY';
-                        const actionLbl = metrics.isMf ? (isBuy ? 'INVESTED' : 'REDEEMED') : (isBuy ? 'BOUGHT' : 'SOLD');
+                        const txnInfo = extractTxnDetails(t, metrics.isMf);
+                        const isBuy = txnInfo.isBuy;
+                        const actionLbl = txnInfo.actionLbl;
 
-                        const rawUnits = t.units !== undefined && t.units !== null 
-                          ? t.units 
-                          : (t.quantity !== undefined && t.quantity !== null 
-                            ? t.quantity 
-                            : (t.PositionQuantityChange !== undefined && t.PositionQuantityChange !== null 
-                              ? Math.abs(t.PositionQuantityChange) 
-                              : (t.Quantity !== undefined ? Math.abs(t.Quantity) : 0)));
-                              
-                        const parsedUnits = Math.abs(parseFloat(rawUnits) || 0);
-                        const formattedUnitsStr = isNaN(parsedUnits) 
-                          ? '—' 
-                          : (metrics.isMf ? parsedUnits.toFixed(3) : Math.round(parsedUnits).toString());
+                        const formattedUnitsStr = metrics.isMf 
+                          ? txnInfo.parsedUnits.toFixed(3) 
+                          : `${Math.round(txnInfo.parsedUnits)} shares`;
 
-                        const rawUnitPrice = t.unitPrice !== undefined && t.unitPrice !== null 
-                          ? t.unitPrice 
-                          : (t.UnitPrice !== undefined ? t.UnitPrice : 0);
-                        const parsedPrice = parseFloat(rawUnitPrice) || 0;
-                        const priceStr = parsedPrice > 0 ? `₹${parsedPrice.toFixed(2)}` : '—';
-
-                        const rawTradeVal = t.tradeValue !== undefined && t.tradeValue !== null 
-                          ? t.tradeValue 
-                          : (t.costBasis !== undefined && t.costBasis !== null 
-                            ? t.costBasis 
-                            : (t.TradeValue !== undefined ? t.TradeValue : (t.Amount !== undefined ? Math.abs(t.Amount) : 0)));
-                        const parsedVal = Math.abs(parseFloat(rawTradeVal) || 0);
-                        const tradeValStr = formatINR(parsedVal);
+                        const priceStr = txnInfo.parsedPrice > 0 ? `₹${txnInfo.parsedPrice.toFixed(2)}` : '—';
+                        const tradeValStr = formatINR(txnInfo.parsedVal);
 
                         const isPosAmount = metrics.isMf ? isBuy : !isBuy;
                         const amountSign = metrics.isMf ? '+' : (isBuy ? '-' : '+');
@@ -338,12 +477,12 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
 
                         return (
                           <tr key={t.rawTxn?.ID || t.id || idx}>
-                            <td>{t.date}</td>
                             <td>
                               <span className={`txn-type-pill ${isBuy ? 'buy' : 'sell'}`}>
                                 {actionLbl}
                               </span>
                             </td>
+                            <td className="num-tabular">{txnInfo.date}</td>
                             <td style={{ textAlign: 'right' }} className={`mono font-bold num-tabular ${isBuy ? 'pos' : 'neg'}`}>
                               {isBuy ? '+' : '-'}{formattedUnitsStr}
                             </td>
@@ -360,53 +499,34 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
                   </table>
                 </div>
 
-                {/* Mobile Card List View — Redesigned Mobile Transactions */}
+                {/* Mobile Activity Cards View */}
                 <div className="mobile-txn-list mobile-only">
                   {sortedTxns.map((t, idx) => {
-                    const isBuy = t.action === 'BUY' || String(t.InvestmentTransactionType || '').toUpperCase() === 'BUY';
-                    const actionLbl = metrics.isMf ? (isBuy ? 'INVESTED' : 'REDEEMED') : (isBuy ? 'BOUGHT' : 'SOLD');
+                    const txnInfo = extractTxnDetails(t, metrics.isMf);
+                    const isBuy = txnInfo.isBuy;
+                    const actionLbl = txnInfo.actionLbl;
 
-                    const rawUnits = t.units !== undefined && t.units !== null 
-                      ? t.units 
-                      : (t.quantity !== undefined && t.quantity !== null 
-                        ? t.quantity 
-                        : (t.PositionQuantityChange !== undefined && t.PositionQuantityChange !== null 
-                          ? Math.abs(t.PositionQuantityChange) 
-                          : (t.Quantity !== undefined ? Math.abs(t.Quantity) : 0)));
-                          
-                    const parsedUnits = Math.abs(parseFloat(rawUnits) || 0);
-                    const qtyStr = isNaN(parsedUnits) 
-                      ? '—' 
-                      : (metrics.isMf ? `${parsedUnits.toFixed(3)} units` : `${Math.round(parsedUnits)} Qty`);
+                    const qtyStr = metrics.isMf 
+                      ? `${txnInfo.parsedUnits.toFixed(3)} units` 
+                      : `${Math.round(txnInfo.parsedUnits)} shares`;
 
-                    const rawUnitPrice = t.unitPrice !== undefined && t.unitPrice !== null 
-                      ? t.unitPrice 
-                      : (t.UnitPrice !== undefined ? t.UnitPrice : 0);
-                    const parsedPrice = parseFloat(rawUnitPrice) || 0;
-                    const priceStr = parsedPrice > 0 ? `₹${parsedPrice.toFixed(2)}` : '—';
-
-                    const rawTradeVal = t.tradeValue !== undefined && t.tradeValue !== null 
-                      ? t.tradeValue 
-                      : (t.costBasis !== undefined && t.costBasis !== null 
-                        ? t.costBasis 
-                        : (t.TradeValue !== undefined ? t.TradeValue : (t.Amount !== undefined ? Math.abs(t.Amount) : 0)));
-                    const parsedVal = Math.abs(parseFloat(rawTradeVal) || 0);
-                    const tradeValStr = formatINR(parsedVal);
+                    const priceStr = txnInfo.parsedPrice > 0 ? `₹${txnInfo.parsedPrice.toFixed(2)}` : '—';
+                    const tradeValStr = formatINR(txnInfo.parsedVal);
 
                     const isPosAmount = metrics.isMf ? isBuy : !isBuy;
                     const amountSign = metrics.isMf ? '+' : (isBuy ? '-' : '+');
                     const pnlClass = isPosAmount ? 'pos' : 'neg';
 
                     return (
-                      <div key={t.rawTxn?.ID || t.id || idx} className="mobile-txn-card flex-between">
+                      <div key={t.rawTxn?.ID || t.id || idx} className="portfolio-card mobile-txn-card flex-between">
                         <div>
-                          <div className="txn-primary-type">
+                          <div className="flex-gap-xs align-center">
                             <span className={`txn-action-tag ${isBuy ? 'buy' : 'sell'}`}>
                               {actionLbl}
                             </span>
+                            <span className="txn-date text-muted font-xs num-tabular">{txnInfo.date}</span>
                           </div>
-                          <div className="txn-date text-muted font-xs mt-1">{t.date}</div>
-                          <div className="txn-sub-meta text-muted font-xs mt-0.5 num-tabular">
+                          <div className="txn-sub-meta text-muted font-xs mt-1.5 num-tabular">
                             <span className="mono">{qtyStr}</span>
                             <span> · </span>
                             <span className="mono">{metrics.isMf ? 'NAV' : 'Price'} {priceStr}</span>
@@ -428,61 +548,24 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
 
         {/* Tab 2: Acquisition Lots (FIFO) */}
         {activeTab === 'fifo' && (
-          <div className="sheet-card-section">
-            <div className="fifo-helper-header text-muted font-xs mb-3">
-              Acquisition lots used for cost-basis calculation
+          <div className="detail-tab-content">
+            <div className="portfolio-card mb-2.5">
+              <div className="portfolio-card-header mb-1">
+                <h4 className="portfolio-card-title font-xs text-muted uppercase">FIFO LOTS</h4>
+                <div className="portfolio-card-sub">
+                  Acquisition tranches used to calculate remaining cost basis and realized P&L.
+                </div>
+              </div>
             </div>
+
             {displayLots.length === 0 ? (
-              <div className="portfolio-empty-state font-xs text-muted">No active FIFO lots for this view.</div>
+              <div className="portfolio-card portfolio-empty-state font-xs text-muted">
+                No active FIFO lots for this view.
+              </div>
             ) : (
               <>
-                {/* Mobile View: Dedicated Lot Cards */}
-                <div className="mobile-fifo-list mobile-only">
-                  {displayLots.map((lot, idx) => (
-                    <div key={lot.transactionId || idx} className="fifo-lot-card mb-2">
-                      <div className="fifo-card-header flex-between">
-                        <div>
-                          <span className="text-muted font-xs block uppercase">Acquired</span>
-                          <span className="font-bold text-primary font-sm">{lot.date}</span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-muted font-xs block uppercase">Original Cost</span>
-                          <span className="font-bold num-tabular font-sm">{formatINR(lot.costBasis)}</span>
-                        </div>
-                      </div>
-
-                      <div className="fifo-card-body grid-2 font-xs mt-2 pt-2 border-top">
-                        <div>
-                          <span className="text-muted block">Original Units</span>
-                          <span className="font-semibold num-tabular block mt-0.5">
-                            {metrics.isMf ? lot.units.toFixed(3) : Math.round(lot.units)}
-                          </span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-muted block">{metrics.isMf ? 'Original NAV' : 'Acq. Price'}</span>
-                          <span className="font-semibold num-tabular block mt-0.5">
-                            ₹{lot.unitCost.toFixed(metrics.isMf ? 4 : 2)}
-                          </span>
-                        </div>
-                        <div className="mt-2">
-                          <span className="text-muted block">Remaining Units</span>
-                          <span className={`font-bold num-tabular block mt-0.5 ${lot.remainingUnits > 0 ? 'pos' : 'text-muted'}`}>
-                            {metrics.isMf ? lot.remainingUnits.toFixed(3) : Math.round(lot.remainingUnits)}
-                          </span>
-                        </div>
-                        <div className="text-right mt-2">
-                          <span className="text-muted block">Remaining Cost Basis</span>
-                          <span className="font-bold num-tabular block mt-0.5">
-                            {formatINR(lot.remainingCostBasis !== undefined ? lot.remainingCostBasis : (lot.remainingUnits * lot.unitCost))}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Desktop View: Comprehensive Table */}
-                <div className="sheet-lots-table-wrap desktop-only">
+                {/* Desktop View */}
+                <div className="portfolio-card sheet-lots-table-wrap desktop-only">
                   <table className="sheet-lots-table fifo-table">
                     <thead>
                       <tr>
@@ -495,24 +578,79 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
                       </tr>
                     </thead>
                     <tbody>
-                      {displayLots.map((lot, idx) => (
-                        <tr key={lot.transactionId || idx}>
-                          <td>{lot.date}</td>
-                          <td style={{ textAlign: 'right' }} className="num-tabular">
-                            {metrics.isMf ? lot.units.toFixed(3) : Math.round(lot.units)}
-                          </td>
-                          <td style={{ textAlign: 'right' }} className="num-tabular">₹{lot.unitCost.toFixed(metrics.isMf ? 4 : 2)}</td>
-                          <td style={{ textAlign: 'right' }} className="num-tabular">{formatINR(lot.costBasis)}</td>
-                          <td style={{ textAlign: 'right' }} className={`num-tabular font-bold ${lot.remainingUnits > 0 ? 'pos' : 'text-muted'}`}>
-                            {metrics.isMf ? lot.remainingUnits.toFixed(3) : Math.round(lot.remainingUnits)}
-                          </td>
-                          <td style={{ textAlign: 'right' }} className="num-tabular font-bold">
-                            {formatINR(lot.remainingCostBasis !== undefined ? lot.remainingCostBasis : (lot.remainingUnits * lot.unitCost))}
-                          </td>
-                        </tr>
-                      ))}
+                      {displayLots.map((lot, idx) => {
+                        const origUnits = lot.units !== undefined ? lot.units : (lot.qty || lot.quantity || 0);
+                        const remUnits = lot.remainingUnits !== undefined ? lot.remainingUnits : 0;
+                        const uCost = lot.unitCost !== undefined ? lot.unitCost : (origUnits > 0 ? lot.costBasis / origUnits : 0);
+                        const origCost = lot.costBasis !== undefined ? lot.costBasis : (origUnits * uCost);
+
+                        return (
+                          <tr key={lot.transactionId || idx}>
+                            <td className="num-tabular">{lot.date}</td>
+                            <td style={{ textAlign: 'right' }} className="num-tabular">
+                              {metrics.isMf ? origUnits.toFixed(3) : Math.round(origUnits)}
+                            </td>
+                            <td style={{ textAlign: 'right' }} className="num-tabular">₹{uCost.toFixed(metrics.isMf ? 4 : 2)}</td>
+                            <td style={{ textAlign: 'right' }} className="num-tabular">{formatINR(origCost)}</td>
+                            <td style={{ textAlign: 'right' }} className={`num-tabular font-bold ${remUnits > 0 ? 'pos' : 'text-muted'}`}>
+                              {metrics.isMf ? remUnits.toFixed(3) : Math.round(remUnits)}
+                            </td>
+                            <td style={{ textAlign: 'right' }} className="num-tabular font-bold">
+                              {formatINR(lot.remainingCostBasis !== undefined ? lot.remainingCostBasis : (remUnits * uCost))}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
+                </div>
+
+                {/* Mobile View */}
+                <div className="mobile-fifo-list mobile-only">
+                  {displayLots.map((lot, idx) => {
+                    const origUnits = lot.units !== undefined ? lot.units : (lot.qty || lot.quantity || 0);
+                    const remUnits = lot.remainingUnits !== undefined ? lot.remainingUnits : 0;
+                    const uCost = lot.unitCost !== undefined ? lot.unitCost : (origUnits > 0 ? lot.costBasis / origUnits : 0);
+                    const origCost = lot.costBasis !== undefined ? lot.costBasis : (origUnits * uCost);
+
+                    return (
+                      <div key={lot.transactionId || idx} className="portfolio-card fifo-lot-card mb-2">
+                        <div className="fifo-card-header flex-between mb-1.5">
+                          <div>
+                            <span className="sec-lbl text-muted uppercase">ACQUIRED</span>
+                            <span className="sec-val font-bold text-primary num-tabular">{lot.date}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="sec-lbl text-muted uppercase">COST BASIS</span>
+                            <span className="sec-val font-bold num-tabular text-primary">
+                              {formatINR(lot.remainingCostBasis !== undefined ? lot.remainingCostBasis : (remUnits * uCost))}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="card-secondary-grid grid-3 pt-1.5 mt-1.5">
+                          <div>
+                            <span className="sec-lbl text-muted uppercase">ACQUIRED QTY</span>
+                            <span className="sec-val font-semibold num-tabular">
+                              {metrics.isMf ? origUnits.toFixed(3) : Math.round(origUnits)}
+                            </span>
+                          </div>
+                          <div className="text-center">
+                            <span className="sec-lbl text-muted uppercase">REMAINING QTY</span>
+                            <span className={`sec-val font-bold num-tabular ${remUnits > 0 ? 'pos' : 'text-muted'}`}>
+                              {metrics.isMf ? remUnits.toFixed(3) : Math.round(remUnits)}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="sec-lbl text-muted uppercase">{metrics.isMf ? 'ORIGINAL NAV' : 'ACQ. PRICE'}</span>
+                            <span className="sec-val font-semibold num-tabular">
+                              ₹{uCost.toFixed(metrics.isMf ? 2 : 2)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -521,35 +659,38 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
 
         {/* Tab 3: Accounting */}
         {activeTab === 'accounting' && (
-          <div className="sheet-card-section">
+          <div className="portfolio-card detail-accounting-card mb-2.5">
+            <div className="portfolio-card-header mb-3">
+              <h4 className="portfolio-card-title font-xs text-muted uppercase">ACCOUNTING & AUDIT METADATA</h4>
+            </div>
             <div className="sheet-grid-2">
               <div className="sheet-detail-row">
-                <span className="sheet-row-lbl text-muted">Platform / SubAccount</span>
-                <span className="sheet-row-val highlight">{displayPos.subAccount}</span>
+                <span className="sec-lbl text-muted uppercase">PLATFORM / SUBACCOUNT</span>
+                <span className="sec-val font-semibold text-primary">{displayPos.subAccount}</span>
               </div>
               <div className="sheet-detail-row">
-                <span className="sheet-row-lbl text-muted">Investment Account</span>
-                <span className="sheet-row-val">{displayPos.investmentAccount}</span>
+                <span className="sec-lbl text-muted uppercase">INVESTMENT ACCOUNT</span>
+                <span className="sec-val font-semibold text-primary">{displayPos.investmentAccount}</span>
               </div>
               <div className="sheet-detail-row">
-                <span className="sheet-row-lbl text-muted">ISIN</span>
-                <span className="sheet-row-val mono">{displayPos.isin}</span>
+                <span className="sec-lbl text-muted uppercase">ISIN</span>
+                <span className="sec-val font-semibold mono text-primary">{displayPos.isin}</span>
               </div>
               <div className="sheet-detail-row">
-                <span className="sheet-row-lbl text-muted">Folio Number</span>
-                <span className="sheet-row-val mono">{displayPos.folioNumber}</span>
+                <span className="sec-lbl text-muted uppercase">FOLIO NUMBER</span>
+                <span className="sec-val font-semibold mono text-primary">{displayPos.folioNumber || 'Single Folio'}</span>
               </div>
               <div className="sheet-detail-row">
-                <span className="sheet-row-lbl text-muted">Holding Mode</span>
-                <span className="sheet-row-val">{displayPos.holdingMode}</span>
+                <span className="sec-lbl text-muted uppercase">HOLDING MODE</span>
+                <span className="sec-val font-semibold text-primary">{displayPos.holdingMode}</span>
               </div>
               <div className="sheet-detail-row">
-                <span className="sheet-row-lbl text-muted">Ownership Scope</span>
-                <span className="sheet-row-val">{displayPos.ownershipTag === 'MIXED_HOLDING' ? 'Mixed Holding' : (displayPos.ownershipTag || 'Individual')}</span>
+                <span className="sec-lbl text-muted uppercase">OWNERSHIP SCOPE</span>
+                <span className="sec-val font-semibold text-primary">{displayPos.ownershipTag === 'MIXED_HOLDING' ? 'Mixed Holding' : (displayPos.ownershipTag || 'Individual')}</span>
               </div>
               <div className="sheet-detail-row">
-                <span className="sheet-row-lbl text-muted">Realized P&L</span>
-                <span className="sheet-row-val num-tabular">
+                <span className="sec-lbl text-muted uppercase">REALIZED P&L</span>
+                <span className="sec-val num-tabular font-bold">
                   {displayPos.realizedPnl !== 0 ? (
                     <span className={displayPos.realizedPnl > 0 ? 'pos' : 'neg'}>
                       {displayPos.realizedPnl > 0 ? '+' : ''}{formatINR(displayPos.realizedPnl)}
@@ -558,8 +699,8 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
                 </span>
               </div>
               <div className="sheet-detail-row">
-                <span className="sheet-row-lbl text-muted">Accounting Method</span>
-                <span className="sheet-row-val">First-In, First-Out (FIFO)</span>
+                <span className="sec-lbl text-muted uppercase">ACCOUNTING METHOD</span>
+                <span className="sec-val font-semibold text-primary">First-In, First-Out (FIFO)</span>
               </div>
             </div>
           </div>
@@ -568,4 +709,3 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
     </div>
   );
 }
-

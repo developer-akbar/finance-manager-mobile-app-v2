@@ -2541,6 +2541,17 @@ export default function AddTransaction({
             </div>
           </div>
 
+          <div className="form-actions" style={{ display: 'flex', gap: '10px', marginBottom: 14 }}>
+            <button className="btn btn-primary btn-lg" style={{ flex: 2 }} onClick={() => handleSave(false)} disabled={saving}>
+              {saving ? 'Saving…' : isEdit ? 'Update' : (isCopy ? 'Copy' : 'Save')}
+            </button>
+            {!isEdit && onSaveAndContinue && (
+              <button className="btn btn-secondary btn-lg" style={{ flex: 1 }} onClick={() => handleSave(true)} disabled={saving}>
+                {saving ? 'Saving…' : 'Continue'}
+              </button>
+            )}
+          </div>
+
           {/* Tags (Header with label above, tags below full width) */}
           <div className="tags-section" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14, width: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -2667,17 +2678,6 @@ export default function AddTransaction({
                 />
               </div>
             </div>
-          </div>
-
-          <div className="form-actions" style={{ display: 'flex', gap: '10px' }}>
-            <button className="btn btn-primary btn-lg" style={{ flex: 2 }} onClick={() => handleSave(false)} disabled={saving}>
-              {saving ? 'Saving…' : isEdit ? 'Update' : (isCopy ? 'Copy' : 'Save')}
-            </button>
-            {!isEdit && onSaveAndContinue && (
-              <button className="btn btn-secondary btn-lg" style={{ flex: 1 }} onClick={() => handleSave(true)} disabled={saving}>
-                {saving ? 'Saving…' : 'Continue'}
-              </button>
-            )}
           </div>
           <div style={{ height: 16 }} />
         </div>

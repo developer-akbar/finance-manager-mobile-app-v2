@@ -3,46 +3,48 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianG
 import { formatINR } from '../../../utils/format.js';
 import { parseMutualFundTransaction } from '../../../utils/mutualFundPositionEngine.js';
 import { parseTxnFields } from '../../../utils/brokerageAccounting.js';
+import { formatSignedCurrency, formatSignedPercent, getPnlClass } from '../../../utils/portfolioAggregation.js';
 
-export default function PortfolioPerformance({ positions = [], transactions = [], isValued = false }) {
-  // 1. Calculate Realized P&L breakdown
-  const realizedBreakdown = useMemo(() => {
-    const byAccount = {};
-    const byPlatform = {};
-    let totalRealized = 0;
+export default function PortfolioPerformance({ 
+  positions = [], 
+  transactions = [], 
+  scopeFilter = 'personal', 
+  accountFilter = 'all', 
+  platformFilter = 'all',
+  summaryMetrics = null 
+}) {
+  // 1. Calculate Realized P&L and metrics from filtered positions
+  const { totalRealized, topRealizedPerformer, activeCostBasis, valuedUnrealizedPnl, valuedReturnPercent, isFullyValued, hasPartialValuation } = useMemo(() => {
+    let realized = 0;
+    let bestPerformer = null;
+    let activeCost = 0;
 
     for (const p of positions) {
+      if (p.status === 'ACTIVE') {
+        activeCost += (p.remainingCostBasis || 0);
+      }
       if (p.realizedPnl !== 0) {
-        totalRealized += p.realizedPnl;
-
-        const acct = p.investmentAccount || 'Liquid Mutual Funds';
-        byAccount[acct] = (byAccount[acct] || 0) + p.realizedPnl;
-
-        const plat = p.subAccount || 'Default';
-        byPlatform[plat] = (byPlatform[plat] || 0) + p.realizedPnl;
+        realized += p.realizedPnl;
+      }
+      if (p.status === 'REDEEMED' && p.realizedPnl > 0) {
+        if (!bestPerformer || p.realizedPnl > bestPerformer.realizedPnl) {
+          bestPerformer = p;
+        }
       }
     }
 
     return {
-      totalRealized: Math.round(totalRealized * 100) / 100,
-      byAccount,
-      byPlatform
+      totalRealized: Math.round(realized * 100) / 100,
+      topRealizedPerformer: bestPerformer,
+      activeCostBasis: summaryMetrics?.activeCostBasis ?? Math.round(activeCost * 100) / 100,
+      valuedUnrealizedPnl: summaryMetrics?.valuedUnrealizedPnl ?? null,
+      valuedReturnPercent: summaryMetrics?.valuedReturnPercent ?? null,
+      isFullyValued: summaryMetrics?.isFullyValued ?? false,
+      hasPartialValuation: summaryMetrics?.hasPartialValuation ?? false
     };
-  }, [positions]);
+  }, [positions, summaryMetrics]);
 
-  // 2. Performers (Best Realized Investment)
-  const performers = useMemo(() => {
-    const redeemedWithPnL = positions
-      .filter(p => p.status === 'REDEEMED')
-      .sort((a, b) => b.realizedPnl - a.realizedPnl);
-
-    return {
-      topRedeemed: redeemedWithPnL.slice(0, 3),
-      bottomRedeemed: redeemedWithPnL.slice(-3).reverse()
-    };
-  }, [positions]);
-
-  // 3. Chronological Time-Series Chart Data (Cumulative Invested Cost & Cumulative Realized P&L)
+  // 2. Chronological Time-Series Chart Data respecting Scope -> Account -> Platform filters
   const timeSeriesData = useMemo(() => {
     const events = [];
 
@@ -58,21 +60,42 @@ export default function PortfolioPerformance({ positions = [], transactions = []
       const dObj = parseDate(dStr);
       if (isNaN(dObj.getTime())) continue;
 
-      // MF Parse
+      // 1. MF Parse
       const mf = parseMutualFundTransaction(t);
-      if (mf && (mf.action === 'BUY' || mf.action === 'SELL')) {
+      if (mf && (mf.action === 'BUY' || mf.action === 'SELL') && mf.isin) {
+        // Scope Filter
+        if (scopeFilter === 'personal' && (mf.ownershipTag !== 'PERSONAL' && mf.ownershipTag !== 'MIXED_HOLDING')) continue;
+        if (scopeFilter === 'father' && mf.ownershipTag !== 'FATHER_EXTERNAL') continue;
+
+        // Account Filter
+        if (accountFilter !== 'all' && mf.investmentAccount !== accountFilter && accountFilter !== 'Mutual Funds') continue;
+
+        // Platform Filter
+        if (platformFilter !== 'all' && mf.subAccount !== platformFilter) continue;
+
         events.push({
           dateObj: dObj,
           dateLabel: dStr,
           costDelta: mf.action === 'BUY' ? mf.costBasis : -mf.costBasis,
-          pnlDelta: mf.action === 'SELL' ? mf.realizedPnl : 0
+          pnlDelta: mf.action === 'SELL' ? (mf.realizedPnl || 0) : 0
         });
         continue;
       }
 
-      // Share Market Parse
+      // 2. Share Market Parse
       const sm = parseTxnFields(t);
-      if (sm && (sm.type === 'BUY' || sm.type === 'SELL')) {
+      if (sm && (sm.type === 'BUY' || sm.type === 'SELL') && !sm.isRecon && sm.symbol) {
+        const subAccount = sm.brokerage || 'Fareeda Groww';
+
+        // Scope Filter: Share market is personal in canonical data
+        if (scopeFilter === 'father') continue;
+
+        // Account Filter
+        if (accountFilter !== 'all' && accountFilter !== 'Share Market') continue;
+
+        // Platform Filter
+        if (platformFilter !== 'all' && subAccount !== platformFilter) continue;
+
         events.push({
           dateObj: dObj,
           dateLabel: dStr,
@@ -107,7 +130,7 @@ export default function PortfolioPerformance({ positions = [], transactions = []
     }
 
     return series;
-  }, [transactions]);
+  }, [transactions, scopeFilter, accountFilter, platformFilter]);
 
   return (
     <div className="portfolio-card performance-card">
@@ -115,35 +138,64 @@ export default function PortfolioPerformance({ positions = [], transactions = []
         <div>
           <h4 className="portfolio-card-title">Investment & Realized P&L</h4>
           <div className="portfolio-card-sub">
-            Capital invested and realized gains/losses over time
+            Capital deployed and realized gains/losses over time
           </div>
-          <div className="portfolio-chart-helper-note" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 4 }}>
-            Historical capital deployed and realized gains/losses. Market value is not represented in this chart.
+          <div className="portfolio-chart-helper-note">
+            ℹ️ Historical capital deployed (FIFO cost basis) and cumulative realized gains over time. Does not represent current market value / NAV fluctuation.
           </div>
         </div>
       </div>
 
-      {/* Analytics Hero Strip */}
+      {/* Analytics Hero Strip — Compact 3-metric analytics block */}
       <div className="performance-metrics-strip">
+        {/* Metric 1: Capital Deployed / Invested */}
         <div className="perf-metric-box">
-          <div className="perf-metric-lbl">Total Realized Gains / Losses</div>
-          <div className={`perf-metric-val ${realizedBreakdown.totalRealized >= 0 ? 'pos' : 'neg'}`}>
-            {realizedBreakdown.totalRealized >= 0 ? '+' : ''}{formatINR(realizedBreakdown.totalRealized)}
+          <div className="perf-metric-lbl">ACTIVE INVESTED COST</div>
+          <div className="perf-metric-val num-tabular text-primary">
+            {formatINR(activeCostBasis)}
           </div>
-          <div className="perf-metric-sub">Across all redeemed positions</div>
+          <div className="perf-metric-sub">Capital currently deployed</div>
         </div>
+
+        {/* Metric 2: Unrealized P&L */}
         <div className="perf-metric-box">
-          <div className="perf-metric-lbl">Best Realized Investment</div>
-          <div className="perf-metric-val pos">
-            {performers.topRedeemed[0] ? `${performers.topRedeemed[0].note || performers.topRedeemed[0].security} (+${formatINR(performers.topRedeemed[0].realizedPnl)})` : '—'}
+          <div className="perf-metric-lbl">UNREALIZED P&L</div>
+          <div className="perf-metric-val num-tabular">
+            {valuedUnrealizedPnl !== null ? (
+              <span className={getPnlClass(valuedUnrealizedPnl)}>
+                {formatSignedCurrency(valuedUnrealizedPnl)}
+              </span>
+            ) : (
+              <span className="text-muted">—</span>
+            )}
           </div>
-          <div className="perf-metric-sub">Highest individual realized gain among redeemed positions</div>
+          <div className="perf-metric-sub">
+            {valuedReturnPercent !== null && (
+              <div className={`perf-metric-pct ${getPnlClass(valuedUnrealizedPnl)} font-semibold`}>
+                {formatSignedPercent(valuedReturnPercent)}
+              </div>
+            )}
+            <div className="perf-metric-coverage">
+              {isFullyValued ? '100% valued' : hasPartialValuation ? 'Partial valuation' : 'Awaiting live prices'}
+            </div>
+          </div>
+        </div>
+
+        {/* Metric 3: Historical Realized P&L */}
+        <div className="perf-metric-box">
+          <div className="perf-metric-lbl">HISTORICAL REALIZED P&L</div>
+          <div className={`perf-metric-val num-tabular ${getPnlClass(totalRealized)}`}>
+            {totalRealized !== 0 ? formatSignedCurrency(totalRealized) : '₹0'}
+          </div>
+          <div className="perf-metric-sub">
+            {topRealizedPerformer ? `Best: ${topRealizedPerformer.note || topRealizedPerformer.security} (+${formatINR(topRealizedPerformer.realizedPnl)})` : 'From closed positions'}
+          </div>
         </div>
       </div>
 
       {/* Historical Growth Chart */}
-      <div className="performance-chart-container" style={{ width: '100%', height: 230, marginTop: 16 }}>
-        <div className="chart-legend-row" style={{ display: 'flex', gap: 16, marginBottom: 8, fontSize: '0.78rem' }}>
+      <div className="performance-chart-container">
+        <div className="chart-legend-row performance-chart-legend">
           <span style={{ color: '#4F46E5', fontWeight: 600 }}>■ Cumulative Invested Cost</span>
           <span style={{ color: '#10B981', fontWeight: 600 }}>■ Cumulative Realized P&L</span>
         </div>
@@ -173,7 +225,7 @@ export default function PortfolioPerformance({ positions = [], transactions = []
           </ResponsiveContainer>
         ) : (
           <div className="portfolio-performance-empty">
-            <div className="performance-empty-title">Historical Trajectory Unavailable</div>
+            <div className="performance-empty-title">Historical Trajectory Unavailable for Selected Filter</div>
           </div>
         )}
       </div>

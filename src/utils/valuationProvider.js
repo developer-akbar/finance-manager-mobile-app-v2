@@ -179,13 +179,17 @@ export class MutualFundValuationProvider {
       let schemeCode = ISIN_TO_SCHEME_MAP[isinKey];
       let searchedMeta = null;
 
-      // If ISIN is not in static map, search by scheme name and match exact ISIN
+      // If ISIN is not in static map, search by scheme name and match exact ISIN or top search match
       if (!schemeCode) {
-        const searchTerm = position?.note || position?.security || isinKey;
+        const rawTerm = position?.securityName || position?.note || position?.security || isinKey || '';
+        const cleanTerm = rawTerm
+          .replace(/^(father['’]?s?|fareeda['’]?s?|ak['’]?s?|external|mixed)\s+/i, '')
+          .trim();
+        const searchTerm = cleanTerm || isinKey;
         const searchRes = await fetch(`https://api.mfapi.in/mf/search?q=${encodeURIComponent(searchTerm)}`);
         if (searchRes.ok) {
           const searchData = await searchRes.json();
-          if (Array.isArray(searchData)) {
+          if (Array.isArray(searchData) && searchData.length > 0) {
             for (const item of searchData.slice(0, 15)) {
               try {
                 const candRes = await fetch(`https://api.mfapi.in/mf/${item.schemeCode}`);
@@ -199,6 +203,9 @@ export class MutualFundValuationProvider {
                   }
                 }
               } catch (e) {}
+            }
+            if (!schemeCode && searchData[0]?.schemeCode) {
+              schemeCode = searchData[0].schemeCode;
             }
           }
         }

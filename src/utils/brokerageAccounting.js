@@ -252,14 +252,41 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
       const isTrade = f.type === 'BUY' || f.type === 'BUY_RECON' || f.type === 'SELL' || f.type === 'OPENING_LOT' || f.type === 'BONUS';
       if (isTrade && f.symbol) {
         if (!holdings[f.symbol]) {
-          holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null, realizedPnL: 0, totalProceeds: 0 };
+          holdings[f.symbol] = {
+            symbol: f.symbol,
+            qty: 0,
+            buyQty: 0,
+            sellQty: 0,
+            buyCost: 0,
+            soldCostBasis: 0,
+            activeStatus: null,
+            realizedPnL: 0,
+            totalProceeds: 0,
+            txns: [],
+            buyLots: [],
+            lastTransactionDate: ''
+          };
         }
         const h = holdings[f.symbol];
+        h.txns.push(t);
+        if (t.date || t.Date) h.lastTransactionDate = t.date || t.Date;
+
         if (f.type === 'BUY' || f.type === 'BUY_RECON' || f.type === 'OPENING_LOT' || f.type === 'BONUS') {
           h.qty += f.qty;
+          h.buyQty += f.qty;
           h.buyCost += f.cost;
+          h.buyLots.push({
+            transactionId: `${f.symbol}-lot-${h.buyLots.length + 1}`,
+            date: t.date || t.Date || '',
+            units: f.qty,
+            remainingUnits: 0,
+            unitCost: f.qty > 0 ? f.cost / f.qty : 0,
+            costBasis: f.cost,
+            ownershipTag: 'PERSONAL'
+          });
         } else if (f.type === 'SELL') {
           h.qty -= f.qty;
+          h.sellQty += f.qty;
           h.soldCostBasis += f.costBasis;
           const netProceeds = f.cashImpact || f.cost || parseFloat(t.INR || t.inr || t.Amount || t.amount || 0);
           const pnl = f.realizedPnL !== undefined && f.realizedPnL !== 0 ? f.realizedPnL : (netProceeds - f.costBasis);
@@ -268,7 +295,20 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
         }
       } else if (f.type === 'POSITION_STATUS' && f.symbol) {
         if (!holdings[f.symbol]) {
-          holdings[f.symbol] = { symbol: f.symbol, qty: 0, buyCost: 0, soldCostBasis: 0, activeStatus: null, realizedPnL: 0, totalProceeds: 0 };
+          holdings[f.symbol] = {
+            symbol: f.symbol,
+            qty: 0,
+            buyQty: 0,
+            sellQty: 0,
+            buyCost: 0,
+            soldCostBasis: 0,
+            activeStatus: null,
+            realizedPnL: 0,
+            totalProceeds: 0,
+            txns: [],
+            buyLots: [],
+            lastTransactionDate: ''
+          };
         }
         if (f.activeHolding === 'NO') {
           holdings[f.symbol].activeStatus = 'NO';
@@ -300,22 +340,35 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
         const value = h.qty * price;
         currentMarketValue += value;
 
+        const firstBuyDate = (h.txns && h.txns.length > 0) ? (h.txns[0].date || h.txns[0].Date || '') : '';
         activeHoldings.push({
           symbol: h.symbol,
           qty: h.qty,
           investedCost: cost,
           currentPrice: price,
           currentValue: value,
-          unrealizedPnL: value - cost
-        });
-      } else {
-        redeemedHoldings.push({
-          symbol: h.symbol,
-          qty: 0,
+          unrealizedPnL: value - cost,
           buyCost: h.buyCost,
           soldCostBasis: h.soldCostBasis,
           realizedPnL: h.realizedPnL || 0,
-          totalProceeds: h.totalProceeds || 0
+          txns: h.txns || [],
+          buyLots: h.buyLots || [],
+          firstBuyDate: h.firstBuyDate || firstBuyDate,
+          lastTransactionDate: h.lastTransactionDate || ''
+        });
+      } else {
+        const exitedQty = h.sellQty || h.buyQty || h.qty || 0;
+        redeemedHoldings.push({
+          symbol: h.symbol,
+          qty: 0,
+          exitedQty,
+          buyCost: h.buyCost,
+          soldCostBasis: h.soldCostBasis,
+          realizedPnL: h.realizedPnL || 0,
+          totalProceeds: h.totalProceeds || 0,
+          txns: h.txns || [],
+          buyLots: h.buyLots || [],
+          lastTransactionDate: h.lastTransactionDate || ''
         });
       }
     });
