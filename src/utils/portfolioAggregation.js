@@ -107,6 +107,7 @@ export function aggregatePositionsForDisplay(positions = [], valuationProvider =
           returnPercent,
           isValued: true,
           priceType: sampleVal.priceType,
+          previousClose: sampleVal.previousClose || null,
           asOf: sampleVal.asOf,
           asOfTime: sampleVal.asOfTime || null,
           fetchedAt: sampleVal.fetchedAt,
@@ -117,7 +118,7 @@ export function aggregatePositionsForDisplay(positions = [], valuationProvider =
           error: null
         };
       } else if (sampleVal) {
-        groupValuation = { ...sampleVal, navConflict };
+        groupValuation = { ...sampleVal, navConflict, previousClose: sampleVal.previousClose || null };
       }
     }
 
@@ -223,6 +224,54 @@ export function formatSignedPercent(percent) {
   if (pct === 0) return '0.00%';
   const absFormatted = Math.abs(pct).toFixed(2);
   return pct > 0 ? `+${absFormatted}%` : `-${absFormatted}%`;
+}
+
+/**
+ * Calculates Today's Change indicator and percentage based on LTP and provider's previousClose.
+ * Strict rules:
+ * - Only applies to Equities and ETFs.
+ * - Does not invent intraday MF movement.
+ * - Returns formatted text: ↑ +₹X.XX (+X.XX%) / ↓ -₹X.XX (-X.XX%) / → ₹0.00 (0.00%) / —
+ */
+export function getTodaysChange(price, previousClose, assetType = 'EQUITY') {
+  if (assetType === 'MUTUAL_FUND') {
+    return null;
+  }
+  if (typeof price !== 'number' || typeof previousClose !== 'number' || isNaN(price) || isNaN(previousClose) || previousClose <= 0) {
+    return null;
+  }
+  const change = Math.round((price - previousClose) * 100) / 100;
+  const changePct = Math.round(((price - previousClose) / previousClose) * 10000) / 100;
+
+  if (change > 0) {
+    const absChg = Math.abs(change).toFixed(2);
+    const absPct = Math.abs(changePct).toFixed(2);
+    return {
+      change,
+      changePct,
+      text: `↑ +₹${absChg} (+${absPct}%)`,
+      cls: 'pos',
+      color: 'var(--income)'
+    };
+  } else if (change < 0) {
+    const absChg = Math.abs(change).toFixed(2);
+    const absPct = Math.abs(changePct).toFixed(2);
+    return {
+      change,
+      changePct,
+      text: `↓ -₹${absChg} (-${absPct}%)`,
+      cls: 'neg',
+      color: 'var(--expense)'
+    };
+  } else {
+    return {
+      change: 0,
+      changePct: 0,
+      text: `→ ₹0.00 (0.00%)`,
+      cls: '',
+      color: 'var(--text-muted)'
+    };
+  }
 }
 
 export function parseDateToTimestamp(dateStr) {

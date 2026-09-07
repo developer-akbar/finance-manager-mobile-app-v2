@@ -6,8 +6,10 @@ import {
   formatAsOfDate, 
   formatSignedCurrency, 
   formatSignedPercent,
-  computePositionXIRR
+  computePositionXIRR,
+  getTodaysChange
 } from '../../../utils/portfolioAggregation.js';
+import { detectAssetType } from '../../../utils/valuationProvider.js';
 
 export default function HoldingsTable({ positions = [], valuationProvider, valuationVersion, onSelectPosition }) {
   const [search, setSearch] = useState('');
@@ -184,8 +186,26 @@ export default function HoldingsTable({ positions = [], valuationProvider, valua
                         <td style={{ textAlign: 'right' }} className="mono num-tabular">
                           {isValued && typeof val.nav === 'number' ? (
                             <div>
-                              <div className="font-semibold">{metrics.priceLabel} ₹{val.nav.toFixed(4)}</div>
-                              {val.asOf && <div className="text-muted font-xs">As of {formatAsOfDate(val.asOf)}</div>}
+                              {(() => {
+                                const assetType = detectAssetType(group);
+                                const isEquityOrEtf = assetType === 'EQUITY' || assetType === 'ETF';
+                                const todaysChange = isEquityOrEtf ? getTodaysChange(val.nav, val.previousClose, assetType) : null;
+                                return (
+                                  <div className="font-semibold" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px', flexWrap: 'wrap' }}>
+                                    <span>{metrics.priceLabel} ₹{val.nav.toFixed(2)}</span>
+                                    {todaysChange ? (
+                                      <span className={`todays-change font-semibold ${todaysChange.cls}`} style={{ fontSize: '0.72rem', color: todaysChange.color, whiteSpace: 'nowrap' }}>
+                                        {todaysChange.text}
+                                      </span>
+                                    ) : (isEquityOrEtf ? (
+                                      <span className="todays-change text-muted font-semibold" style={{ fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                                        —
+                                      </span>
+                                    ) : null)}
+                                  </div>
+                                );
+                              })()}
+                              {val.asOf && <div className="text-muted font-xs">As of {formatAsOfDate(val.asOf)}{val.asOfTime ? `, ${val.asOfTime}` : ''}</div>}
                             </div>
                           ) : (
                             <span className="val-na text-muted">{metrics.unvaluedLabel}</span>
@@ -355,9 +375,29 @@ export default function HoldingsTable({ positions = [], valuationProvider, valua
                     <div className="card-metadata-grid grid-3 mt-2 font-xs text-muted">
                       <div className="meta-col">
                         <span className="meta-lbl block">{metrics.priceLabel}</span>
-                        <span className="meta-val font-bold text-primary block num-tabular">
-                          {isValued && typeof val.nav === 'number' ? `₹${val.nav.toFixed(2)}` : '—'}
-                        </span>
+                        {(() => {
+                          const assetType = detectAssetType(group);
+                          const isEquityOrEtf = assetType === 'EQUITY' || assetType === 'ETF';
+                          const todaysChange = isEquityOrEtf && isValued && typeof val.nav === 'number'
+                            ? getTodaysChange(val.nav, val.previousClose, assetType)
+                            : null;
+                          return (
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', flexWrap: 'wrap' }}>
+                              <span className="meta-val font-bold text-primary num-tabular">
+                                {isValued && typeof val.nav === 'number' ? `₹${val.nav.toFixed(2)}` : '—'}
+                              </span>
+                              {todaysChange ? (
+                                <span className={`todays-change font-semibold num-tabular ${todaysChange.cls}`} style={{ fontSize: '0.68rem', color: todaysChange.color, whiteSpace: 'nowrap' }}>
+                                  {todaysChange.text}
+                                </span>
+                              ) : (isEquityOrEtf && isValued && typeof val.nav === 'number' ? (
+                                <span className="todays-change text-muted font-semibold num-tabular" style={{ fontSize: '0.68rem', whiteSpace: 'nowrap' }}>
+                                  —
+                                </span>
+                              ) : null)}
+                            </div>
+                          );
+                        })()}
                         {isValued && val.asOf && (
                           <span className="meta-sub-date block text-muted">
                             As of {formatAsOfDate(val.asOf)}{val.asOfTime ? `, ${val.asOfTime}` : ''}

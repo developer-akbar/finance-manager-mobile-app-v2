@@ -40,11 +40,16 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const invLabel = (t.Note || t.note || '').trim() || (t.SecuritySymbol || t.security_symbol || '').trim() || '';
   const invQty = parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0);
   const invNav = parseFloat(t.UnitPrice || t.unit_price || 0);
-  const invTradeVal = parseFloat(t.TradeValue || t.trade_value || (invType === 'BUY' || invType === 'SELL' ? (t.CostBasis || t.cost_basis || t.INR || t.inr || t.Amount || t.amount || 0) : 0));
+  const invGrossVal = parseFloat(t.TradeValue || t.trade_value || 0);
+  const invTotalCharges = parseFloat(t.TotalCharges || t.total_charges || 0);
   const invCostBasis = parseFloat(t.CostBasis || t.cost_basis || 0);
+  const invActualAmt = parseFloat(t.ActualAmount || t.actual_amount || 0);
   const invRealizedPnl = parseFloat(t.RealizedPnl || t.realized_pnl || 0);
   const invBroker = String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || '').trim();
   const invIsin = String(t.SecurityISIN || t.security_isin || '').trim();
+
+  // Investment amount is always gross Trade Value
+  const invEffectiveAmt = invGrossVal > 0 ? invGrossVal : (amount > 0 ? amount : (invActualAmt > 0 ? invActualAmt : 0));
 
   // Determine actual display type based on the sign of the amount
   let displayType = type;
@@ -237,7 +242,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
         <div className="txn-amt-wrap">
           <div className={`txn-amt-col ${cls}`}>
             {isInvestment
-              ? (invType === 'UNIT_ADJUSTMENT' ? '₹0' : `${sign}${formatINR(invTradeVal || amount)}`)
+              ? (invType === 'UNIT_ADJUSTMENT' ? '₹0' : `${sign}${formatINR(invEffectiveAmt || amount)}`)
               : `${sign}${formatINR(amount)}`}
           </div>
           {runningBalance !== null && (
@@ -277,11 +282,17 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
   const invSecurityDisplay = securityName || noteText || 'Investment Security';
   const invQty = parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0);
   const invNav = parseFloat(t.UnitPrice || t.unit_price || 0);
-  const invTradeVal = parseFloat(t.TradeValue || t.trade_value || (invType === 'BUY' || invType === 'SELL' ? (t.CostBasis || t.cost_basis || t.INR || t.inr || t.Amount || t.amount || 0) : 0));
+  const invGrossVal = parseFloat(t.TradeValue || t.trade_value || 0);
+  const invTotalCharges = parseFloat(t.TotalCharges || t.total_charges || 0);
   const invCostBasis = parseFloat(t.CostBasis || t.cost_basis || 0);
+  const invActualAmt = parseFloat(t.ActualAmount || t.actual_amount || 0);
   const invRealizedPnl = parseFloat(t.RealizedPnl || t.realized_pnl || 0);
   const invBroker = String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || '').trim();
   const invIsin = String(t.SecurityISIN || t.security_isin || '').trim();
+
+  const invEffectiveAmt = invType === 'BUY'
+    ? (invActualAmt > 0 ? invActualAmt : (invCostBasis > 0 ? invCostBasis : (amount > 0 ? amount : (invGrossVal > 0 ? invGrossVal + invTotalCharges : 0))))
+    : (invActualAmt > 0 ? invActualAmt : (amount > 0 ? amount : (invGrossVal > 0 ? Math.max(0, invGrossVal - invTotalCharges) : 0)));
 
   const invDetails = React.useMemo(() => {
     if (!isInvestment) return null;
@@ -390,7 +401,7 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
         {/* Hero */}
         <div className="dp-hero" onClick={() => setShowEdit(true)} style={{ cursor: 'pointer' }}>
           <div className={`dp-amount ${isInvestment ? (invType === 'BUY' ? 'income' : invType === 'SELL' ? 'expense' : 'transfer') : cls}`}>
-            {isInvestment ? (invType === 'UNIT_ADJUSTMENT' ? '₹0' : `${invType === 'BUY' ? '+' : ''}${formatINR(invTradeVal || amount)}`) : `${sign}${formatINR(amount)}`}
+            {isInvestment ? (invType === 'UNIT_ADJUSTMENT' ? '₹0' : `${invType === 'BUY' ? '+' : ''}${formatINR(invEffectiveAmt || amount)}`) : `${sign}${formatINR(amount)}`}
           </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
             {isInvestment ? (
@@ -462,8 +473,18 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
               {noteText && noteText !== securityName && <DPRow label="Note" value={noteText} />}
               {invQty !== 0 && <DPRow label="Units" value={`${Math.abs(invQty).toFixed(3)} units`} />}
               {invNav > 0 && <DPRow label="NAV / Price" value={`₹${invNav.toFixed(4)}`} />}
-              {invTradeVal > 0 && <DPRow label="Trade Value" value={formatINR(invTradeVal)} />}
-              {invCostBasis > 0 && <DPRow label="Cost Basis" value={formatINR(invCostBasis)} />}
+              {invGrossVal > 0 && <DPRow label="Trade Value" value={formatINR(invGrossVal)} />}
+              {(t.SettlementMode || t.settlement_mode) && (
+                <DPRow label="Settlement Mode" value={(t.SettlementMode || t.settlement_mode) === 'BREAKDOWN' ? 'Charge Breakdown' : 'Actual Paid/Received'} />
+              )}
+              {invTotalCharges > 0 && <DPRow label={invType === 'BUY' ? 'Acquisition Charges' : 'Selling Charges'} value={formatINR(invTotalCharges)} />}
+              {invActualAmt > 0 && <DPRow label={invType === 'BUY' ? 'Actual Paid' : 'Actual Received'} value={formatINR(invActualAmt)} />}
+              {invType === 'BUY' && (invCostBasis > 0 || invTotalCharges > 0) && (
+                <DPRow label="Economic Cost Basis" value={formatINR(invCostBasis || (invGrossVal + invTotalCharges))} />
+              )}
+              {invType === 'SELL' && (invGrossVal > 0 || invTotalCharges > 0) && (
+                <DPRow label="Net Sale Proceeds" value={formatINR(invActualAmt > 0 ? invActualAmt : Math.max(0, invGrossVal - invTotalCharges))} />
+              )}
               {invType === 'SELL' && <DPRow label="Realized P&L" value={`${invRealizedPnl >= 0 ? '+' : ''}${formatINR(invRealizedPnl)}`} />}
               {t.Description && <DPRow label="Description" value={t.Description} />}
               {t.Tags && <DPRow label="Tags" value={t.Tags} />}

@@ -15,6 +15,7 @@
  */
 
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { resolveSecurity } from './securityResolution.js';
 
 /**
  * Classifies asset type from position metadata
@@ -340,16 +341,42 @@ export class MutualFundValuationProvider {
  * Helper function to query market data for Equities & ETFs
  */
 export async function fetchStockPriceFromProvider(position, key, assetType = 'EQUITY') {
-  const cleanSymbol = String(position?.note || position?.security || key || '').trim().toUpperCase();
-  let ticker = cleanSymbol;
+  const cleanSymbol = String(position?.note || position?.security || key || '').trim();
+  const resolved = resolveSecurity(position || key || cleanSymbol);
 
-  // Symbol normalization for Indian NSE tickers
-  if (cleanSymbol.includes('GOLD') || (cleanSymbol.includes('BEES') && cleanSymbol.includes('GOLD'))) {
-    ticker = 'GOLDBEES.NS';
-  } else if (cleanSymbol.includes('SILVER') || (cleanSymbol.includes('BEES') && cleanSymbol.includes('SILVER'))) {
-    ticker = 'SILVERBEES.NS';
-  } else if (!ticker.endsWith('.NS') && !ticker.endsWith('.BO')) {
-    ticker = `${ticker.replace(/\s+/g, '')}.NS`;
+  let ticker = '';
+  if (resolved && resolved.isResolved && resolved.symbol) {
+    const exchangeSuffix = resolved.exchange === 'BSE' ? '.BO' : '.NS';
+    ticker = `${resolved.symbol}${exchangeSuffix}`;
+  } else if (cleanSymbol) {
+    const symUpper = cleanSymbol.toUpperCase().trim();
+    if (symUpper.includes('GOLD') || (symUpper.includes('BEES') && symUpper.includes('GOLD'))) {
+      ticker = 'GOLDBEES.NS';
+    } else if (symUpper.includes('SILVER') || (symUpper.includes('BEES') && symUpper.includes('SILVER'))) {
+      ticker = 'SILVERBEES.NS';
+    } else if (symUpper.endsWith('.NS') || symUpper.endsWith('.BO')) {
+      ticker = symUpper;
+    } else if (/^[A-Z0-9_-]+$/.test(symUpper)) {
+      ticker = `${symUpper}.NS`;
+    }
+  }
+
+  if (!ticker) {
+    return {
+      symbol: cleanSymbol,
+      isin: position?.isin || null,
+      assetType,
+      price: null,
+      priceType: 'LTP',
+      currency: 'INR',
+      source: 'NSE/YahooFinance',
+      asOf: null,
+      fetchedAt: new Date().toISOString(),
+      freshness: 'UNAVAILABLE',
+      isStale: true,
+      isAvailable: false,
+      error: 'Unresolved security symbol'
+    };
   }
 
   const targetPath = `/v8/finance/chart/${encodeURIComponent(ticker)}?range=1d&interval=1d`;
@@ -452,7 +479,11 @@ export async function fetchStockPriceFromProvider(position, key, assetType = 'EQ
     }
 
     const regularPrice = typeof meta.regularMarketPrice === 'number' ? meta.regularMarketPrice : null;
-    const prevClose = typeof meta.previousClose === 'number' ? meta.previousClose : (typeof meta.chartPreviousClose === 'number' ? meta.chartPreviousClose : null);
+    const prevClose = typeof meta.regularMarketPreviousClose === 'number'
+      ? meta.regularMarketPreviousClose
+      : (typeof meta.previousClose === 'number'
+          ? meta.previousClose
+          : (typeof meta.chartPreviousClose === 'number' ? meta.chartPreviousClose : null));
 
     const price = regularPrice !== null ? regularPrice : prevClose;
     if (price === null || isNaN(price) || price <= 0) {
@@ -461,6 +492,7 @@ export async function fetchStockPriceFromProvider(position, key, assetType = 'EQ
         isin: position?.isin || null,
         assetType,
         price: null,
+        previousClose: null,
         priceType: 'LTP',
         currency: 'INR',
         source: 'NSE/YahooFinance',
@@ -504,6 +536,7 @@ export async function fetchStockPriceFromProvider(position, key, assetType = 'EQ
       isin: position?.isin || null,
       assetType,
       price,
+      previousClose: (prevClose !== null && !isNaN(prevClose) && prevClose > 0) ? prevClose : null,
       priceType,
       currency: meta.currency || 'INR',
       source: 'NSE/YahooFinance',
@@ -769,6 +802,7 @@ export class ValuationProvider {
         returnPercent,
         isValued: true,
         priceType,
+        previousClose: (typeof navResult.previousClose === 'number' && !isNaN(navResult.previousClose) && navResult.previousClose > 0) ? navResult.previousClose : null,
         asOf: navResult.asOf,
         asOfTime: navResult.asOfTime || null,
         fetchedAt: navResult.fetchedAt,

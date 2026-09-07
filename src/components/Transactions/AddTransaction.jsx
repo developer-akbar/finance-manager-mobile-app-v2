@@ -1,7 +1,9 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { v4 as uuid } from 'uuid';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { inputToStorage, toInputDate, nowTimeStr, formatINR } from '../../utils/format.js';
-import { resolveInvestmentAccounts } from '../../utils/brokerageAccounting.js';
+import { resolveInvestmentAccounts, calculateGrowwCharges } from '../../utils/brokerageAccounting.js';
+import { resolveSecurity, searchSecurities, cleanSecurityToNote } from '../../utils/securityResolution.js';
 import './AddTransaction.css';
 import { AccountsManager, CategoriesManager } from '../Settings/Settings.jsx';
 import {
@@ -628,6 +630,12 @@ export default function AddTransaction({
       // Strip (x/x) instalment suffix from Note so user sees clean note in edit form
       const cleanNote = stripInstalmentSuffix(t.Note || t.note || '');
       const dispAmt = String(t.TradeValue || t.trade_value || t.INR || t.Amount || t.amount || '');
+      const dispActual = t.ActualAmount !== undefined && t.ActualAmount !== null && t.ActualAmount !== ''
+        ? String(t.ActualAmount)
+        : (t.actual_amount !== undefined && t.actual_amount !== null && t.actual_amount !== '' ? String(t.actual_amount) : '');
+
+      const rawMode = t.SettlementMode || t.settlement_mode || '';
+      const initialSettlementMode = rawMode && String(rawMode).trim().toUpperCase() === 'BREAKDOWN' ? 'BREAKDOWN' : 'ACTUAL';
 
       let initialAccount = rt.startsWith('Transfer') ? '' : (t.Account || t.FromAccount || '');
       let initialInvestmentAccount = '';
@@ -671,13 +679,24 @@ export default function AddTransaction({
         settlementAccount: initialSettlementAccount,
         // Investment specific state
         investmentTransactionType: isInv ? (invType || (rt === 'BUY' || rt === 'SELL' ? rt : 'BUY')) : '',
+        settlementMode: initialSettlementMode,
         securitySymbol: t.SecuritySymbol || t.security_symbol || '',
+        securityDisplayName: t.SecurityDisplayName || t.security_display_name || cleanNote || '',
         securityISIN: t.SecurityISIN || t.security_isin || '',
         quantity: String(Math.abs(parseFloat(t.Quantity || t.quantity || t.PositionQuantityChange || t.position_qty_change || 0)) || ''),
         unitPrice: String(t.UnitPrice || t.unit_price || ''),
         tradeValue: String(t.TradeValue || t.trade_value || dispAmt || ''),
+        actualAmount: dispActual,
         costBasis: String(t.CostBasis || t.cost_basis || ''),
         realizedPnl: String(t.RealizedPnl || t.realized_pnl || ''),
+        brokerageCharges: String(t.BrokerageCharges || t.brokerage_charges || ''),
+        exchangeCharges: String(t.ExchangeCharges || t.exchange_charges || ''),
+        sttCharges: String(t.STTCharges || t.stt_charges || ''),
+        sebiCharges: String(t.SEBICharges || t.sebi_charges || ''),
+        stampDutyCharges: String(t.StampDutyCharges || t.stamp_duty_charges || ''),
+        gstCharges: String(t.GSTCharges || t.gst_charges || ''),
+        dpCharges: String(t.DPCharges || t.dp_charges || ''),
+        otherCharges: String(t.OtherCharges || t.other_charges || ''),
         brokerage: isInv ? initialSubAccount : '',
         source: t.Source || t.source || ''
       };
@@ -702,13 +721,24 @@ export default function AddTransaction({
         fundingAccount: '',
         settlementAccount: '',
         investmentTransactionType: 'BUY',
+        settlementMode: 'ACTUAL',
         securitySymbol: '',
+        securityDisplayName: '',
         securityISIN: '',
         quantity: '',
         unitPrice: '',
         tradeValue: '',
+        actualAmount: '',
         costBasis: '',
         realizedPnl: '',
+        brokerageCharges: '',
+        exchangeCharges: '',
+        sttCharges: '',
+        sebiCharges: '',
+        stampDutyCharges: '',
+        gstCharges: '',
+        dpCharges: '',
+        otherCharges: '',
         brokerage: '',
         source: ''
       };
@@ -736,13 +766,24 @@ export default function AddTransaction({
       fundingAccount: '',
       settlementAccount: '',
       investmentTransactionType: 'BUY',
+      settlementMode: 'ACTUAL',
       securitySymbol: '',
+      securityDisplayName: '',
       securityISIN: '',
       quantity: '',
       unitPrice: '',
       tradeValue: '',
+      actualAmount: '',
       costBasis: '',
       realizedPnl: '',
+      brokerageCharges: '',
+      exchangeCharges: '',
+      sttCharges: '',
+      sebiCharges: '',
+      stampDutyCharges: '',
+      gstCharges: '',
+      dpCharges: '',
+      otherCharges: '',
       brokerage: '',
       source: ''
     };
@@ -1135,6 +1176,7 @@ export default function AddTransaction({
   const [secFocused, setSecFocused] = useState(false);
   const [secSugs, setSecSugs] = useState([]);
   const noteUserEditedRef = useRef(Boolean(isEdit));
+  const lastAutoNoteRef = useRef(isEdit ? cleanSecurityToNote(editTransaction?.Note || editTransaction?.note || '') : '');
   const lastEditedInvInputRef = useRef('quantity');
 
   // Extract distinct investment securities from transactions
@@ -1189,26 +1231,334 @@ export default function AddTransaction({
     return s;
   }
 
+  const totalCharges = useMemo(() => {
+    const sum = (parseFloat(form.brokerageCharges) || 0) +
+      (parseFloat(form.exchangeCharges) || 0) +
+      (parseFloat(form.sttCharges) || 0) +
+      (parseFloat(form.sebiCharges) || 0) +
+      (parseFloat(form.stampDutyCharges) || 0) +
+      (parseFloat(form.gstCharges) || 0) +
+      (parseFloat(form.dpCharges) || 0) +
+      (parseFloat(form.otherCharges) || 0);
+    return Math.round(sum * 100) / 100;
+  }, [form.brokerageCharges, form.exchangeCharges, form.sttCharges, form.sebiCharges, form.stampDutyCharges, form.gstCharges, form.dpCharges, form.otherCharges]);
+
+  // Unified Settlement calculation
+  const computedSettlement = useMemo(() => {
+    const invType = (form.investmentTransactionType || 'BUY').toUpperCase();
+    const tradeVal = parseFloat(form.tradeValue || form.amount) || 0;
+    const mode = (form.settlementMode || 'ACTUAL').toUpperCase();
+    const hasActual = form.actualAmount !== undefined && form.actualAmount !== null && form.actualAmount !== '' && !isNaN(parseFloat(form.actualAmount));
+    const actualAmt = hasActual ? parseFloat(form.actualAmount) : null;
+
+    let charges = 0;
+    let costBasis = parseFloat(form.costBasis) || 0;
+    let netProceeds = tradeVal;
+    let realizedPnl = parseFloat(form.realizedPnl) || 0;
+
+    if (mode === 'ACTUAL') {
+      if (invType === 'BUY') {
+        if (hasActual) {
+          charges = Math.max(0, Math.round((actualAmt - tradeVal) * 100) / 100);
+          costBasis = actualAmt;
+        } else {
+          charges = 0;
+          costBasis = tradeVal;
+        }
+      } else if (invType === 'SELL') {
+        if (hasActual) {
+          charges = Math.max(0, Math.round((tradeVal - actualAmt) * 100) / 100);
+          netProceeds = actualAmt;
+        } else {
+          charges = 0;
+          netProceeds = tradeVal;
+        }
+        const cb = parseFloat(form.costBasis);
+        if (!isNaN(cb)) {
+          realizedPnl = Math.round((netProceeds - cb) * 100) / 100;
+        }
+      }
+    } else {
+      // BREAKDOWN mode
+      charges = totalCharges;
+      if (invType === 'BUY') {
+        costBasis = Math.round((tradeVal + totalCharges) * 100) / 100;
+      } else if (invType === 'SELL') {
+        netProceeds = Math.round((tradeVal - totalCharges) * 100) / 100;
+        const cb = parseFloat(form.costBasis);
+        if (!isNaN(cb)) {
+          realizedPnl = Math.round((netProceeds - cb) * 100) / 100;
+        }
+      }
+    }
+
+    return {
+      mode,
+      invType,
+      tradeVal,
+      hasActual,
+      actualAmt,
+      charges,
+      costBasis,
+      netProceeds,
+      realizedPnl
+    };
+  }, [form.settlementMode, form.investmentTransactionType, form.tradeValue, form.amount, form.actualAmount, form.costBasis, form.realizedPnl, totalCharges]);
+
+  const getRuleBreakdown = (baseForm, overrideTradeVal) => {
+    const invType = (baseForm.investmentTransactionType || 'BUY').toUpperCase();
+    const tradeVal = overrideTradeVal !== undefined ? parseFloat(overrideTradeVal) || 0 : (parseFloat(baseForm.tradeValue || baseForm.amount) || 0);
+    return calculateGrowwCharges({
+      invType,
+      tradeVal,
+      securitySymbol: baseForm.securitySymbol,
+      securityISIN: baseForm.securityISIN,
+      investmentAccount: baseForm.investmentAccount || baseForm.account || '',
+      exchange: 'NSE'
+    });
+  };
+
+  const handleSettlementModeChange = (newMode) => {
+    setForm(prev => {
+      const invType = (prev.investmentTransactionType || 'BUY').toUpperCase();
+      const tradeVal = parseFloat(prev.tradeValue || prev.amount) || 0;
+      if (newMode === 'BREAKDOWN') {
+        const hasSavedBreakdown = Boolean(
+          isEdit && editTransaction && (
+            (editTransaction.BrokerageCharges !== undefined && editTransaction.BrokerageCharges !== null && editTransaction.BrokerageCharges !== '') ||
+            (editTransaction.brokerage_charges !== undefined && editTransaction.brokerage_charges !== null && editTransaction.brokerage_charges !== '') ||
+            (editTransaction.ExchangeCharges !== undefined && editTransaction.ExchangeCharges !== null && editTransaction.ExchangeCharges !== '') ||
+            (editTransaction.exchange_charges !== undefined && editTransaction.exchange_charges !== null && editTransaction.exchange_charges !== '') ||
+            (editTransaction.STTCharges !== undefined && editTransaction.STTCharges !== null && editTransaction.STTCharges !== '') ||
+            (editTransaction.stt_charges !== undefined && editTransaction.stt_charges !== null && editTransaction.stt_charges !== '') ||
+            (editTransaction.StampDutyCharges !== undefined && editTransaction.StampDutyCharges !== null && editTransaction.StampDutyCharges !== '') ||
+            (editTransaction.stamp_duty_charges !== undefined && editTransaction.stamp_duty_charges !== null && editTransaction.stamp_duty_charges !== '') ||
+            (editTransaction.SEBICharges !== undefined && editTransaction.SEBICharges !== null && editTransaction.SEBICharges !== '') ||
+            (editTransaction.sebi_charges !== undefined && editTransaction.sebi_charges !== null && editTransaction.sebi_charges !== '') ||
+            (editTransaction.GSTCharges !== undefined && editTransaction.GSTCharges !== null && editTransaction.GSTCharges !== '') ||
+            (editTransaction.gst_charges !== undefined && editTransaction.gst_charges !== null && editTransaction.gst_charges !== '') ||
+            (editTransaction.DPCharges !== undefined && editTransaction.DPCharges !== null && editTransaction.DPCharges !== '') ||
+            (editTransaction.dp_charges !== undefined && editTransaction.dp_charges !== null && editTransaction.dp_charges !== '') ||
+            (editTransaction.OtherCharges !== undefined && editTransaction.OtherCharges !== null && editTransaction.OtherCharges !== '') ||
+            (editTransaction.other_charges !== undefined && editTransaction.other_charges !== null && editTransaction.other_charges !== '')
+          )
+        );
+
+        const hasExistingFormBreakdown = Boolean(
+          (prev.brokerageCharges !== '' && prev.brokerageCharges !== undefined && prev.brokerageCharges !== null) ||
+          (prev.exchangeCharges !== '' && prev.exchangeCharges !== undefined && prev.exchangeCharges !== null) ||
+          (prev.sttCharges !== '' && prev.sttCharges !== undefined && prev.sttCharges !== null) ||
+          (prev.sebiCharges !== '' && prev.sebiCharges !== undefined && prev.sebiCharges !== null) ||
+          (prev.stampDutyCharges !== '' && prev.stampDutyCharges !== undefined && prev.stampDutyCharges !== null) ||
+          (prev.gstCharges !== '' && prev.gstCharges !== undefined && prev.gstCharges !== null) ||
+          (prev.dpCharges !== '' && prev.dpCharges !== undefined && prev.dpCharges !== null) ||
+          (prev.otherCharges !== '' && prev.otherCharges !== undefined && prev.otherCharges !== null)
+        );
+
+        if (hasSavedBreakdown || hasExistingFormBreakdown) {
+          // Restore/preserve existing or saved breakdown values exactly
+          const restoredBrokerage = (prev.brokerageCharges !== '' && prev.brokerageCharges !== undefined && prev.brokerageCharges !== null)
+            ? prev.brokerageCharges
+            : (editTransaction?.BrokerageCharges ?? editTransaction?.brokerage_charges ?? '');
+          const restoredExchange = (prev.exchangeCharges !== '' && prev.exchangeCharges !== undefined && prev.exchangeCharges !== null)
+            ? prev.exchangeCharges
+            : (editTransaction?.ExchangeCharges ?? editTransaction?.exchange_charges ?? '');
+          const restoredSTT = (prev.sttCharges !== '' && prev.sttCharges !== undefined && prev.sttCharges !== null)
+            ? prev.sttCharges
+            : (editTransaction?.STTCharges ?? editTransaction?.stt_charges ?? '');
+          const restoredSEBI = (prev.sebiCharges !== '' && prev.sebiCharges !== undefined && prev.sebiCharges !== null)
+            ? prev.sebiCharges
+            : (editTransaction?.SEBICharges ?? editTransaction?.sebi_charges ?? '');
+          const restoredStampDuty = (prev.stampDutyCharges !== '' && prev.stampDutyCharges !== undefined && prev.stampDutyCharges !== null)
+            ? prev.stampDutyCharges
+            : (editTransaction?.StampDutyCharges ?? editTransaction?.stamp_duty_charges ?? '');
+          const restoredGST = (prev.gstCharges !== '' && prev.gstCharges !== undefined && prev.gstCharges !== null)
+            ? prev.gstCharges
+            : (editTransaction?.GSTCharges ?? editTransaction?.gst_charges ?? '');
+          const restoredDP = (prev.dpCharges !== '' && prev.dpCharges !== undefined && prev.dpCharges !== null)
+            ? prev.dpCharges
+            : (editTransaction?.DPCharges ?? editTransaction?.dp_charges ?? '');
+          const restoredOther = (prev.otherCharges !== '' && prev.otherCharges !== undefined && prev.otherCharges !== null)
+            ? prev.otherCharges
+            : (editTransaction?.OtherCharges ?? editTransaction?.other_charges ?? '');
+
+          const sumExistingCharges = (parseFloat(restoredBrokerage) || 0) +
+            (parseFloat(restoredExchange) || 0) +
+            (parseFloat(restoredSTT) || 0) +
+            (parseFloat(restoredSEBI) || 0) +
+            (parseFloat(restoredStampDuty) || 0) +
+            (parseFloat(restoredGST) || 0) +
+            (parseFloat(restoredDP) || 0) +
+            (parseFloat(restoredOther) || 0);
+
+          let nextCostBasis = prev.costBasis;
+          let nextRealizedPnl = prev.realizedPnl;
+          if (invType === 'BUY') {
+            nextCostBasis = roundNum(tradeVal + sumExistingCharges, 2);
+          } else {
+            const netProc = tradeVal - sumExistingCharges;
+            const cb = parseFloat(prev.costBasis);
+            if (!isNaN(cb)) {
+              nextRealizedPnl = roundNum(netProc - cb, 2);
+            }
+          }
+          return {
+            ...prev,
+            settlementMode: 'BREAKDOWN',
+            brokerageCharges: String(restoredBrokerage ?? ''),
+            exchangeCharges: String(restoredExchange ?? ''),
+            sttCharges: String(restoredSTT ?? ''),
+            sebiCharges: String(restoredSEBI ?? ''),
+            stampDutyCharges: String(restoredStampDuty ?? ''),
+            gstCharges: String(restoredGST ?? ''),
+            dpCharges: String(restoredDP ?? ''),
+            otherCharges: String(restoredOther ?? ''),
+            costBasis: nextCostBasis,
+            realizedPnl: nextRealizedPnl
+          };
+        } else {
+          // No saved breakdown data exists -> calculate from Groww rule engine
+          const brk = getRuleBreakdown(prev);
+          let nextCostBasis = prev.costBasis;
+          let nextRealizedPnl = prev.realizedPnl;
+          if (invType === 'BUY') {
+            nextCostBasis = roundNum(tradeVal + brk.totalCharges, 2);
+          } else {
+            const netProc = tradeVal - brk.totalCharges;
+            const cb = parseFloat(prev.costBasis);
+            if (!isNaN(cb)) {
+              nextRealizedPnl = roundNum(netProc - cb, 2);
+            }
+          }
+          return {
+            ...prev,
+            settlementMode: 'BREAKDOWN',
+            brokerageCharges: String(brk.brokerageCharges || ''),
+            exchangeCharges: String(brk.exchangeCharges || ''),
+            sttCharges: String(brk.sttCharges || ''),
+            sebiCharges: String(brk.sebiCharges || ''),
+            stampDutyCharges: String(brk.stampDutyCharges || ''),
+            gstCharges: String(brk.gstCharges || ''),
+            dpCharges: String(brk.dpCharges || ''),
+            otherCharges: String(brk.otherCharges || ''),
+            costBasis: nextCostBasis,
+            realizedPnl: nextRealizedPnl
+          };
+        }
+      } else {
+        // Switching to ACTUAL
+        const hasActual = prev.actualAmount !== undefined && prev.actualAmount !== null && prev.actualAmount !== '' && !isNaN(parseFloat(prev.actualAmount));
+        const actualAmt = hasActual ? parseFloat(prev.actualAmount) : tradeVal;
+        let nextCostBasis = prev.costBasis;
+        let nextRealizedPnl = prev.realizedPnl;
+        if (invType === 'BUY') {
+          nextCostBasis = roundNum(actualAmt, 2);
+        } else {
+          const cb = parseFloat(prev.costBasis);
+          if (!isNaN(cb)) {
+            nextRealizedPnl = roundNum(actualAmt - cb, 2);
+          }
+        }
+        return {
+          ...prev,
+          settlementMode: 'ACTUAL',
+          costBasis: nextCostBasis,
+          realizedPnl: nextRealizedPnl
+        };
+      }
+    });
+  };
+
   const handleSecurityChange = (v) => {
-    set('securitySymbol', v);
+    setForm(prev => {
+      const isAutoEligible = !noteUserEditedRef.current ||
+        !prev.note ||
+        !prev.note.trim() ||
+        prev.note === lastAutoNoteRef.current ||
+        prev.note === cleanSecurityToNote(prev.securitySymbol) ||
+        prev.note === prev.securityDisplayName;
+
+      const cleanNote = cleanSecurityToNote(v);
+      const nextNote = isAutoEligible ? cleanNote : prev.note;
+      if (isAutoEligible) {
+        lastAutoNoteRef.current = cleanNote;
+      }
+
+      return {
+        ...prev,
+        securitySymbol: v,
+        securityDisplayName: cleanNote || v,
+        note: nextNote
+      };
+    });
+    if (errors.securitySymbol) setErrors(p => ({ ...p, securitySymbol: '' }));
     if (v.trim().length > 0) {
-      const q = v.toLowerCase();
-      const filtered = investmentSecurities.filter(s =>
-        s.symbol.toLowerCase().includes(q) || (s.note && s.note.toLowerCase().includes(q))
-      ).slice(0, 10);
-      setSecSugs(filtered);
+      const sugs = searchSecurities(v, investmentSecurities);
+      setSecSugs(sugs);
     } else {
       setSecSugs([]);
     }
   };
 
   const handleSelectSecurity = (item) => {
-    set('securitySymbol', item.symbol);
-    // If user has not manually customized their Note, auto-fill Note with clean human-readable name
-    if (!noteUserEditedRef.current && (!form.note || !form.note.trim())) {
-      const cleanName = item.note || cleanSecurityToNote(item.symbol) || item.symbol;
-      set('note', cleanName);
-    }
+    const resolved = resolveSecurity(item);
+    const cleanDisplayName = resolved.displayName || item.displayName || item.note || cleanSecurityToNote(item.symbol) || item.symbol;
+    const canonicalSymbol = resolved.symbol || item.symbol || '';
+    const canonicalISIN = resolved.isin || item.isin || '';
+
+    setForm(prev => {
+      const isAutoEligible = !noteUserEditedRef.current ||
+        !prev.note ||
+        !prev.note.trim() ||
+        prev.note === lastAutoNoteRef.current ||
+        prev.note === cleanSecurityToNote(prev.securitySymbol) ||
+        prev.note === prev.securityDisplayName;
+
+      const nextNote = isAutoEligible ? cleanDisplayName : prev.note;
+      if (isAutoEligible) {
+        lastAutoNoteRef.current = cleanDisplayName;
+      }
+
+      const nextForm = {
+        ...prev,
+        securitySymbol: cleanDisplayName || canonicalSymbol,
+        securityDisplayName: cleanDisplayName,
+        securityISIN: canonicalISIN,
+        note: nextNote
+      };
+
+      if (prev.settlementMode === 'BREAKDOWN') {
+        const brk = getRuleBreakdown(nextForm);
+        const tradeVal = parseFloat(prev.tradeValue || prev.amount) || 0;
+        const invType = (prev.investmentTransactionType || 'BUY').toUpperCase();
+        let nextCostBasis = prev.costBasis;
+        let nextRealizedPnl = prev.realizedPnl;
+        if (invType === 'BUY') {
+          nextCostBasis = roundNum(tradeVal + brk.totalCharges, 2);
+        } else {
+          const netProc = tradeVal - brk.totalCharges;
+          const cb = parseFloat(prev.costBasis);
+          if (!isNaN(cb)) {
+            nextRealizedPnl = roundNum(netProc - cb, 2);
+          }
+        }
+        return {
+          ...nextForm,
+          brokerageCharges: String(brk.brokerageCharges || ''),
+          exchangeCharges: String(brk.exchangeCharges || ''),
+          sttCharges: String(brk.sttCharges || ''),
+          sebiCharges: String(brk.sebiCharges || ''),
+          stampDutyCharges: String(brk.stampDutyCharges || ''),
+          gstCharges: String(brk.gstCharges || ''),
+          dpCharges: String(brk.dpCharges || ''),
+          otherCharges: String(brk.otherCharges || ''),
+          costBasis: nextCostBasis,
+          realizedPnl: nextRealizedPnl
+        };
+      }
+
+      return nextForm;
+    });
     setSecSugs([]);
     setSecFocused(false);
   };
@@ -1219,15 +1569,107 @@ export default function AddTransaction({
     return String(Math.round((Number(n) + Number.EPSILON) * factor) / factor);
   };
 
-  const calcPnl = (tradeValStr, costBasisStr) => {
+  const calcPnl = (tradeValStr, costBasisStr, chargesVal = totalCharges) => {
     if (tradeValStr === '' || tradeValStr === null || tradeValStr === undefined) return '';
     if (costBasisStr === '' || costBasisStr === null || costBasisStr === undefined) return '';
     const v = parseFloat(tradeValStr);
     const cb = parseFloat(costBasisStr);
+    const ch = parseFloat(chargesVal) || 0;
     if (!isNaN(v) && !isNaN(cb)) {
-      return roundNum(v - cb, 2);
+      const netProceeds = v - ch;
+      return roundNum(netProceeds - cb, 2);
     }
     return '';
+  };
+
+  const handleActualAmountChange = (val) => {
+    setForm(prev => {
+      const invType = (prev.investmentTransactionType || 'BUY').toUpperCase();
+      const tradeVal = parseFloat(prev.tradeValue || prev.amount) || 0;
+      const actualAmt = parseFloat(val);
+      const hasActual = val !== '' && !isNaN(actualAmt);
+
+      let nextCostBasis = prev.costBasis;
+      let nextRealizedPnl = prev.realizedPnl;
+
+      if (invType === 'BUY') {
+        if (hasActual) {
+          nextCostBasis = roundNum(actualAmt, 2);
+        } else {
+          nextCostBasis = roundNum(tradeVal, 2);
+        }
+      } else if (invType === 'SELL') {
+        const cb = parseFloat(prev.costBasis);
+        if (!isNaN(cb)) {
+          const netProc = hasActual ? actualAmt : tradeVal;
+          nextRealizedPnl = roundNum(netProc - cb, 2);
+        }
+      }
+
+      return {
+        ...prev,
+        actualAmount: val,
+        costBasis: nextCostBasis,
+        realizedPnl: nextRealizedPnl
+      };
+    });
+  };
+
+  const handleChargeChange = (field, val) => {
+    setForm(prev => {
+      const nextForm = { ...prev, [field]: val };
+      const invType = (nextForm.investmentTransactionType || 'BUY').toUpperCase();
+      const tradeVal = parseFloat(nextForm.tradeValue || nextForm.amount) || 0;
+
+      const totCharges = (parseFloat(nextForm.brokerageCharges) || 0) +
+        (parseFloat(nextForm.exchangeCharges) || 0) +
+        (parseFloat(nextForm.sttCharges) || 0) +
+        (parseFloat(nextForm.sebiCharges) || 0) +
+        (parseFloat(nextForm.stampDutyCharges) || 0) +
+        (parseFloat(nextForm.gstCharges) || 0) +
+        (parseFloat(nextForm.dpCharges) || 0) +
+        (parseFloat(nextForm.otherCharges) || 0);
+
+      let nextCostBasis = nextForm.costBasis;
+      let nextRealizedPnl = nextForm.realizedPnl;
+
+      const mode = (nextForm.settlementMode || 'ACTUAL').toUpperCase();
+      const hasActual = nextForm.actualAmount !== undefined && nextForm.actualAmount !== null && nextForm.actualAmount !== '' && !isNaN(parseFloat(nextForm.actualAmount));
+
+      if (mode === 'BREAKDOWN') {
+        if (invType === 'BUY') {
+          if (tradeVal > 0) {
+            nextCostBasis = roundNum(tradeVal + totCharges, 2);
+          }
+        } else if (invType === 'SELL') {
+          const cb = parseFloat(nextForm.costBasis);
+          if (!isNaN(cb) && tradeVal > 0) {
+            const netProceeds = tradeVal - totCharges;
+            nextRealizedPnl = roundNum(netProceeds - cb, 2);
+          }
+        }
+      } else {
+        if (invType === 'BUY') {
+          if (hasActual) {
+            nextCostBasis = roundNum(parseFloat(nextForm.actualAmount), 2);
+          } else if (tradeVal > 0) {
+            nextCostBasis = roundNum(tradeVal, 2);
+          }
+        } else if (invType === 'SELL') {
+          const cb = parseFloat(nextForm.costBasis);
+          if (!isNaN(cb) && tradeVal > 0) {
+            const netProceeds = hasActual ? parseFloat(nextForm.actualAmount) : tradeVal;
+            nextRealizedPnl = roundNum(netProceeds - cb, 2);
+          }
+        }
+      }
+
+      return {
+        ...nextForm,
+        costBasis: nextCostBasis,
+        realizedPnl: nextRealizedPnl
+      };
+    });
   };
 
   // Controlled 2-of-3 calculation model for Units, Price, Trade Value & SELL Realized P&L
@@ -1237,6 +1679,7 @@ export default function AddTransaction({
       const q = parseFloat(val);
       const p = parseFloat(prev.unitPrice);
       const invType = (prev.investmentTransactionType || 'BUY').toUpperCase();
+      const mode = (prev.settlementMode || 'ACTUAL').toUpperCase();
 
       let nextTradeVal = prev.tradeValue;
 
@@ -1246,13 +1689,71 @@ export default function AddTransaction({
         nextTradeVal = roundNum(q * p, 2);
       }
 
-      const nextPnl = invType === 'SELL' ? calcPnl(nextTradeVal, prev.costBasis) : prev.realizedPnl;
+      const tradeValNum = parseFloat(nextTradeVal) || 0;
+
+      if (mode === 'BREAKDOWN') {
+        const brk = calculateGrowwCharges({
+          invType,
+          tradeVal: tradeValNum,
+          securitySymbol: prev.securitySymbol,
+          securityISIN: prev.securityISIN,
+          investmentAccount: prev.investmentAccount || prev.account || '',
+          exchange: 'NSE'
+        });
+        let nextCostBasis = prev.costBasis;
+        let nextPnl = prev.realizedPnl;
+        if (invType === 'BUY') {
+          nextCostBasis = roundNum(tradeValNum + brk.totalCharges, 2);
+        } else if (invType === 'SELL') {
+          const netProc = tradeValNum - brk.totalCharges;
+          const cb = parseFloat(prev.costBasis);
+          if (!isNaN(cb)) {
+            nextPnl = roundNum(netProc - cb, 2);
+          }
+        }
+        return {
+          ...prev,
+          quantity: val,
+          tradeValue: nextTradeVal,
+          amount: nextTradeVal,
+          brokerageCharges: String(brk.brokerageCharges || ''),
+          exchangeCharges: String(brk.exchangeCharges || ''),
+          sttCharges: String(brk.sttCharges || ''),
+          sebiCharges: String(brk.sebiCharges || ''),
+          stampDutyCharges: String(brk.stampDutyCharges || ''),
+          gstCharges: String(brk.gstCharges || ''),
+          dpCharges: String(brk.dpCharges || ''),
+          otherCharges: String(brk.otherCharges || ''),
+          costBasis: nextCostBasis,
+          realizedPnl: nextPnl
+        };
+      }
+
+      // ACTUAL Mode
+      const hasActual = prev.actualAmount !== undefined && prev.actualAmount !== null && prev.actualAmount !== '' && !isNaN(parseFloat(prev.actualAmount));
+      let nextCostBasis = prev.costBasis;
+      let nextPnl = prev.realizedPnl;
+
+      if (invType === 'BUY') {
+        if (hasActual) {
+          nextCostBasis = roundNum(parseFloat(prev.actualAmount), 2);
+        } else if (tradeValNum > 0) {
+          nextCostBasis = roundNum(tradeValNum, 2);
+        }
+      } else if (invType === 'SELL') {
+        const netProc = hasActual ? parseFloat(prev.actualAmount) : tradeValNum;
+        const cb = parseFloat(prev.costBasis);
+        if (!isNaN(cb) && !isNaN(netProc)) {
+          nextPnl = roundNum(netProc - cb, 2);
+        }
+      }
 
       return {
         ...prev,
         quantity: val,
         tradeValue: nextTradeVal,
         amount: nextTradeVal,
+        costBasis: nextCostBasis,
         realizedPnl: nextPnl
       };
     });
@@ -1265,6 +1766,7 @@ export default function AddTransaction({
       const p = parseFloat(val);
       const q = parseFloat(prev.quantity);
       const invType = (prev.investmentTransactionType || 'BUY').toUpperCase();
+      const mode = (prev.settlementMode || 'ACTUAL').toUpperCase();
 
       let nextTradeVal = prev.tradeValue;
 
@@ -1274,13 +1776,71 @@ export default function AddTransaction({
         nextTradeVal = roundNum(q * p, 2);
       }
 
-      const nextPnl = invType === 'SELL' ? calcPnl(nextTradeVal, prev.costBasis) : prev.realizedPnl;
+      const tradeValNum = parseFloat(nextTradeVal) || 0;
+
+      if (mode === 'BREAKDOWN') {
+        const brk = calculateGrowwCharges({
+          invType,
+          tradeVal: tradeValNum,
+          securitySymbol: prev.securitySymbol,
+          securityISIN: prev.securityISIN,
+          investmentAccount: prev.investmentAccount || prev.account || '',
+          exchange: 'NSE'
+        });
+        let nextCostBasis = prev.costBasis;
+        let nextPnl = prev.realizedPnl;
+        if (invType === 'BUY') {
+          nextCostBasis = roundNum(tradeValNum + brk.totalCharges, 2);
+        } else if (invType === 'SELL') {
+          const netProc = tradeValNum - brk.totalCharges;
+          const cb = parseFloat(prev.costBasis);
+          if (!isNaN(cb)) {
+            nextPnl = roundNum(netProc - cb, 2);
+          }
+        }
+        return {
+          ...prev,
+          unitPrice: val,
+          tradeValue: nextTradeVal,
+          amount: nextTradeVal,
+          brokerageCharges: String(brk.brokerageCharges || ''),
+          exchangeCharges: String(brk.exchangeCharges || ''),
+          sttCharges: String(brk.sttCharges || ''),
+          sebiCharges: String(brk.sebiCharges || ''),
+          stampDutyCharges: String(brk.stampDutyCharges || ''),
+          gstCharges: String(brk.gstCharges || ''),
+          dpCharges: String(brk.dpCharges || ''),
+          otherCharges: String(brk.otherCharges || ''),
+          costBasis: nextCostBasis,
+          realizedPnl: nextPnl
+        };
+      }
+
+      // ACTUAL Mode
+      const hasActual = prev.actualAmount !== undefined && prev.actualAmount !== null && prev.actualAmount !== '' && !isNaN(parseFloat(prev.actualAmount));
+      let nextCostBasis = prev.costBasis;
+      let nextPnl = prev.realizedPnl;
+
+      if (invType === 'BUY') {
+        if (hasActual) {
+          nextCostBasis = roundNum(parseFloat(prev.actualAmount), 2);
+        } else if (tradeValNum > 0) {
+          nextCostBasis = roundNum(tradeValNum, 2);
+        }
+      } else if (invType === 'SELL') {
+        const netProc = hasActual ? parseFloat(prev.actualAmount) : tradeValNum;
+        const cb = parseFloat(prev.costBasis);
+        if (!isNaN(cb) && !isNaN(netProc)) {
+          nextPnl = roundNum(netProc - cb, 2);
+        }
+      }
 
       return {
         ...prev,
         unitPrice: val,
         tradeValue: nextTradeVal,
         amount: nextTradeVal,
+        costBasis: nextCostBasis,
         realizedPnl: nextPnl
       };
     });
@@ -1293,6 +1853,7 @@ export default function AddTransaction({
       const q = parseFloat(prev.quantity);
       const p = parseFloat(prev.unitPrice);
       const invType = (prev.investmentTransactionType || 'BUY').toUpperCase();
+      const mode = (prev.settlementMode || 'ACTUAL').toUpperCase();
 
       let nextUnitPrice = prev.unitPrice;
       let nextQuantity = prev.quantity;
@@ -1306,7 +1867,65 @@ export default function AddTransaction({
         }
       }
 
-      const nextPnl = invType === 'SELL' ? calcPnl(val, prev.costBasis) : prev.realizedPnl;
+      const tradeValNum = !isNaN(v) ? v : 0;
+
+      if (mode === 'BREAKDOWN') {
+        const brk = calculateGrowwCharges({
+          invType,
+          tradeVal: tradeValNum,
+          securitySymbol: prev.securitySymbol,
+          securityISIN: prev.securityISIN,
+          investmentAccount: prev.investmentAccount || prev.account || '',
+          exchange: 'NSE'
+        });
+        let nextCostBasis = prev.costBasis;
+        let nextPnl = prev.realizedPnl;
+        if (invType === 'BUY') {
+          nextCostBasis = roundNum(tradeValNum + brk.totalCharges, 2);
+        } else if (invType === 'SELL') {
+          const netProc = tradeValNum - brk.totalCharges;
+          const cb = parseFloat(prev.costBasis);
+          if (!isNaN(cb)) {
+            nextPnl = roundNum(netProc - cb, 2);
+          }
+        }
+        return {
+          ...prev,
+          tradeValue: val,
+          amount: val,
+          unitPrice: nextUnitPrice,
+          quantity: nextQuantity,
+          brokerageCharges: String(brk.brokerageCharges || ''),
+          exchangeCharges: String(brk.exchangeCharges || ''),
+          sttCharges: String(brk.sttCharges || ''),
+          sebiCharges: String(brk.sebiCharges || ''),
+          stampDutyCharges: String(brk.stampDutyCharges || ''),
+          gstCharges: String(brk.gstCharges || ''),
+          dpCharges: String(brk.dpCharges || ''),
+          otherCharges: String(brk.otherCharges || ''),
+          costBasis: nextCostBasis,
+          realizedPnl: nextPnl
+        };
+      }
+
+      // ACTUAL Mode
+      const hasActual = prev.actualAmount !== undefined && prev.actualAmount !== null && prev.actualAmount !== '' && !isNaN(parseFloat(prev.actualAmount));
+      let nextCostBasis = prev.costBasis;
+      let nextPnl = prev.realizedPnl;
+
+      if (invType === 'BUY') {
+        if (hasActual) {
+          nextCostBasis = roundNum(parseFloat(prev.actualAmount), 2);
+        } else if (!isNaN(v) && v > 0) {
+          nextCostBasis = roundNum(v, 2);
+        }
+      } else if (invType === 'SELL') {
+        const netProc = hasActual ? parseFloat(prev.actualAmount) : tradeValNum;
+        const cb = parseFloat(prev.costBasis);
+        if (!isNaN(cb) && !isNaN(netProc)) {
+          nextPnl = roundNum(netProc - cb, 2);
+        }
+      }
 
       return {
         ...prev,
@@ -1314,6 +1933,7 @@ export default function AddTransaction({
         amount: val,
         unitPrice: nextUnitPrice,
         quantity: nextQuantity,
+        costBasis: nextCostBasis,
         realizedPnl: nextPnl
       };
     });
@@ -1323,8 +1943,23 @@ export default function AddTransaction({
 
   const handleCostBasisChange = (val) => {
     setForm(prev => {
-      const currentTradeVal = prev.tradeValue || prev.amount;
-      const nextPnl = calcPnl(currentTradeVal, val);
+      const currentTradeVal = parseFloat(prev.tradeValue || prev.amount) || 0;
+      const mode = (prev.settlementMode || 'ACTUAL').toUpperCase();
+      const totCharges = (parseFloat(prev.brokerageCharges) || 0) +
+        (parseFloat(prev.exchangeCharges) || 0) +
+        (parseFloat(prev.sttCharges) || 0) +
+        (parseFloat(prev.sebiCharges) || 0) +
+        (parseFloat(prev.stampDutyCharges) || 0) +
+        (parseFloat(prev.gstCharges) || 0) +
+        (parseFloat(prev.dpCharges) || 0) +
+        (parseFloat(prev.otherCharges) || 0);
+      const hasActual = prev.actualAmount !== undefined && prev.actualAmount !== null && prev.actualAmount !== '' && !isNaN(parseFloat(prev.actualAmount));
+      const netProc = mode === 'ACTUAL'
+        ? (hasActual ? parseFloat(prev.actualAmount) : currentTradeVal)
+        : (currentTradeVal - totCharges);
+      const cb = parseFloat(val);
+      const nextPnl = (!isNaN(cb) && !isNaN(netProc)) ? roundNum(netProc - cb, 2) : '';
+
       return {
         ...prev,
         costBasis: val,
@@ -1335,7 +1970,13 @@ export default function AddTransaction({
   };
 
   const handleNoteChange = (v) => {
-    noteUserEditedRef.current = true;
+    if (isInvMode) {
+      if (v !== lastAutoNoteRef.current) {
+        noteUserEditedRef.current = true;
+      }
+    } else {
+      noteUserEditedRef.current = true;
+    }
     set('note', v);
     if (v.trim().length > 0) {
       const q = v.toLowerCase(), seen = new Set();
@@ -1370,11 +2011,34 @@ export default function AddTransaction({
   const handleNoteFocus = () => {
     setPickerState(null);
     setNoteFocused(true);
-    // Never show suggestions on empty Note field
-    if (!form.note || !form.note.trim()) {
-      setNoteSugs([]);
+    // Never show suggestions on empty Note field; do NOT mark as manually edited
+    if (form.note && form.note.trim()) {
+      const q = form.note.toLowerCase(), seen = new Set();
+      if (isInvMode) {
+        const sugs = investmentSecurities
+          .map(s => s.note || cleanSecurityToNote(s.symbol) || s.symbol)
+          .filter(n => {
+            if (!n || seen.has(n.toLowerCase()) || !n.toLowerCase().includes(q)) return false;
+            seen.add(n.toLowerCase());
+            return true;
+          }).slice(0, 10);
+        setNoteSugs(sugs);
+      } else {
+        const matchedTxns = transactions.filter(t => {
+          const isTargetXfer = form.type.toLowerCase().startsWith('transfer');
+          const tType = (t['Income/Expense'] || 'Expense').toLowerCase();
+          if (isTargetXfer) return tType.startsWith('transfer');
+          return tType === form.type.toLowerCase();
+        });
+        const sugs = matchedTxns.map(t => stripInstalmentSuffix(t.Note || '')).filter(n => {
+          if (!n || seen.has(n.toLowerCase()) || !n.toLowerCase().includes(q)) return false;
+          seen.add(n.toLowerCase());
+          return true;
+        }).slice(0, 15);
+        setNoteSugs(sugs);
+      }
     } else {
-      handleNoteChange(form.note);
+      setNoteSugs([]);
     }
   };
 
@@ -1583,8 +2247,40 @@ export default function AddTransaction({
             tradeVal = parseFloat(roundNum(qty * price, 2));
           }
 
-          const costBasis = parseFloat(form.costBasis) || 0;
-          const realizedPnl = parseFloat(form.realizedPnl) || 0;
+          const mode = (form.settlementMode || 'ACTUAL').toUpperCase();
+          const hasActual = form.actualAmount !== undefined && form.actualAmount !== null && form.actualAmount !== '' && !isNaN(parseFloat(form.actualAmount));
+          const actualAmt = hasActual ? parseFloat(form.actualAmount) : 0;
+
+          let totCharges = totalCharges;
+          let costBasis = parseFloat(form.costBasis) || 0;
+          let realizedPnl = parseFloat(form.realizedPnl) || 0;
+          let effectiveCashVal = tradeVal;
+
+          if (mode === 'ACTUAL') {
+            if (invType === 'BUY') {
+              totCharges = hasActual ? Math.max(0, Math.round((actualAmt - tradeVal) * 100) / 100) : 0;
+              costBasis = hasActual ? actualAmt : tradeVal;
+              effectiveCashVal = costBasis;
+            } else if (invType === 'SELL') {
+              totCharges = hasActual ? Math.max(0, Math.round((tradeVal - actualAmt) * 100) / 100) : 0;
+              const netProc = hasActual ? actualAmt : tradeVal;
+              effectiveCashVal = netProc;
+              const cb = parseFloat(form.costBasis) || 0;
+              realizedPnl = Math.round((netProc - cb) * 100) / 100;
+            }
+          } else {
+            // BREAKDOWN
+            totCharges = totalCharges;
+            if (invType === 'BUY') {
+              costBasis = Math.round((tradeVal + totCharges) * 100) / 100;
+              effectiveCashVal = costBasis;
+            } else if (invType === 'SELL') {
+              const netProc = Math.round((tradeVal - totCharges) * 100) / 100;
+              effectiveCashVal = netProc;
+              const cb = parseFloat(form.costBasis) || 0;
+              realizedPnl = Math.round((netProc - cb) * 100) / 100;
+            }
+          }
 
           const currentInvAcct = form.investmentAccount || form.account || '';
           const currentSubAcct = form.subAccount || '';
@@ -1602,6 +2298,7 @@ export default function AddTransaction({
             : (isFundedFromBank ? fundingBankAcct : currentInvAcct);
 
           // Preserve exact Amount & INR semantics for historical CAS vs other investment records:
+          // Investment transaction amount is ALWAYS gross Trade Value (e.g. ₹3,167), NOT Actual Paid (₹3,176.02)
           const isCasSell = isEdit && invType === 'SELL' && (parseFloat(editTransaction?.INR || 0) === 0 || String(editTransaction?.Amount || '') === '0.0') && !isFundedFromBank;
           const savedInr = isCasSell ? 0 : tradeVal;
           const savedAmount = isCasSell ? (editTransaction?.Amount || '0.0') : String(tradeVal);
@@ -1616,6 +2313,8 @@ export default function AddTransaction({
 
           // In double-entry, Account represents the primary source / outflow account:
           const primaryAcct = isFundedFromBank && invType === 'BUY' ? fundingBankAcct : currentInvAcct;
+
+          const invTxnId = isEdit ? (editTransaction._id || editTransaction.id || editTransaction.ID) : uuid();
 
           const invData = {
             Date: inputToStorage(form.date),
@@ -1636,8 +2335,8 @@ export default function AddTransaction({
             receipt_image: form.receipt_image || '',
             warranty_expiry: form.warranty_expiry || '',
             serial_no: form.serial_no || '',
-            _id: editTransaction?._id,
-            ID: editTransaction?.ID || editTransaction?.id || editTransaction?._id,
+            _id: invTxnId,
+            ID: invTxnId,
             InvestmentAccount: currentInvAcct,
             investment_account: currentInvAcct,
             SubAccount: currentSubAcct,
@@ -1646,12 +2345,26 @@ export default function AddTransaction({
             InvestmentTransactionType: invType,
             Brokerage: currentSubAcct,
             SecuritySymbol: form.securitySymbol || baseNote || '',
+            SecurityDisplayName: form.securityDisplayName || baseNote || form.securitySymbol || '',
             SecurityISIN: form.securityISIN || (isEdit ? (editTransaction?.SecurityISIN || '') : ''),
             Quantity: qty,
             UnitPrice: price,
             TradeValue: tradeVal,
+            SettlementMode: mode,
+            settlement_mode: mode,
+            ActualAmount: hasActual ? actualAmt : '',
+            actual_amount: hasActual ? actualAmt : 0,
             CostBasis: costBasis,
             RealizedPnl: realizedPnl,
+            BrokerageCharges: parseFloat(form.brokerageCharges) || 0,
+            ExchangeCharges: parseFloat(form.exchangeCharges) || 0,
+            STTCharges: parseFloat(form.sttCharges) || 0,
+            SEBICharges: parseFloat(form.sebiCharges) || 0,
+            StampDutyCharges: parseFloat(form.stampDutyCharges) || 0,
+            GSTCharges: parseFloat(form.gstCharges) || 0,
+            DPCharges: parseFloat(form.dpCharges) || 0,
+            OtherCharges: parseFloat(form.otherCharges) || 0,
+            TotalCharges: totCharges,
             CashImpact: isCasSell ? 0 : (invType === 'BUY' ? -tradeVal : tradeVal),
             PositionQuantityChange: invType === 'SELL' ? -Math.abs(qty) : Math.abs(qty),
             Source: isEdit ? (editTransaction?.Source || 'Manual') : 'Manual',
@@ -1659,9 +2372,59 @@ export default function AddTransaction({
           };
 
           if (isEdit) {
-            await updateTransaction(editTransaction._id || editTransaction.id || editTransaction.ID, invData);
+            await updateTransaction(invTxnId, invData);
           } else {
             await addTransaction(invData);
+          }
+
+          // ── Linked Brokerage Charge Transaction (Zerodha Charge Pattern) ──────────
+          // When totCharges > 0, create/update a separate Transfer charge transaction
+          // that reduces brokerage cash separately from the gross investment amount.
+          const existingCharge = transactions.find(t =>
+            t.split_group_id === `inv_charge_${invTxnId}` ||
+            (t.tags || t.Tags || '').includes(`#inv_charge:${invTxnId}`)
+          );
+
+          if (totCharges > 0) {
+            const chargeTxnId = existingCharge ? (existingCharge._id || existingCharge.id || existingCharge.ID) : uuid();
+            const chargeData = {
+              _id: chargeTxnId,
+              ID: chargeTxnId,
+              Date: inputToStorage(form.date),
+              Time: form.time || '',
+              Account: currentInvAcct || 'Share Market',
+              FromAccount: currentInvAcct || 'Share Market',
+              ToAccount: 'Investment Charges',
+              Category: 'Investment Charges',
+              Subcategory: currentSubAcct || 'Default',
+              Note: `${baseNote || form.securityDisplayName || form.securitySymbol || 'Investment'} Brokerage Charges`,
+              Description: `Brokerage & statutory charges for ${baseNote || form.securityDisplayName || form.securitySymbol || 'Investment'}`,
+              INR: -totCharges,
+              Amount: String(totCharges),
+              Currency: 'INR',
+              'Income/Expense': 'Transfer-Out',
+              recurring_rule_id: '',
+              Tags: `${currentSubAcct || 'Brokerage'}|Ledger|CHARGE #inv_charge:${invTxnId}`,
+              split_group_id: `inv_charge_${invTxnId}`,
+              SubAccount: currentSubAcct,
+              FromSubAccount: currentSubAcct,
+              ToSubAccount: '',
+              InvestmentTransactionType: 'CHARGE',
+              Brokerage: currentSubAcct,
+              SecuritySymbol: form.securitySymbol || '',
+              SecurityDisplayName: form.securityDisplayName || '',
+              TradeValue: totCharges,
+              CashImpact: -totCharges
+            };
+
+            if (existingCharge) {
+              await updateTransaction(chargeTxnId, chargeData);
+            } else {
+              await addTransaction(chargeData);
+            }
+          } else if (existingCharge) {
+            // Charges became 0 -> delete existing linked charge
+            await deleteTransaction(existingCharge._id || existingCharge.id || existingCharge.ID);
           }
         } else {
           // Normal single transaction or instalment edit
@@ -1838,7 +2601,42 @@ export default function AddTransaction({
                     border: `1.5px solid ${(form.investmentTransactionType || 'BUY') === 'BUY' ? 'var(--income)' : 'var(--border)'}`,
                     cursor: 'pointer', transition: 'var(--transition)'
                   }}
-                  onClick={() => set('investmentTransactionType', 'BUY')}
+                  onClick={() => {
+                    setForm(prev => {
+                      const mode = (prev.settlementMode || 'ACTUAL').toUpperCase();
+                      const tradeVal = parseFloat(prev.tradeValue || prev.amount) || 0;
+                      if (mode === 'BREAKDOWN') {
+                        const brk = calculateGrowwCharges({
+                          invType: 'BUY',
+                          tradeVal,
+                          securitySymbol: prev.securitySymbol,
+                          securityISIN: prev.securityISIN,
+                          investmentAccount: prev.investmentAccount || prev.account || '',
+                          exchange: 'NSE'
+                        });
+                        return {
+                          ...prev,
+                          investmentTransactionType: 'BUY',
+                          brokerageCharges: String(brk.brokerageCharges || ''),
+                          exchangeCharges: String(brk.exchangeCharges || ''),
+                          sttCharges: String(brk.sttCharges || ''),
+                          sebiCharges: String(brk.sebiCharges || ''),
+                          stampDutyCharges: String(brk.stampDutyCharges || ''),
+                          gstCharges: String(brk.gstCharges || ''),
+                          dpCharges: String(brk.dpCharges || ''),
+                          otherCharges: String(brk.otherCharges || ''),
+                          costBasis: roundNum(tradeVal + brk.totalCharges, 2)
+                        };
+                      } else {
+                        const hasActual = prev.actualAmount !== undefined && prev.actualAmount !== null && prev.actualAmount !== '' && !isNaN(parseFloat(prev.actualAmount));
+                        return {
+                          ...prev,
+                          investmentTransactionType: 'BUY',
+                          costBasis: roundNum(hasActual ? parseFloat(prev.actualAmount) : tradeVal, 2)
+                        };
+                      }
+                    });
+                  }}
                 >
                   🟢 BUY
                 </button>
@@ -1853,12 +2651,44 @@ export default function AddTransaction({
                   }}
                   onClick={() => {
                     setForm(prev => {
-                      const nextPnl = calcPnl(prev.tradeValue || prev.amount, prev.costBasis);
-                      return {
-                        ...prev,
-                        investmentTransactionType: 'SELL',
-                        realizedPnl: nextPnl || prev.realizedPnl
-                      };
+                      const mode = (prev.settlementMode || 'ACTUAL').toUpperCase();
+                      const tradeVal = parseFloat(prev.tradeValue || prev.amount) || 0;
+                      if (mode === 'BREAKDOWN') {
+                        const brk = calculateGrowwCharges({
+                          invType: 'SELL',
+                          tradeVal,
+                          securitySymbol: prev.securitySymbol,
+                          securityISIN: prev.securityISIN,
+                          investmentAccount: prev.investmentAccount || prev.account || '',
+                          exchange: 'NSE'
+                        });
+                        const netProc = tradeVal - brk.totalCharges;
+                        const cb = parseFloat(prev.costBasis);
+                        const nextPnl = !isNaN(cb) ? roundNum(netProc - cb, 2) : prev.realizedPnl;
+                        return {
+                          ...prev,
+                          investmentTransactionType: 'SELL',
+                          brokerageCharges: String(brk.brokerageCharges || ''),
+                          exchangeCharges: String(brk.exchangeCharges || ''),
+                          sttCharges: String(brk.sttCharges || ''),
+                          sebiCharges: String(brk.sebiCharges || ''),
+                          stampDutyCharges: String(brk.stampDutyCharges || ''),
+                          gstCharges: String(brk.gstCharges || ''),
+                          dpCharges: String(brk.dpCharges || ''),
+                          otherCharges: String(brk.otherCharges || ''),
+                          realizedPnl: nextPnl
+                        };
+                      } else {
+                        const hasActual = prev.actualAmount !== undefined && prev.actualAmount !== null && prev.actualAmount !== '' && !isNaN(parseFloat(prev.actualAmount));
+                        const netProc = hasActual ? parseFloat(prev.actualAmount) : tradeVal;
+                        const cb = parseFloat(prev.costBasis);
+                        const nextPnl = !isNaN(cb) ? roundNum(netProc - cb, 2) : prev.realizedPnl;
+                        return {
+                          ...prev,
+                          investmentTransactionType: 'SELL',
+                          realizedPnl: nextPnl
+                        };
+                      }
                     });
                   }}
                 >
@@ -1944,21 +2774,28 @@ export default function AddTransaction({
                 <input
                   className={`form-input ${errors.securitySymbol ? 'err' : ''}`}
                   type="text"
-                  placeholder="e.g. Motilal Oswal ELSS or TCS"
+                  placeholder="e.g. PC Jeweller, Vodafone Idea, Gold BeES"
                   value={form.securitySymbol}
                   onFocus={() => {
                     setSecFocused(true);
                     if (form.securitySymbol && form.securitySymbol.trim()) {
                       handleSecurityChange(form.securitySymbol);
                     } else {
-                      setSecSugs([]);
+                      setSecSugs(searchSecurities('', investmentSecurities));
                     }
                   }}
                   onChange={e => handleSecurityChange(e.target.value)}
                   onBlur={() => {
-                    setTimeout(() => setSecFocused(false), 200);
-                    if (!noteUserEditedRef.current && (!form.note || !form.note.trim()) && form.securitySymbol?.trim()) {
-                      set('note', cleanSecurityToNote(form.securitySymbol) || form.securitySymbol.trim());
+                    setTimeout(() => setSecFocused(false), 220);
+                    if (form.securitySymbol && form.securitySymbol.trim()) {
+                      const resolved = resolveSecurity(form.securitySymbol);
+                      if (!noteUserEditedRef.current && (!form.note || !form.note.trim())) {
+                        const cleanName = resolved.displayName || cleanSecurityToNote(form.securitySymbol) || form.securitySymbol.trim();
+                        set('note', cleanName);
+                      }
+                      if (resolved.isResolved && resolved.isin && !form.securityISIN) {
+                        set('securityISIN', resolved.isin);
+                      }
                     }
                   }}
                 />
@@ -1967,21 +2804,35 @@ export default function AddTransaction({
                   <div style={{
                     position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
                     background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
-                    boxShadow: '0 8px 24px rgba(0,0,0,0.4)', maxHeight: 200, overflowY: 'auto', marginTop: 4
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.4)', maxHeight: 220, overflowY: 'auto', marginTop: 4
                   }}>
                     {secSugs.map((s, idx) => (
                       <div
                         key={idx}
                         style={{
                           padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
-                          display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          transition: 'background 0.1s'
                         }}
                         onMouseDown={() => handleSelectSecurity(s)}
                       >
-                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>{s.symbol}</span>
-                        {s.note && s.note !== s.symbol && (
-                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{s.note}</span>
-                        )}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            {s.displayName || s.symbol}
+                          </span>
+                          {s.symbol && s.symbol !== s.displayName && (
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                              {s.exchange ? `${s.exchange}: ` : ''}{s.symbol}
+                            </span>
+                          )}
+                        </div>
+                        <span style={{
+                          fontSize: '0.65rem', fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+                          background: s.assetType === 'ETF' ? 'rgba(255, 183, 77, 0.15)' : s.assetType === 'EQUITY' ? 'rgba(99, 179, 237, 0.15)' : 'rgba(0, 229, 160, 0.15)',
+                          color: s.assetType === 'ETF' ? '#ffb74d' : s.assetType === 'EQUITY' ? '#63b3ed' : 'var(--income)'
+                        }}>
+                          {s.assetType || 'SECURITY'}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -1997,7 +2848,7 @@ export default function AddTransaction({
                     className="form-input"
                     type="text"
                     value={form.note}
-                    placeholder="e.g. Motilal Oswal ELSS"
+                    placeholder="e.g. PC Jeweller"
                     style={{ paddingRight: (form.note || noteFocused) ? '30px' : undefined }}
                     autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
                     onChange={e => handleNoteChange(e.target.value)}
@@ -2103,6 +2954,266 @@ export default function AddTransaction({
                   </div>
                 </div>
               )}
+
+              {/* 9. Settlement & Charges Section */}
+              <div style={{
+                marginTop: 10,
+                background: 'var(--bg-card2)',
+                border: '1px solid var(--border)',
+                borderRadius: 12,
+                padding: '12px 14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '0.02em' }}>
+                    {(form.investmentTransactionType || 'BUY') === 'BUY' ? '💳 Settlement (Cost Basis)' : '💰 Settlement (Net Proceeds)'}
+                  </div>
+                  {computedSettlement.charges > 0 && (
+                    <span style={{
+                      fontSize: '0.7rem',
+                      fontWeight: 700,
+                      background: 'rgba(255, 183, 77, 0.15)',
+                      color: '#ffb74d',
+                      padding: '2px 8px',
+                      borderRadius: 6
+                    }}>
+                      Charges: ₹{computedSettlement.charges.toFixed(2)}
+                    </span>
+                  )}
+                </div>
+
+                {/* Settlement Mode Toggle */}
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>
+                    How should charges be calculated?
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    <button
+                      type="button"
+                      onClick={() => handleSettlementModeChange('ACTUAL')}
+                      style={{
+                        padding: '8px 8px',
+                        borderRadius: 'var(--r-md)',
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        background: (form.settlementMode || 'ACTUAL') === 'ACTUAL' ? 'rgba(0, 229, 160, 0.15)' : 'var(--bg-card)',
+                        color: (form.settlementMode || 'ACTUAL') === 'ACTUAL' ? 'var(--income)' : 'var(--text-muted)',
+                        border: '1.5px solid',
+                        borderColor: (form.settlementMode || 'ACTUAL') === 'ACTUAL' ? 'var(--income)' : 'var(--border)',
+                        cursor: 'pointer',
+                        transition: 'background 0.15s ease, border-color 0.15s ease, color 0.15s ease',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        boxSizing: 'border-box',
+                        minWidth: 0,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      <span style={{ fontSize: '0.8rem', lineHeight: 1, display: 'inline-block', width: 12, textAlign: 'center', flexShrink: 0 }}>
+                        {(form.settlementMode || 'ACTUAL') === 'ACTUAL' ? '●' : '○'}
+                      </span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {(form.investmentTransactionType || 'BUY') === 'BUY' ? 'Actual Paid' : 'Actual Received'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSettlementModeChange('BREAKDOWN')}
+                      style={{
+                        padding: '8px 8px',
+                        borderRadius: 'var(--r-md)',
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        background: (form.settlementMode || 'ACTUAL') === 'BREAKDOWN' ? 'rgba(99, 179, 237, 0.15)' : 'var(--bg-card)',
+                        color: (form.settlementMode || 'ACTUAL') === 'BREAKDOWN' ? 'var(--accent)' : 'var(--text-muted)',
+                        border: '1.5px solid',
+                        borderColor: (form.settlementMode || 'ACTUAL') === 'BREAKDOWN' ? 'var(--accent)' : 'var(--border)',
+                        cursor: 'pointer',
+                        transition: 'background 0.15s ease, border-color 0.15s ease, color 0.15s ease',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        boxSizing: 'border-box',
+                        minWidth: 0,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      <span style={{ fontSize: '0.8rem', lineHeight: 1, display: 'inline-block', width: 12, textAlign: 'center', flexShrink: 0 }}>
+                        {(form.settlementMode || 'ACTUAL') === 'BREAKDOWN' ? '●' : '○'}
+                      </span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        Charge Breakdown
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* ACTUAL Mode Input */}
+                {(form.settlementMode || 'ACTUAL') === 'ACTUAL' && (
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.74rem' }}>
+                      {(form.investmentTransactionType || 'BUY') === 'BUY' ? 'Actual Paid (₹)' : 'Actual Received (₹)'}
+                    </label>
+                    <input
+                      className="form-input"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder={form.tradeValue || form.amount || '0.00'}
+                      value={form.actualAmount}
+                      onChange={e => handleActualAmountChange(e.target.value)}
+                    />
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                      {(form.investmentTransactionType || 'BUY') === 'BUY'
+                        ? 'Final amount debited by broker (defaults to Trade Value if blank)'
+                        : 'Final amount credited to your account (defaults to Trade Value if blank)'}
+                    </div>
+                  </div>
+                )}
+
+                {/* Settlement Summary Strip */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  background: 'var(--bg-card)',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  fontSize: '0.72rem'
+                }}>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    Calculated Charges:{' '}
+                    <strong style={{ color: computedSettlement.charges > 0 ? '#ffb74d' : 'var(--text-primary)' }}>
+                      ₹{computedSettlement.charges.toFixed(2)}
+                    </strong>
+                  </span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {(form.investmentTransactionType || 'BUY') === 'BUY' ? 'Cost Basis' : 'Net Proceeds'}:{' '}
+                    <strong style={{ color: 'var(--accent)' }}>
+                      ₹{(
+                        (form.investmentTransactionType || 'BUY') === 'BUY'
+                          ? computedSettlement.costBasis
+                          : computedSettlement.netProceeds
+                      ).toFixed(2)}
+                    </strong>
+                  </span>
+                </div>
+
+                {/* Advanced charge breakdown: strictly visible when settlementMode is BREAKDOWN */}
+                {(form.settlementMode || 'ACTUAL') === 'BREAKDOWN' && (
+                  <div style={{ borderTop: '1px dashed var(--border)', paddingTop: 8 }}>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8 }}>
+                      ⚙️ Charge Breakdown (Auto-calculated · Editable)
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.65rem', marginBottom: 2 }}>Brokerage (₹)</label>
+                        <input
+                          className="form-input"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          style={{ fontSize: '0.78rem', padding: '4px 6px' }}
+                          value={form.brokerageCharges}
+                          onChange={e => handleChargeChange('brokerageCharges', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.65rem', marginBottom: 2 }}>Exchange Charges (₹)</label>
+                        <input
+                          className="form-input"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          style={{ fontSize: '0.78rem', padding: '4px 6px' }}
+                          value={form.exchangeCharges}
+                          onChange={e => handleChargeChange('exchangeCharges', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.65rem', marginBottom: 2 }}>STT (₹)</label>
+                        <input
+                          className="form-input"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          style={{ fontSize: '0.78rem', padding: '4px 6px' }}
+                          value={form.sttCharges}
+                          onChange={e => handleChargeChange('sttCharges', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.65rem', marginBottom: 2 }}>SEBI Turnover Fee (₹)</label>
+                        <input
+                          className="form-input"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          style={{ fontSize: '0.78rem', padding: '4px 6px' }}
+                          value={form.sebiCharges}
+                          onChange={e => handleChargeChange('sebiCharges', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.65rem', marginBottom: 2 }}>Stamp Duty (₹)</label>
+                        <input
+                          className="form-input"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          style={{ fontSize: '0.78rem', padding: '4px 6px' }}
+                          value={form.stampDutyCharges}
+                          onChange={e => handleChargeChange('stampDutyCharges', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.65rem', marginBottom: 2 }}>GST (₹)</label>
+                        <input
+                          className="form-input"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          style={{ fontSize: '0.78rem', padding: '4px 6px' }}
+                          value={form.gstCharges}
+                          onChange={e => handleChargeChange('gstCharges', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.65rem', marginBottom: 2 }}>DP Charges (₹)</label>
+                        <input
+                          className="form-input"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          style={{ fontSize: '0.78rem', padding: '4px 6px' }}
+                          value={form.dpCharges}
+                          onChange={e => handleChargeChange('dpCharges', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label" style={{ fontSize: '0.65rem', marginBottom: 2 }}>Other Charges (₹)</label>
+                        <input
+                          className="form-input"
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          style={{ fontSize: '0.78rem', padding: '4px 6px' }}
+                          value={form.otherCharges}
+                          onChange={e => handleChargeChange('otherCharges', e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </>
           ) : (
             <>

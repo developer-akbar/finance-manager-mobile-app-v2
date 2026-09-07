@@ -202,9 +202,10 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
       } else if (f.type === 'SELL') {
         genuineSellCash += inr;
         cashBalance += inr;
-      } else if (f.type === 'CHARGE' || note === 'Zerodha Charges' || desc.includes('trading charges')) {
-        charges += inr;
-        cashBalance += inr;
+      } else if (f.type === 'CHARGE' || note.endsWith('Brokerage Charges') || note === 'Zerodha Charges' || desc.includes('trading charges') || (t.Tags && String(t.Tags).includes('|CHARGE'))) {
+        const debitAmt = inr < 0 ? inr : -Math.abs(inr);
+        charges += debitAmt;
+        cashBalance += debitAmt;
       } else if (type === 'Expense') {
         charges -= inr;
         cashBalance -= inr;
@@ -570,4 +571,119 @@ export function resolveInvestmentSubAccount(t, parentAsset) {
   }
 
   return null;
+}
+
+/**
+ * Brokerage & statutory charges engine based on Groww published rules.
+ * Supports Equity Shares, ETFs, and Mutual Funds for both BUY and SELL transactions.
+ */
+export function calculateGrowwCharges({
+  invType = 'BUY',
+  tradeVal = 0,
+  securitySymbol = '',
+  securityISIN = '',
+  investmentAccount = '',
+  exchange = 'NSE'
+}) {
+  const val = parseFloat(tradeVal) || 0;
+  if (val <= 0) {
+    return {
+      brokerageCharges: 0,
+      exchangeCharges: 0,
+      sttCharges: 0,
+      sebiCharges: 0,
+      stampDutyCharges: 0,
+      gstCharges: 0,
+      dpCharges: 0,
+      otherCharges: 0,
+      totalCharges: 0
+    };
+  }
+
+  const symUpper = String(securitySymbol || '').trim().toUpperCase();
+  const isinUpper = String(securityISIN || '').trim().toUpperCase();
+  const acctLower = String(investmentAccount || '').toLowerCase();
+  const type = String(invType || 'BUY').trim().toUpperCase();
+
+  const isMF = acctLower.includes('mutual fund') ||
+    (isinUpper.startsWith('INF') && !symUpper.includes('BEES') && !symUpper.includes('ETF'));
+
+  const isETF = symUpper.endsWith('BEES') ||
+    symUpper.includes('ETF') ||
+    (symUpper.includes('GOLD') && symUpper.includes('BEES')) ||
+    symUpper.includes('SILVERBEES');
+
+  const isBSE = String(exchange || '').toUpperCase() === 'BSE';
+
+  let brokerage = 0;
+  let stt = 0;
+  let exchangeCharges = 0;
+  let sebi = 0;
+  let stampDuty = 0;
+  let gst = 0;
+  let dpCharges = 0;
+  let other = 0;
+
+  if (isMF) {
+    // Mutual Funds: Zero brokerage, Zero STT, Zero exchange charges
+    // Stamp duty: 0.005% on BUY
+    brokerage = 0;
+    stt = 0;
+    exchangeCharges = 0;
+    sebi = 0;
+    stampDuty = type === 'BUY' ? Math.round(val * 0.00005 * 100) / 100 : 0;
+    gst = 0;
+    dpCharges = 0;
+    other = 0;
+  } else if (isETF) {
+    // ETF on Groww:
+    // Brokerage: Min(₹20, 0.05% of trade value)
+    brokerage = Math.round(Math.min(20, val * 0.0005) * 100) / 100;
+    // STT: 0 on BUY, 0.001% on SELL
+    stt = type === 'SELL' ? Math.round(val * 0.00001 * 100) / 100 : 0;
+    // Exchange: 0.00297% (NSE) / 0.00375% (BSE)
+    exchangeCharges = Math.round(val * (isBSE ? 0.0000375 : 0.0000297) * 100) / 100;
+    // SEBI: 0.0001% (₹10 / crore)
+    sebi = Math.round(val * 0.000001 * 100) / 100;
+    // Stamp duty: 0.015% on BUY only
+    stampDuty = type === 'BUY' ? Math.round(val * 0.00015 * 100) / 100 : 0;
+    // DP Charges: ₹13.50 on SELL from demat (0 on BUY)
+    dpCharges = type === 'SELL' ? 13.50 : 0;
+    // GST: 18% on (Brokerage + Exchange + SEBI + DP Charges)
+    gst = Math.round((brokerage + exchangeCharges + sebi + dpCharges) * 0.18 * 100) / 100;
+    // Other / IPFT: NSE IPFT 0.0001%
+    other = Math.round(val * 0.000001 * 100) / 100;
+  } else {
+    // Equity Delivery on Groww:
+    // Brokerage: Min(₹20, 0.05% of trade value)
+    brokerage = Math.round(Math.min(20, val * 0.0005) * 100) / 100;
+    // STT: 0.1% on BUY, 0.1% on SELL
+    stt = Math.round(val * 0.001 * 100) / 100;
+    // Exchange: 0.00297% (NSE) / 0.00375% (BSE)
+    exchangeCharges = Math.round(val * (isBSE ? 0.0000375 : 0.0000297) * 100) / 100;
+    // SEBI: 0.0001%
+    sebi = Math.round(val * 0.000001 * 100) / 100;
+    // Stamp duty: 0.015% on BUY only
+    stampDuty = type === 'BUY' ? Math.round(val * 0.00015 * 100) / 100 : 0;
+    // DP Charges: ₹13.50 on SELL
+    dpCharges = type === 'SELL' ? 13.50 : 0;
+    // GST: 18% on (Brokerage + Exchange + SEBI + DP Charges)
+    gst = Math.round((brokerage + exchangeCharges + sebi + dpCharges) * 0.18 * 100) / 100;
+    // Other / IPFT: 0.0001%
+    other = Math.round(val * 0.000001 * 100) / 100;
+  }
+
+  const totalCharges = Math.round((brokerage + stt + exchangeCharges + sebi + stampDuty + gst + dpCharges + other) * 100) / 100;
+
+  return {
+    brokerageCharges: brokerage,
+    exchangeCharges,
+    sttCharges: stt,
+    sebiCharges: sebi,
+    stampDutyCharges: stampDuty,
+    gstCharges: gst,
+    dpCharges,
+    otherCharges: other,
+    totalCharges
+  };
 }
