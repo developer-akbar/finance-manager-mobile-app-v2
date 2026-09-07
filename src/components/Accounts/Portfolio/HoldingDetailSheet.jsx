@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { formatINR } from '../../../utils/format.js';
-import { defaultValuationProvider } from '../../../utils/valuationProvider.js';
+import { defaultValuationProvider, detectAssetType } from '../../../utils/valuationProvider.js';
 import { parseTxnFields } from '../../../utils/brokerageAccounting.js';
 import { 
   getInvestmentDisplayMetrics, 
@@ -8,7 +8,8 @@ import {
   formatSignedCurrency, 
   formatSignedPercent,
   getPnlClass,
-  computePositionXIRR
+  computePositionXIRR,
+  getTodaysChange
 } from '../../../utils/portfolioAggregation.js';
 
 function extractTxnDetails(t, isMf) {
@@ -288,9 +289,29 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
             {/* Column 1: Current NAV / LTP */}
             <div className="detail-meta-col">
               <span className="detail-meta-lbl text-muted uppercase">{isRedeemed ? 'Status' : metrics.priceLabel}</span>
-              <span className="detail-meta-val font-bold text-primary num-tabular mt-1">
-                {isRedeemed ? 'Closed / Exited' : (isValued && typeof activeValuation.nav === 'number' ? `₹${activeValuation.nav.toFixed(2)}` : '—')}
-              </span>
+              {(() => {
+                const assetType = detectAssetType(displayPos);
+                const isEquityOrEtf = assetType === 'EQUITY' || assetType === 'ETF';
+                const todaysChange = !isRedeemed && isEquityOrEtf && isValued && typeof activeValuation?.nav === 'number'
+                  ? getTodaysChange(activeValuation.nav, activeValuation.previousClose, assetType)
+                  : null;
+                return (
+                  <div className="flex-gap-xs align-baseline flex-wrap mt-1">
+                    <span className="detail-meta-val font-bold text-primary num-tabular">
+                      {isRedeemed ? 'Closed / Exited' : (isValued && typeof activeValuation.nav === 'number' ? `₹${activeValuation.nav.toFixed(2)}` : '—')}
+                    </span>
+                    {todaysChange ? (
+                      <span className={`todays-change font-semibold num-tabular ${todaysChange.cls}`} style={{ fontSize: '0.68rem', color: todaysChange.color, whiteSpace: 'nowrap' }}>
+                        {todaysChange.text}
+                      </span>
+                    ) : (!isRedeemed && isEquityOrEtf && isValued && typeof activeValuation?.nav === 'number' ? (
+                      <span className="todays-change text-muted font-semibold num-tabular" style={{ fontSize: '0.68rem', whiteSpace: 'nowrap' }}>
+                        —
+                      </span>
+                    ) : null)}
+                  </div>
+                );
+              })()}
               {isValued && activeValuation?.asOf && !isRedeemed && (
                 <div className="detail-meta-sub text-muted font-xs mt-0.5">
                   As of {formatAsOfDate(activeValuation.asOf)}{activeValuation?.asOfTime ? `, ${activeValuation.asOfTime}` : ''}

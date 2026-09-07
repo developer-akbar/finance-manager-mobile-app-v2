@@ -21,6 +21,18 @@ export const rowToTxn = (r) => {
     FromSubAccount: r.from_sub_account || '',
     ToSubAccount: r.to_sub_account || '',
     InvestmentAccount: r.investment_account || '',
+    ActualAmount: parseFloat(r.actual_amount || 0) || (r.actual_amount === 0 ? 0 : ''),
+    TotalCharges: parseFloat(r.total_charges || 0) || 0,
+    BrokerageCharges: parseFloat(r.brokerage_charges || 0) || (r.brokerage_charges === 0 ? 0 : ''),
+    ExchangeCharges: parseFloat(r.exchange_charges || 0) || (r.exchange_charges === 0 ? 0 : ''),
+    STTCharges: parseFloat(r.stt_charges || 0) || (r.stt_charges === 0 ? 0 : ''),
+    SEBICharges: parseFloat(r.sebi_charges || 0) || (r.sebi_charges === 0 ? 0 : ''),
+    StampDutyCharges: parseFloat(r.stamp_duty_charges || 0) || (r.stamp_duty_charges === 0 ? 0 : ''),
+    GSTCharges: parseFloat(r.gst_charges || 0) || (r.gst_charges === 0 ? 0 : ''),
+    DPCharges: parseFloat(r.dp_charges || 0) || (r.dp_charges === 0 ? 0 : ''),
+    OtherCharges: parseFloat(r.other_charges || 0) || (r.other_charges === 0 ? 0 : ''),
+    SecurityDisplayName: r.security_display_name || '',
+    SettlementMode: r.settlement_mode || 'ACTUAL',
   };
   
   if (r.investment_transaction_type || r.brokerage) {
@@ -30,6 +42,7 @@ export const rowToTxn = (r) => {
       InvestmentTransactionType: r.investment_transaction_type || '',
       Brokerage: r.brokerage || '',
       SecuritySymbol: r.security_symbol || '',
+      SecurityDisplayName: r.security_display_name || '',
       SecurityISIN: r.security_isin || '',
       Quantity: parseFloat(r.quantity) || 0,
       UnitPrice: parseFloat(r.unit_price) || 0,
@@ -42,7 +55,18 @@ export const rowToTxn = (r) => {
       OrderId: r.order_id || '',
       Exchange: r.exchange || '',
       Segment: r.segment || '',
-      Source: r.source || ''
+      Source: r.source || '',
+      ActualAmount: parseFloat(r.actual_amount || 0) || (r.actual_amount === 0 ? 0 : ''),
+      TotalCharges: parseFloat(r.total_charges || 0) || 0,
+      BrokerageCharges: parseFloat(r.brokerage_charges || 0) || (r.brokerage_charges === 0 ? 0 : ''),
+      ExchangeCharges: parseFloat(r.exchange_charges || 0) || (r.exchange_charges === 0 ? 0 : ''),
+      STTCharges: parseFloat(r.stt_charges || 0) || (r.stt_charges === 0 ? 0 : ''),
+      SEBICharges: parseFloat(r.sebi_charges || 0) || (r.sebi_charges === 0 ? 0 : ''),
+      StampDutyCharges: parseFloat(r.stamp_duty_charges || 0) || (r.stamp_duty_charges === 0 ? 0 : ''),
+      GSTCharges: parseFloat(r.gst_charges || 0) || (r.gst_charges === 0 ? 0 : ''),
+      DPCharges: parseFloat(r.dp_charges || 0) || (r.dp_charges === 0 ? 0 : ''),
+      OtherCharges: parseFloat(r.other_charges || 0) || (r.other_charges === 0 ? 0 : ''),
+      SettlementMode: r.settlement_mode || 'ACTUAL',
     };
   }
   return base;
@@ -156,8 +180,21 @@ export const addTransaction = async (data) => {
   
   if (isInv) {
     const invAcct = data.InvestmentAccount || data.investment_account || data.Category || '';
+    const actualAmt = parseFloat(data.ActualAmount !== undefined && data.ActualAmount !== '' ? data.ActualAmount : (data.actual_amount !== undefined && data.actual_amount !== '' ? data.actual_amount : 0)) || 0;
+    const totCharges = parseFloat(data.TotalCharges !== undefined && data.TotalCharges !== '' ? data.TotalCharges : (data.total_charges !== undefined && data.total_charges !== '' ? data.total_charges : 0)) || 0;
+    const brokCharges = parseFloat(data.BrokerageCharges !== undefined && data.BrokerageCharges !== '' ? data.BrokerageCharges : (data.brokerage_charges !== undefined && data.brokerage_charges !== '' ? data.brokerage_charges : 0)) || 0;
+    const exCharges = parseFloat(data.ExchangeCharges !== undefined && data.ExchangeCharges !== '' ? data.ExchangeCharges : (data.exchange_charges !== undefined && data.exchange_charges !== '' ? data.exchange_charges : 0)) || 0;
+    const sttCh = parseFloat(data.STTCharges !== undefined && data.STTCharges !== '' ? data.STTCharges : (data.stt_charges !== undefined && data.stt_charges !== '' ? data.stt_charges : 0)) || 0;
+    const sebiCh = parseFloat(data.SEBICharges !== undefined && data.SEBICharges !== '' ? data.SEBICharges : (data.sebi_charges !== undefined && data.sebi_charges !== '' ? data.sebi_charges : 0)) || 0;
+    const stampCh = parseFloat(data.StampDutyCharges !== undefined && data.StampDutyCharges !== '' ? data.StampDutyCharges : (data.stamp_duty_charges !== undefined && data.stamp_duty_charges !== '' ? data.stamp_duty_charges : 0)) || 0;
+    const gstCh = parseFloat(data.GSTCharges !== undefined && data.GSTCharges !== '' ? data.GSTCharges : (data.gst_charges !== undefined && data.gst_charges !== '' ? data.gst_charges : 0)) || 0;
+    const dpCh = parseFloat(data.DPCharges !== undefined && data.DPCharges !== '' ? data.DPCharges : (data.dp_charges !== undefined && data.dp_charges !== '' ? data.dp_charges : 0)) || 0;
+    const otherCh = parseFloat(data.OtherCharges !== undefined && data.OtherCharges !== '' ? data.OtherCharges : (data.other_charges !== undefined && data.other_charges !== '' ? data.other_charges : 0)) || 0;
+    const secDispName = String(data.SecurityDisplayName || data.security_display_name || data.Note || data.note || '');
+    const setMode = String(data.SettlementMode || data.settlement_mode || 'ACTUAL').toUpperCase();
+
     await db.run(
-      `INSERT OR IGNORE INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source,investment_account) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT OR IGNORE INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [id, data.Date||'', data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
        data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
        parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
@@ -171,7 +208,7 @@ export const addTransaction = async (data) => {
        parseFloat(data.Quantity||0), parseFloat(data.UnitPrice||0), parseFloat(data.TradeValue||0),
        parseFloat(data.CostBasis||0), parseFloat(data.CashImpact||0), parseFloat(data.PositionQuantityChange||0),
        parseFloat(data.RealizedPnl||0), data.TradeId||'', data.OrderId||'', data.Exchange||'', data.Segment||'', data.Source||'',
-       invAcct]
+       invAcct, actualAmt, totCharges, brokCharges, exCharges, sttCh, sebiCh, stampCh, gstCh, dpCh, otherCh, secDispName, setMode]
     );
     return rowToTxn({
       id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'',
@@ -187,7 +224,11 @@ export const addTransaction = async (data) => {
       quantity:parseFloat(data.Quantity||0), unit_price:parseFloat(data.UnitPrice||0), trade_value:parseFloat(data.TradeValue||0),
       cost_basis:parseFloat(data.CostBasis||0), cash_impact:parseFloat(data.CashImpact||0), position_qty_change:parseFloat(data.PositionQuantityChange||0),
       realized_pnl:parseFloat(data.RealizedPnl||0), trade_id:data.TradeId||'', order_id:data.OrderId||'', exchange:data.Exchange||'', segment:data.Segment||'', source:data.Source||'',
-      investment_account:invAcct
+      investment_account:invAcct,
+      actual_amount:actualAmt, total_charges:totCharges, brokerage_charges:brokCharges, exchange_charges:exCharges,
+      stt_charges:sttCh, sebi_charges:sebiCh, stamp_duty_charges:stampCh, gst_charges:gstCh, dp_charges:dpCh, other_charges:otherCh,
+      security_display_name:secDispName,
+      settlement_mode:setMode
     });
   } else {
     await db.run(
@@ -413,7 +454,9 @@ export const deleteTransaction = async (id) => {
   }
   await Promise.all([
     db.run('DELETE FROM transactions WHERE id=?', [id]),
-    db.run('DELETE FROM investment_transactions WHERE id=?', [id])
+    db.run('DELETE FROM investment_transactions WHERE id=?', [id]),
+    db.run('DELETE FROM transactions WHERE split_group_id=?', [`inv_charge_${id}`]),
+    db.run('DELETE FROM investment_transactions WHERE split_group_id=?', [`inv_charge_${id}`])
   ]);
 };
 export const deleteAllTransactions = async ()  => {

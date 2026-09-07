@@ -350,10 +350,47 @@ const applySchema = async (db) => {
     exchange TEXT,
     segment TEXT,
     source TEXT,
-    investment_account TEXT
+    investment_account TEXT,
+    actual_amount REAL,
+    total_charges REAL,
+    brokerage_charges REAL,
+    exchange_charges REAL,
+    stt_charges REAL,
+    sebi_charges REAL,
+    stamp_duty_charges REAL,
+    gst_charges REAL,
+    dp_charges REAL,
+    other_charges REAL,
+    security_display_name TEXT,
+    settlement_mode TEXT DEFAULT 'ACTUAL'
   );`);
   try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN investment_account TEXT`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN investment_account TEXT`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN actual_amount REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN total_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN brokerage_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN exchange_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN stt_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN sebi_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN stamp_duty_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN gst_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN dp_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN other_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN security_display_name TEXT`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN settlement_mode TEXT DEFAULT 'ACTUAL'`); } catch {}
+
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN actual_amount REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN total_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN brokerage_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN exchange_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN stt_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN sebi_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN stamp_duty_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN gst_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN dp_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN other_charges REAL DEFAULT 0`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN security_display_name TEXT`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN settlement_mode TEXT DEFAULT 'ACTUAL'`); } catch {}
   await db.execute(`CREATE TABLE IF NOT EXISTS brokerages (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE,

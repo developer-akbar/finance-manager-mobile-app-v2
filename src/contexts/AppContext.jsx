@@ -542,7 +542,17 @@ export function AppProvider({ children }) {
 
   const addTransaction    = async (data) => { const r = await dbAdd(data);    if (r) dispatch({ type:'ADD_TXN', payload:r }); return r; };
   const updateTransaction = async (id,d) => { const r = await dbUpdate(id,d); if (r) dispatch({ type:'UPD_TXN', payload:r }); return r; };
-  const deleteTransaction = async (id)   => { await dbDelete(id); dispatch({ type:'DEL_TXN', payload:id }); };
+  const deleteTransaction = async (id)   => {
+    const linkedCharges = (state.transactions || []).filter(t =>
+      t.split_group_id === `inv_charge_${id}` ||
+      (t.tags || t.Tags || '').includes(`#inv_charge:${id}`)
+    );
+    await dbDelete(id);
+    for (const ct of linkedCharges) {
+      dispatch({ type: 'DEL_TXN', payload: ct._id || ct.id || ct.ID });
+    }
+    dispatch({ type: 'DEL_TXN', payload: id });
+  };
 
   // ── Instalment bulk operations ─────────────────────────────────────────
   // Edit Note, Description, Tags, Category, Subcategory, Account, etc. across all instalments in series.
