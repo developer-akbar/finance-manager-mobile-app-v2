@@ -139,7 +139,7 @@ export default function InvestmentActivity({ transactions = [], scopeFilter = 'p
                   <span>{item.date}</span> · 
                   <span className="platform-tag">{item.subAccount}</span>
                   {item.ownershipTag && item.ownershipTag !== 'PERSONAL' && (
-                    <span className={`ownership-pill ${item.ownershipTag.toLowerCase()}`}>
+                    <span className={`ownership-pill platform-tag ${item.ownershipTag.toLowerCase()}`}>
                       {item.ownershipTag}
                     </span>
                   )}

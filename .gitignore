@@ -25,5 +25,5 @@ scratch/verify_*.cjs
 scratch/compare_*.cjs
 scratch/benchmark_*.cjs
 scratch/test_*.cjs
-scratch/*.cjs
+scratch/tmp_*.cjs
 

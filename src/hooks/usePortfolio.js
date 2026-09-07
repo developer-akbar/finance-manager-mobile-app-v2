@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { getUnifiedPortfolioData } from '../utils/portfolioSelector.js';
 import { defaultValuationProvider } from '../utils/valuationProvider.js';
+import { computePortfolioXIRR } from '../utils/portfolioAggregation.js';
 
 export function usePortfolio(transactions = [], settings = {}, filters = {}) {
   const {
@@ -106,6 +107,9 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
   // Segregated Brokerage Cash Calculation
   const relevantBrokerageCash = useMemo(() => {
     const { brokerageCashMap } = rawPortfolio;
+    if (scopeFilter === 'father') {
+      return 0; // External Holdings does not own personal brokerage cash
+    }
     if (accountFilter !== 'all' && accountFilter !== 'Share Market') {
       return 0; // If filtered exclusively to Mutual Funds, brokerage cash is 0
     }
@@ -113,7 +117,7 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
       return brokerageCashMap[platformFilter] || 0;
     }
     return rawPortfolio.totalBrokerageCash;
-  }, [rawPortfolio, platformFilter, accountFilter]);
+  }, [rawPortfolio, scopeFilter, platformFilter, accountFilter]);
 
   // Summary Metrics
   const summaryMetrics = useMemo(() => {
@@ -156,6 +160,7 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
       : 0;
 
     const uniquePlatforms = new Set(displayedPositions.map(p => p.subAccount).filter(Boolean));
+    const portfolioXirr = computePortfolioXIRR(activeHoldings, valuationProvider);
 
     return {
       activeCostBasis: Math.round(activeCost * 100) / 100,
@@ -167,6 +172,7 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
       valuedReturnPercent,
       totalUnrealizedPnl,
       unrealizedReturnPercent,
+      portfolioXirr,
       isFullyValued,
       hasPartialValuation,
       valuedCount,

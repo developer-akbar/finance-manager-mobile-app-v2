@@ -34,7 +34,7 @@ export default function RedeemedInvestments({ positions = [], onSelectPosition }
               <th>Fund / Scheme</th>
               <th>Platform</th>
               <th>Folio / Mode</th>
-              <th style={{ textAlign: 'right' }}>Units Exited</th>
+              <th style={{ textAlign: 'right' }}>Qty / Units Exited</th>
               <th style={{ textAlign: 'right' }}>Cost Basis</th>
               <th style={{ textAlign: 'right' }}>Realized P&L</th>
               <th style={{ textAlign: 'right' }}>Exit Date</th>
@@ -42,28 +42,33 @@ export default function RedeemedInvestments({ positions = [], onSelectPosition }
             </tr>
           </thead>
           <tbody>
-            {redeemed.map(pos => (
-              <tr 
-                key={pos.positionKey} 
-                className="holdings-table-row clickable"
-                onClick={() => onSelectPosition(pos)}
-              >
-                <td className="fund-cell">
-                  <div className="fund-primary-name">{pos.note || pos.security}</div>
-                  <div className="fund-secondary-meta mono">{pos.isin}</div>
-                </td>
-                <td>
-                  <span className="platform-tag">{pos.subAccount}</span>
-                </td>
-                <td>
-                  <div className="folio-mode-meta">
-                    <span className="folio-text mono">{pos.folioNumber || '—'}</span>
-                    <span className="mode-text">{pos.holdingMode}</span>
-                  </div>
-                </td>
-                <td style={{ textAlign: 'right' }} className="mono">
-                  {pos.sellUnits > 0 ? pos.sellUnits.toFixed(3) : pos.buyUnits.toFixed(3)}
-                </td>
+            {redeemed.map(pos => {
+              const isDemat = pos.investmentAccount === 'Share Market' || pos.holdingMode === 'DEMAT';
+              const qty = pos.sellUnits > 0 ? pos.sellUnits : (pos.buyUnits > 0 ? pos.buyUnits : pos.currentUnits);
+              const qtyDisplay = isDemat ? `${Math.round(qty)} shares` : `${qty.toFixed(3)} units`;
+
+              return (
+                <tr 
+                  key={pos.positionKey} 
+                  className="holdings-table-row clickable"
+                  onClick={() => onSelectPosition(pos)}
+                >
+                  <td className="fund-cell">
+                    <div className="fund-primary-name">{pos.note || pos.security}</div>
+                    <div className="fund-secondary-meta mono">{pos.isin}</div>
+                  </td>
+                  <td>
+                    <span className="platform-tag">{pos.subAccount}</span>
+                  </td>
+                  <td>
+                    <div className="folio-mode-meta">
+                      <span className="folio-text mono">{pos.folioNumber || '—'}</span>
+                      <span className="mode-text">{pos.holdingMode}</span>
+                    </div>
+                  </td>
+                  <td style={{ textAlign: 'right' }} className="mono">
+                    {qtyDisplay}
+                  </td>
                 <td style={{ textAlign: 'right' }}>
                   {formatINR(pos.buyCost || pos.sellCostBasis)}
                 </td>
@@ -91,7 +96,7 @@ export default function RedeemedInvestments({ positions = [], onSelectPosition }
                   </button>
                 </td>
               </tr>
-            ))}
+            )})}
           </tbody>
         </table>
       </div>

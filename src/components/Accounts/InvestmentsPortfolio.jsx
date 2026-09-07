@@ -4,6 +4,7 @@ import { usePortfolio } from '../../hooks/usePortfolio.js';
 import { defaultValuationProvider } from '../../utils/valuationProvider.js';
 
 import PortfolioSummary from './Portfolio/PortfolioSummary.jsx';
+import PortfolioBreakdown from './Portfolio/PortfolioBreakdown.jsx';
 import PortfolioAllocation from './Portfolio/PortfolioAllocation.jsx';
 import PortfolioPerformance from './Portfolio/PortfolioPerformance.jsx';
 import HoldingsTable from './Portfolio/HoldingsTable.jsx';
@@ -148,7 +149,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
               onChange={e => handleScopeChange(e.target.value)}
             >
               <option value="personal">My Portfolio</option>
-              <option value="father">Father's Holdings</option>
+              <option value="father">External Holdings</option>
               <option value="all">All Holdings</option>
             </select>
             <span className="compact-select-arrow">▼</span>
@@ -216,6 +217,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           valuedReturnPercent={summaryMetrics.valuedReturnPercent}
           totalUnrealizedPnl={summaryMetrics.totalUnrealizedPnl}
           unrealizedReturnPercent={summaryMetrics.unrealizedReturnPercent}
+          portfolioXirr={summaryMetrics.portfolioXirr}
           isFullyValued={summaryMetrics.isFullyValued}
           hasPartialValuation={summaryMetrics.hasPartialValuation}
           valuedCount={summaryMetrics.valuedCount}
@@ -230,6 +232,13 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           onOpenDataIssues={() => setActiveTab('issues')}
         />
 
+        {/* Portfolio Breakdown Summary */}
+        <PortfolioBreakdown 
+          positions={displayedPositions}
+          valuationProvider={defaultValuationProvider}
+          valuationVersion={valuationVersion}
+          summaryMetrics={summaryMetrics}
+        />
 
         {/* View Navigation Tabs */}
         <div className="portfolio-nav-tabs">
@@ -277,18 +286,29 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
               onSelectPosition={pos => setSelectedPosition(pos)}
             />
             <div style={{ height: 16 }} />
-            <PortfolioAllocation positions={displayedPositions} />
+            <PortfolioAllocation 
+              positions={displayedPositions}
+              valuationProvider={defaultValuationProvider}
+              valuationVersion={valuationVersion}
+            />
             <div style={{ height: 16 }} />
             <PortfolioPerformance 
               positions={displayedPositions}
               transactions={transactions}
-              isValued={summaryMetrics.isValued} 
+              scopeFilter={scopeFilter}
+              accountFilter={accountFilter}
+              platformFilter={platformFilter}
+              summaryMetrics={summaryMetrics}
             />
           </>
         )}
 
         {activeTab === 'allocation' && (
-          <PortfolioAllocation positions={displayedPositions} />
+          <PortfolioAllocation 
+            positions={displayedPositions}
+            valuationProvider={defaultValuationProvider}
+            valuationVersion={valuationVersion}
+          />
         )}
 
         {activeTab === 'redeemed' && (

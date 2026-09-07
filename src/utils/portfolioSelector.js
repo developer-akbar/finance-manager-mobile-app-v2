@@ -40,6 +40,33 @@ export function getUnifiedPortfolioData(transactions = [], settings = {}) {
       const currentPrice = h.currentPrice > 0 ? h.currentPrice : null;
       const currentValue = h.currentValue > 0 ? h.currentValue : null;
 
+      const firstBuyDate = h.firstBuyDate || (h.txns && h.txns.length > 0 ? (h.txns[0].date || h.txns[0].Date || '') : '');
+      const lastTransactionDate = h.lastTransactionDate || (h.txns && h.txns.length > 0 ? (h.txns[h.txns.length - 1].date || h.txns[h.txns.length - 1].Date || '') : '');
+      const buyLots = (h.buyLots && h.buyLots.length > 0) ? h.buyLots : [
+        {
+          transactionId: `${positionKey}-lot-1`,
+          date: firstBuyDate,
+          units: currentUnits,
+          remainingUnits: currentUnits,
+          unitCost: avgCost,
+          costBasis: remainingCostBasis,
+          ownershipTag: 'PERSONAL'
+        }
+      ];
+      const txns = (h.txns && h.txns.length > 0) ? h.txns : [
+        {
+          id: `${positionKey}-txn-1`,
+          date: firstBuyDate,
+          action: 'BUY',
+          units: currentUnits,
+          unitPrice: avgCost,
+          tradeValue: remainingCostBasis,
+          investmentAccount: 'Share Market',
+          subAccount: broker,
+          security: h.symbol
+        }
+      ];
+
       shareMarketPositions.push({
         positionKey,
         investmentAccount: 'Share Market',
@@ -60,35 +87,13 @@ export function getUnifiedPortfolioData(transactions = [], settings = {}) {
         sellCostBasis: 0,
         realizedPnl: 0,
         totalProceeds: 0,
-        buyCount: 1,
+        buyCount: txns.length || 1,
         sellCount: 0,
-        firstBuyDate: '',
-        lastTransactionDate: '',
-        buyLots: [
-          {
-            transactionId: `${positionKey}-lot-1`,
-            date: h.firstBuyDate || '',
-            units: currentUnits,
-            remainingUnits: currentUnits,
-            unitCost: avgCost,
-            costBasis: remainingCostBasis,
-            ownershipTag: 'PERSONAL'
-          }
-        ],
+        firstBuyDate,
+        lastTransactionDate,
+        buyLots,
         sellRecords: [],
-        txns: (h.txns && h.txns.length > 0) ? h.txns : [
-          {
-            id: `${positionKey}-txn-1`,
-            date: h.firstBuyDate || '',
-            action: 'BUY',
-            units: currentUnits,
-            unitPrice: avgCost,
-            tradeValue: remainingCostBasis,
-            investmentAccount: 'Share Market',
-            subAccount: broker,
-            security: h.symbol
-          }
-        ],
+        txns,
         snapshotPrice: currentPrice,
         snapshotMarketValue: currentValue
       });
@@ -103,6 +108,7 @@ export function getUnifiedPortfolioData(transactions = [], settings = {}) {
       const soldCostBasis = parseFloat(h.soldCostBasis) || 0;
       const realizedPnl = parseFloat(h.realizedPnL) || 0;
       const totalProceeds = parseFloat(h.totalProceeds) || (soldCostBasis + realizedPnl);
+      const exitedQty = parseFloat(h.exitedQty || h.sellQty || h.buyQty || 0);
 
       shareMarketPositions.push({
         positionKey,
@@ -116,21 +122,21 @@ export function getUnifiedPortfolioData(transactions = [], settings = {}) {
         ownershipTag: 'PERSONAL',
         status: 'REDEEMED',
         currentUnits: 0,
-        buyUnits: 0,
-        sellUnits: 0,
+        buyUnits: exitedQty,
+        sellUnits: exitedQty,
         buyCost: Math.round(buyCost * 100) / 100,
         remainingCostBasis: 0,
-        averageCostPerUnit: 0,
+        averageCostPerUnit: exitedQty > 0 ? buyCost / exitedQty : 0,
         sellCostBasis: Math.round(soldCostBasis * 100) / 100,
         realizedPnl: Math.round(realizedPnl * 100) / 100,
         totalProceeds: Math.round(totalProceeds * 100) / 100,
-        buyCount: 1,
-        sellCount: 1,
-        firstBuyDate: '',
-        lastTransactionDate: '',
-        buyLots: [],
+        buyCount: (h.txns || []).length || 1,
+        sellCount: (h.txns || []).filter(t => (t.InvestmentTransactionType || t.investment_transaction_type || '').toUpperCase() === 'SELL').length || 1,
+        firstBuyDate: (h.txns && h.txns[0]) ? (h.txns[0].date || h.txns[0].Date || '') : '',
+        lastTransactionDate: h.lastTransactionDate || '',
+        buyLots: h.buyLots || [],
         sellRecords: [],
-        txns: []
+        txns: h.txns || []
       });
     });
   });

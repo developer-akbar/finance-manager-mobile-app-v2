@@ -5,7 +5,8 @@ import {
   getInvestmentDisplayMetrics, 
   formatAsOfDate, 
   formatSignedCurrency, 
-  formatSignedPercent 
+  formatSignedPercent,
+  computePositionXIRR
 } from '../../../utils/portfolioAggregation.js';
 
 export default function HoldingsTable({ positions = [], valuationProvider, valuationVersion, onSelectPosition }) {
@@ -135,7 +136,7 @@ export default function HoldingsTable({ positions = [], valuationProvider, valua
                           <div className="fund-secondary-meta">
                             <span className="mono font-xs text-muted">{group.isin}</span>
                             {group.ownershipTag !== 'PERSONAL' && (
-                              <span className={`ownership-pill ${group.ownershipTag.toLowerCase()}`}>
+                              <span className={`ownership-pill platform-tag ${group.ownershipTag.toLowerCase()}`}>
                                 {group.ownershipTag}
                               </span>
                             )}
@@ -303,7 +304,7 @@ export default function HoldingsTable({ positions = [], valuationProvider, valua
                             </button>
                           )}
                           {group.ownershipTag !== 'PERSONAL' && group.ownershipTag !== 'MIXED_HOLDING' && (
-                            <span className={`ownership-pill ${group.ownershipTag.toLowerCase()}`}>
+                            <span className={`ownership-pill platform-tag ${group.ownershipTag.toLowerCase()}`}>
                               {group.ownershipTag}
                             </span>
                           )}
@@ -337,13 +338,16 @@ export default function HoldingsTable({ positions = [], valuationProvider, valua
                       </div>
                       <div className="sec-col text-right">
                         <span className="sec-lbl text-muted uppercase">XIRR</span>
-                        {isValued && metrics.isMf && typeof val.returnPercent === 'number' ? (
-                          <span className={`sec-val font-semibold num-tabular ${getPnlClass(val.returnPercent)}`}>
-                            {formatSignedPercent(val.returnPercent)}
-                          </span>
-                        ) : (
-                          <span className="sec-val text-muted">—</span>
-                        )}
+                        {(() => {
+                          const groupXirr = computePositionXIRR(group, val);
+                          return groupXirr !== null ? (
+                            <span className={`sec-val font-semibold num-tabular ${getPnlClass(groupXirr)}`}>
+                              {formatSignedPercent(groupXirr)}
+                            </span>
+                          ) : (
+                            <span className="sec-val text-muted">—</span>
+                          );
+                        })()}
                       </div>
                     </div>
 
