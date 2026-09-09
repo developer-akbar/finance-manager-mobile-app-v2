@@ -11,7 +11,14 @@ import {
 } from '../../../utils/portfolioAggregation.js';
 import { detectAssetType } from '../../../utils/valuationProvider.js';
 
-export default function HoldingsTable({ positions = [], valuationProvider, valuationVersion, onSelectPosition }) {
+export default function HoldingsTable({ 
+  positions = [], 
+  valuationProvider, 
+  valuationVersion, 
+  oneDayDisplayMode = 'unit',
+  onToggleOneDayDisplayMode = null,
+  onSelectPosition 
+}) {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('cost-desc'); // 'cost-desc' | 'units-desc' | 'name-asc' | 'value-desc'
   const [expandedGroups, setExpandedGroups] = useState({});
@@ -188,16 +195,25 @@ export default function HoldingsTable({ positions = [], valuationProvider, valua
                             <div>
                               {(() => {
                                 const assetType = detectAssetType(group);
-                                const isEquityOrEtf = assetType === 'EQUITY' || assetType === 'ETF';
-                                const todaysChange = isEquityOrEtf ? getTodaysChange(val.nav, val.previousClose, assetType) : null;
+                                const dailyChange = isValued && typeof val.nav === 'number'
+                                  ? getTodaysChange(val.nav, val.previousClose, assetType, group.currentUnits, oneDayDisplayMode)
+                                  : null;
                                 return (
                                   <div className="font-semibold" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px', flexWrap: 'wrap' }}>
                                     <span>{metrics.priceLabel} ₹{val.nav.toFixed(2)}</span>
-                                    {todaysChange ? (
-                                      <span className={`todays-change font-semibold ${todaysChange.cls}`} style={{ fontSize: '0.72rem', color: todaysChange.color, whiteSpace: 'nowrap' }}>
-                                        {todaysChange.text}
+                                    {dailyChange ? (
+                                      <span 
+                                        className={`todays-change font-semibold ${dailyChange.cls}`} 
+                                        style={{ fontSize: '0.72rem', color: dailyChange.color, whiteSpace: 'nowrap', cursor: 'pointer' }} 
+                                        title="Tap 1D change to switch between price/NAV change and position 1D P&L."
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (onToggleOneDayDisplayMode) onToggleOneDayDisplayMode(e);
+                                        }}
+                                      >
+                                        {dailyChange.text}
                                       </span>
-                                    ) : (isEquityOrEtf ? (
+                                    ) : (isValued && typeof val.nav === 'number' ? (
                                       <span className="todays-change text-muted font-semibold" style={{ fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
                                         —
                                       </span>
@@ -377,20 +393,27 @@ export default function HoldingsTable({ positions = [], valuationProvider, valua
                         <span className="meta-lbl block">{metrics.priceLabel}</span>
                         {(() => {
                           const assetType = detectAssetType(group);
-                          const isEquityOrEtf = assetType === 'EQUITY' || assetType === 'ETF';
-                          const todaysChange = isEquityOrEtf && isValued && typeof val.nav === 'number'
-                            ? getTodaysChange(val.nav, val.previousClose, assetType)
+                          const dailyChange = isValued && typeof val.nav === 'number'
+                            ? getTodaysChange(val.nav, val.previousClose, assetType, group.currentUnits, oneDayDisplayMode)
                             : null;
                           return (
                             <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', flexWrap: 'wrap' }}>
                               <span className="meta-val font-bold text-primary num-tabular">
                                 {isValued && typeof val.nav === 'number' ? `₹${val.nav.toFixed(2)}` : '—'}
                               </span>
-                              {todaysChange ? (
-                                <span className={`todays-change font-semibold num-tabular ${todaysChange.cls}`} style={{ fontSize: '0.68rem', color: todaysChange.color, whiteSpace: 'nowrap' }}>
-                                  {todaysChange.text}
+                              {dailyChange ? (
+                                <span 
+                                  className={`todays-change font-semibold num-tabular ${dailyChange.cls}`} 
+                                  style={{ fontSize: '0.68rem', color: dailyChange.color, whiteSpace: 'nowrap', cursor: 'pointer' }} 
+                                  title="Tap 1D change to switch between price/NAV change and position 1D P&L."
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (onToggleOneDayDisplayMode) onToggleOneDayDisplayMode(e);
+                                  }}
+                                >
+                                  {dailyChange.text}
                                 </span>
-                              ) : (isEquityOrEtf && isValued && typeof val.nav === 'number' ? (
+                              ) : (isValued && typeof val.nav === 'number' ? (
                                 <span className="todays-change text-muted font-semibold num-tabular" style={{ fontSize: '0.68rem', whiteSpace: 'nowrap' }}>
                                   —
                                 </span>
