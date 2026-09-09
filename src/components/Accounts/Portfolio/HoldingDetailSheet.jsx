@@ -83,7 +83,16 @@ function extractTxnDetails(t, isMf) {
   };
 }
 
-export default function HoldingDetailSheet({ position, valuationProvider, valuationVersion, valuation, onClose, onSelectTxn }) {
+export default function HoldingDetailSheet({ 
+  position, 
+  valuationProvider, 
+  valuationVersion, 
+  valuation, 
+  oneDayDisplayMode = 'unit',
+  onToggleOneDayDisplayMode = null,
+  onClose, 
+  onSelectTxn 
+}) {
   if (!position) return null;
 
   const provider = valuationProvider || (valuation && typeof valuation.getValuation === 'function' ? valuation : defaultValuationProvider);
@@ -291,20 +300,27 @@ export default function HoldingDetailSheet({ position, valuationProvider, valuat
               <span className="detail-meta-lbl text-muted uppercase">{isRedeemed ? 'Status' : metrics.priceLabel}</span>
               {(() => {
                 const assetType = detectAssetType(displayPos);
-                const isEquityOrEtf = assetType === 'EQUITY' || assetType === 'ETF';
-                const todaysChange = !isRedeemed && isEquityOrEtf && isValued && typeof activeValuation?.nav === 'number'
-                  ? getTodaysChange(activeValuation.nav, activeValuation.previousClose, assetType)
+                const dailyChange = !isRedeemed && isValued && typeof activeValuation?.nav === 'number'
+                  ? getTodaysChange(activeValuation.nav, activeValuation.previousClose, assetType, displayPos.currentUnits, oneDayDisplayMode)
                   : null;
                 return (
                   <div className="flex-gap-xs align-baseline flex-wrap mt-1">
                     <span className="detail-meta-val font-bold text-primary num-tabular">
                       {isRedeemed ? 'Closed / Exited' : (isValued && typeof activeValuation.nav === 'number' ? `₹${activeValuation.nav.toFixed(2)}` : '—')}
                     </span>
-                    {todaysChange ? (
-                      <span className={`todays-change font-semibold num-tabular ${todaysChange.cls}`} style={{ fontSize: '0.68rem', color: todaysChange.color, whiteSpace: 'nowrap' }}>
-                        {todaysChange.text}
+                    {dailyChange ? (
+                      <span 
+                        className={`todays-change font-semibold num-tabular ${dailyChange.cls}`} 
+                        style={{ fontSize: '0.68rem', color: dailyChange.color, whiteSpace: 'nowrap', cursor: 'pointer' }} 
+                        title="Tap 1D change to switch between price/NAV change and position 1D P&L."
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onToggleOneDayDisplayMode) onToggleOneDayDisplayMode(e);
+                        }}
+                      >
+                        {dailyChange.text}
                       </span>
-                    ) : (!isRedeemed && isEquityOrEtf && isValued && typeof activeValuation?.nav === 'number' ? (
+                    ) : (!isRedeemed && isValued && typeof activeValuation?.nav === 'number' ? (
                       <span className="todays-change text-muted font-semibold num-tabular" style={{ fontSize: '0.68rem', whiteSpace: 'nowrap' }}>
                         —
                       </span>

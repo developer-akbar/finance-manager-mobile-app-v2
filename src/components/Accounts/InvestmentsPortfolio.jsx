@@ -25,6 +25,14 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
   const [platformFilter, setPlatformFilter] = useState('all'); // 'all' | subaccount name
   const [accountFilter, setAccountFilter] = useState('all'); // 'all' | account name
   const [selectedPosition, setSelectedPosition] = useState(null);
+  const [oneDayDisplayMode, setOneDayDisplayMode] = useState('unit'); // 'unit' | 'position'
+
+  const toggleOneDayDisplayMode = (e) => {
+    if (e && typeof e.stopPropagation === 'function') {
+      e.stopPropagation();
+    }
+    setOneDayDisplayMode(prev => (prev === 'unit' ? 'position' : 'unit'));
+  };
 
   // Intercept back button: close position detail if open, else trigger onBack
   useEffect(() => {
@@ -89,6 +97,8 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
         position={selectedPosition}
         valuationProvider={defaultValuationProvider}
         valuationVersion={valuationVersion}
+        oneDayDisplayMode={oneDayDisplayMode}
+        onToggleOneDayDisplayMode={toggleOneDayDisplayMode}
         onClose={() => setSelectedPosition(null)}
       />
     );
@@ -218,6 +228,11 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           totalUnrealizedPnl={summaryMetrics.totalUnrealizedPnl}
           unrealizedReturnPercent={summaryMetrics.unrealizedReturnPercent}
           portfolioXirr={summaryMetrics.portfolioXirr}
+          total1DChange={summaryMetrics.total1DChange}
+          portfolio1DPct={summaryMetrics.portfolio1DPct}
+          valid1DCount={summaryMetrics.valid1DCount}
+          hasMfIn1D={summaryMetrics.hasMfIn1D}
+          hasEquityIn1D={summaryMetrics.hasEquityIn1D}
           isFullyValued={summaryMetrics.isFullyValued}
           hasPartialValuation={summaryMetrics.hasPartialValuation}
           valuedCount={summaryMetrics.valuedCount}
@@ -283,6 +298,8 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
               positions={displayedPositions}
               valuationProvider={defaultValuationProvider}
               valuationVersion={valuationVersion}
+              oneDayDisplayMode={oneDayDisplayMode}
+              onToggleOneDayDisplayMode={toggleOneDayDisplayMode}
               onSelectPosition={pos => setSelectedPosition(pos)}
             />
             <div style={{ height: 16 }} />

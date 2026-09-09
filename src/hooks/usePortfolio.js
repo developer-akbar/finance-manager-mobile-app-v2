@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { getUnifiedPortfolioData } from '../utils/portfolioSelector.js';
 import { defaultValuationProvider } from '../utils/valuationProvider.js';
-import { computePortfolioXIRR } from '../utils/portfolioAggregation.js';
+import { computePortfolioXIRR, computePortfolio1DReturns } from '../utils/portfolioAggregation.js';
 
 export function usePortfolio(transactions = [], settings = {}, filters = {}) {
   const {
@@ -27,7 +27,7 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
     if (scopeFilter === 'personal') {
       return allPositions.filter(p => p.ownershipTag === 'PERSONAL' || p.ownershipTag === 'MIXED_HOLDING');
     } else if (scopeFilter === 'father') {
-      return allPositions.filter(p => p.ownershipTag === 'FATHER_EXTERNAL');
+      return allPositions.filter(p => p.ownershipTag === 'FATHER_EXTERNAL' || p.ownershipTag === 'EXTERNAL_FATHER');
     }
     return allPositions;
   }, [rawPortfolio, scopeFilter]);
@@ -41,68 +41,72 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
     });
   }, [scopedPositions, platformFilter, accountFilter]);
 
-  // Available filter dropdown options
+  // 4. Active vs Redeemed Segregation
+  const activeHoldings = useMemo(() => {
+    return displayedPositions.filter(p => p.status === 'ACTIVE' && (p.currentUnits || 0) > 0);
+  }, [displayedPositions]);
+
+  const redeemedHoldings = useMemo(() => {
+    return displayedPositions.filter(p => p.status === 'REDEEMED' || (p.currentUnits || 0) <= 0);
+  }, [displayedPositions]);
+
+  const dataIssues = useMemo(() => {
+    return displayedPositions.filter(p => p.hasDiscrepancy);
+  }, [displayedPositions]);
+
+  // Available Filter Options (Dynamically calculated based on current scope & account)
   const availablePlatforms = useMemo(() => {
     const filtered = accountFilter === 'all' 
       ? scopedPositions 
       : scopedPositions.filter(p => p.investmentAccount === accountFilter);
     const subs = new Set(filtered.map(p => p.subAccount).filter(Boolean));
-    return Array.from(subs);
+    return Array.from(subs).sort();
   }, [scopedPositions, accountFilter]);
 
   const availableAccounts = useMemo(() => {
     const accts = new Set(scopedPositions.map(p => p.investmentAccount).filter(Boolean));
-    return Array.from(accts);
+    return Array.from(accts).sort();
   }, [scopedPositions]);
 
-  // Active, Redeemed & Data Issue positions
-  const activeHoldings = useMemo(() => {
-    return displayedPositions.filter(p => p.status === 'ACTIVE');
-  }, [displayedPositions]);
+  // Asynchronous Live Valuation Fetcher
+  const refreshValuations = useCallback(async (force = false) => {
+    if (!valuationProvider) return;
+    const fetchFn = typeof valuationProvider.fetchAllValuations === 'function'
+      ? valuationProvider.fetchAllValuations.bind(valuationProvider)
+      : (typeof valuationProvider.fetchLiveValuations === 'function' ? valuationProvider.fetchLiveValuations.bind(valuationProvider) : null);
+    if (!fetchFn) return;
 
-  const redeemedHoldings = useMemo(() => {
-    return displayedPositions.filter(p => p.status === 'REDEEMED');
-  }, [displayedPositions]);
-
-  const dataIssues = useMemo(() => {
-    return displayedPositions.filter(p => p.status === 'LEGACY_DATA_ISSUE');
-  }, [displayedPositions]);
-
-  // Manual & Auto Refresh Trigger
-  const isFetchingRef = useRef(false);
-
-  const refreshValuations = useCallback(async (forceRefresh = false) => {
-    if (isFetchingRef.current) return;
-    if (!valuationProvider || typeof valuationProvider.fetchAllValuations !== 'function') return;
-
-    isFetchingRef.current = true;
     setIsFetchingValuations(true);
     try {
-      const res = await valuationProvider.fetchAllValuations(activeHoldings, { forceRefresh });
-      if (res && res.fetchedAt) {
-        setLastValuedAt(res.fetchedAt);
+      if (typeof valuationProvider.fetchAllValuations === 'function') {
+        const res = await valuationProvider.fetchAllValuations(activeHoldings, { forceRefresh: force });
+        if (res && res.fetchedAt) {
+          setLastValuedAt(res.fetchedAt);
+        } else {
+          setLastValuedAt(new Date());
+        }
+      } else {
+        await valuationProvider.fetchLiveValuations(activeHoldings, force);
+        setLastValuedAt(new Date());
       }
-    } catch (err) {
-      console.warn('Valuation refresh error:', err);
-    } finally {
-      isFetchingRef.current = false;
-      setIsFetchingValuations(false);
       setValuationVersion(v => v + 1);
+    } catch (err) {
+      console.error('[usePortfolio] Valuation fetch failed:', err);
+    } finally {
+      setIsFetchingValuations(false);
     }
-  }, [activeHoldings, valuationProvider]);
+  }, [valuationProvider, activeHoldings]);
 
-  // Active holdings identity signature for cold load and filter transition detection
+  // Auto-fetch valuations when active holdings identity keys change
   const activeKeysSignature = useMemo(() => {
-    return activeHoldings.map(p => `${p.positionKey || p.isin || p.security}:${p.currentUnits}`).join('|');
+    return activeHoldings.map(p => p.positionKey || p.isin || p.security).sort().join(';');
   }, [activeHoldings]);
 
-  // Auto fetch on initial render or position list change ONLY
   useEffect(() => {
     if (autoFetchValuations && activeHoldings.length > 0) {
       refreshValuations(false);
     }
   }, [activeKeysSignature, autoFetchValuations]);
-
 
   // Segregated Brokerage Cash Calculation
   const relevantBrokerageCash = useMemo(() => {
@@ -162,6 +166,15 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
     const uniquePlatforms = new Set(displayedPositions.map(p => p.subAccount).filter(Boolean));
     const portfolioXirr = computePortfolioXIRR(activeHoldings, valuationProvider);
 
+    const {
+      total1DChange,
+      previousDayValue,
+      portfolio1DPct,
+      valid1DCount,
+      hasMfIn1D,
+      hasEquityIn1D
+    } = computePortfolio1DReturns(activeHoldings, valuationProvider);
+
     return {
       activeCostBasis: Math.round(activeCost * 100) / 100,
       activeUnits: Math.round(activeUnits * 1000) / 1000,
@@ -173,6 +186,12 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
       totalUnrealizedPnl,
       unrealizedReturnPercent,
       portfolioXirr,
+      total1DChange,
+      previousDayValue,
+      portfolio1DPct,
+      valid1DCount,
+      hasMfIn1D,
+      hasEquityIn1D,
       isFullyValued,
       hasPartialValuation,
       valuedCount,

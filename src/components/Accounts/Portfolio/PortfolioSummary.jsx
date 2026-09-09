@@ -13,6 +13,11 @@ export default function PortfolioSummary({
   totalUnrealizedPnl = null,
   unrealizedReturnPercent = null,
   portfolioXirr = null,
+  total1DChange = null,
+  portfolio1DPct = null,
+  valid1DCount = 0,
+  hasMfIn1D = false,
+  hasEquityIn1D = false,
   isFullyValued = false,
   hasPartialValuation = false,
   valuedCount = 0,
@@ -122,12 +127,37 @@ export default function PortfolioSummary({
           </div>
         </div>
 
-        {/* Metric 5: TODAY'S CHANGE */}
-        <div className="hero-kpi-card">
-          <div className="hero-kpi-lbl">TODAY'S CHANGE</div>
-          <div className="hero-kpi-val kpi-val-na num-tabular">—</div>
+        {/* Metric 5: 1D RETURNS */}
+        <div 
+          className="hero-kpi-card" 
+          title={hasMfIn1D 
+            ? (hasEquityIn1D ? "Market movement since previous close & based on latest NAV vs previous NAV" : "Based on latest NAV vs previous NAV") 
+            : "Market movement since previous close"
+          }
+        >
+          <div className="hero-kpi-lbl">1D RETURNS</div>
+          <div className="hero-kpi-val num-tabular">
+            {isFetchingValuations && total1DChange === null ? (
+              <span className="kpi-val-na">Loading...</span>
+            ) : total1DChange !== null && portfolio1DPct !== null ? (
+              <span className={getPnlClass(total1DChange)}>
+                {total1DChange > 0 ? '↑ ' : total1DChange < 0 ? '↓ ' : '→ '}
+                {formatSignedCurrency(total1DChange)} ({formatSignedPercent(portfolio1DPct)})
+              </span>
+            ) : (
+              <span className="kpi-val-na">—</span>
+            )}
+          </div>
           <div className="hero-kpi-sub">
-            Market-day price change
+            {total1DChange !== null ? (
+              hasMfIn1D && !hasEquityIn1D 
+                ? 'Based on latest NAV vs previous NAV' 
+                : hasMfIn1D && hasEquityIn1D
+                  ? 'Market movement since previous close / NAV'
+                  : 'Market movement since previous close'
+            ) : (
+              'Market movement since previous close'
+            )}
           </div>
         </div>
 

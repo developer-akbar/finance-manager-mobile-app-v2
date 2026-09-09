@@ -7,6 +7,8 @@
  * Does not alter underlying transaction ledgers, FIFO accounting, cost basis, or P&L engines.
  */
 
+import { detectAssetType } from './valuationProvider.js';
+
 export function aggregatePositionsForDisplay(positions = [], valuationProvider = null) {
   if (!Array.isArray(positions)) return [];
 
@@ -227,38 +229,47 @@ export function formatSignedPercent(percent) {
 }
 
 /**
- * Calculates Today's Change indicator and percentage based on LTP and provider's previousClose.
- * Strict rules:
- * - Only applies to Equities and ETFs.
- * - Does not invent intraday MF movement.
- * - Returns formatted text: ↑ +₹X.XX (+X.XX%) / ↓ -₹X.XX (-X.XX%) / → ₹0.00 (0.00%) / —
+ * Calculates 1D Change indicator and percentage based on price/NAV and provider's previousClose/previousNAV.
+ * Supports:
+ * - Equities & ETFs: Today's Change (LTP vs Previous Close)
+ * - Mutual Funds: 1D Returns (Latest NAV vs Previous NAV)
+ * - Mode 'unit': Per-unit price/NAV movement (LTP - previousClose)
+ * - Mode 'position': Total 1D P&L movement for the position (LTP - previousClose) * currentUnits
+ * Returns formatted text: ↑ +₹X.XX (+X.XX%) / ↓ -₹X.XX (-X.XX%) / → ₹0.00 (0.00%) / —
  */
-export function getTodaysChange(price, previousClose, assetType = 'EQUITY') {
-  if (assetType === 'MUTUAL_FUND') {
-    return null;
-  }
+export function getDailyChangeIndicator(price, previousClose, assetType = 'EQUITY', units = null, mode = 'unit') {
   if (typeof price !== 'number' || typeof previousClose !== 'number' || isNaN(price) || isNaN(previousClose) || previousClose <= 0) {
     return null;
   }
-  const change = Math.round((price - previousClose) * 100) / 100;
+  const perUnitChange = Math.round((price - previousClose) * 100) / 100;
   const changePct = Math.round(((price - previousClose) / previousClose) * 10000) / 100;
 
+  let change = perUnitChange;
+  if (mode === 'position' && typeof units === 'number' && units > 0) {
+    change = Math.round((price - previousClose) * units * 100) / 100;
+  }
+
+  const isMf = assetType === 'MUTUAL_FUND';
+  const label = isMf ? '1D Returns' : "Today's Change";
+  const absChg = Math.abs(change).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const absPct = Math.abs(changePct).toFixed(2);
+
   if (change > 0) {
-    const absChg = Math.abs(change).toFixed(2);
-    const absPct = Math.abs(changePct).toFixed(2);
     return {
       change,
       changePct,
+      perUnitChange,
+      label,
       text: `↑ +₹${absChg} (+${absPct}%)`,
       cls: 'pos',
       color: 'var(--income)'
     };
   } else if (change < 0) {
-    const absChg = Math.abs(change).toFixed(2);
-    const absPct = Math.abs(changePct).toFixed(2);
     return {
       change,
       changePct,
+      perUnitChange,
+      label,
       text: `↓ -₹${absChg} (-${absPct}%)`,
       cls: 'neg',
       color: 'var(--expense)'
@@ -267,11 +278,17 @@ export function getTodaysChange(price, previousClose, assetType = 'EQUITY') {
     return {
       change: 0,
       changePct: 0,
+      perUnitChange: 0,
+      label,
       text: `→ ₹0.00 (0.00%)`,
       cls: '',
       color: 'var(--text-muted)'
     };
   }
+}
+
+export function getTodaysChange(price, previousClose, assetType = 'EQUITY', units = null, mode = 'unit') {
+  return getDailyChangeIndicator(price, previousClose, assetType, units, mode);
 }
 
 export function parseDateToTimestamp(dateStr) {
@@ -600,5 +617,100 @@ export function getInvestmentDisplayMetrics(position, valuation = null) {
     unvaluedLabel: isMf ? 'NAV unavailable' : 'LTP unavailable'
   };
 }
+
+/**
+ * Computes portfolio-level 1D Returns / Day's P&L and percentage movement
+ * Aggregates across all currently held Equities, ETFs, and Mutual Funds that have valid
+ * latest price/NAV and previous-close/previous-NAV data.
+ * 
+ * Rules:
+ * 1. Equity / ETF:
+ *    dayChangeAmount = (LTP - previousClose) * currentQty
+ *    previousCloseValue = previousClose * currentQty
+ * 2. Mutual Funds:
+ *    dayChangeAmount = (latestNAV - previousNAV) * currentUnits
+ *    previousNAVValue = previousNAV * currentUnits
+ * 3. Total:
+ *    total1DChange = sum(dayChangeAmount)
+ *    previousDayValue = sum(previousDayValues)
+ *    portfolio1DPct = (total1DChange / previousDayValue) * 100
+ */
+export function computePortfolio1DReturns(activePositions = [], valuationProvider = null) {
+  if (!Array.isArray(activePositions) || activePositions.length === 0 || !valuationProvider) {
+    return {
+      total1DChange: null,
+      previousDayValue: null,
+      portfolio1DPct: null,
+      valid1DCount: 0,
+      totalHoldingsCount: Array.isArray(activePositions) ? activePositions.length : 0,
+      hasMfIn1D: false,
+      hasEquityIn1D: false
+    };
+  }
+
+  let sum1DChange = 0;
+  let sumPrevDayValue = 0;
+  let valid1DCount = 0;
+  let hasMfIn1D = false;
+  let hasEquityIn1D = false;
+
+  for (const pos of activePositions) {
+    const val = valuationProvider.getValuation(pos);
+    const units = pos.currentUnits || 0;
+    if (
+      !val || 
+      !val.isValued || 
+      typeof val.nav !== 'number' || 
+      typeof val.previousClose !== 'number' || 
+      isNaN(val.nav) || 
+      isNaN(val.previousClose) || 
+      val.previousClose <= 0 || 
+      units <= 0
+    ) {
+      continue;
+    }
+
+    const dayChangeAmount = (val.nav - val.previousClose) * units;
+    const prevVal = val.previousClose * units;
+
+    sum1DChange += dayChangeAmount;
+    sumPrevDayValue += prevVal;
+    valid1DCount++;
+
+    const assetType = detectAssetType(pos);
+    if (assetType === 'MUTUAL_FUND') {
+      hasMfIn1D = true;
+    } else {
+      hasEquityIn1D = true;
+    }
+  }
+
+  if (valid1DCount === 0 || sumPrevDayValue <= 0) {
+    return {
+      total1DChange: null,
+      previousDayValue: null,
+      portfolio1DPct: null,
+      valid1DCount: 0,
+      totalHoldingsCount: activePositions.length,
+      hasMfIn1D,
+      hasEquityIn1D
+    };
+  }
+
+  const total1DChange = Math.round(sum1DChange * 100) / 100;
+  const previousDayValue = Math.round(sumPrevDayValue * 100) / 100;
+  const portfolio1DPct = Math.round((sum1DChange / sumPrevDayValue) * 10000) / 100;
+
+  return {
+    total1DChange,
+    previousDayValue,
+    portfolio1DPct,
+    valid1DCount,
+    totalHoldingsCount: activePositions.length,
+    hasMfIn1D,
+    hasEquityIn1D
+  };
+}
+
 
 

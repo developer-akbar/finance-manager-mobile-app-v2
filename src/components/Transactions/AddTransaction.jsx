@@ -249,8 +249,8 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
   }, []);
 
   const q = query.trim().toLowerCase();
-  const recentList = recent.filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
-  const allItems = items.filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
+  const recentList = (recent || []).filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
+  const allItems = (items || []).filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
   const noResults = recentList.length === 0 && allItems.length === 0;
 
   const Chip = ({ name }) => (
@@ -341,10 +341,11 @@ function SubcategoryPickerInline({ items, recent, value, onSelect, onClose }) {
 }
 
 function PickerField({ label, value, placeholder, error, items, recent, onSelect, exclude = '', onReorder, onAfterSelect, setPickerState, hideLabel = false, active }, ref) {
+  const typeKey = (label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   React.useImperativeHandle(ref, () => ({
     open: () => {
       setPickerState({
-        type: label.toLowerCase().replace(' ', ''),
+        type: typeKey,
         label,
         value,
         items,
@@ -354,7 +355,7 @@ function PickerField({ label, value, placeholder, error, items, recent, onSelect
         onReorder
       });
     }
-  }), [label, value, items, recent, onSelect, onAfterSelect, exclude, onReorder, setPickerState]);
+  }), [label, typeKey, value, items, recent, onSelect, onAfterSelect, exclude, onReorder, setPickerState]);
   return (
     <div className="form-group">
       {!hideLabel && <label className="form-label">{label}</label>}
@@ -362,7 +363,7 @@ function PickerField({ label, value, placeholder, error, items, recent, onSelect
         className={`form-input picker-trigger ${error ? 'err' : ''} ${!value ? 'picker-trigger-empty' : ''}` + (active ? ' focus' : '')}
         onClick={() => {
           setPickerState({
-            type: label.toLowerCase().replace(' ', ''),
+            type: typeKey,
             label,
             value,
             items,
@@ -590,10 +591,20 @@ export default function AddTransaction({
   const amountRef = useRef(null);
   const noteRef = useRef(null);
   const accountRef = useRef(null);
+  const subAccountRef = useRef(null);
+  const fromRef = useRef(null);
+  const fromSubAccountRef = useRef(null);
+  const toRef = useRef(null);
+  const toSubAccountRef = useRef(null);
   const categoryRef = useRef(null);
   const subcatRef = useRef(null);
-  const fromRef = useRef(null);
-  const toRef = useRef(null);
+  const fundingAccountRef = useRef(null);
+  const secRef = useRef(null);
+  const quantityRef = useRef(null);
+  const unitPriceRef = useRef(null);
+  const tradeValueRef = useRef(null);
+  const costBasisRef = useRef(null);
+  const actualAmountRef = useRef(null);
   const descriptionRef = useRef(null);
 
   const lastTime = useMemo(() => {
@@ -796,6 +807,175 @@ export default function AddTransaction({
   const formRefLatest = useRef(form);
   formRefLatest.current = form;
 
+  // Tags Accordion state
+  const [isTagsExpanded, setIsTagsExpanded] = useState(false);
+
+  const selectedTagsCount = useMemo(() => {
+    return (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean).length;
+  }, [form.tags]);
+
+  const handleNumberFocus = useCallback((e) => {
+    setPickerState(null);
+    try {
+      e.target.select();
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleNumberContextMenu = useCallback((e) => {
+    e.preventDefault();
+  }, []);
+
+  // Centralized Sequential Auto-Focus mechanism
+  const goNextEmpty = useCallback((justFilled) => {
+    const currentForm = formRefLatest.current;
+    const snap = { ...currentForm };
+    if (justFilled) {
+      if (justFilled.key) snap[justFilled.key] = justFilled.val;
+      Object.assign(snap, justFilled);
+    }
+    const currentType = snap.type || 'Expense';
+    const isTransferMode = currentType === 'Transfer-Out';
+    const isInvestmentMode = currentType === 'Investment';
+
+    setTimeout(() => {
+      if (isInvestmentMode) {
+        // 1. Investment Account
+        if (!snap.investmentAccount && !snap.account) {
+          accountRef.current?.open();
+          return;
+        }
+        // 2. Platform / Subaccount
+        const acctName = snap.investmentAccount || snap.account;
+        const acctObj = (accounts || []).find(a => (a.name || '').toLowerCase() === (acctName || '').toLowerCase());
+        const subs = getSortedSubs(acctObj);
+        if (subs.length > 0 && !snap.subAccount) {
+          subAccountRef.current?.open ? subAccountRef.current.open() : subAccountRef.current?.focus();
+          return;
+        }
+        // 3. Funding / Settlement Account
+        if (!snap.fundingAccount && !snap.settlementAccount) {
+          fundingAccountRef.current?.focus();
+          return;
+        }
+        // 4. Security
+        if (!snap.securitySymbol || !snap.securitySymbol.trim()) {
+          secRef.current?.focus();
+          return;
+        }
+        // 5. Units / Quantity
+        if (!snap.quantity || parseFloat(snap.quantity) === 0 || isNaN(parseFloat(snap.quantity))) {
+          quantityRef.current?.focus();
+          return;
+        }
+        // 6. NAV / Price
+        if (!snap.unitPrice || parseFloat(snap.unitPrice) === 0 || isNaN(parseFloat(snap.unitPrice))) {
+          unitPriceRef.current?.focus();
+          return;
+        }
+        // 7. Trade Value
+        if (!snap.tradeValue && !snap.amount) {
+          tradeValueRef.current?.focus();
+          return;
+        }
+        // 8. Cost Basis (for SELL)
+        if ((snap.investmentTransactionType || 'BUY') === 'SELL' && (!snap.costBasis || isNaN(parseFloat(snap.costBasis)))) {
+          costBasisRef.current?.focus();
+          return;
+        }
+        // 9. Actual Paid / Received (for ACTUAL mode if blank)
+        if ((snap.settlementMode || 'ACTUAL') === 'ACTUAL' && (!snap.actualAmount || isNaN(parseFloat(snap.actualAmount)))) {
+          actualAmountRef.current?.focus();
+          return;
+        }
+        // 10. Note
+        if (!snap.note || !snap.note.trim()) {
+          noteRef.current?.focus();
+          return;
+        }
+      } else if (isTransferMode) {
+        // 1. From Account
+        if (!snap.fromAccount) {
+          fromRef.current?.open();
+          return;
+        }
+        // 2. From Sub Account
+        const fromObj = (accounts || []).find(a => a.name === snap.fromAccount);
+        const fromSubs = getSortedSubs(fromObj);
+        if (fromSubs.length > 0 && !snap.fromSubAccount) {
+          fromSubAccountRef.current?.open ? fromSubAccountRef.current.open() : fromSubAccountRef.current?.focus();
+          return;
+        }
+        // 3. To Account
+        if (!snap.toAccount) {
+          toRef.current?.open();
+          return;
+        }
+        // 4. To Sub Account
+        const toObj = (accounts || []).find(a => a.name === snap.toAccount);
+        const toSubs = getSortedSubs(toObj);
+        if (toSubs.length > 0 && !snap.toSubAccount) {
+          toSubAccountRef.current?.open ? toSubAccountRef.current.open() : toSubAccountRef.current?.focus();
+          return;
+        }
+        // 5. Amount
+        if (!snap.amount || parseFloat(snap.amount) === 0 || isNaN(parseFloat(snap.amount))) {
+          amountRef.current?.focus();
+          return;
+        }
+        // 6. Note
+        if (!snap.note || !snap.note.trim()) {
+          noteRef.current?.focus();
+          return;
+        }
+      } else {
+        // Expense or Income
+        // 1. Account
+        if (!snap.account) {
+          accountRef.current?.open();
+          return;
+        }
+        // 2. Sub Account
+        const acctObj = (accounts || []).find(a => (a.name || '').toLowerCase() === (snap.account || '').toLowerCase());
+        const subs = getSortedSubs(acctObj);
+        if (subs.length > 0 && !snap.subAccount) {
+          subAccountRef.current?.open ? subAccountRef.current.open() : subAccountRef.current?.focus();
+          return;
+        }
+        // 3. Category
+        if (!snap.category) {
+          categoryRef.current?.open();
+          return;
+        }
+        // 4. Subcategory
+        const catSubs = (categories?.[snap.category]?.subcategories || []).filter(s => s && s !== 'Default');
+        if (catSubs.length > 0 && !snap.subcategory) {
+          subcatRef.current?.open();
+          return;
+        }
+        // 5. Amount
+        if (!snap.amount || parseFloat(snap.amount) === 0 || isNaN(parseFloat(snap.amount))) {
+          amountRef.current?.focus();
+          return;
+        }
+        // 6. Note
+        if (!snap.note || !snap.note.trim()) {
+          noteRef.current?.focus();
+          return;
+        }
+      }
+    }, 120);
+  }, [accounts, categories, getSortedSubs]);
+
+  const afterCategory = useCallback((catVal, freshSubs) => {
+    setTimeout(() => {
+      if (freshSubs && freshSubs.length > 0) {
+        subcatRef.current?.open();
+      } else {
+        goNextEmpty({ key: 'category', val: catVal });
+      }
+    }, 120);
+  }, [goNextEmpty]);
+
   // SMS / UPI Parser State
   const [smsModal, setSmsModal] = useState(false);
   const [smsInputText, setSmsInputText] = useState('');
@@ -856,51 +1036,151 @@ export default function AddTransaction({
     };
   }, [backInterceptRef, onClose, reorderScreen]);
 
-  // Open account picker as first focus on mount (add/copy only, not edit)
+  // Open first appropriate field on mount (add/copy/prefill)
   React.useEffect(() => {
     if (isEdit) return;
-    if (isTransfer) {
-      if (form.fromAccount && !form.toAccount) {
-        const t = setTimeout(() => toRef.current?.open(), 200);
-        return () => clearTimeout(t);
-      }
-      return;
-    }
-    const t = setTimeout(() => accountRef.current?.open(), 200);
+    const t = setTimeout(() => {
+      goNextEmpty();
+    }, 200);
     return () => clearTimeout(t);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEdit, goNextEmpty]);
 
   const set = (k, v) => {
+    let nextSubVal = null;
+    let nextFromSubVal = null;
+    let nextToSubVal = null;
+
     setForm(p => {
       if (k === 'type') {
-        const n = { ...p, type: v, category: '', subcategory: '' };
-        if (v === 'Transfer-Out' && p.account) { n.fromAccount = p.account; n.account = ''; }
-        else if (p.type === 'Transfer-Out' && v !== 'Transfer-Out' && p.fromAccount) { n.account = p.fromAccount; n.fromAccount = ''; n.toAccount = ''; }
+        const isTransferType = v === 'Transfer-Out';
+        const isInvType = v === 'Investment';
+
+        const n = { ...p, type: v };
+
+        if (isTransferType) {
+          const fromAcct = p.account || p.fromAccount || '';
+          const fromObj = (accounts || []).find(a => (a.name || '').toLowerCase() === (fromAcct || '').toLowerCase()) || { name: fromAcct, subAccounts: [] };
+          const fromSubs = getSortedSubs(fromObj);
+          n.fromAccount = fromAcct;
+          n.fromSubAccount = fromSubs.includes(p.subAccount || p.fromSubAccount) ? (p.subAccount || p.fromSubAccount) : '';
+
+          const toAcct = p.toAccount || '';
+          const toObj = (accounts || []).find(a => (a.name || '').toLowerCase() === (toAcct || '').toLowerCase()) || { name: toAcct, subAccounts: [] };
+          const toSubs = getSortedSubs(toObj);
+          n.toAccount = toAcct;
+          n.toSubAccount = toSubs.includes(p.toSubAccount) ? p.toSubAccount : '';
+
+          n.account = '';
+          n.subAccount = '';
+          n.category = '';
+          n.subcategory = '';
+          n.investmentAccount = '';
+          n.fundingAccount = '';
+          n.settlementAccount = '';
+          n.securitySymbol = '';
+          n.quantity = '';
+          n.unitPrice = '';
+          n.tradeValue = '';
+          n.costBasis = '';
+          n.actualAmount = '';
+        } else if (isInvType) {
+          const invAcct = p.investmentAccount || p.account || p.fromAccount || '';
+          const invObj = (accounts || []).find(a => (a.name || '').toLowerCase() === (invAcct || '').toLowerCase()) || { name: invAcct, subAccounts: [] };
+          const invSubs = getSortedSubs(invObj);
+          n.investmentAccount = invAcct;
+          n.account = invAcct;
+          n.subAccount = invSubs.includes(p.subAccount || p.fromSubAccount) ? (p.subAccount || p.fromSubAccount) : '';
+
+          n.fromAccount = '';
+          n.fromSubAccount = '';
+          n.toAccount = '';
+          n.toSubAccount = '';
+          n.category = '';
+          n.subcategory = '';
+        } else {
+          // Expense or Income
+          const acct = p.account || p.fromAccount || '';
+          const acctObj = (accounts || []).find(a => (a.name || '').toLowerCase() === (acct || '').toLowerCase()) || { name: acct, subAccounts: [] };
+          const subs = getSortedSubs(acctObj);
+          n.account = acct;
+          n.subAccount = subs.includes(p.subAccount || p.fromSubAccount) ? (p.subAccount || p.fromSubAccount) : '';
+
+          // Validate category for new type
+          const wantType = v === 'Income' ? 'Income' : 'Expense';
+          const catArr = state.categoriesArr || [];
+          const validCatNames = catArr.length > 0
+            ? catArr.filter(c => (c.type || 'Expense') === wantType).map(c => c.name)
+            : Object.entries(categories || {}).filter(([, d]) => (d?.type || 'Expense') === wantType).map(([cn]) => cn);
+
+          if (p.category && validCatNames.includes(p.category)) {
+            n.category = p.category;
+            const freshSubs = (categories?.[p.category]?.subcategories || []).filter(s => s && s !== 'Default');
+            n.subcategory = freshSubs.includes(p.subcategory) ? p.subcategory : '';
+          } else {
+            n.category = '';
+            n.subcategory = '';
+          }
+
+          n.fromAccount = '';
+          n.fromSubAccount = '';
+          n.toAccount = '';
+          n.toSubAccount = '';
+          n.investmentAccount = '';
+          n.fundingAccount = '';
+          n.settlementAccount = '';
+          n.securitySymbol = '';
+          n.quantity = '';
+          n.unitPrice = '';
+          n.tradeValue = '';
+          n.costBasis = '';
+          n.actualAmount = '';
+        }
         return n;
       }
-      if (k === 'category') return { ...p, [k]: v, subcategory: '' };
-      if (k === 'investmentAccount') return { ...p, investmentAccount: v, account: v };
+
+      if (k === 'account') {
+        const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === (v || '').toLowerCase()) || { name: v, subAccounts: [] };
+        const subs = getSortedSubs(matched);
+        nextSubVal = subs.length > 0 ? (subs.includes(p.subAccount) ? p.subAccount : '') : '';
+        return { ...p, account: v, subAccount: nextSubVal };
+      }
+
+      if (k === 'fromAccount') {
+        const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === (v || '').toLowerCase()) || { name: v, subAccounts: [] };
+        const subs = getSortedSubs(matched);
+        nextFromSubVal = subs.length > 0 ? (subs.includes(p.fromSubAccount) ? p.fromSubAccount : '') : '';
+        return { ...p, fromAccount: v, fromSubAccount: nextFromSubVal };
+      }
+
+      if (k === 'toAccount') {
+        const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === (v || '').toLowerCase()) || { name: v, subAccounts: [] };
+        const subs = getSortedSubs(matched);
+        nextToSubVal = subs.length > 0 ? (subs.includes(p.toSubAccount) ? p.toSubAccount : '') : '';
+        return { ...p, toAccount: v, toSubAccount: nextToSubVal };
+      }
+
+      if (k === 'investmentAccount') {
+        const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === (v || '').toLowerCase()) || { name: v, subAccounts: [] };
+        const subs = getSortedSubs(matched);
+        nextSubVal = subs.length > 0 ? (subs.includes(p.subAccount) ? p.subAccount : '') : '';
+        return { ...p, investmentAccount: v, account: v, subAccount: nextSubVal };
+      }
+
+      if (k === 'category') {
+        const freshSubs = (categories?.[v]?.subcategories || []).filter(s => s && s !== 'Default');
+        const nextSub = freshSubs.includes(p.subcategory) ? p.subcategory : '';
+        return { ...p, category: v, subcategory: nextSub };
+      }
+
       return { ...p, [k]: v };
     });
+
     if (errors[k]) setErrors(p => ({ ...p, [k]: '' }));
-    // Auto-open picker for Transfer
     if (k === 'type') {
       setPickerState(null);
-      if (v === 'Transfer-Out') {
-        setTimeout(() => setPickerState({
-          type: 'from',
-          label: 'From',
-          value: form.fromAccount,
-          items: accountList,
-          recent: recentAccounts,
-          onSelect: (val) => { set('fromAccount', val); goNextEmpty({ key: 'fromAccount', val }); },
-          onReorder: () => setReorderScreen('accounts')
-        }), 100);
-      } else {
-        setTimeout(() => {
-          accountRef.current?.open();
-        }, 100);
-      }
+      setTimeout(() => {
+        goNextEmpty({ key: 'type', val: v });
+      }, 100);
     }
   };
 
@@ -912,11 +1192,11 @@ export default function AddTransaction({
   }, [accounts, form.investmentAccount, form.account]);
 
   const fromAcctObj = useMemo(() => {
-    return (accounts || []).find(a => a.name === form.fromAccount);
+    return (accounts || []).find(a => (a.name || '').toLowerCase() === (form.fromAccount || '').toLowerCase());
   }, [accounts, form.fromAccount]);
 
   const toAcctObj = useMemo(() => {
-    return (accounts || []).find(a => a.name === form.toAccount);
+    return (accounts || []).find(a => (a.name || '').toLowerCase() === (form.toAccount || '').toLowerCase());
   }, [accounts, form.toAccount]);
 
   const accountList = useMemo(() => {
@@ -1561,6 +1841,7 @@ export default function AddTransaction({
     });
     setSecSugs([]);
     setSecFocused(false);
+    goNextEmpty({ key: 'securitySymbol', val: cleanDisplayName || canonicalSymbol });
   };
 
   const roundNum = (n, maxDec = 2) => {
@@ -2126,6 +2407,21 @@ export default function AddTransaction({
       const manualTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean).map(t => t.startsWith('#') ? t : `#${t}`);
       const combinedTags = Array.from(new Set([...manualTags, ...extractedHashtags])).join(', ');
 
+      // Derive sanitized dependent field values based on current active transaction type & parent accounts
+      const mainAcctName = isTransfer ? (form.fromAccount || '') : (form.account || form.investmentAccount || '');
+      const mainAcctObj = (accounts || []).find(a => (a.name || '').toLowerCase() === mainAcctName.toLowerCase()) || { name: mainAcctName, subAccounts: [] };
+      const validMainSubs = getSortedSubs(mainAcctObj);
+      const cleanSubAccount = validMainSubs.includes(isTransfer ? form.fromSubAccount : form.subAccount) ? (isTransfer ? form.fromSubAccount : form.subAccount) : '';
+
+      const toAcctName = isTransfer ? (form.toAccount || '') : '';
+      const toAcctObj = (accounts || []).find(a => (a.name || '').toLowerCase() === toAcctName.toLowerCase()) || { name: toAcctName, subAccounts: [] };
+      const validToSubs = getSortedSubs(toAcctObj);
+      const cleanToSubAccount = (isTransfer && validToSubs.includes(form.toSubAccount)) ? form.toSubAccount : '';
+
+      const catName = isTransfer ? '' : (form.category || '');
+      const validCatSubs = (categories?.[catName]?.subcategories || []).filter(s => s && s !== 'Default');
+      const cleanSubcategory = (!isTransfer && !isInvMode && validCatSubs.includes(form.subcategory)) ? form.subcategory : 'Default';
+
       if (isSplit && !isTransfer && !isEdit) {
         const splitGroupId = 'split-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
         for (const s of splits) {
@@ -2144,7 +2440,7 @@ export default function AddTransaction({
             'Income/Expense': form.type,
             Tags: combinedTags,
             split_group_id: splitGroupId,
-            SubAccount: form.subAccount,
+            SubAccount: cleanSubAccount,
           });
         }
         onClose();
@@ -2160,7 +2456,7 @@ export default function AddTransaction({
             rule_type: 'instalment', status: 'completed',
             txn_type: form.type,
             account: form.account, from_account: form.fromAccount || '', to_account: form.toAccount || '',
-            category: form.category, subcategory: form.subcategory || '',
+            category: form.category, subcategory: cleanSubcategory,
             base_note: baseNote, description: form.description || '',
             currency: 'INR', total_amount: totalAmount,
             total_days: recurringConfig.totalDays,
@@ -2180,16 +2476,16 @@ export default function AddTransaction({
             await addTransaction({
               Date: instTxnDate, Time: form.time || '00:00',
               Account: form.account, FromAccount: form.fromAccount || '', ToAccount: form.toAccount || '',
-              Category: form.category, Subcategory: form.subcategory || 'Default',
+              Category: form.category, Subcategory: cleanSubcategory,
               Note: buildInstalmentNote(baseNote, inst.part, inst.total),
               Description: form.description || '',
               INR: inst.amount, Amount: String(inst.amount),
               Currency: 'INR', 'Income/Expense': form.type,
               recurring_rule_id: saved.id,
               Tags: combinedTags,
-              SubAccount: isTransfer ? form.fromSubAccount : form.subAccount,
-              FromSubAccount: isTransfer ? form.fromSubAccount : '',
-              ToSubAccount: isTransfer ? form.toSubAccount : '',
+              SubAccount: cleanSubAccount,
+              FromSubAccount: isTransfer ? cleanSubAccount : '',
+              ToSubAccount: isTransfer ? cleanToSubAccount : '',
             });
           }
         } else if (recurringConfig.type === 'repeat') {
@@ -2198,7 +2494,7 @@ export default function AddTransaction({
             rule_type: 'repeat', status: 'active',
             txn_type: form.type,
             account: form.account, from_account: form.fromAccount || '', to_account: form.toAccount || '',
-            category: form.category, subcategory: form.subcategory || '',
+            category: form.category, subcategory: cleanSubcategory,
             base_note: baseNote, description: form.description || '',
             currency: 'INR', amount_per_part: totalAmount,
             start_date: isoDate,
@@ -2212,15 +2508,15 @@ export default function AddTransaction({
             Date: txnDate, Time: form.time || '',
             Account: form.account, FromAccount: form.fromAccount || '', ToAccount: form.toAccount || '',
             Category: isTransfer ? 'Transfer' : form.category,
-            Subcategory: form.subcategory || 'Default',
+            Subcategory: cleanSubcategory,
             Note: baseNote, Description: form.description || '',
             INR: totalAmount, Amount: form.amount,
             Currency: 'INR', 'Income/Expense': form.type,
             recurring_rule_id: saved.id,
             Tags: combinedTags,
-            SubAccount: isTransfer ? form.fromSubAccount : form.subAccount,
-            FromSubAccount: isTransfer ? form.fromSubAccount : '',
-            ToSubAccount: isTransfer ? form.toSubAccount : '',
+            SubAccount: cleanSubAccount,
+            FromSubAccount: isTransfer ? cleanSubAccount : '',
+            ToSubAccount: isTransfer ? cleanToSubAccount : '',
           });
         }
       } else {
@@ -2283,7 +2579,7 @@ export default function AddTransaction({
           }
 
           const currentInvAcct = form.investmentAccount || form.account || '';
-          const currentSubAcct = form.subAccount || '';
+          const currentSubAcct = cleanSubAccount;
           const fundingBankAcct = (invType === 'BUY' ? form.fundingAccount : (form.settlementAccount || form.fundingAccount)) || '';
           const isFundedFromBank = Boolean(fundingBankAcct && fundingBankAcct.toLowerCase() !== currentInvAcct.toLowerCase());
 
@@ -2323,7 +2619,7 @@ export default function AddTransaction({
             FromAccount: fromAcct,
             ToAccount: toAcct,
             Category: currentInvAcct,
-            Subcategory: form.subcategory || 'Default',
+            Subcategory: cleanSubcategory,
             Note: baseNote || form.securitySymbol || '',
             Description: form.description || (isEdit ? (editTransaction?.Description || '') : ''),
             INR: savedInr,
@@ -2483,44 +2779,7 @@ export default function AddTransaction({
     } finally { setSaving(false); }
   };
 
-  // Smart focus flow: after a field is selected, move to the next EMPTY required field
-  // Order: account → category → subcategory (if available) → amount (if empty) → note
-  // subsForCat: pass the subcategories for the just-selected category (avoids stale closure)
-  // afterCategory: called when category is selected (both add AND edit mode).
-  // In edit: opens subcat picker if subs exist (user just changed category, may need new subcat).
-  // In add:  same, then continues to amount/note if no subs.
-  const afterCategory = (catVal, freshSubs) => {
-    setTimeout(() => {
-      if (freshSubs && freshSubs.length > 0) {
-        subcatRef.current?.open();
-      } else if (!isEdit) {
-        if (!form.amount) amountRef.current?.focus(); else noteRef.current?.focus();
-      }
-    }, 120);
-  };
 
-  // goNextEmpty: smart flow for account/amount/note — does NOT touch subcategory
-  const goNextEmpty = (justFilled) => {
-    if (isEdit) return;
-    const currentForm = formRefLatest.current;
-    const snap = { ...currentForm };
-    if (justFilled) snap[justFilled.key] = justFilled.val;
-    const currentIsTransfer = snap.type === 'Transfer-Out';
-    setTimeout(() => {
-      if (currentIsTransfer) {
-        if (!snap.fromAccount) { fromRef.current?.open(); return; }
-        if (!snap.toAccount) {
-          setTimeout(() => { toRef.current?.open(); }, 80);
-          return;
-        }
-      } else {
-        if (!snap.account) { accountRef.current?.open(); return; }
-        if (!snap.category) { categoryRef.current?.open(); return; }
-      }
-      if (!snap.amount) { amountRef.current?.focus(); return; }
-      if (!snap.note) { noteRef.current?.focus(); return; }
-    }, 120);
-  };
 
   return (
     <>
@@ -2718,17 +2977,19 @@ export default function AddTransaction({
                 items={accountList}
                 recent={recentAccounts}
                 onSelect={v => {
-                  setForm(prev => {
-                    const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === v.toLowerCase()) || { name: v, subAccounts: [] };
-                    const subs = getSortedSubs(matched);
-                    const nextSub = subs.length > 0 ? (subs.includes(prev.subAccount) ? prev.subAccount : subs[0]) : '';
-                    return {
-                      ...prev,
-                      investmentAccount: v,
-                      account: v,
-                      subAccount: nextSub
-                    };
-                  });
+                  const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === v.toLowerCase()) || { name: v, subAccounts: [] };
+                  const subs = getSortedSubs(matched);
+                  const nextSub = subs.length > 0 ? (subs.includes(form.subAccount) ? form.subAccount : '') : '';
+                  setForm(prev => ({
+                    ...prev,
+                    investmentAccount: v,
+                    account: v,
+                    subAccount: nextSub
+                  }));
+                  if (pickerState && (pickerState.type === 'platformsubaccount' || pickerState.type === 'subaccount') && nextSub === '') {
+                    setPickerState(null);
+                  }
+                  goNextEmpty({ key: 'investmentAccount', val: v, subAccount: nextSub });
                 }}
                 onAfterSelect={() => setPickerState(null)}
                 onReorder={() => setReorderScreen('accounts')}
@@ -2736,31 +2997,36 @@ export default function AddTransaction({
               />
 
               {/* 3. Platform / Subaccount */}
-              <div className="form-group" style={{ marginTop: 8 }}>
-                <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>Platform / Subaccount</label>
-                <select
-                  className="form-input"
-                  style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }}
+              {selectedAcctObj && getSortedSubs(selectedAcctObj).length > 0 && (
+                <PickerFieldFR
+                  setPickerState={setPickerState}
+                  ref={subAccountRef}
+                  label="Platform / Subaccount"
                   value={form.subAccount}
-                  onChange={e => set('subAccount', e.target.value)}
-                >
-                  <option value="">(Select Platform / Subaccount)</option>
-                  {selectedAcctObj && getSortedSubs(selectedAcctObj).map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
+                  placeholder="Select Platform / Subaccount"
+                  items={getSortedSubs(selectedAcctObj)}
+                  onSelect={v => {
+                    set('subAccount', v);
+                    goNextEmpty({ key: 'subAccount', val: v });
+                  }}
+                  onAfterSelect={() => setPickerState(null)}
+                  active={pickerState && (pickerState.label === 'Platform / Subaccount' || pickerState.type === 'platformsubaccount')}
+                />
+              )}
 
               {/* 4. Funding Account (BUY) or Settlement Account (SELL) */}
-              <div className="form-group" style={{ marginTop: 8 }}>
-                <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>
+              <div className="form-group">
+                <label className="form-label">
                   {(form.investmentTransactionType || 'BUY') === 'BUY' ? 'Funding Account' : 'Settlement Account'}
                 </label>
                 <select
+                  ref={fundingAccountRef}
                   className="form-input"
-                  style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }}
                   value={(form.investmentTransactionType || 'BUY') === 'BUY' ? form.fundingAccount : (form.settlementAccount || form.fundingAccount)}
                   onChange={e => {
                     const val = e.target.value;
                     setForm(p => ({ ...p, fundingAccount: val, settlementAccount: val }));
+                    goNextEmpty({ key: 'fundingAccount', val });
                   }}
                 >
                   <option value="">(None / Direct Portfolio Cash)</option>
@@ -2769,14 +3035,16 @@ export default function AddTransaction({
               </div>
 
               {/* 5. Security / Fund */}
-              <div className="form-group" style={{ marginTop: 8, position: 'relative' }}>
+              <div className="form-group" style={{ position: 'relative' }}>
                 <label className="form-label">Security / Fund</label>
                 <input
+                  ref={secRef}
                   className={`form-input ${errors.securitySymbol ? 'err' : ''}`}
                   type="text"
                   placeholder="e.g. PC Jeweller, Vodafone Idea, Gold BeES"
                   value={form.securitySymbol}
                   onFocus={() => {
+                    setPickerState(null);
                     setSecFocused(true);
                     if (form.securitySymbol && form.securitySymbol.trim()) {
                       handleSecurityChange(form.securitySymbol);
@@ -2840,7 +3108,7 @@ export default function AddTransaction({
               </div>
 
               {/* 6. Note */}
-              <div className="form-group" style={{ marginTop: 8 }}>
+              <div className="form-group">
                 <label className="form-label">Note</label>
                 <div style={{ position: 'relative', flex: 1 }}>
                   <input
@@ -2882,58 +3150,110 @@ export default function AddTransaction({
               </div>
 
               {/* 7. Controlled 2-of-3 inputs: Units, NAV/Price, Trade Value */}
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
                 <div className="form-group" style={{ flex: 1, margin: 0 }}>
                   <label className="form-label">Units / Quantity</label>
                   <input
+                    ref={quantityRef}
                     className={`form-input ${errors.quantity ? 'err' : ''}`}
                     type="text"
                     inputMode="decimal"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck="false"
                     placeholder="0.000"
                     value={form.quantity}
+                    onFocus={handleNumberFocus}
+                    onClick={handleNumberFocus}
+                    onContextMenu={handleNumberContextMenu}
                     onChange={e => handleUnitsChange(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); unitPriceRef.current?.focus(); } }}
                   />
                   {errors.quantity && <div className="field-error" style={{ color: 'var(--expense)', fontSize: '0.7rem', marginTop: 3 }}>{errors.quantity}</div>}
                 </div>
                 <div className="form-group" style={{ flex: 1, margin: 0 }}>
                   <label className="form-label">NAV / Price (₹)</label>
                   <input
+                    ref={unitPriceRef}
                     className={`form-input ${errors.unitPrice ? 'err' : ''}`}
                     type="text"
                     inputMode="decimal"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck="false"
                     placeholder="0.0000"
                     value={form.unitPrice}
+                    onFocus={handleNumberFocus}
+                    onClick={handleNumberFocus}
+                    onContextMenu={handleNumberContextMenu}
                     onChange={e => handlePriceChange(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); tradeValueRef.current?.focus(); } }}
                   />
                   {errors.unitPrice && <div className="field-error" style={{ color: 'var(--expense)', fontSize: '0.7rem', marginTop: 3 }}>{errors.unitPrice}</div>}
                 </div>
               </div>
 
-              <div className="form-group" style={{ marginTop: 8 }}>
+              <div className="form-group">
                 <label className="form-label">Trade Value (₹)</label>
                 <input
+                  ref={tradeValueRef}
                   className={`form-input ${errors.tradeValue || errors.amount ? 'err' : ''}`}
                   type="text"
                   inputMode="decimal"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck="false"
                   placeholder="0.00"
                   value={form.tradeValue || form.amount}
+                  onFocus={handleNumberFocus}
+                  onClick={handleNumberFocus}
+                  onContextMenu={handleNumberContextMenu}
                   onChange={e => handleTradeValueChange(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if ((form.investmentTransactionType || 'BUY') === 'SELL') {
+                        costBasisRef.current?.focus();
+                      } else if ((form.settlementMode || 'ACTUAL') === 'ACTUAL') {
+                        actualAmountRef.current?.focus();
+                      } else {
+                        noteRef.current?.focus();
+                      }
+                    }
+                  }}
                 />
                 {errors.tradeValue && <div className="field-error" style={{ color: 'var(--expense)', fontSize: '0.7rem', marginTop: 3 }}>{errors.tradeValue}</div>}
               </div>
 
               {/* 8. SELL-specific: Cost Basis & Realized P&L */}
               {(form.investmentTransactionType || 'BUY') === 'SELL' && (
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <div style={{ display: 'flex', gap: 8 }}>
                   <div className="form-group" style={{ flex: 1, margin: 0 }}>
                     <label className="form-label">Cost Basis (₹)</label>
                     <input
+                      ref={costBasisRef}
                       className={`form-input ${errors.costBasis ? 'err' : ''}`}
                       type="text"
                       inputMode="decimal"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      spellCheck="false"
                       placeholder="0.00"
                       value={form.costBasis}
+                      onFocus={handleNumberFocus}
+                      onClick={handleNumberFocus}
+                      onContextMenu={handleNumberContextMenu}
                       onChange={e => handleCostBasisChange(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if ((form.settlementMode || 'ACTUAL') === 'ACTUAL') {
+                            actualAmountRef.current?.focus();
+                          } else {
+                            noteRef.current?.focus();
+                          }
+                        }
+                      }}
                     />
                     {errors.costBasis && <div className="field-error" style={{ color: 'var(--expense)', fontSize: '0.7rem', marginTop: 3 }}>{errors.costBasis}</div>}
                   </div>
@@ -2957,7 +3277,7 @@ export default function AddTransaction({
 
               {/* 9. Settlement & Charges Section */}
               <div style={{
-                marginTop: 10,
+                marginTop: 6,
                 background: 'var(--bg-card2)',
                 border: '1px solid var(--border)',
                 borderRadius: 12,
@@ -3058,16 +3378,24 @@ export default function AddTransaction({
                 {/* ACTUAL Mode Input */}
                 {(form.settlementMode || 'ACTUAL') === 'ACTUAL' && (
                   <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label" style={{ fontSize: '0.74rem' }}>
+                    <label className="form-label">
                       {(form.investmentTransactionType || 'BUY') === 'BUY' ? 'Actual Paid (₹)' : 'Actual Received (₹)'}
                     </label>
                     <input
+                      ref={actualAmountRef}
                       className="form-input"
                       type="text"
                       inputMode="decimal"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      spellCheck="false"
                       placeholder={form.tradeValue || form.amount || '0.00'}
                       value={form.actualAmount}
+                      onFocus={handleNumberFocus}
+                      onClick={handleNumberFocus}
+                      onContextMenu={handleNumberContextMenu}
                       onChange={e => handleActualAmountChange(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); noteRef.current?.focus(); } }}
                     />
                     <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 4 }}>
                       {(form.investmentTransactionType || 'BUY') === 'BUY'
@@ -3120,9 +3448,15 @@ export default function AddTransaction({
                           className="form-input"
                           type="text"
                           inputMode="decimal"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck="false"
                           placeholder="0.00"
                           style={{ fontSize: '0.78rem', padding: '4px 6px' }}
                           value={form.brokerageCharges}
+                          onFocus={handleNumberFocus}
+                          onClick={handleNumberFocus}
+                          onContextMenu={handleNumberContextMenu}
                           onChange={e => handleChargeChange('brokerageCharges', e.target.value)}
                         />
                       </div>
@@ -3132,9 +3466,15 @@ export default function AddTransaction({
                           className="form-input"
                           type="text"
                           inputMode="decimal"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck="false"
                           placeholder="0.00"
                           style={{ fontSize: '0.78rem', padding: '4px 6px' }}
                           value={form.exchangeCharges}
+                          onFocus={handleNumberFocus}
+                          onClick={handleNumberFocus}
+                          onContextMenu={handleNumberContextMenu}
                           onChange={e => handleChargeChange('exchangeCharges', e.target.value)}
                         />
                       </div>
@@ -3144,9 +3484,15 @@ export default function AddTransaction({
                           className="form-input"
                           type="text"
                           inputMode="decimal"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck="false"
                           placeholder="0.00"
                           style={{ fontSize: '0.78rem', padding: '4px 6px' }}
                           value={form.sttCharges}
+                          onFocus={handleNumberFocus}
+                          onClick={handleNumberFocus}
+                          onContextMenu={handleNumberContextMenu}
                           onChange={e => handleChargeChange('sttCharges', e.target.value)}
                         />
                       </div>
@@ -3156,9 +3502,15 @@ export default function AddTransaction({
                           className="form-input"
                           type="text"
                           inputMode="decimal"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck="false"
                           placeholder="0.00"
                           style={{ fontSize: '0.78rem', padding: '4px 6px' }}
                           value={form.sebiCharges}
+                          onFocus={handleNumberFocus}
+                          onClick={handleNumberFocus}
+                          onContextMenu={handleNumberContextMenu}
                           onChange={e => handleChargeChange('sebiCharges', e.target.value)}
                         />
                       </div>
@@ -3168,9 +3520,15 @@ export default function AddTransaction({
                           className="form-input"
                           type="text"
                           inputMode="decimal"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck="false"
                           placeholder="0.00"
                           style={{ fontSize: '0.78rem', padding: '4px 6px' }}
                           value={form.stampDutyCharges}
+                          onFocus={handleNumberFocus}
+                          onClick={handleNumberFocus}
+                          onContextMenu={handleNumberContextMenu}
                           onChange={e => handleChargeChange('stampDutyCharges', e.target.value)}
                         />
                       </div>
@@ -3180,9 +3538,15 @@ export default function AddTransaction({
                           className="form-input"
                           type="text"
                           inputMode="decimal"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck="false"
                           placeholder="0.00"
                           style={{ fontSize: '0.78rem', padding: '4px 6px' }}
                           value={form.gstCharges}
+                          onFocus={handleNumberFocus}
+                          onClick={handleNumberFocus}
+                          onContextMenu={handleNumberContextMenu}
                           onChange={e => handleChargeChange('gstCharges', e.target.value)}
                         />
                       </div>
@@ -3192,9 +3556,15 @@ export default function AddTransaction({
                           className="form-input"
                           type="text"
                           inputMode="decimal"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck="false"
                           placeholder="0.00"
                           style={{ fontSize: '0.78rem', padding: '4px 6px' }}
                           value={form.dpCharges}
+                          onFocus={handleNumberFocus}
+                          onClick={handleNumberFocus}
+                          onContextMenu={handleNumberContextMenu}
                           onChange={e => handleChargeChange('dpCharges', e.target.value)}
                         />
                       </div>
@@ -3204,9 +3574,15 @@ export default function AddTransaction({
                           className="form-input"
                           type="text"
                           inputMode="decimal"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck="false"
                           placeholder="0.00"
                           style={{ fontSize: '0.78rem', padding: '4px 6px' }}
                           value={form.otherCharges}
+                          onFocus={handleNumberFocus}
+                          onClick={handleNumberFocus}
+                          onContextMenu={handleNumberContextMenu}
                           onChange={e => handleChargeChange('otherCharges', e.target.value)}
                         />
                       </div>
@@ -3248,66 +3624,113 @@ export default function AddTransaction({
               {/* Row 2: Account(s) */}
               {isTransfer ? (
                 <>
-                  <div className="transfer-swap-row">
-                    <PickerFieldFR ref={fromRef} setPickerState={setPickerState} label="From" value={form.fromAccount} placeholder="Select"
-                      error={errors.fromAccount} items={accountList} recent={recentAccounts}
-                      onSelect={v => { set('fromAccount', v); goNextEmpty({ key: 'fromAccount', val: v }); }}
-                      onAfterSelect={() => setPickerState(null)}
-                      onReorder={() => setReorderScreen('accounts')}
-                      active={pickerState && pickerState.type === 'from'} />
-                    <button type="button" className="swap-btn" title="Swap"
-                      onClick={() => setForm(p => ({ ...p, fromAccount: p.toAccount, toAccount: p.fromAccount, fromSubAccount: p.toSubAccount, toSubAccount: p.fromSubAccount }))}>
-                      ⇅
-                    </button>
-                    <PickerFieldFR ref={toRef} setPickerState={setPickerState} label="To" value={form.toAccount} placeholder="Select"
-                      error={errors.toAccount} items={accountList} recent={recentAccounts}
-                      onSelect={v => { set('toAccount', v); goNextEmpty({ key: 'toAccount', val: v }); }}
-                      onAfterSelect={() => setPickerState(null)}
-                      onReorder={() => setReorderScreen('accounts')}
-                      active={pickerState && pickerState.type === 'to'} />
-                  </div>
-                  {((fromAcctObj && getSortedSubs(fromAcctObj).length > 0) ||
-                    (toAcctObj && getSortedSubs(toAcctObj).length > 0)) && (
-                    <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                      {fromAcctObj && getSortedSubs(fromAcctObj).length > 0 ? (
-                        <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                          <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>From Sub Account</label>
-                          <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.fromSubAccount} onChange={e => set('fromSubAccount', e.target.value)}>
-                            <option value="">(Select Sub Account)</option>
-                            {getSortedSubs(fromAcctObj).map(s => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                        </div>
-                      ) : <div style={{ flex: 1 }} />}
-                      {toAcctObj && getSortedSubs(toAcctObj).length > 0 ? (
-                        <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                          <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>To Sub Account</label>
-                          <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.toSubAccount} onChange={e => set('toSubAccount', e.target.value)}>
-                            <option value="">(Select Sub Account)</option>
-                            {getSortedSubs(toAcctObj).map(s => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                        </div>
-                      ) : <div style={{ flex: 1 }} />}
+                  {/* FROM Row */}
+                  <div className="form-group account-subacct-group">
+                    <label className="form-label">From</label>
+                    <div className={`account-subacct-wrap ${fromAcctObj && getSortedSubs(fromAcctObj).length > 0 ? 'has-sub' : ''}`}>
+                      <PickerFieldFR ref={fromRef} setPickerState={setPickerState} label="From" hideLabel value={form.fromAccount} placeholder="Select account"
+                        error={errors.fromAccount} items={accountList} recent={recentAccounts}
+                        onSelect={v => {
+                          const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === (v || '').toLowerCase()) || { name: v, subAccounts: [] };
+                          const subs = getSortedSubs(matched);
+                          const nextSub = subs.length > 0 ? (subs.includes(form.fromSubAccount) ? form.fromSubAccount : '') : '';
+                          setForm(p => ({ ...p, fromAccount: v, fromSubAccount: nextSub }));
+                          if (pickerState && pickerState.type === 'fromsubaccount' && nextSub === '') setPickerState(null);
+                          goNextEmpty({ key: 'fromAccount', val: v, fromSubAccount: nextSub });
+                        }}
+                        onAfterSelect={() => setPickerState(null)}
+                        onReorder={() => setReorderScreen('accounts')}
+                        active={pickerState && pickerState.type === 'from'} />
+                      {fromAcctObj && getSortedSubs(fromAcctObj).length > 0 && (
+                        <PickerFieldFR ref={fromSubAccountRef} setPickerState={setPickerState} label="From Sub Account" hideLabel value={form.fromSubAccount} placeholder="Sub Account"
+                          items={getSortedSubs(fromAcctObj)}
+                          onSelect={v => { set('fromSubAccount', v); goNextEmpty({ key: 'fromSubAccount', val: v }); }}
+                          onAfterSelect={() => setPickerState(null)}
+                          active={pickerState && (pickerState.label === 'From Sub Account' || pickerState.type === 'fromsubaccount')} />
+                      )}
                     </div>
-                  )}
+                  </div>
+
+                  {/* TO Row */}
+                  <div className="form-group account-subacct-group">
+                    <div className="form-label-with-action">
+                      <label className="form-label">To</label>
+                      <button type="button" className="swap-btn-icon" title="Swap From and To"
+                        onClick={() => {
+                          setForm(p => {
+                            const newFromAcct = p.toAccount || '';
+                            const newToAcct = p.fromAccount || '';
+                            const fromMatched = (accounts || []).find(a => (a.name || '').toLowerCase() === newFromAcct.toLowerCase()) || { name: newFromAcct, subAccounts: [] };
+                            const fromSubs = getSortedSubs(fromMatched);
+                            const newFromSub = fromSubs.includes(p.toSubAccount) ? p.toSubAccount : '';
+
+                            const toMatched = (accounts || []).find(a => (a.name || '').toLowerCase() === newToAcct.toLowerCase()) || { name: newToAcct, subAccounts: [] };
+                            const toSubs = getSortedSubs(toMatched);
+                            const newToSub = toSubs.includes(p.fromSubAccount) ? p.fromSubAccount : '';
+
+                            return {
+                              ...p,
+                              fromAccount: newFromAcct,
+                              fromSubAccount: newFromSub,
+                              toAccount: newToAcct,
+                              toSubAccount: newToSub,
+                            };
+                          });
+                          setPickerState(null);
+                        }}>
+                        ⇅
+                      </button>
+                    </div>
+                    <div className={`account-subacct-wrap ${toAcctObj && getSortedSubs(toAcctObj).length > 0 ? 'has-sub' : ''}`}>
+                      <PickerFieldFR ref={toRef} setPickerState={setPickerState} label="To" hideLabel value={form.toAccount} placeholder="Select account"
+                        error={errors.toAccount} items={accountList} recent={recentAccounts}
+                        onSelect={v => {
+                          const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === (v || '').toLowerCase()) || { name: v, subAccounts: [] };
+                          const subs = getSortedSubs(matched);
+                          const nextSub = subs.length > 0 ? (subs.includes(form.toSubAccount) ? form.toSubAccount : '') : '';
+                          setForm(p => ({ ...p, toAccount: v, toSubAccount: nextSub }));
+                          if (pickerState && pickerState.type === 'tosubaccount' && nextSub === '') setPickerState(null);
+                          goNextEmpty({ key: 'toAccount', val: v, toSubAccount: nextSub });
+                        }}
+                        onAfterSelect={() => setPickerState(null)}
+                        onReorder={() => setReorderScreen('accounts')}
+                        active={pickerState && pickerState.type === 'to'} />
+                      {toAcctObj && getSortedSubs(toAcctObj).length > 0 && (
+                        <PickerFieldFR ref={toSubAccountRef} setPickerState={setPickerState} label="To Sub Account" hideLabel value={form.toSubAccount} placeholder="Sub Account"
+                          items={getSortedSubs(toAcctObj)}
+                          onSelect={v => { set('toSubAccount', v); goNextEmpty({ key: 'toSubAccount', val: v }); }}
+                          onAfterSelect={() => setPickerState(null)}
+                          active={pickerState && (pickerState.label === 'To Sub Account' || pickerState.type === 'tosubaccount')} />
+                      )}
+                    </div>
+                  </div>
                 </>
               ) : (
-                <>
-                  <PickerFieldFR setPickerState={setPickerState} ref={accountRef} label="Account" value={form.account} placeholder="Select account"
-                    error={errors.account} items={accountList} recent={recentAccounts}
-                    onSelect={v => { set('account', v); goNextEmpty({ key: 'account', val: v }); }}
-                    onAfterSelect={() => setPickerState(null)}
-                    onReorder={() => setReorderScreen('accounts')}
-                    active={pickerState && pickerState.type === 'account'} />
-                  {selectedAcctObj && getSortedSubs(selectedAcctObj).length > 0 && (
-                    <div className="form-group" style={{ marginTop: 8 }}>
-                      <label className="form-label" style={{ fontSize: '0.68rem', marginBottom: 2 }}>Sub Account / Platform</label>
-                      <select className="form-input" style={{ fontSize: '0.78rem', height: 36, padding: '4px 8px' }} value={form.subAccount} onChange={e => set('subAccount', e.target.value)}>
-                        <option value="">(Select Sub Account)</option>
-                        {getSortedSubs(selectedAcctObj).map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-                  )}
-                </>
+                <div className="form-group account-subacct-group">
+                  <label className="form-label">Account</label>
+                  <div className={`account-subacct-wrap ${selectedAcctObj && getSortedSubs(selectedAcctObj).length > 0 ? 'has-sub' : ''}`}>
+                    <PickerFieldFR setPickerState={setPickerState} ref={accountRef} label="Account" hideLabel value={form.account} placeholder="Select account"
+                      error={errors.account} items={accountList} recent={recentAccounts}
+                      onSelect={v => {
+                        const matched = (accounts || []).find(a => (a.name || '').toLowerCase() === (v || '').toLowerCase()) || { name: v, subAccounts: [] };
+                        const subs = getSortedSubs(matched);
+                        const nextSub = subs.length > 0 ? (subs.includes(form.subAccount) ? form.subAccount : '') : '';
+                        setForm(p => ({ ...p, account: v, subAccount: nextSub }));
+                        if (pickerState && pickerState.type === 'subaccount' && nextSub === '') setPickerState(null);
+                        goNextEmpty({ key: 'account', val: v, subAccount: nextSub });
+                      }}
+                      onAfterSelect={() => setPickerState(null)}
+                      onReorder={() => setReorderScreen('accounts')}
+                      active={pickerState && pickerState.type === 'account'} />
+                    {selectedAcctObj && getSortedSubs(selectedAcctObj).length > 0 && (
+                      <PickerFieldFR setPickerState={setPickerState} ref={subAccountRef} label="Sub Account" hideLabel value={form.subAccount} placeholder="Sub Account"
+                        items={getSortedSubs(selectedAcctObj)}
+                        onSelect={v => { set('subAccount', v); goNextEmpty({ key: 'subAccount', val: v }); }}
+                        onAfterSelect={() => setPickerState(null)}
+                        active={pickerState && (pickerState.label === 'Sub Account' || pickerState.type === 'subaccount')} />
+                    )}
+                  </div>
+                </div>
               )}
             </>
           )}
@@ -3316,7 +3739,7 @@ export default function AddTransaction({
           {!isTransfer && !isSplit && !isInvMode && (
             <div className="form-group category-subcat-group">
               <label className="form-label">Category</label>
-              <div className="category-subcat-wrap">
+              <div className={`category-subcat-wrap ${availSubs && availSubs.length > 0 ? 'has-sub' : ''}`}>
                 <PickerFieldFR setPickerState={setPickerState} ref={categoryRef} label="Category" value={form.category} placeholder="Select category"
                   hideLabel
                   error={errors.category} items={availCats} recent={recentCats}
@@ -3328,12 +3751,14 @@ export default function AddTransaction({
                   onAfterSelect={() => setPickerState(null)}
                   onReorder={() => setReorderScreen('categories')}
                   active={pickerState && pickerState.type === 'category'} />
-                <SubcatFieldFR setPickerState={setPickerState} ref={subcatRef} value={form.subcategory} items={availSubs}
-                  hideLabel
-                  recent={recentSubs}
-                  onChange={v => set('subcategory', v)}
-                  onAfterSelect={() => { if (!isEdit) { if (!form.amount) setTimeout(() => amountRef.current?.focus(), 120); else setTimeout(() => noteRef.current?.focus(), 120); } }}
-                  active={pickerState && pickerState.type === 'subcategory'} />
+                {availSubs && availSubs.length > 0 && (
+                  <SubcatFieldFR setPickerState={setPickerState} ref={subcatRef} value={form.subcategory} items={availSubs}
+                    hideLabel
+                    recent={recentSubs}
+                    onChange={v => set('subcategory', v)}
+                    onAfterSelect={() => goNextEmpty()}
+                    active={pickerState && pickerState.type === 'subcategory'} />
+                )}
               </div>
             </div>
           )}
@@ -3351,8 +3776,11 @@ export default function AddTransaction({
                     type="text" inputMode="decimal" pattern="^-?[0-9]*([.,][0-9]+)?"
                     autoComplete="off" autoCorrect="off" spellCheck="false"
                     placeholder="0"
-                    onFocus={e => { setPickerState(null); e.target.select(); }}
-                    value={form.amount} onChange={e => set('amount', e.target.value)} />
+                    onFocus={handleNumberFocus}
+                    onClick={handleNumberFocus}
+                    onContextMenu={handleNumberContextMenu}
+                    value={form.amount} onChange={e => set('amount', e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); noteRef.current?.focus(); } }} />
                 </div>
                 {!isTransfer && !isEdit && (
                   <button
@@ -3502,11 +3930,16 @@ export default function AddTransaction({
                       <input
                         type="text"
                         inputMode="decimal"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck="false"
                         placeholder="Amount"
                         className="form-input"
                         style={{ paddingLeft: 22, fontSize: '0.8rem', padding: '6px 8px 6px 20px' }}
                         value={s.amount}
-                        onFocus={e => e.target.select()}
+                        onFocus={handleNumberFocus}
+                        onClick={handleNumberFocus}
+                        onContextMenu={handleNumberContextMenu}
                         onChange={e => {
                           const val = e.target.value;
                           setSplits(prev => {
@@ -3663,47 +4096,97 @@ export default function AddTransaction({
             )}
           </div>
 
-          {/* Tags (Header with label above, tags below full width) */}
-          <div className="tags-section" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14, width: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <label className="form-label" style={{ margin: 0, fontWeight: 700 }}>Tags</label>
-              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Type #tag or tap below</span>
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, width: '100%' }}>
-              {allAvailableTags.map(tag => {
-                const currentTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-                const isSelected = currentTags.includes(tag.toLowerCase()) ||
-                  ((form.note || '') + ' ' + (form.description || '')).toLowerCase().includes(tag.toLowerCase());
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => {
-                      let nextTags;
-                      if (isSelected) {
-                        nextTags = currentTags.filter(t => t !== tag.toLowerCase());
-                      } else {
-                        nextTags = [...currentTags, tag.toLowerCase()];
-                      }
-                      set('tags', nextTags.join(', '));
-                    }}
-                    style={{
-                      padding: '5px 12px',
-                      borderRadius: 14,
-                      fontSize: '0.74rem',
-                      fontWeight: isSelected ? 800 : 500,
-                      border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
-                      background: isSelected ? 'rgba(0, 229, 160, 0.15)' : 'var(--bg-card2)',
-                      color: isSelected ? 'var(--accent)' : 'var(--text-muted)',
-                      cursor: 'pointer',
-                      transition: 'all 0.12s ease',
-                    }}
-                  >
-                    {tag}
-                  </button>
-                );
-              })}
-            </div>
+          {/* Tags Accordion */}
+          <div className="tags-accordion-container" style={{ marginBottom: 14, width: '100%' }}>
+            <button
+              type="button"
+              className="tags-accordion-header"
+              onClick={() => setIsTagsExpanded(prev => !prev)}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: 'var(--bg-card2)',
+                border: '1px solid var(--border)',
+                borderRadius: isTagsExpanded ? '12px 12px 0 0' : '12px',
+                padding: '10px 14px',
+                cursor: 'pointer',
+                transition: 'border-radius 0.15s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--text-primary)' }}>🏷️ Tags</span>
+                {selectedTagsCount > 0 && (
+                  <span style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 700,
+                    background: 'rgba(0, 229, 160, 0.15)',
+                    color: 'var(--accent)',
+                    padding: '2px 8px',
+                    borderRadius: 10
+                  }}>
+                    {selectedTagsCount} selected
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                <span>{isTagsExpanded ? 'Hide' : 'Add / View'}</span>
+                <span style={{ fontSize: '0.65rem' }}>{isTagsExpanded ? '▲' : '▼'}</span>
+              </div>
+            </button>
+
+            {isTagsExpanded && (
+              <div className="tags-accordion-body" style={{
+                background: 'var(--bg-card2)',
+                border: '1px solid var(--border)',
+                borderTop: 'none',
+                borderRadius: '0 0 12px 12px',
+                padding: '10px 14px 14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8
+              }}>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                  Type #tag in note or tap chips below:
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, width: '100%' }}>
+                  {allAvailableTags.map(tag => {
+                    const currentTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+                    const isSelected = currentTags.includes(tag.toLowerCase()) ||
+                      ((form.note || '') + ' ' + (form.description || '')).toLowerCase().includes(tag.toLowerCase());
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          let nextTags;
+                          if (isSelected) {
+                            nextTags = currentTags.filter(t => t !== tag.toLowerCase());
+                          } else {
+                            nextTags = [...currentTags, tag.toLowerCase()];
+                          }
+                          set('tags', nextTags.join(', '));
+                        }}
+                        style={{
+                          padding: '5px 12px',
+                          borderRadius: 14,
+                          fontSize: '0.74rem',
+                          fontWeight: isSelected ? 800 : 500,
+                          border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
+                          background: isSelected ? 'rgba(0, 229, 160, 0.15)' : 'var(--bg-card)',
+                          color: isSelected ? 'var(--accent)' : 'var(--text-muted)',
+                          cursor: 'pointer',
+                          transition: 'all 0.12s ease',
+                        }}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Receipt & Warranty Section */}

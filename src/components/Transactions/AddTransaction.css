@@ -235,34 +235,67 @@
   padding: 32px 0;
 }
 
-/* ── Swap button between transfer accounts ──────────────────────────────── */
-.transfer-swap-row {
+/* ── Responsive conditional parent-child field wraps and swap button ───────── */
+.category-subcat-wrap,
+.account-subacct-wrap {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: normal;
-  gap: 6px;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  width: 100%;
 }
 
-.swap-btn {
+.category-subcat-wrap.has-sub,
+.account-subacct-wrap.has-sub {
+  grid-template-columns: 2fr 1fr;
+}
+
+.category-subcat-wrap .form-group,
+.account-subacct-wrap .form-group {
+  margin: 0;
+  min-width: 0;
+  display: block;
+}
+
+.category-subcat-wrap .form-label,
+.account-subacct-wrap .form-label {
+  display: none;
+}
+
+.category-subcat-wrap .picker-trigger,
+.account-subacct-wrap .picker-trigger {
+  width: 100%;
+}
+
+.form-label-with-action {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 25px;
-  height: 25px;
-  background: var(--bg-card2);
-  border: 1.5px solid var(--border);
-  border-radius: 50%;
-  cursor: pointer;
-  flex-shrink: 0;
-  margin-bottom: 0;
-  color: var(--text-muted);
-  font-size: 1rem;
-  transition: background 0.12s;
+  justify-content: space-between;
+  width: 100%;
+  padding-right: 2px;
 }
 
-.swap-btn:active {
+.swap-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1;
+  padding: 0;
+  transition: all 0.12s ease;
+}
+
+.swap-btn-icon:hover,
+.swap-btn-icon:active {
   background: var(--bg-hover);
   color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* ── Recurring sheet option rows ─────────────────────────────────────────── */
@@ -304,11 +337,23 @@
   margin-top: 2px;
 }
 
-/* ── Tags Section (Full width vertical layout) ──────────────────────────── */
-.tags-section {
-  display: flex !important;
-  flex-direction: column !important;
-  width: 100% !important;
-  gap: 8px !important;
-  margin-bottom: 14px !important;
+/* ── Tags Section (Collapsible Accordion Layout) ────────────────────────── */
+.tags-accordion-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin-bottom: 14px;
+}
+
+.tags-accordion-header {
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.tags-accordion-header:active {
+  background: var(--bg-card);
+}
+
+.tags-accordion-body {
+  animation: fadeIn 0.15s ease;
 }

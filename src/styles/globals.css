@@ -258,11 +258,18 @@ select option {
 .add-form .form-group { display:grid; grid-template-columns:112px 1fr; align-items:center; gap:8px; }
 .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:start; }
 .grid-2 .form-group { margin-bottom:0; }
-.category-subcat-wrap { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-.category-subcat-wrap .form-group { display:flex; align-items:center; margin:0; }
-.category-subcat-wrap .form-label { display:none; }
-.category-subcat-wrap .picker-trigger { width:100%; }
-.category-subcat-group .form-label { white-space:normal; }
+.category-subcat-wrap,
+.account-subacct-wrap { display:grid; grid-template-columns:1fr; gap:8px; width:100%; }
+.category-subcat-wrap.has-sub,
+.account-subacct-wrap.has-sub { grid-template-columns:2fr 1fr; }
+.category-subcat-wrap .form-group,
+.account-subacct-wrap .form-group { margin:0; min-width:0; display:block; }
+.category-subcat-wrap .form-label,
+.account-subacct-wrap .form-label { display:none; }
+.category-subcat-wrap .picker-trigger,
+.account-subacct-wrap .picker-trigger { width:100%; }
+.category-subcat-group .form-label,
+.account-subacct-group .form-label { white-space:normal; }
 .add-form .form-label { margin:0; text-align:left; max-width:none; white-space:normal; line-height:1.2; }
 .add-form .form-input, .add-form .picker-trigger { width:100%; }
 .date-time-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -276,8 +283,6 @@ select option {
 .description-section .form-group { grid-template-columns:1fr; }
 .description-section .form-label { width:100%; }
 .description-section textarea.form-input { min-height:34px; max-height:220px; }
-.transfer-swap-row { display:flex; flex-direction:column; gap:8px; position:relative; }
-.swap-btn { position:absolute; right:0; top:50%; transform:translateY(-50%); margin-bottom:0; }
 .picker-room { border-top:1px solid var(--border); max-height:50dvh; overflow-y:auto; background:var(--bg-card2); }
 .picker-sheet-inline .picker-sheet-hdr { padding:8px var(--page-px); border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--bg-card2); z-index:5; }
 

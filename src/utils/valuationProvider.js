@@ -281,12 +281,19 @@ export class MutualFundValuationProvider {
       const nav = parseFloat(latestEntry.nav);
       const asOf = latestEntry.date; // e.g. "04-09-2026"
 
+      const prevEntry = detailData.data?.[1];
+      const prevNavParsed = prevEntry ? parseFloat(prevEntry.nav) : null;
+      const previousClose = (prevNavParsed !== null && !isNaN(prevNavParsed) && prevNavParsed > 0) ? prevNavParsed : null;
+      const previousAsOf = prevEntry?.date || null;
+
       if (isNaN(nav) || nav <= 0) {
         return {
           symbol: position?.note || isinKey,
           isin: isinKey,
           assetType: 'MUTUAL_FUND',
           price: null,
+          previousClose: null,
+          previousAsOf: null,
           currency: 'INR',
           source: 'api.mfapi.in',
           asOf: null,
@@ -307,6 +314,8 @@ export class MutualFundValuationProvider {
         isin: isinKey,
         assetType: 'MUTUAL_FUND',
         price: nav,
+        previousClose,
+        previousAsOf,
         currency: 'INR',
         source: 'api.mfapi.in',
         asOf,
@@ -896,7 +905,7 @@ export class ValuationProvider {
       const isSnapshot = cached && (cached.source === 'snapshot' || cached.source === 'manual_override' || cached.source === 'nav_map');
       const isExpired = !cached?.fetchedAt || (now - new Date(cached.fetchedAt).getTime() > CACHE_TTL_MS);
 
-      if (forceRefresh || !cached || !cached.isAvailable || isSnapshot || isExpired) {
+      if (forceRefresh || !cached || !cached.isAvailable || isSnapshot || isExpired || cached.previousClose === undefined) {
         fetchPromises.push(this.fetchSecurityValuation(pos));
       }
     }
@@ -921,6 +930,14 @@ export class ValuationProvider {
       valuedCount,
       fetchedAt: new Date().toISOString()
     };
+  }
+
+  /**
+   * Alias for fetchAllValuations
+   */
+  async fetchLiveValuations(positions = [], force = false) {
+    const forceRefresh = typeof force === 'boolean' ? force : (force?.forceRefresh || false);
+    return this.fetchAllValuations(positions, { forceRefresh });
   }
 }
 
