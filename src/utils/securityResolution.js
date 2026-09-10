@@ -42,11 +42,11 @@ export const KNOWN_SECURITIES = [
   },
   {
     displayName: 'Standard Engineering',
-    symbol: 'STANDARD',
+    symbol: 'SETL',
     exchange: 'BSE',
     isin: 'INE505C01012',
     assetType: 'EQUITY',
-    aliases: ['Standard Engineering Ltd', 'Standard Capital Markets', 'STANDARD']
+    aliases: ['Standard Engineering Ltd', 'Standard Capital Markets', 'SETL']
   },
   {
     displayName: 'Nippon India ETF Gold BeES',
@@ -344,6 +344,79 @@ export const KNOWN_SECURITIES = [
     isin: 'INE257A01026',
     assetType: 'EQUITY',
     aliases: ['Bharat Heavy Electricals', 'BHEL']
+  },
+  // Major Mutual Funds & Index Funds
+  {
+    displayName: 'Motilal Oswal Nifty Next 50',
+    symbol: 'INF247L01AC1',
+    exchange: '',
+    isin: 'INF247L01AC1',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['Motilal Nifty Next 50', 'Motilal Oswal Nifty Next 50 Index Fund', 'Father Motilal Nifty Next 50', 'Motilal Oswal Nifty Next 50 Fund', 'Motilal Next 50']
+  },
+  {
+    displayName: 'DSP Nifty Next 50 Index Fund',
+    symbol: 'INF740KA1MG9',
+    exchange: '',
+    isin: 'INF740KA1MG9',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['DSP Nifty Next 50', 'DSP Nifty Next 50 Index', 'DSP Next 50']
+  },
+  {
+    displayName: 'HDFC Mid-Cap Opportunities Fund',
+    symbol: 'INF179K01XQ0',
+    exchange: '',
+    isin: 'INF179K01XQ0',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['HDFC Mid-Cap Fund', 'HDFC Mid-Cap', 'HDFC Midcap']
+  },
+  {
+    displayName: 'Mirae Asset Large and Midcap Fund',
+    symbol: 'INF769K01BI1',
+    exchange: '',
+    isin: 'INF769K01BI1',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['Mirae Asset Large & Midcap', 'Mirae Large and Midcap', 'Mirae Asset Large and Midcap']
+  },
+  {
+    displayName: 'Motilal Oswal Midcap Fund',
+    symbol: 'INF247L01445',
+    exchange: '',
+    isin: 'INF247L01445',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['Motilal Oswal Midcap', 'Motilal Midcap']
+  },
+  {
+    displayName: 'Nippon India Large Cap Fund',
+    symbol: 'INF204K01XI3',
+    exchange: '',
+    isin: 'INF204K01XI3',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['Nippon India Large Cap Direct Growth', 'Nippon India Large Cap', 'Nippon Large Cap']
+  },
+  {
+    displayName: 'Nippon India Small Cap Fund',
+    symbol: 'INF204K01K15',
+    exchange: '',
+    isin: 'INF204K01K15',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['Nippon India Small Cap Direct Growth', 'Nippon India Small Cap', 'Nippon Small Cap']
+  },
+  {
+    displayName: 'Parag Parikh Flexi Cap Fund',
+    symbol: 'INF879O01027',
+    exchange: '',
+    isin: 'INF879O01027',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['Parag Parikh Flexi Cap', 'PPFAS Flexi Cap', 'Parag Parikh', 'PPFAS']
+  },
+  {
+    displayName: 'Motilal Oswal Large and Midcap Fund',
+    symbol: 'INF247L01999',
+    exchange: '',
+    isin: 'INF247L01999',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['Motilal Oswal Large & Midcap', 'Motilal Large and Midcap']
   }
 ];
 
@@ -502,7 +575,7 @@ export function resolveSecurity(target, options = {}) {
   // 6. Unresolved fallback — DO NOT invent symbols or fake data
   const fallbackAssetType = inputAssetType || (
     inputName.toUpperCase().includes('ETF') || inputName.toUpperCase().includes('BEES') ? 'ETF' :
-    inputISIN.startsWith('INF') ? 'MUTUAL_FUND' : 'EQUITY'
+      inputISIN.startsWith('INF') ? 'MUTUAL_FUND' : 'EQUITY'
   );
 
   return {

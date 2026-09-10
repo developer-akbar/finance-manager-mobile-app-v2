@@ -48,62 +48,64 @@ export default function PortfolioPerformance({
   const timeSeriesData = useMemo(() => {
     const events = [];
 
-    for (const t of transactions) {
-      const dStr = t.Date || t.date || '';
-      if (!dStr) continue;
+    const parseDate = (s) => {
+      if (!s) return new Date(0);
+      const parts = String(s).split('/');
+      if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+      return new Date(s);
+    };
 
-      const parseDate = (s) => {
-        const parts = s.split('/');
-        if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-        return new Date(s);
-      };
-      const dObj = parseDate(dStr);
-      if (isNaN(dObj.getTime())) continue;
-
-      // 1. MF Parse
-      const mf = parseMutualFundTransaction(t);
-      if (mf && (mf.action === 'BUY' || mf.action === 'SELL') && mf.isin) {
-        // Scope Filter
-        if (scopeFilter === 'personal' && (mf.ownershipTag !== 'PERSONAL' && mf.ownershipTag !== 'MIXED_HOLDING')) continue;
-        if (scopeFilter === 'father' && mf.ownershipTag !== 'FATHER_EXTERNAL') continue;
-
-        // Account Filter
-        if (accountFilter !== 'all' && mf.investmentAccount !== accountFilter && accountFilter !== 'Mutual Funds') continue;
-
-        // Platform Filter
-        if (platformFilter !== 'all' && mf.subAccount !== platformFilter) continue;
-
-        events.push({
-          dateObj: dObj,
-          dateLabel: dStr,
-          costDelta: mf.action === 'BUY' ? mf.costBasis : -mf.costBasis,
-          pnlDelta: mf.action === 'SELL' ? (mf.realizedPnl || 0) : 0
-        });
-        continue;
+    // Extract historical cash events directly from already-scoped/filtered positions
+    for (const pos of positions) {
+      // 1. BUY lots
+      if (Array.isArray(pos.buyLots)) {
+        for (const lot of pos.buyLots) {
+          const dStr = lot.date || lot.Date || pos.firstBuyDate || '';
+          const dObj = parseDate(dStr);
+          if (isNaN(dObj.getTime()) || dObj.getTime() === 0) continue;
+          const cost = parseFloat(lot.costBasis) || (parseFloat(lot.units || 0) * parseFloat(lot.unitCost || 0)) || 0;
+          if (cost > 0) {
+            events.push({
+              dateObj: dObj,
+              dateLabel: dStr,
+              costDelta: cost,
+              pnlDelta: 0
+            });
+          }
+        }
+      } else if (Array.isArray(pos.txns)) {
+        for (const t of pos.txns) {
+          const dStr = t.date || t.Date || '';
+          const dObj = parseDate(dStr);
+          if (isNaN(dObj.getTime()) || dObj.getTime() === 0) continue;
+          const isBuy = (t.action || t.type || '').toUpperCase() === 'BUY';
+          const cost = parseFloat(t.costBasis || t.tradeValue || t.amount || 0);
+          events.push({
+            dateObj: dObj,
+            dateLabel: dStr,
+            costDelta: isBuy ? cost : -cost,
+            pnlDelta: !isBuy ? parseFloat(t.realizedPnl || 0) : 0
+          });
+        }
       }
 
-      // 2. Share Market Parse
-      const sm = parseTxnFields(t);
-      if (sm && (sm.type === 'BUY' || sm.type === 'SELL') && !sm.isRecon && sm.symbol) {
-        const subAccount = sm.brokerage || 'Fareeda Groww';
-
-        // Scope Filter: Share market is personal in canonical data
-        if (scopeFilter === 'father') continue;
-
-        // Account Filter
-        if (accountFilter !== 'all' && accountFilter !== 'Share Market') continue;
-
-        // Platform Filter
-        if (platformFilter !== 'all' && subAccount !== platformFilter) continue;
-
-        events.push({
-          dateObj: dObj,
-          dateLabel: dStr,
-          costDelta: sm.type === 'BUY' ? (sm.costBasis || sm.cost) : -(sm.costBasis || sm.cost),
-          pnlDelta: sm.type === 'SELL' ? (sm.realizedPnL || 0) : 0
-        });
+      // 2. SELL records
+      if (Array.isArray(pos.sellRecords)) {
+        for (const s of pos.sellRecords) {
+          const dStr = s.date || s.Date || pos.lastTransactionDate || '';
+          const dObj = parseDate(dStr);
+          if (isNaN(dObj.getTime()) || dObj.getTime() === 0) continue;
+          events.push({
+            dateObj: dObj,
+            dateLabel: dStr,
+            costDelta: -(parseFloat(s.costBasis) || 0),
+            pnlDelta: parseFloat(s.realizedPnl || 0)
+          });
+        }
       }
     }
+
+    if (events.length === 0) return [];
 
     events.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
 
@@ -130,7 +132,7 @@ export default function PortfolioPerformance({
     }
 
     return series;
-  }, [transactions, scopeFilter, accountFilter, platformFilter]);
+  }, [positions]);
 
   return (
     <div className="portfolio-card performance-card">
@@ -200,7 +202,7 @@ export default function PortfolioPerformance({
           <span style={{ color: '#10B981', fontWeight: 600 }}>■ Cumulative Realized P&L</span>
         </div>
         {timeSeriesData.length > 0 ? (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={200} minWidth={0} minHeight={200}>
             <AreaChart data={timeSeriesData} margin={{ top: 10, right: 15, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="colorInvested" x1="0" y1="0" x2="0" y2="1">

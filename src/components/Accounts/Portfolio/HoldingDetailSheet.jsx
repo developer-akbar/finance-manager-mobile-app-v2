@@ -124,13 +124,31 @@ export default function HoldingDetailSheet({
   }, [isViewingAll, position, underlyingPositions, activeFolioPos]);
 
   const displayLots = useMemo(() => {
+    let lots = [];
     if (isViewingAll) {
       if (Array.isArray(position.buyLots) && position.buyLots.length > 0) {
-        return position.buyLots;
+        lots = position.buyLots;
+      } else {
+        lots = underlyingPositions.flatMap(p => p.buyLots || p.fifoLots || []);
       }
-      return underlyingPositions.flatMap(p => p.buyLots || p.fifoLots || []);
+    } else {
+      lots = activeFolioPos?.buyLots || activeFolioPos?.fifoLots || [];
     }
-    return activeFolioPos?.buyLots || activeFolioPos?.fifoLots || [];
+
+    // DISPLAY ORDER ONLY: Latest acquisition date first (descending).
+    // Underlying FIFO calculation and order remains chronological oldest -> newest.
+    return [...lots].sort((a, b) => {
+      const parseD = (str) => {
+        if (!str) return 0;
+        const pts = String(str).split(/[-/]/);
+        if (pts.length === 3) {
+          if (pts[0].length === 4) return new Date(pts[0], pts[1] - 1, pts[2]).getTime();
+          return new Date(pts[2], pts[1] - 1, pts[0]).getTime();
+        }
+        return new Date(str || 0).getTime() || 0;
+      };
+      return parseD(b.date || b.Date) - parseD(a.date || a.Date);
+    });
   }, [isViewingAll, position, underlyingPositions, activeFolioPos]);
 
   const sortedTxns = useMemo(() => {

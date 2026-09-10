@@ -22,7 +22,7 @@ export default function InvestmentActivity({ transactions = [], scopeFilter = 'p
       if (p && (p.action === 'BUY' || p.action === 'SELL') && p.isin) {
         // Apply Scope Filter
         if (scopeFilter === 'personal' && (p.ownershipTag !== 'PERSONAL' && p.ownershipTag !== 'MIXED_HOLDING')) continue;
-        if (scopeFilter === 'father' && p.ownershipTag !== 'FATHER_EXTERNAL') continue;
+        if ((scopeFilter === 'father' || scopeFilter === 'external') && (p.ownershipTag !== 'EXTERNAL' && p.ownershipTag !== 'FATHER_EXTERNAL')) continue;
 
         // Apply Account Filter
         if (accountFilter !== 'all' && p.investmentAccount !== accountFilter && accountFilter !== 'Mutual Funds') continue;
@@ -52,7 +52,7 @@ export default function InvestmentActivity({ transactions = [], scopeFilter = 'p
         const subAccount = sm.brokerage || 'Fareeda Groww';
 
         // Apply Scope Filter
-        if (scopeFilter === 'father') continue; // Share market is personal in canonical data
+        if (scopeFilter === 'father' || scopeFilter === 'external') continue; // Share market is personal in canonical data
 
         // Apply Account Filter
         if (accountFilter !== 'all' && accountFilter !== 'Share Market') continue;

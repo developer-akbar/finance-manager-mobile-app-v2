@@ -443,6 +443,9 @@ export async function fetchStockPriceFromProvider(position, key, assetType = 'EQ
             data = json;
             break;
           }
+        } else if (response.status === 404) {
+          // Explicit Not Found from market API: stop trying further fallback endpoints
+          break;
         }
       } catch (err) {
         // Continue to next endpoint if CORS / network restriction occurs
@@ -905,7 +908,7 @@ export class ValuationProvider {
       const isSnapshot = cached && (cached.source === 'snapshot' || cached.source === 'manual_override' || cached.source === 'nav_map');
       const isExpired = !cached?.fetchedAt || (now - new Date(cached.fetchedAt).getTime() > CACHE_TTL_MS);
 
-      if (forceRefresh || !cached || !cached.isAvailable || isSnapshot || isExpired || cached.previousClose === undefined) {
+      if (forceRefresh || !cached || isSnapshot || isExpired) {
         fetchPromises.push(this.fetchSecurityValuation(pos));
       }
     }

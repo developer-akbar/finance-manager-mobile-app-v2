@@ -220,8 +220,8 @@ export default function PortfolioAllocation({
       )}
 
       <div className="allocation-chart-content">
-        <div className="allocation-pie-wrap" style={{ width: 184, height: 184 }}>
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="allocation-pie-wrap" style={{ width: 184, height: 184, minWidth: 184, minHeight: 184 }}>
+          <ResponsiveContainer width={184} height={184} minWidth={184} minHeight={184}>
             <PieChart>
               <Pie
                 data={chartData}

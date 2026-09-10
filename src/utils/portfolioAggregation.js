@@ -8,6 +8,41 @@
  */
 
 import { detectAssetType } from './valuationProvider.js';
+import { resolveSecurity } from './securityResolution.js';
+
+/**
+ * Robust tokenized & alias-aware search filter for portfolio holdings.
+ * Matches exact substrings, multiple query words across security name,
+ * ISIN, note, subaccount, folios, raw transaction metadata, and canonical aliases.
+ */
+export function matchesHoldingSearch(g, query) {
+  if (!query) return true;
+  const q = String(query || '').toLowerCase().trim();
+  if (!q) return true;
+
+  const resolved = resolveSecurity(g.isin || g.security || g.note);
+  const aliasTerms = (resolved && Array.isArray(resolved.aliases)) ? resolved.aliases.join(' ') : '';
+  const resolvedDisplayName = (resolved && resolved.displayName) ? resolved.displayName : '';
+  const resolvedSymbol = (resolved && resolved.symbol) ? resolved.symbol : '';
+
+  const underlyingText = (g.underlyingPositions || []).map(p => {
+    const raw = p.rawTxn || {};
+    return `${p.security || ''} ${p.note || ''} ${p.folioNumber || ''} ${p.holdingMode || ''} ${raw.SecuritySymbol || ''} ${raw.SecurityDisplayName || ''} ${raw.Description || ''}`;
+  }).join(' ');
+
+  const fullCorpus = `${g.note || ''} ${g.security || ''} ${g.isin || ''} ${g.subAccount || ''} ${g.investmentAccount || ''} ${g.ownershipTag || ''} ${resolvedDisplayName} ${resolvedSymbol} ${aliasTerms} ${underlyingText}`.toLowerCase();
+
+  // 1. Direct exact substring match
+  if (fullCorpus.includes(q)) return true;
+
+  // 2. Tokenized multi-word match (every token in search query must appear in holding corpus)
+  const tokens = q.split(/\s+/).filter(Boolean);
+  if (tokens.length > 1) {
+    return tokens.every(token => fullCorpus.includes(token));
+  }
+
+  return false;
+}
 
 export function aggregatePositionsForDisplay(positions = [], valuationProvider = null) {
   if (!Array.isArray(positions)) return [];
