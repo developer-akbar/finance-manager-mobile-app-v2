@@ -6,6 +6,8 @@
  * from first-class normalized transactions without mutating any data or ledger balances.
  */
 
+import { resolveSecurity } from './securityResolution.js';
+
 export const EPSILON = 0.005; // Maximum unit tolerance for rounding residue
 
 /**
@@ -18,23 +20,28 @@ export function normalizeFolio(folio = '') {
 }
 
 /**
- * Constructs the canonical 5-part identity key for a mutual fund position:
- * InvestmentAccount | SubAccount | SecurityISIN | FolioNumber | HoldingMode
+ * Constructs the canonical 6-part identity key for a mutual fund position:
+ * InvestmentAccount | SubAccount | SecurityISIN | FolioNumber | HoldingMode | OwnershipTag
  */
 export function getCanonicalPositionKey({
   investmentAccount = 'Liquid Mutual Funds',
   subAccount = '',
   isin = '',
+  security = '',
   folioNumber = '',
-  holdingMode = 'NON_DEMAT'
+  holdingMode = 'NON_DEMAT',
+  ownershipTag = 'PERSONAL'
 }) {
   const normAcct = String(investmentAccount || 'Liquid Mutual Funds').trim();
   const normSub = String(subAccount || '').trim();
-  const normIsin = String(isin || '').trim().toUpperCase();
+  const normIsin = String(isin || security || '').trim().toUpperCase();
   const normFolio = normalizeFolio(folioNumber);
   const normMode = String(holdingMode || 'NON_DEMAT').trim().toUpperCase();
+  const normOwner = (ownershipTag === 'EXTERNAL' || ownershipTag === 'FATHER_EXTERNAL' || ownershipTag === 'EXTERNAL_FATHER')
+    ? 'EXTERNAL'
+    : (ownershipTag === 'MIXED_HOLDING' ? 'MIXED_HOLDING' : 'PERSONAL');
 
-  return `${normAcct} | ${normSub} | ${normIsin} | ${normFolio} | ${normMode}`;
+  return `${normAcct} | ${normSub} | ${normIsin} | ${normFolio} | ${normMode} | ${normOwner}`;
 }
 
 /**
@@ -42,7 +49,7 @@ export function getCanonicalPositionKey({
  */
 function extractTagValue(tagStr = '', key = '') {
   if (!tagStr) return '';
-  const regex = new RegExp(`(?:^|[|,]\\s*)${key}:([^|,]+)`, 'i');
+  const regex = new RegExp(`(?:^|[|,]\\s*)${key}:\\s*([^|,]+)`, 'i');
   const match = tagStr.match(regex);
   return match ? match[1].trim() : '';
 }
@@ -54,39 +61,85 @@ export function parseMutualFundTransaction(t) {
   if (!t) return null;
 
   const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
-  const type = String(t['Income/Expense'] || t.type || '').trim();
-  const note = String(t.Note || t.note || '').trim();
-  const desc = String(t.Description || t.description || '').trim();
   const tags = String(t.Tags || t.tags || '').trim();
   const fromAcct = String(t.FromAccount || t.Account || t.account || '').trim();
   const toAcct = String(t.ToAccount || '').trim();
-  const isin = String(t.SecurityISIN || t.security_isin || extractTagValue(tags, 'ISIN') || '').trim().toUpperCase();
+  const desc = String(t.Description || t.description || '').trim();
+  const isinRaw = String(t.SecurityISIN || t.security_isin || extractTagValue(tags, 'ISIN') || extractTagValue(desc, 'ISIN') || '').trim().toUpperCase();
 
-  // Identify if this is a mutual fund transaction
-  const isMF = 
+  // Fast pre-filter: Skip generic non-investment transactions immediately
+  const isCandidate = 
     invType === 'BUY' || 
     invType === 'SELL' || 
-    !!isin || 
+    !!isinRaw || 
     tags.includes('MF|') || 
     tags.includes('CAMS') || 
     toAcct === 'Liquid Mutual Funds' || 
     fromAcct === 'Liquid Mutual Funds' || 
     toAcct === 'Mutual Funds Tax Saver' || 
-    fromAcct === 'Mutual Funds Tax Saver';
+    fromAcct === 'Mutual Funds Tax Saver' ||
+    tags.includes('Ownership:') ||
+    tags.includes('Folio:') ||
+    !!t.InvestmentAccount || !!t.investment_account ||
+    desc.includes('|');
+
+  if (!isCandidate) return null;
+
+  const type = String(t['Income/Expense'] || t.type || '').trim();
+  const note = String(t.Note || t.note || '').trim();
+  const cat = String(t.Category || t.category || '').trim();
+  const invAcct = String(t.InvestmentAccount || t.investment_account || '').trim();
+  const subAcctRaw = String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || t.ToSubAccount || t.to_sub_account || t.FromSubAccount || t.from_sub_account || '').trim();
+
+  // Explicitly reject Share Market trades (handled exclusively by brokerage accounting engine)
+  const isShareMarket = invAcct === 'Share Market' || fromAcct === 'Share Market' || toAcct === 'Share Market' || cat === 'Share Market' || subAcctRaw === 'Zerodha';
+  if (isShareMarket) return null;
+
+  // Identify if this is a mutual fund account
+  const isMfAccount = 
+    invAcct === 'Liquid Mutual Funds' || invAcct === 'Mutual Funds Tax Saver' ||
+    toAcct === 'Liquid Mutual Funds' || toAcct === 'Mutual Funds Tax Saver' ||
+    fromAcct === 'Liquid Mutual Funds' || fromAcct === 'Mutual Funds Tax Saver' ||
+    cat === 'Liquid Mutual Funds' || cat === 'Mutual Funds Tax Saver' || cat.includes('Mutual Funds') ||
+    tags.includes('MF|') || tags.includes('CAMS');
+
+  let isin = isinRaw;
+
+  // If ISIN is missing on an investment candidate, resolve from SecuritySymbol / SecurityDisplayName / Note
+  if (!isin) {
+    const secCandidate = String(t.SecuritySymbol || t.security_symbol || t.SecurityDisplayName || t.security_display_name || note || '').trim();
+    if (secCandidate) {
+      const resolved = resolveSecurity(secCandidate);
+      if (resolved && resolved.isResolved && resolved.isin && resolved.isin.trim().toUpperCase().startsWith('INF')) {
+        isin = resolved.isin.trim().toUpperCase();
+      }
+    }
+  }
+
+  // Must be an MF account or have an INF ISIN
+  const isINF = isin && isin.startsWith('INF');
+  if (!isMfAccount && !isINF) return null;
+
+  // Identify if this is a mutual fund transaction
+  const isMF = 
+    invType === 'BUY' || 
+    invType === 'SELL' || 
+    tags.includes('Folio:') || 
+    toAcct.includes('Mutual Funds') || 
+    fromAcct.includes('Mutual Funds') ||
+    isINF;
 
   if (!isMF) return null;
 
   // Investment Account
-  let investmentAccount = String(t.InvestmentAccount || t.investment_account || '').trim();
+  let investmentAccount = invAcct;
   if (!investmentAccount) {
-    if (toAcct === 'Liquid Mutual Funds' || toAcct === 'Mutual Funds Tax Saver') {
-      investmentAccount = toAcct;
-    } else if (fromAcct === 'Liquid Mutual Funds' || fromAcct === 'Mutual Funds Tax Saver') {
-      investmentAccount = fromAcct;
-    } else if (String(t.Category || '').includes('Tax Saver')) {
+    if (toAcct === 'Mutual Funds Tax Saver' || fromAcct === 'Mutual Funds Tax Saver' || cat.includes('Tax Saver')) {
       investmentAccount = 'Mutual Funds Tax Saver';
-    } else {
+    } else if (toAcct === 'Liquid Mutual Funds' || fromAcct === 'Liquid Mutual Funds' || isMfAccount || isINF) {
       investmentAccount = 'Liquid Mutual Funds';
+    } else {
+      return null;
     }
   }
 
@@ -117,29 +170,88 @@ export function parseMutualFundTransaction(t) {
     }
   }
 
-  // Ownership Tag
-  let ownershipTag = extractTagValue(tags, 'Ownership').toUpperCase();
-  if (!ownershipTag) {
+  // Ownership Tag — Canonical Single Source of Truth
+  let rawOwn = (
+    t.OwnershipTag ||
+    t.ownership_tag ||
+    extractTagValue(tags, 'Ownership') ||
+    extractTagValue(desc, 'Ownership') ||
+    ''
+  ).toUpperCase().trim();
+
+  let ownershipTag = 'PERSONAL';
+  if (rawOwn === 'EXTERNAL' || rawOwn === 'FATHER_EXTERNAL' || rawOwn === 'EXTERNAL_FATHER') {
+    ownershipTag = 'EXTERNAL';
+  } else if (rawOwn === 'MIXED_HOLDING' || rawOwn === 'MIXED') {
+    ownershipTag = 'MIXED_HOLDING';
+  } else if (rawOwn === 'PERSONAL') {
+    ownershipTag = 'PERSONAL';
+  } else {
+    // Legacy fallback ONLY when no explicit ownership tag was ever recorded
     const combined = `${note} ${desc}`.toLowerCase();
-    if (combined.includes('father')) {
-      ownershipTag = 'FATHER_EXTERNAL';
-    } else if (combined.includes('mixed') || (subAccount === 'Fareeda ETMoney' && (folioNumber.includes('8470103') || folioNumber.includes('91055029576')) && !combined.includes('father'))) {
+    if (combined.includes('father') || combined.includes('external')) {
+      ownershipTag = 'EXTERNAL';
+    } else if (combined.includes('mixed') || (subAccount === 'Fareeda ETMoney' && (folioNumber.includes('8470103') || folioNumber.includes('91055029576')))) {
       ownershipTag = 'MIXED_HOLDING';
     } else {
       ownershipTag = 'PERSONAL';
     }
   }
 
-  const quantity = Math.abs(parseFloat(t.Quantity || t.quantity || 0) || 0);
-  const unitPrice = parseFloat(t.UnitPrice || t.unit_price || 0) || 0;
-  const tradeValue = Math.abs(parseFloat(t.TradeValue !== undefined && t.TradeValue !== '' ? t.TradeValue : (t.trade_value !== undefined && t.trade_value !== '' ? t.trade_value : (t.Amount || t.amount || 0))) || 0);
-  const costBasis = Math.abs(parseFloat(t.CostBasis !== undefined && t.CostBasis !== '' ? t.CostBasis : (t.cost_basis !== undefined && t.cost_basis !== '' ? t.cost_basis : tradeValue)) || 0);
+  let quantity = Math.abs(parseFloat(t.Quantity !== undefined && t.Quantity !== '' ? t.Quantity : (t.quantity !== undefined && t.quantity !== '' ? t.quantity : (t.Units !== undefined && t.Units !== '' ? t.Units : (t.units !== undefined && t.units !== '' ? t.units : 0)))) || 0);
+  if (!quantity && desc) {
+    const m = desc.match(/([0-9.]+)\s*Units/i);
+    if (m) quantity = parseFloat(m[1]) || 0;
+  }
+
+  let unitPrice = parseFloat(t.UnitPrice !== undefined && t.UnitPrice !== '' ? t.UnitPrice : (t.unit_price !== undefined && t.unit_price !== '' ? t.unit_price : (t.NAV !== undefined && t.NAV !== '' ? t.NAV : (t.nav !== undefined && t.nav !== '' ? t.nav : 0)))) || 0;
+  if (!unitPrice && desc) {
+    const m = desc.match(/@\s*([0-9.]+)/);
+    if (m) unitPrice = parseFloat(m[1]) || 0;
+  }
+
+  const rawCostBasis = Math.abs(parseFloat(t.CostBasis !== undefined && t.CostBasis !== '' ? t.CostBasis : (t.cost_basis !== undefined && t.cost_basis !== '' ? t.cost_basis : 0)) || 0);
+  const rawTradeValue = Math.abs(parseFloat(t.TradeValue !== undefined && t.TradeValue !== '' ? t.TradeValue : (t.trade_value !== undefined && t.trade_value !== '' ? t.trade_value : (t.Amount || t.amount || t.INR || t.inr || 0))) || 0);
+  const calcVal = (quantity > 0 && unitPrice > 0) ? Math.round(quantity * unitPrice * 100) / 100 : 0;
+
+  const totalCharges = parseFloat(
+    t.TotalCharges ?? t.total_charges ?? (
+      (parseFloat(t.BrokerageCharges ?? t.brokerage_charges ?? 0) || 0) +
+      (parseFloat(t.ExchangeCharges ?? t.exchange_charges ?? 0) || 0) +
+      (parseFloat(t.STTCharges ?? t.stt_charges ?? 0) || 0) +
+      (parseFloat(t.SEBICharges ?? t.sebi_charges ?? 0) || 0) +
+      (parseFloat(t.StampDutyCharges ?? t.stamp_duty_charges ?? 0) || 0) +
+      (parseFloat(t.GSTCharges ?? t.gst_charges ?? 0) || 0) +
+      (parseFloat(t.DPCharges ?? t.dp_charges ?? 0) || 0) +
+      (parseFloat(t.OtherCharges ?? t.other_charges ?? 0) || 0)
+    )
+  ) || 0;
+
+  const action = invType === 'SELL' ? 'SELL' : (invType === 'BUY' ? 'BUY' : (type === 'Transfer-Out' && fromAcct.includes('Mutual Funds') ? 'SELL' : 'BUY'));
+
+  let costBasis = 0;
+  let tradeValue = 0;
+
+  if (action === 'BUY') {
+    costBasis = rawCostBasis > 0 ? rawCostBasis : ((rawTradeValue > 0 ? rawTradeValue : calcVal) + totalCharges);
+    tradeValue = rawTradeValue > 0 ? rawTradeValue : (calcVal > 0 ? calcVal : (costBasis - totalCharges));
+  } else {
+    tradeValue = rawTradeValue > 0 ? rawTradeValue : (calcVal > 0 ? calcVal : rawCostBasis);
+    costBasis = rawCostBasis;
+  }
+
+  if (quantity > 0 && unitPrice === 0 && tradeValue > 0) {
+    unitPrice = Math.round((tradeValue / quantity) * 10000) / 10000;
+  } else if (unitPrice > 0 && quantity === 0 && tradeValue > 0) {
+    quantity = Math.round((tradeValue / unitPrice) * 1000) / 1000;
+  }
+
   const realizedPnl = parseFloat(t.RealizedPnl !== undefined && t.RealizedPnl !== '' ? t.RealizedPnl : (t.realized_pnl !== undefined && t.realized_pnl !== '' ? t.realized_pnl : 0)) || 0;
 
   return {
     id: t.ID || t.id || '',
     date: t.Date || t.date || '',
-    action: invType === 'SELL' ? 'SELL' : (invType === 'BUY' ? 'BUY' : (type === 'Transfer-Out' && fromAcct.includes('Mutual Funds') ? 'SELL' : 'BUY')),
+    action,
     investmentAccount,
     subAccount,
     isin,
@@ -171,7 +283,7 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
   const parsedTxns = [];
   for (const t of transactions) {
     const p = parseMutualFundTransaction(t);
-    if (p && p.isin && (p.action === 'BUY' || p.action === 'SELL')) {
+    if (p && (p.isin || p.security || p.note) && (p.action === 'BUY' || p.action === 'SELL')) {
       parsedTxns.push(p);
     }
   }
@@ -194,8 +306,10 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
       investmentAccount: t.investmentAccount,
       subAccount: t.subAccount,
       isin: t.isin,
+      security: t.security || t.note,
       folioNumber: t.folioNumber,
-      holdingMode: t.holdingMode
+      holdingMode: t.holdingMode,
+      ownershipTag: t.ownershipTag
     });
 
     if (!positionGroups.has(key)) {
@@ -388,7 +502,8 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
 
     byOwnership: {
       PERSONAL: aggregatePositions(positions.filter(p => p.ownershipTag === 'PERSONAL')),
-      FATHER_EXTERNAL: aggregatePositions(positions.filter(p => p.ownershipTag === 'FATHER_EXTERNAL')),
+      EXTERNAL: aggregatePositions(positions.filter(p => p.ownershipTag === 'EXTERNAL' || p.ownershipTag === 'FATHER_EXTERNAL')),
+      FATHER_EXTERNAL: aggregatePositions(positions.filter(p => p.ownershipTag === 'EXTERNAL' || p.ownershipTag === 'FATHER_EXTERNAL')),
       MIXED_HOLDING: aggregatePositions(positions.filter(p => p.ownershipTag === 'MIXED_HOLDING'))
     },
 
@@ -400,9 +515,9 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
     summary.bySubAccount[sub] = aggregatePositions(positions.filter(p => p.subAccount === sub));
   }
 
-  // Helper to filter Personal Portfolio (Excludes FATHER_EXTERNAL)
+  // Helper to filter Personal Portfolio (Excludes EXTERNAL and legacy FATHER_EXTERNAL)
   const getPersonalPortfolio = () => {
-    return positions.filter(p => p.ownershipTag !== 'FATHER_EXTERNAL');
+    return positions.filter(p => p.ownershipTag === 'PERSONAL' || p.ownershipTag === 'MIXED_HOLDING');
   };
 
   return {

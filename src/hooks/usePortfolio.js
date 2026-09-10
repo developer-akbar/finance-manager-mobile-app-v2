@@ -26,8 +26,8 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
     const { allPositions } = rawPortfolio;
     if (scopeFilter === 'personal') {
       return allPositions.filter(p => p.ownershipTag === 'PERSONAL' || p.ownershipTag === 'MIXED_HOLDING');
-    } else if (scopeFilter === 'father') {
-      return allPositions.filter(p => p.ownershipTag === 'FATHER_EXTERNAL' || p.ownershipTag === 'EXTERNAL_FATHER');
+    } else if (scopeFilter === 'father' || scopeFilter === 'external') {
+      return allPositions.filter(p => p.ownershipTag === 'EXTERNAL' || p.ownershipTag === 'FATHER_EXTERNAL' || p.ownershipTag === 'EXTERNAL_FATHER');
     }
     return allPositions;
   }, [rawPortfolio, scopeFilter]);
@@ -68,6 +68,15 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
     return Array.from(accts).sort();
   }, [scopedPositions]);
 
+  // Active vs Redeemed across whole portfolio for valuation caching
+  const allActivePositions = useMemo(() => {
+    return (rawPortfolio.allPositions || []).filter(p => p.status === 'ACTIVE' && (p.currentUnits || 0) > 0);
+  }, [rawPortfolio.allPositions]);
+
+  const allActiveKeysSignature = useMemo(() => {
+    return allActivePositions.map(p => p.positionKey || p.isin || p.security).sort().join(';');
+  }, [allActivePositions]);
+
   // Asynchronous Live Valuation Fetcher
   const refreshValuations = useCallback(async (force = false) => {
     if (!valuationProvider) return;
@@ -76,17 +85,19 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
       : (typeof valuationProvider.fetchLiveValuations === 'function' ? valuationProvider.fetchLiveValuations.bind(valuationProvider) : null);
     if (!fetchFn) return;
 
+    if (allActivePositions.length === 0) return;
+
     setIsFetchingValuations(true);
     try {
       if (typeof valuationProvider.fetchAllValuations === 'function') {
-        const res = await valuationProvider.fetchAllValuations(activeHoldings, { forceRefresh: force });
+        const res = await valuationProvider.fetchAllValuations(allActivePositions, { forceRefresh: force });
         if (res && res.fetchedAt) {
           setLastValuedAt(res.fetchedAt);
         } else {
           setLastValuedAt(new Date());
         }
       } else {
-        await valuationProvider.fetchLiveValuations(activeHoldings, force);
+        await valuationProvider.fetchLiveValuations(allActivePositions, force);
         setLastValuedAt(new Date());
       }
       setValuationVersion(v => v + 1);
@@ -95,23 +106,19 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
     } finally {
       setIsFetchingValuations(false);
     }
-  }, [valuationProvider, activeHoldings]);
+  }, [valuationProvider, allActivePositions]);
 
-  // Auto-fetch valuations when active holdings identity keys change
-  const activeKeysSignature = useMemo(() => {
-    return activeHoldings.map(p => p.positionKey || p.isin || p.security).sort().join(';');
-  }, [activeHoldings]);
-
+  // Auto-fetch valuations once when portfolio active securities change (NOT when filters change)
   useEffect(() => {
-    if (autoFetchValuations && activeHoldings.length > 0) {
+    if (autoFetchValuations && allActivePositions.length > 0) {
       refreshValuations(false);
     }
-  }, [activeKeysSignature, autoFetchValuations]);
+  }, [allActiveKeysSignature, autoFetchValuations]);
 
   // Segregated Brokerage Cash Calculation
   const relevantBrokerageCash = useMemo(() => {
     const { brokerageCashMap } = rawPortfolio;
-    if (scopeFilter === 'father') {
+    if (scopeFilter === 'father' || scopeFilter === 'external') {
       return 0; // External Holdings does not own personal brokerage cash
     }
     if (accountFilter !== 'all' && accountFilter !== 'Share Market') {

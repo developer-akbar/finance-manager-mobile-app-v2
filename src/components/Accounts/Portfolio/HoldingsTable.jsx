@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { formatINR } from '../../../utils/format.js';
 import { 
   aggregatePositionsForDisplay, 
+  matchesHoldingSearch,
   getInvestmentDisplayMetrics, 
   formatAsOfDate, 
   formatSignedCurrency, 
@@ -34,13 +35,7 @@ export default function HoldingsTable({
     let list = aggregatedGroups;
 
     if (q) {
-      list = list.filter(g => 
-        (g.note || '').toLowerCase().includes(q) ||
-        (g.security || '').toLowerCase().includes(q) ||
-        (g.subAccount || '').toLowerCase().includes(q) ||
-        (g.isin || '').toLowerCase().includes(q) ||
-        g.underlyingPositions.some(p => (p.folioNumber || '').toLowerCase().includes(q))
-      );
+      list = list.filter(g => matchesHoldingSearch(g, q));
     }
 
     return [...list].sort((a, b) => {

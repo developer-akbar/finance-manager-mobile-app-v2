@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { usePortfolio } from '../../hooks/usePortfolio.js';
 import { defaultValuationProvider } from '../../utils/valuationProvider.js';
@@ -49,6 +49,14 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     };
   }, [selectedPosition, onBack, backInterceptRef]);
 
+  // Stable filter options object
+  const portfolioFilters = useMemo(() => ({
+    scopeFilter,
+    platformFilter,
+    accountFilter,
+    valuationProvider: defaultValuationProvider
+  }), [scopeFilter, platformFilter, accountFilter]);
+
   // Derived Portfolio Data via Custom Hook
   const {
     displayedPositions,
@@ -63,12 +71,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
     lastValuedAt,
     refreshValuations,
     valuationVersion
-  } = usePortfolio(transactions, settings, {
-    scopeFilter,
-    platformFilter,
-    accountFilter,
-    valuationProvider: defaultValuationProvider
-  });
+  } = usePortfolio(transactions, settings, portfolioFilters);
 
   // Cascading Filter Handlers
   const handleScopeChange = (newScope) => {
@@ -311,10 +314,6 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
             <div style={{ height: 16 }} />
             <PortfolioPerformance 
               positions={displayedPositions}
-              transactions={transactions}
-              scopeFilter={scopeFilter}
-              accountFilter={accountFilter}
-              platformFilter={platformFilter}
               summaryMetrics={summaryMetrics}
             />
           </>

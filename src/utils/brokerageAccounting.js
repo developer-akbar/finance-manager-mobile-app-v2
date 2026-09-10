@@ -687,3 +687,101 @@ export function calculateGrowwCharges({
     totalCharges
   };
 }
+
+/**
+ * Resolves known Folio and HoldingMode from transaction history given Owner, Platform/SubAccount, and Security/ISIN.
+ */
+export function resolveKnownFolioAndMode({
+  owner = 'Myself',
+  platform = '',
+  isin = '',
+  security = '',
+  transactions = []
+}) {
+  if (!transactions || !transactions.length) {
+    const p = String(platform || '').toLowerCase();
+    const mode = p.includes('groww') || p.includes('zerodha') ? 'DEMAT' : p.includes('etmoney') ? 'NON_DEMAT' : 'DEMAT';
+    return { folio: '', holdingMode: mode, isResolved: false };
+  }
+
+  const isTargetExternal = owner === 'External' || owner === 'EXTERNAL' || owner === 'Father' || owner === 'FATHER_EXTERNAL';
+  const targetOwnerTag = isTargetExternal ? 'EXTERNAL' : 'PERSONAL';
+  const targetPlatform = String(platform || '').trim().toLowerCase();
+  const targetISIN = String(isin || '').trim().toUpperCase();
+  const targetSec = String(security || '').trim().toLowerCase();
+
+  const extractTagValue = (str = '', key = '') => {
+    if (!str) return '';
+    const regex = new RegExp(`(?:^|[|,]\\s*)${key}:\\s*([^|,]+)`, 'i');
+    const match = String(str).match(regex);
+    return match ? match[1].trim() : '';
+  };
+
+  for (const t of transactions) {
+    const tags = t.Tags || t.tags || '';
+    const desc = t.Description || t.description || '';
+    const note = t.Note || t.note || '';
+
+    let rawOwn = (
+      t.OwnershipTag ||
+      t.ownership_tag ||
+      extractTagValue(tags, 'Ownership') ||
+      extractTagValue(desc, 'Ownership') ||
+      ''
+    ).toUpperCase().trim();
+
+    let own = 'PERSONAL';
+    if (rawOwn === 'EXTERNAL' || rawOwn === 'FATHER_EXTERNAL' || rawOwn === 'EXTERNAL_FATHER') {
+      own = 'EXTERNAL';
+    } else if (rawOwn === 'PERSONAL') {
+      own = 'PERSONAL';
+    } else {
+      const combined = `${note} ${desc}`.toLowerCase();
+      if (combined.includes('father') || combined.includes('external')) own = 'EXTERNAL';
+      else own = 'PERSONAL';
+    }
+
+    if (own !== targetOwnerTag) continue;
+
+    const tSub = String(t.SubAccount || t.sub_account || t.Brokerage || t.brokerage || t.ToSubAccount || t.to_sub_account || t.FromSubAccount || t.from_sub_account || '').trim().toLowerCase();
+    if (targetPlatform && tSub && tSub !== targetPlatform) continue;
+
+    const tISIN = String(t.SecurityISIN || t.security_isin || t.ISIN || t.isin || extractTagValue(tags, 'ISIN') || extractTagValue(desc, 'ISIN') || '').trim().toUpperCase();
+    const tSec = String(t.SecuritySymbol || t.security_symbol || note || desc || '').trim().toLowerCase();
+
+    const isinMatch = Boolean(targetISIN && tISIN && targetISIN === tISIN);
+    const secMatch = Boolean(targetSec && (tSec.includes(targetSec) || targetSec.includes(tSec)));
+
+    if (isinMatch || secMatch) {
+      let folio = String(t.FolioNumber || t.folio_number || extractTagValue(tags, 'Folio') || extractTagValue(desc, 'Folio') || '').trim();
+      if (!folio && desc.includes('Folio=')) {
+        const m = desc.match(/Folio=([^|\r\n]+)/i);
+        if (m) folio = m[1].trim();
+      }
+
+      let mode = String(t.HoldingMode || t.holding_mode || extractTagValue(tags, 'Mode') || extractTagValue(desc, 'Mode') || '').trim().toUpperCase();
+      if (!mode) {
+        const combinedDesc = `${desc} ${note}`.toUpperCase();
+        if (combinedDesc.includes('DEMAT') && !combinedDesc.includes('NON DEMAT') && !combinedDesc.includes('NON-DEMAT')) mode = 'DEMAT';
+        else if (combinedDesc.includes('NON-DEMAT') || combinedDesc.includes('NON DEMAT')) mode = 'NON_DEMAT';
+      }
+
+      if (folio || mode) {
+        return {
+          folio,
+          holdingMode: mode || (targetPlatform.includes('groww') || targetPlatform.includes('zerodha') ? 'DEMAT' : 'NON_DEMAT'),
+          isResolved: Boolean(folio)
+        };
+      }
+    }
+  }
+
+  // Fallback defaults based on platform convention if nothing explicit found
+  if (targetPlatform.includes('groww') || targetPlatform.includes('zerodha')) {
+    return { folio: '', holdingMode: 'DEMAT', isResolved: false };
+  } else if (targetPlatform.includes('etmoney')) {
+    return { folio: '', holdingMode: 'NON_DEMAT', isResolved: false };
+  }
+
+  return { folio: '', holdingMode: 'DEMAT', isResolved: false };
+}

@@ -254,4 +254,20 @@ export const getCategoryEmoji = (category = '', note = '') => {
   return EMOJI_MAP.default;
 };
 
+export const cleanNumericInput = (val, allowNegative = false) => {
+  if (val === '' || val === undefined || val === null) return '';
+  let str = String(val);
+  let isNeg = false;
+  if (allowNegative && str.startsWith('-')) {
+    isNeg = true;
+    str = str.slice(1);
+  }
+  let cleaned = str.replace(/[^0-9.]/g, '');
+  const parts = cleaned.split('.');
+  if (parts.length > 2) {
+    cleaned = parts[0] + '.' + parts.slice(1).join('');
+  }
+  return isNeg ? `-${cleaned}` : cleaned;
+};
+
 

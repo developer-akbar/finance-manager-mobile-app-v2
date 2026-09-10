@@ -14,6 +14,7 @@ finman_2026-09-02.csv
 finman_2026-09-03.csv
 finman_2026-09-05_AG.csv
 finman_2026-09-05_old.csv
+finman_2026-09-10.csv
 finman_CAS_*.csv
 
 # Diagnostic & Investigation Scratch Scripts
@@ -26,4 +27,6 @@ scratch/compare_*.cjs
 scratch/benchmark_*.cjs
 scratch/test_*.cjs
 scratch/tmp_*.cjs
+scratch/*.mjs
+scratch/*.js
 
