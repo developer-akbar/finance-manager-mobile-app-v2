@@ -79,16 +79,22 @@ export function getUnifiedPortfolioData(transactions = [], settings = {}) {
         ownershipTag: 'PERSONAL',
         status: 'ACTIVE',
         currentUnits,
-        buyUnits: currentUnits,
-        sellUnits: 0,
-        buyCost: remainingCostBasis,
+        buyUnits: parseFloat(h.buyQty) || (currentUnits + (parseFloat(h.sellQty) || 0)),
+        sellUnits: parseFloat(h.sellQty) || 0,
+        buyCost: parseFloat(h.buyCost) || (remainingCostBasis + (parseFloat(h.soldCostBasis) || 0)),
         remainingCostBasis: Math.round(remainingCostBasis * 100) / 100,
         averageCostPerUnit: Math.round(avgCost * 10000) / 10000,
-        sellCostBasis: 0,
-        realizedPnl: 0,
-        totalProceeds: 0,
-        buyCount: txns.length || 1,
-        sellCount: 0,
+        sellCostBasis: Math.round((parseFloat(h.soldCostBasis) || 0) * 100) / 100,
+        realizedPnl: Math.round((parseFloat(h.realizedPnL) || 0) * 100) / 100,
+        totalProceeds: Math.round(((parseFloat(h.totalProceeds) || ((parseFloat(h.soldCostBasis) || 0) + (parseFloat(h.realizedPnL) || 0)))) * 100) / 100,
+        buyCount: (h.txns || []).filter(t => {
+          const type = (t.InvestmentTransactionType || t.investment_transaction_type || t.Category || t.category || '').toUpperCase();
+          return type === 'BUY' || type === 'BUY_RECON' || type === 'OPENING_LOT' || type === 'BONUS';
+        }).length || txns.length || 1,
+        sellCount: (h.txns || []).filter(t => {
+          const type = (t.InvestmentTransactionType || t.investment_transaction_type || t.Category || t.category || '').toUpperCase();
+          return type === 'SELL';
+        }).length,
         firstBuyDate,
         lastTransactionDate,
         buyLots,

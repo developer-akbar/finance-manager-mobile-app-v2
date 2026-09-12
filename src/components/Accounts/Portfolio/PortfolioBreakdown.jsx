@@ -77,6 +77,7 @@ export default function PortfolioBreakdown({
       cat.activePositions.push(p);
       cat.activeCount++;
       cat.activeCost += (p.remainingCostBasis || 0);
+      cat.realizedPnl += (p.realizedPnl || 0);
 
       const val = valuationProvider ? valuationProvider.getValuation(p) : p.valuation;
       if (val && val.isValued && typeof val.currentValue === 'number') {

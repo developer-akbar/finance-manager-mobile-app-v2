@@ -417,6 +417,22 @@ export const KNOWN_SECURITIES = [
     isin: 'INF247L01999',
     assetType: 'MUTUAL_FUND',
     aliases: ['Motilal Oswal Large & Midcap', 'Motilal Large and Midcap']
+  },
+  {
+    displayName: 'DSP Nifty 50 Equal Weight Index Fund',
+    symbol: 'INF740KA1CR7',
+    exchange: '',
+    isin: 'INF740KA1CR7',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['DSP Nifty 50 Equal Weight', 'DSP Nifty 50 Equal Weight Index', 'DSP Equal Weight']
+  },
+  {
+    displayName: 'Quant Flexi Cap Fund',
+    symbol: 'INF966L01911',
+    exchange: '',
+    isin: 'INF966L01911',
+    assetType: 'MUTUAL_FUND',
+    aliases: ['quant Flexi Cap Fund', 'Quant Flexi Cap', 'Quant Flexicap']
   }
 ];
 
@@ -435,15 +451,36 @@ function normalizeText(str) {
 export function cleanSecurityToNote(securityStr) {
   if (!securityStr) return '';
   let s = String(securityStr).trim();
-  // Strip leading technical code prefix (e.g. "127LTGPG-", "166TPDGG-", "119ETTSD-")
-  s = s.replace(/^[0-9A-Za-z]+[-_]\s*/, '');
-  // Strip common technical fund suffixes
-  s = s.replace(/\s*-\s*(Direct|Regular)\s+Plan.*$/i, '');
-  s = s.replace(/\s*\((Non Demat|Demat)\)/gi, '');
+
+  // Strip trailing ISIN / Advisor / Registrar / Demat noise in CAS headers
+  s = s.replace(/\s*-\s*ISIN\s*:.*$/i, '');
+  s = s.replace(/\s*ISIN\s*:.*$/i, '');
+  s = s.replace(/\s*\(.*Advisor.*$/i, '');
+  s = s.replace(/\s*Registrar\s*:.*$/i, '');
+  s = s.replace(/\s*\(\s*(Non\s*-\s*Demat|Non\s*Demat|Demat)\s*\)/gi, '');
+
+  // Strip leading technical code prefix (e.g. "D 842 - ", "D 869 - ", "127 FMGDG - ", "101 ETGPG - ", "166 PEDGG - ")
+  s = s.replace(/^[0-9A-Za-z]+(\s+[0-9A-Za-z]+)*\s*[-_]\s*/, (match) => {
+    if (/^(Canara|DSP|HDFC|Kotak|Mirae|Motilal|Nippon|Parag|quant|Franklin|Axis|SBI|ICICI|Tata|Aditya|UTI)/i.test(match)) {
+      return match;
+    }
+    return '';
+  });
+
+  // Strip redundant AMC prefix if followed by fund name
+  s = s.replace(/^(DSP|Canara Robeco|HDFC|Kotak|Mirae Asset|Motilal Oswal|Nippon India|PPFAS|quant|Franklin Templeton)\s+Mutual\s+Fund\s+/i, '');
+
+  // Strip technical plan suffixes
+  s = s.replace(/\s*-\s*(Direct|Regular)\s+(Plan|Growth|Option).*$/i, '');
+  s = s.replace(/\s*-\s*(Dir|Reg)\s*-\s*Growth.*$/i, '');
+  s = s.replace(/\s*-\s*(Direct|Regular)$/i, '');
   s = s.replace(/\s*-\s*Growth.*$/i, '');
-  s = s.replace(/\s+Growth(\s+Plan)?/gi, '');
+  s = s.replace(/\s+Growth(\s+Plan|\s+Option)?/gi, '');
+  s = s.replace(/\s+Direct(\s+Plan)?/gi, '');
+  s = s.replace(/\s+Plan(\s+Growth)?/gi, '');
+
   // Clean trailing punctuation / whitespace
-  s = s.replace(/[\s\-_]+$/, '').trim();
+  s = s.replace(/[\s\-_,]+$/, '').trim();
   return s;
 }
 
@@ -563,7 +600,7 @@ export function resolveSecurity(target, options = {}) {
   if (inputISIN.startsWith('INF') || inputName.startsWith('INF')) {
     const isinVal = (inputISIN.startsWith('INF') ? inputISIN : inputName).trim().toUpperCase();
     return {
-      displayName: inputName !== isinVal ? inputName : cleanSecurityToNote(inputName),
+      displayName: inputName && inputName !== isinVal ? cleanSecurityToNote(inputName) : isinVal,
       symbol: isinVal,
       exchange: '',
       isin: isinVal,

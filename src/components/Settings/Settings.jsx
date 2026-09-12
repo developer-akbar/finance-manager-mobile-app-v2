@@ -8,6 +8,8 @@ import { encryptBackupData, decryptBackupData } from '../../utils/cryptoBackup.j
 import { getDB } from '../../database/db.js';
 import { v4 as uuid } from 'uuid';
 import { parseTradebook, parseLedger, parseHoldings, parseDividends } from '../../utils/brokerageAdapters.js';
+import { parseCASText } from '../../utils/casParser.js';
+import { generateCASTransactions } from '../../utils/casAdapter.js';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -1353,18 +1355,22 @@ function DataManager({ onBack }) {
   const [importLoading, setImportLoading] = useState(false);
   const [importLoadingMessage, setImportLoadingMessage] = useState('Processing backup file...');
   const [importTarget, setImportTarget] = useState('generic');
+  const [casReconciliation, setCasReconciliation] = useState(null);
 
   useEffect(() => {
     if (pendingRows && pendingRows.length > 0) {
+      if (casReconciliation) return;
       setAnalysing(true);
       analyseImport(pendingRows)
         .then(res => setAnalysis(res))
         .catch(err => console.error(err))
         .finally(() => setAnalysing(false));
     } else {
-      setAnalysis(null);
+      if (!casReconciliation) {
+        setAnalysis(null);
+      }
     }
-  }, [pendingRows, analyseImport]);
+  }, [pendingRows, analyseImport, casReconciliation]);
 
   // Encrypted Backup & Restore State
   const [cryptoModal, setCryptoModal] = useState(null); // null | { mode: 'export' } | { mode: 'import', rawText, fileName }
@@ -1530,7 +1536,102 @@ function DataManager({ onBack }) {
           setStatus({ type: 'error', msg: 'No dividend payments parsed. Verify file format.' });
           return;
         }
-        setPending(txns);
+      } else if (importTarget.startsWith('cas_liquid_mf')) {
+        let rawText = '';
+        if (typeof parsed === 'string') {
+          rawText = parsed;
+        } else if (file.name.toLowerCase().endsWith('.pdf')) {
+          const { extractTextFromPDF } = await import('../../utils/pdfParser.js');
+          rawText = await extractTextFromPDF(await file.arrayBuffer());
+        } else {
+          rawText = await file.text();
+        }
+        let overridePlatform = null;
+        if (importTarget === 'cas_liquid_mf_ammi') overridePlatform = 'Ammi Groww';
+        else if (importTarget === 'cas_liquid_mf_fareeda') overridePlatform = 'Fareeda Groww';
+        else if (importTarget === 'cas_liquid_mf_ak') overridePlatform = 'Ak ETMoney';
+
+        const casParsed = parseCASText(rawText, overridePlatform);
+        if (!casParsed || !casParsed.schemes || casParsed.schemes.length === 0) {
+          setStatus({ type: 'error', msg: 'No mutual fund schemes found in CAS statement. Ensure the file is a CAMS or KFintech CAS export.' });
+          setImportLoading(false);
+          return;
+        }
+
+        // Query existing database records to perform safe economic deduplication & platform resolution
+        const db = getDB();
+        const [invRes, genResDB, brokRes] = await Promise.all([
+          db.query('SELECT * FROM investment_transactions', []),
+          db.query('SELECT * FROM transactions', []),
+          db.query('SELECT name FROM brokerages', [])
+        ]);
+        const dbTransactions = [
+          ...(invRes.values || []),
+          ...(genResDB.values || [])
+        ];
+        const existingSubAccountsSet = new Set();
+        (brokRes.values || []).forEach(b => { if (b.name) existingSubAccountsSet.add(b.name); });
+        dbTransactions.forEach(t => {
+          const sa = t.SubAccount || t.sub_account || t.Brokerage || t.brokerage;
+          if (sa) existingSubAccountsSet.add(sa);
+        });
+        ['Ak ETMoney', 'Fareeda Groww', 'Fareeda ETMoney', 'Ammi Groww', 'Zerodha'].forEach(sa => existingSubAccountsSet.add(sa));
+        const existingSubAccounts = Array.from(existingSubAccountsSet).filter(Boolean);
+
+        const { generateCASTransactions, reconcileCASTransactionsWithDB } = await import('../../utils/casAdapter.js');
+        const genRes = generateCASTransactions({
+          casData: casParsed,
+          platform: overridePlatform || casParsed.investor.platform,
+          account: 'Liquid Mutual Funds',
+          ownership: 'PERSONAL',
+          dbTransactions,
+          existingSubAccounts,
+          overridePlatform,
+          manualAssignments: {}
+        });
+
+        if (genRes.transactions.length === 0) {
+          setStatus({ type: 'error', msg: 'No financial mutual fund transactions found in CAS statement.' });
+          setImportLoading(false);
+          return;
+        }
+
+        const econRecon = reconcileCASTransactionsWithDB({
+          casTransactions: genRes.transactions,
+          dbTransactions
+        });
+
+        setCasReconciliation({
+          investor: casParsed.investor,
+          rawCasData: casParsed,
+          ownership: 'PERSONAL',
+          summary: casParsed.summary,
+          report: genRes.reconciliation,
+          detectedPlatforms: genRes.detectedPlatforms || [],
+          existingSubAccounts,
+          dbTransactions,
+          manualAssignments: {},
+          overridePlatform,
+          econRecon
+        });
+
+        setAnalysis({
+          total: econRecon.totalEvents,
+          dbDupeCount: econRecon.alreadyInDatabase,
+          newRows: econRecon.newTransactions,
+          fileDupeCount: 0,
+          invalidCount: 0,
+          isCasReconciliation: true,
+          exactMatches: econRecon.exactMatches,
+          probableDateVariance: econRecon.probableDateVariance,
+          ownershipConflicts: econRecon.ownershipConflicts,
+          folioPlatformConflicts: econRecon.folioPlatformConflicts,
+          routingSummary: econRecon.routingSummary,
+          platformSummary: econRecon.platformSummary
+        });
+
+        // Pass only genuinely new transactions to pendingRows so Merge inserts 0 rows if all are matched
+        setPending(econRecon.trulyNewRows);
         setPendingNm(file.name);
         setIsBackup(false);
         setPendingBackup(null);
@@ -1542,6 +1643,104 @@ function DataManager({ onBack }) {
       setImportLoading(false);
       if (fileRef.current) fileRef.current.value = '';
     }
+  };
+
+  const handleCasPlatformChange = async (folioOrIsin, newPlatform) => {
+    if (!casReconciliation || !casReconciliation.rawCasData) return;
+    const { generateCASTransactions, reconcileCASTransactionsWithDB } = await import('../../utils/casAdapter.js');
+    const updatedManual = {
+      ...(casReconciliation.manualAssignments || {}),
+      [folioOrIsin]: newPlatform
+    };
+    const genRes = generateCASTransactions({
+      casData: casReconciliation.rawCasData,
+      platform: casReconciliation.overridePlatform || casReconciliation.investor?.platform,
+      account: 'Liquid Mutual Funds',
+      ownership: 'PERSONAL',
+      dbTransactions: casReconciliation.dbTransactions,
+      existingSubAccounts: casReconciliation.existingSubAccounts,
+      overridePlatform: casReconciliation.overridePlatform,
+      manualAssignments: updatedManual
+    });
+    const econRecon = reconcileCASTransactionsWithDB({
+      casTransactions: genRes.transactions,
+      dbTransactions: casReconciliation.dbTransactions
+    });
+
+    setCasReconciliation(prev => ({
+      ...prev,
+      manualAssignments: updatedManual,
+      report: genRes.reconciliation,
+      detectedPlatforms: genRes.detectedPlatforms || [],
+      econRecon
+    }));
+
+    setAnalysis(prev => ({
+      ...prev,
+      total: econRecon.totalEvents,
+      dbDupeCount: econRecon.alreadyInDatabase,
+      newRows: econRecon.newTransactions,
+      exactMatches: econRecon.exactMatches,
+      probableDateVariance: econRecon.probableDateVariance,
+      ownershipConflicts: econRecon.ownershipConflicts,
+      folioPlatformConflicts: econRecon.folioPlatformConflicts,
+      routingSummary: econRecon.routingSummary,
+      platformSummary: econRecon.platformSummary
+    }));
+
+    setPending(econRecon.trulyNewRows);
+  };
+
+  const handleApplyPlatformToAllUnconfirmed = async (newPlatform) => {
+    if (!casReconciliation || !casReconciliation.rawCasData || !newPlatform) return;
+    const { generateCASTransactions, reconcileCASTransactionsWithDB } = await import('../../utils/casAdapter.js');
+    const updatedManual = {
+      ...(casReconciliation.manualAssignments || {})
+    };
+    (casReconciliation.report || []).forEach(rec => {
+      if (rec.needsConfirmation) {
+        if (rec.folio) updatedManual[rec.folio] = newPlatform;
+        if (rec.isin) updatedManual[rec.isin] = newPlatform;
+      }
+    });
+
+    const genRes = generateCASTransactions({
+      casData: casReconciliation.rawCasData,
+      platform: casReconciliation.overridePlatform || casReconciliation.investor?.platform,
+      account: 'Liquid Mutual Funds',
+      ownership: 'PERSONAL',
+      dbTransactions: casReconciliation.dbTransactions,
+      existingSubAccounts: casReconciliation.existingSubAccounts,
+      overridePlatform: casReconciliation.overridePlatform,
+      manualAssignments: updatedManual
+    });
+    const econRecon = reconcileCASTransactionsWithDB({
+      casTransactions: genRes.transactions,
+      dbTransactions: casReconciliation.dbTransactions
+    });
+
+    setCasReconciliation(prev => ({
+      ...prev,
+      manualAssignments: updatedManual,
+      report: genRes.reconciliation,
+      detectedPlatforms: genRes.detectedPlatforms || [],
+      econRecon
+    }));
+
+    setAnalysis(prev => ({
+      ...prev,
+      total: econRecon.totalEvents,
+      dbDupeCount: econRecon.alreadyInDatabase,
+      newRows: econRecon.newTransactions,
+      exactMatches: econRecon.exactMatches,
+      probableDateVariance: econRecon.probableDateVariance,
+      ownershipConflicts: econRecon.ownershipConflicts,
+      folioPlatformConflicts: econRecon.folioPlatformConflicts,
+      routingSummary: econRecon.routingSummary,
+      platformSummary: econRecon.platformSummary
+    }));
+
+    setPending(econRecon.trulyNewRows);
   };
 
   const doImport = async (mode) => {
@@ -1562,7 +1761,11 @@ function DataManager({ onBack }) {
           durationSeconds: elapsed
         };
         await updateSettings({ lastImportInfo: JSON.stringify(lastImportInfo) });
-        setStatus({ type: 'success', msg: `✓ Imported ${result.imported.toLocaleString()} transactions in ${elapsed}s${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''} [${fileName}].` });
+        if (casReconciliation && result.imported === 0 && analysis?.dbDupeCount > 0) {
+          setStatus({ type: 'success', msg: `✓ All ${analysis.dbDupeCount.toLocaleString()} CAS transactions already match existing database. 0 rows inserted; existing portfolio & accounting preserved.` });
+        } else {
+          setStatus({ type: 'success', msg: `✓ Imported ${result.imported.toLocaleString()} transactions in ${elapsed}s${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''} [${fileName}].` });
+        }
       } else {
         setStatus({ type: 'error', msg: 'Import cancelled.' });
       }
@@ -1572,6 +1775,8 @@ function DataManager({ onBack }) {
       setPending(null);
       setPendingNm('');
       setPendingBackup(null);
+      setCasReconciliation(null);
+      setAnalysis(null);
       setImportLoading(false);
     }
   };
@@ -1861,6 +2066,10 @@ function DataManager({ onBack }) {
             style={{ width: '100%', padding: '8px 12px', borderRadius: 8, background: 'var(--bg-card2)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
           >
             <option value="generic">FinMan CSV/JSON Backup or MM Excel</option>
+            <option value="cas_liquid_mf">CAMS / KFintech CAS (Auto-Detect)</option>
+            <option value="cas_liquid_mf_ak">CAMS / KFintech CAS (Ak ETMoney)</option>
+            <option value="cas_liquid_mf_fareeda">CAMS / KFintech CAS (Fareeda Groww)</option>
+            <option value="cas_liquid_mf_ammi">CAMS / KFintech CAS (Ammi Groww)</option>
             <option value="zerodha_tradebook">Zerodha Tradebook (XLSX / CSV)</option>
             <option value="zerodha_ledger">Zerodha Ledger (CSV)</option>
             <option value="zerodha_holdings">Zerodha Holdings Snapshot (CSV)</option>
@@ -1868,10 +2077,10 @@ function DataManager({ onBack }) {
           </select>
         </div>
         <label className={`import-drop ${importProgress ? 'disabled' : ''}`} style={{ margin: '0 0 14px', borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '18px var(--page-px)', display: 'block' }}>
-          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json,.finman" style={{ display: 'none' }} onChange={handleFile} disabled={!!importProgress} />
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.xlsm,.json,.finman,.txt,.pdf" style={{ display: 'none' }} onChange={handleFile} disabled={!!importProgress} />
           <div className="import-folder-icon">📂</div>
           <div className="import-drop-title">Choose file</div>
-          <div className="import-drop-sub">CSV / XLS / JSON / 🔒 .finman encrypted backup</div>
+          <div className="import-drop-sub">CSV / XLS / JSON / TXT / PDF / 🔒 .finman encrypted backup</div>
         </label>
 
         {/* Export section */}
@@ -2063,31 +2272,237 @@ function DataManager({ onBack }) {
         {showMode && (
           <>
             <div className="overlay" onClick={() => setShowMode(false)} />
-            <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 20px)' }}>
+            <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 20px)', maxHeight: '85vh', overflowY: 'auto' }}>
               <div className="sheet-handle" />
-              <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 4 }}>
-                {pendingRows?.length?.toLocaleString()} rows found
+              <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>{casReconciliation ? 'CAS Statement Reconciliation' : `${pendingRows?.length?.toLocaleString()} rows found`}</span>
+                {casReconciliation && (
+                  <span style={{
+                    fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: 12,
+                    background: casReconciliation.report?.every(r => r.status === 'PASSED') ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                    color: casReconciliation.report?.every(r => r.status === 'PASSED') ? 'var(--green)' : 'var(--expense)'
+                  }}>
+                    {casReconciliation.report?.every(r => r.status === 'PASSED') ? '✓ 100% Units Reconciled' : '⚠ Discrepancy Found'}
+                  </span>
+                )}
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 4 }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 10 }}>
                 File: {pendingName}
               </div>
 
-              {/* Breakdown summary */}
+              {/* CAS Statement & Entity Details */}
+              {casReconciliation && (() => {
+                const unconfirmedSchemes = casReconciliation.report?.filter(r => r.needsConfirmation) || [];
+                const hasUnconfirmed = unconfirmedSchemes.length > 0;
+                const detectedPlatEntries = Object.entries(analysis?.platformSummary || {});
+                const isSingleConfident = detectedPlatEntries.length === 1 && !hasUnconfirmed;
+                const isMultiConfident = detectedPlatEntries.length > 1 && !hasUnconfirmed;
+                const singlePlatformName = detectedPlatEntries[0]?.[0] || casReconciliation.report?.[0]?.platform || 'Platform';
+                const singleReason = casReconciliation.report?.[0]?.reason || 'Matched automatically';
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
+                    {/* Investor Header */}
+                    <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 12px', fontSize: '0.75rem' }}>
+                        <div><span style={{ color: 'var(--text-muted)' }}>CAS Investor:</span> <b>{casReconciliation.investor?.name || 'Investor'}</b></div>
+                        <div><span style={{ color: 'var(--text-muted)' }}>Ownership:</span> <b>{casReconciliation.ownership || 'PERSONAL'}</b></div>
+                        <div><span style={{ color: 'var(--text-muted)' }}>Total Schemes:</span> <b>{casReconciliation.summary?.totalSchemes || casReconciliation.report?.length}</b></div>
+                        <div><span style={{ color: 'var(--text-muted)' }}>Detected Mode:</span> <b>{casReconciliation.report?.[0]?.holdingMode || 'PHYSICAL'}</b></div>
+                      </div>
+                    </div>
+
+                    {/* Platform Detected Card — High Confidence Single Platform */}
+                    {isSingleConfident && (
+                      <div style={{ background: 'rgba(34, 197, 94, 0.08)', border: '1px solid rgba(34, 197, 94, 0.25)', borderRadius: 10, padding: '10px 14px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Platform Detected</div>
+                            <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                              <span>🏢 {singlePlatformName}</span>
+                              <span style={{ fontSize: '0.7rem', color: 'var(--green)', fontWeight: 700 }}>✓ High Confidence</span>
+                            </div>
+                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                              {singleReason}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)' }}>{analysis?.total || 0}</div>
+                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>events</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Platform Detected Card — Multi-Platform */}
+                    {isMultiConfident && (
+                      <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6 }}>
+                          Platforms Detected ({detectedPlatEntries.length}) ✓
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {detectedPlatEntries.map(([platName, count]) => (
+                            <div key={platName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', padding: '5px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+                              <span>🏢 <b>{platName}</b></span>
+                              <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{count} events</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Platform Confirmation Alert Card — Ambiguous Platforms Only */}
+                    {hasUnconfirmed && (
+                      <div style={{ background: 'rgba(255, 180, 0, 0.08)', border: '1px solid rgba(255, 180, 0, 0.3)', borderRadius: 10, padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--gold)', marginBottom: 2 }}>
+                          ⚠ Platform Needs Confirmation ({unconfirmedSchemes.length} Scheme{unconfirmedSchemes.length > 1 ? 's' : ''})
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: 8 }}>
+                          Select platform below to route these transactions correctly:
+                        </div>
+                        {unconfirmedSchemes.length > 1 && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: 6 }}>
+                            <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--text-muted)', flex: 1 }}>Apply to all unconfirmed:</span>
+                            <select
+                              onChange={e => handleApplyPlatformToAllUnconfirmed(e.target.value)}
+                              defaultValue=""
+                              style={{ fontSize: '0.68rem', padding: '3px 8px', borderRadius: 4, background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                            >
+                              <option value="" disabled>Select platform for all...</option>
+                              {casReconciliation.existingSubAccounts?.map(sa => (
+                                <option key={sa} value={sa}>{sa}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Account Routing Breakdown */}
+                    {analysis?.routingSummary && Object.keys(analysis.routingSummary).length > 0 && (
+                      <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 10, padding: '8px 12px' }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Account Routing Breakdown</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          {Object.entries(analysis.routingSummary).map(([route, count]) => (
+                            <div key={route} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-primary)' }}>
+                              <span>📁 {route}</span>
+                              <b>{count} events</b>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Schemes & Folios Units Audit */}
+                    <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
+                      <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Schemes ({casReconciliation.report?.length})</span>
+                        <span>Closing Units</span>
+                      </div>
+                      <div style={{ maxHeight: 150, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {casReconciliation.report?.map((rec, idx) => (
+                          <div key={idx} style={{
+                            background: 'rgba(255,255,255,0.02)',
+                            border: rec.needsConfirmation ? '1px solid var(--gold)' : '1px solid var(--border-subtle, rgba(255,255,255,0.05))',
+                            borderRadius: 6,
+                            padding: '6px 8px',
+                            fontSize: '0.7rem'
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                              <span style={{ fontWeight: 600, color: 'var(--text-primary)', maxWidth: '70%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {rec.schemeName} ({rec.holdingMode})
+                              </span>
+                              <span style={{ color: rec.status === 'PASSED' ? 'var(--green)' : 'var(--expense)', fontWeight: 700 }}>
+                                {rec.calculatedUnits.toFixed(3)} u {rec.status === 'PASSED' ? '✓' : `(CAS: ${rec.expectedClosingUnits.toFixed(3)})`}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                              <span>Folio: {rec.folio || 'N/A'}</span>
+                              {rec.needsConfirmation ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  <span style={{ color: 'var(--gold)', fontWeight: 700 }}>⚠ Assign:</span>
+                                  <select
+                                    value={rec.platform}
+                                    onChange={e => handleCasPlatformChange(rec.folio || rec.isin, e.target.value)}
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      padding: '2px 6px',
+                                      borderRadius: 4,
+                                      background: 'rgba(255, 180, 0, 0.15)',
+                                      color: 'var(--gold)',
+                                      border: '1px solid var(--gold)'
+                                    }}
+                                  >
+                                    {(casReconciliation.existingSubAccounts || [rec.platform]).map(sa => (
+                                      <option key={sa} value={sa}>{sa}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              ) : (
+                                <span style={{ fontSize: '0.65rem', background: 'rgba(255,255,255,0.06)', padding: '2px 6px', borderRadius: 4, color: 'var(--text-secondary)' }}>
+                                  🏢 {rec.platform}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Multi-Factor Reconciliation Breakdown summary */}
               {analysis && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
                   <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
-                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>New Transactions</div>
-                    <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--green)' }}>{analysis.newRows.toLocaleString()}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Total CAS Events</div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text-primary)' }}>{(analysis.total || 0).toLocaleString()}</div>
                   </div>
                   <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
-                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Already In Database</div>
-                    <div style={{ fontSize: '1rem', fontWeight: 800, color: analysis.dbDupeCount > 0 ? 'var(--gold)' : 'var(--text-primary)' }}>{analysis.dbDupeCount.toLocaleString()}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Already in DB</div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: (analysis.dbDupeCount || 0) > 0 ? 'var(--gold)' : 'var(--text-primary)' }}>{(analysis.dbDupeCount || 0).toLocaleString()}</div>
+                  </div>
+                  <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>New Txns</div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: (analysis.newRows || 0) > 0 ? 'var(--green)' : 'var(--text-muted)' }}>{(analysis.newRows || 0).toLocaleString()}</div>
+                  </div>
+                  <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Date Variance</div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#60a5fa' }}>{(analysis.probableDateVariance || 0).toLocaleString()}</div>
+                  </div>
+                  <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Ownership Conflicts</div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: (analysis.ownershipConflicts || 0) > 0 ? 'var(--expense)' : 'var(--green)' }}>{analysis.ownershipConflicts || 0}</div>
+                  </div>
+                  <div style={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Folio Conflicts</div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: (analysis.folioPlatformConflicts || 0) > 0 ? 'var(--expense)' : 'var(--green)' }}>{analysis.folioPlatformConflicts || 0}</div>
                   </div>
                 </div>
               )}
 
-              {/* Already existing in database notice */}
-              {analysis && analysis.dbDupeCount > 0 && (
+              {/* Detailed Safe Notice for CAS Imports */}
+              {casReconciliation && analysis && (
+                analysis.newRows === 0 ? (
+                  <div style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 12 }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--green)', marginBottom: 3 }}>✓ 100% Economically Matched</div>
+                    <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                      All <b>{analysis.total}</b> CAS events are already represented in FinMan ({analysis.exactMatches || 0} exact date matches, {analysis.probableDateVariance || 0} order-vs-allotment date variances). <b>Merge mode will insert 0 rows</b>, completely protecting your existing accounting, FIFO lots, and cash balances.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 12 }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#60a5fa', marginBottom: 3 }}>ℹ Safe Import Ready</div>
+                    <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
+                      Merge mode will safely add <b>{analysis.newRows}</b> genuinely new investment transactions (CashImpact = 0) and skip <b>{analysis.dbDupeCount}</b> already existing records.
+                    </div>
+                  </div>
+                )
+              )}
+
+              {/* Already existing in database notice for non-CAS */}
+              {!casReconciliation && analysis && analysis.dbDupeCount > 0 && (
                 <div style={{ background: 'rgba(255,180,0,0.08)', border: '1px solid rgba(255,180,0,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 10 }}>
                   <div style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--gold)', marginBottom: 4 }}>⚠ Existing Database Duplicates</div>
                   <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
@@ -2097,11 +2512,11 @@ function DataManager({ onBack }) {
               )}
 
               {/* Possible duplicates within file notice */}
-              {analysis && analysis.fileDupeCount > 0 && (
+              {!casReconciliation && analysis && analysis.fileDupeCount > 0 && (
                 <div style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 10 }}>
                   <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#60a5fa', marginBottom: 4 }}>ℹ Possible Duplicate Rows Within This File</div>
                   <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)' }}>
-                    • <b>{analysis.fileDupeCount.toLocaleString()}</b> rows in the file share an identical date/time/account/amount/note/desc signature. {analysis.dbDupeCount === 0 ? 'No existing FinMan data exists yet.' : ''}
+                    • <b>{analysis.fileDupeCount.toLocaleString()}</b> rows in the file share an identical date/time/account/amount/note/desc signature.
                   </div>
                 </div>
               )}
@@ -2117,12 +2532,12 @@ function DataManager({ onBack }) {
               )}
 
               <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 16 }}>
-                <b style={{ color: 'var(--green)' }}>Merge</b> — keeps all existing transactions, accounts &amp; categories. Adds only new rows (exact duplicates skipped). <b>Recommended for FinMan exports.</b><br /><br />
+                <b style={{ color: 'var(--green)' }}>Merge</b> — keeps all existing transactions, accounts &amp; categories. Adds only new rows (exact duplicates skipped). <b>Recommended for all imports.</b><br /><br />
                 <b style={{ color: 'var(--expense)' }}>Override</b> — ⚠ deletes all existing transactions first, then imports fresh. Settings (accounts, categories) are rebuilt from the file. Use only when starting clean.
               </div>
               <button className="btn btn-primary btn-full" style={{ marginBottom: 8 }} onClick={() => doImport('merge')}>Merge (Recommended)</button>
               <button className="btn btn-danger  btn-full" onClick={() => doImport('override')}>Override — Delete &amp; Replace All</button>
-              <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={() => { setShowMode(false); setPending(null); setAnalysis(null); setIsBackup(false); }}>Cancel</button>
+              <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={() => { setShowMode(false); setPending(null); setAnalysis(null); setIsBackup(false); setCasReconciliation(null); }}>Cancel</button>
             </div>
           </>
         )}
