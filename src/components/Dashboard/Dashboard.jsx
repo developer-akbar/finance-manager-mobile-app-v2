@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount } from '../../utils/format.js';
+import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount, isLifestyleExpense } from '../../utils/format.js';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { ccBalances, isCreditCard, ccDaysUntilDue, ccNextDueDate } from '../Accounts/Accounts.jsx';
 import CashFlowForecast from '../Forecast/CashFlowForecast.jsx';
@@ -321,7 +321,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   // ── Top 5 categories this month ─────────────────────────────────────────────
   const topCats = useMemo(() => {
     const map = {};
-    for (const t of monthTxns.filter(t => txnType(t) === 'expense')) {
+    for (const t of monthTxns.filter(isLifestyleExpense)) {
       const c = t.Category || 'Others';
       map[c] = (map[c] || 0) + txnAmount(t);
     }

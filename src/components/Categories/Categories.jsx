@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, formatINRCompact, txnType, txnAmount, calcTotals, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
+import { parseDate, formatINR, formatINRCompact, txnType, txnAmount, calcTotals, currentFY, fyLabel, fyStart, fyEnd, isLifestyleExpense, isInvestmentCharge } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
@@ -116,7 +116,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
     });
   };
 
-  const catTxns = useMemo(() => allTxns.filter(t => t.Category === catName), [allTxns, catName]);
+  const catTxns = useMemo(() => allTxns.filter(t => t.Category === catName || (catName === 'Investment Charges' && isInvestmentCharge(t))), [allTxns, catName]);
 
   const applyPeriod = (txns) => {
     if (period === 'Month') return txns.filter(t => { const d = parseDate(t.Date); return d.getFullYear() === viewYear && d.getMonth() === viewMonth; });
@@ -390,8 +390,13 @@ export default function Categories({ backInterceptRef, viewParams } = {}) {
 
   // Only show expense or income based on tab
   const typeTxns = useMemo(() =>
-    periodTxns.filter(t => catType === 'Income' ? txnType(t) === 'income' : txnType(t) === 'expense'),
+    periodTxns.filter(t => catType === 'Income' ? txnType(t) === 'income' : isLifestyleExpense(t)),
     [periodTxns, catType]);
+
+  const chargeTxns = useMemo(() =>
+    periodTxns.filter(t => isInvestmentCharge(t) && txnType(t) === 'expense'),
+    [periodTxns]);
+  const chargeTotal = useMemo(() => chargeTxns.reduce((s, t) => s + txnAmount(t), 0), [chargeTxns]);
 
   const totalAmt = useMemo(() => typeTxns.reduce((s, t) => s + txnAmount(t), 0), [typeTxns]);
 
@@ -431,7 +436,7 @@ export default function Categories({ backInterceptRef, viewParams } = {}) {
       {/* Income / Expense tabs with totals */}
       {(() => {
         const incTotal = periodTxns.filter(t => txnType(t) === 'income').reduce((s, t) => s + txnAmount(t), 0);
-        const expTotal = periodTxns.filter(t => txnType(t) === 'expense').reduce((s, t) => s + txnAmount(t), 0);
+        const expTotal = periodTxns.filter(isLifestyleExpense).reduce((s, t) => s + txnAmount(t), 0);
         return (
           <div style={{ padding: '6px var(--page-px) 4px', flexShrink: 0 }}>
             <div className="cat-type-tabs">
@@ -479,6 +484,29 @@ export default function Categories({ backInterceptRef, viewParams } = {}) {
             </div>
           ))
         }
+
+        {catType === 'Expense' && chargeTxns.length > 0 && (
+          <div
+            style={{
+              margin: '16px var(--page-px) 8px',
+              padding: '12px 14px',
+              background: 'var(--card-bg, rgba(255,255,255,0.03))',
+              borderRadius: 12,
+              border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+              cursor: 'pointer'
+            }}
+            onClick={() => setDrill('Investment Charges')}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)' }}>Investment & Trading Charges</div>
+              <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>{chargeTxns.length} transaction{chargeTxns.length > 1 ? 's' : ''}</div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Total: {formatINR(chargeTotal)}</div>
+              <div style={{ fontSize: '0.74rem', color: 'var(--primary, #6366f1)', fontWeight: 600 }}>View Details →</div>
+            </div>
+          </div>
+        )}
         <div style={{ height: 24 }} />
       </div>
     </div>
