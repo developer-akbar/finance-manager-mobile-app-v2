@@ -204,6 +204,19 @@ export const txnType = (t) => {
 
 export const txnAmount = (t) => parseFloat(t.INR || t.Amount || t.amount || 0);
 
+export const isInvestmentCharge = (t) => {
+  if (!t) return false;
+  const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+  if (invType === 'CHARGE') return true;
+  const cat = String(t.Category || t.category || '').trim();
+  if (cat === 'Investment Charges') return true;
+  return false;
+};
+
+export const isLifestyleExpense = (t) => {
+  return txnType(t) === 'expense' && !isInvestmentCharge(t);
+};
+
 export const calcTotals = (transactions) => {
   let income = 0, expense = 0, transfer = 0;
   for (const t of transactions) {

@@ -3,7 +3,7 @@ import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveCo
 import { useApp } from '../../contexts/AppContext.jsx';
 import {
   parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount,
-  getCategoryEmoji, getFY, fyLabel, fyStart, fyEnd, currentFY,
+  getCategoryEmoji, getFY, fyLabel, fyStart, fyEnd, currentFY, isLifestyleExpense
 } from '../../utils/format.js';
 import ReportGenerator from '../Reports/ReportGenerator.jsx';
 import './Analytics.css';
@@ -125,7 +125,7 @@ export default function Analytics({ backInterceptRef }) {
   const categoryData = useMemo(() => {
     const map = {};
     for (const t of periodTxns) {
-      if (txnType(t)!==viewType) continue;
+      if (viewType === 'expense' ? !isLifestyleExpense(t) : txnType(t) !== viewType) continue;
       const cat=t.Category||'Other';
       map[cat]=(map[cat]||0)+txnAmount(t);
     }
