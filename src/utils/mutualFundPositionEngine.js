@@ -105,9 +105,9 @@ export function parseMutualFundTransaction(t) {
 
   let isin = isinRaw;
 
-  // If ISIN is missing on an investment candidate, resolve from SecuritySymbol / SecurityDisplayName / Note
+  // If ISIN is missing on an investment candidate, resolve from SecuritySymbol / SecurityDisplayName
   if (!isin) {
-    const secCandidate = String(t.SecuritySymbol || t.security_symbol || t.SecurityDisplayName || t.security_display_name || note || '').trim();
+    const secCandidate = String(t.SecuritySymbol || t.security_symbol || t.SecurityDisplayName || t.security_display_name || '').trim();
     if (secCandidate) {
       const resolved = resolveSecurity(secCandidate);
       if (resolved && resolved.isResolved && resolved.isin && resolved.isin.trim().toUpperCase().startsWith('INF')) {
@@ -116,30 +116,34 @@ export function parseMutualFundTransaction(t) {
     }
   }
 
-  // Must be an MF account or have an INF ISIN
+  // STRICT INVESTMENT GATE:
+  // A mutual fund investment holding MUST have a valid mutual fund ISIN starting with 'INF'
   const isINF = isin && isin.startsWith('INF');
-  if (!isMfAccount && !isINF) return null;
+  if (!isINF) return null;
 
-  // Identify if this is a mutual fund transaction
-  const isMF = 
+  // STRICT GATE: Must have explicit investment evidence (preventing generic bank transfers from becoming positions)
+  const hasInvestmentEvidence = 
     invType === 'BUY' || 
     invType === 'SELL' || 
+    invType === 'DIVIDEND_REINVEST' || 
+    invType === 'CORPORATE_ACTION' || 
+    invType === 'UNIT_ADJUSTMENT' || 
+    invType === 'OPENING_LOT' ||
     tags.includes('Folio:') || 
-    toAcct.includes('Mutual Funds') || 
-    fromAcct.includes('Mutual Funds') ||
-    isINF;
+    tags.includes('ISIN:INF') ||
+    desc.includes('CAMS_CAS') || 
+    desc.includes('CAS MF') ||
+    (desc.includes('ISIN=INF') && desc.includes('Folio='));
 
-  if (!isMF) return null;
+  if (!hasInvestmentEvidence) return null;
 
   // Investment Account
   let investmentAccount = invAcct;
   if (!investmentAccount) {
     if (toAcct === 'Mutual Funds Tax Saver' || fromAcct === 'Mutual Funds Tax Saver' || cat.includes('Tax Saver')) {
       investmentAccount = 'Mutual Funds Tax Saver';
-    } else if (toAcct === 'Liquid Mutual Funds' || fromAcct === 'Liquid Mutual Funds' || isMfAccount || isINF) {
-      investmentAccount = 'Liquid Mutual Funds';
     } else {
-      return null;
+      investmentAccount = 'Liquid Mutual Funds';
     }
   }
 
@@ -150,6 +154,7 @@ export function parseMutualFundTransaction(t) {
     if (combined.includes('ammi')) subAccount = 'Ammi Groww';
     else if (combined.includes('etmoney') || combined.includes('et money')) subAccount = 'Fareeda ETMoney';
     else if (combined.includes('groww')) subAccount = 'Fareeda Groww';
+    else if (combined.includes('ak')) subAccount = 'Ak ETMoney';
   }
 
   // Folio Number
@@ -187,15 +192,7 @@ export function parseMutualFundTransaction(t) {
   } else if (rawOwn === 'PERSONAL') {
     ownershipTag = 'PERSONAL';
   } else {
-    // Legacy fallback ONLY when no explicit ownership tag was ever recorded
-    const combined = `${note} ${desc}`.toLowerCase();
-    if (combined.includes('father') || combined.includes('external')) {
-      ownershipTag = 'EXTERNAL';
-    } else if (combined.includes('mixed') || (subAccount === 'Fareeda ETMoney' && (folioNumber.includes('8470103') || folioNumber.includes('91055029576')))) {
-      ownershipTag = 'MIXED_HOLDING';
-    } else {
-      ownershipTag = 'PERSONAL';
-    }
+    ownershipTag = 'PERSONAL';
   }
 
   let quantity = Math.abs(parseFloat(t.Quantity !== undefined && t.Quantity !== '' ? t.Quantity : (t.quantity !== undefined && t.quantity !== '' ? t.quantity : (t.Units !== undefined && t.Units !== '' ? t.Units : (t.units !== undefined && t.units !== '' ? t.units : 0)))) || 0);
@@ -227,7 +224,17 @@ export function parseMutualFundTransaction(t) {
     )
   ) || 0;
 
-  const action = invType === 'SELL' ? 'SELL' : (invType === 'BUY' ? 'BUY' : (type === 'Transfer-Out' && fromAcct.includes('Mutual Funds') ? 'SELL' : 'BUY'));
+  // Map Action
+  let action = 'BUY';
+  if (invType === 'SELL') {
+    action = 'SELL';
+  } else if (invType === 'BUY' || invType === 'DIVIDEND_REINVEST' || invType === 'OPENING_LOT') {
+    action = 'BUY';
+  } else if (invType === 'UNIT_ADJUSTMENT' || invType === 'CORPORATE_ACTION') {
+    action = 'UNIT_ADJUSTMENT';
+  } else if (type === 'Transfer-Out' && fromAcct.includes('Mutual Funds') && (desc.includes('REDEMPTION') || desc.includes('SELL'))) {
+    action = 'SELL';
+  }
 
   let costBasis = 0;
   let tradeValue = 0;
@@ -235,9 +242,13 @@ export function parseMutualFundTransaction(t) {
   if (action === 'BUY') {
     costBasis = rawCostBasis > 0 ? rawCostBasis : ((rawTradeValue > 0 ? rawTradeValue : calcVal) + totalCharges);
     tradeValue = rawTradeValue > 0 ? rawTradeValue : (calcVal > 0 ? calcVal : (costBasis - totalCharges));
-  } else {
+  } else if (action === 'SELL') {
     tradeValue = rawTradeValue > 0 ? rawTradeValue : (calcVal > 0 ? calcVal : rawCostBasis);
     costBasis = rawCostBasis;
+  } else {
+    // UNIT_ADJUSTMENT
+    tradeValue = 0;
+    costBasis = 0;
   }
 
   if (quantity > 0 && unitPrice === 0 && tradeValue > 0) {
@@ -247,6 +258,13 @@ export function parseMutualFundTransaction(t) {
   }
 
   const realizedPnl = parseFloat(t.RealizedPnl !== undefined && t.RealizedPnl !== '' ? t.RealizedPnl : (t.realized_pnl !== undefined && t.realized_pnl !== '' ? t.realized_pnl : 0)) || 0;
+
+  // Security display name
+  let security = t.SecuritySymbol || t.security_symbol || '';
+  if (!security) {
+    const res = resolveSecurity(isin);
+    security = res?.displayName || res?.symbol || isin;
+  }
 
   return {
     id: t.ID || t.id || '',
@@ -263,7 +281,7 @@ export function parseMutualFundTransaction(t) {
     tradeValue,
     costBasis,
     realizedPnl,
-    security: t.SecuritySymbol || t.security_symbol || note,
+    security,
     note,
     rawTxn: t
   };
@@ -283,7 +301,7 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
   const parsedTxns = [];
   for (const t of transactions) {
     const p = parseMutualFundTransaction(t);
-    if (p && (p.isin || p.security || p.note) && (p.action === 'BUY' || p.action === 'SELL')) {
+    if (p && (p.isin || p.security || p.note) && (p.action === 'BUY' || p.action === 'SELL' || p.action === 'UNIT_ADJUSTMENT')) {
       parsedTxns.push(p);
     }
   }
@@ -393,8 +411,12 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
         let pnl = 0;
         if (t.realizedPnl !== 0) {
           pnl = t.realizedPnl;
-        } else {
+        } else if (consumedCostForThisSell > 0) {
           pnl = t.tradeValue - consumedCostForThisSell;
+        } else {
+          // If no cost basis can be established and no explicit realizedPnl is provided,
+          // do NOT assume 100% of proceeds is profit.
+          pnl = 0;
         }
         totalRealizedPnl += pnl;
 
@@ -406,6 +428,8 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
           consumedCostBasis: consumedCostForThisSell,
           realizedPnl: pnl
         });
+      } else if (t.action === 'UNIT_ADJUSTMENT') {
+        // Corporate / Segregated portfolio unit adjustment: does not consume FIFO cost lots or generate P&L
       }
     }
 
@@ -419,7 +443,16 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
     let remainingCostBasis = roundMoney(remainingCostBasisRaw);
 
     if (currentUnitsRaw < -EPSILON) {
-      status = 'LEGACY_DATA_ISSUE';
+      // If all original cash buy lots were completely consumed (remainingCostBasisRaw <= EPSILON)
+      // and subsequent redemptions/extinguishments were zero-cost side-pocket payouts,
+      // the investment is fully closed/liquidated (current units = 0, status = REDEEMED).
+      if (remainingCostBasisRaw <= EPSILON && buyLots.every(l => l.remainingUnits <= EPSILON)) {
+        status = 'REDEEMED';
+        currentUnits = 0;
+        remainingCostBasis = 0;
+      } else {
+        status = 'LEGACY_DATA_ISSUE';
+      }
     } else if (Math.abs(currentUnitsRaw) <= EPSILON) {
       status = 'REDEEMED';
       if (Math.abs(currentUnitsRaw) > 0.00001) {

@@ -159,6 +159,11 @@ export async function parseXLS(arrayBuffer) {
 
 export async function parseFile(file) {
   const name = file.name.toLowerCase();
+  if (name.endsWith('.pdf')) {
+    const { extractTextFromPDF } = await import('./pdfParser.js');
+    return await extractTextFromPDF(await file.arrayBuffer());
+  }
+  if (name.endsWith('.txt')) return await file.text();
   if (name.endsWith('.json')) return JSON.parse(await file.text());
   if (name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.xlsm')) {
     return parseXLS(await file.arrayBuffer());

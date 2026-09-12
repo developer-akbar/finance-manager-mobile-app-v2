@@ -183,14 +183,14 @@ export default function PortfolioPerformance({
           </div>
         </div>
 
-        {/* Metric 3: Historical Realized P&L */}
+        {/* Metric 3: Realized P&L */}
         <div className="perf-metric-box">
-          <div className="perf-metric-lbl">HISTORICAL REALIZED P&L</div>
+          <div className="perf-metric-lbl">REALIZED P&L</div>
           <div className={`perf-metric-val num-tabular ${getPnlClass(totalRealized)}`}>
             {totalRealized !== 0 ? formatSignedCurrency(totalRealized) : '₹0'}
           </div>
           <div className="perf-metric-sub">
-            {topRealizedPerformer ? `Best: ${topRealizedPerformer.note || topRealizedPerformer.security} (+${formatINR(topRealizedPerformer.realizedPnl)})` : 'From closed positions'}
+            {topRealizedPerformer ? `Best: ${topRealizedPerformer.note || topRealizedPerformer.security} (+${formatINR(topRealizedPerformer.realizedPnl)})` : 'Across all exits'}
           </div>
         </div>
       </div>

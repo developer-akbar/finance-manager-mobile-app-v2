@@ -281,6 +281,11 @@ export default function HoldingDetailSheet({
               ) : (
                 <div className="detail-metric-val text-muted mt-1">—</div>
               )}
+              {!isRedeemed && displayPos.realizedPnl !== 0 && (
+                <div className="detail-metric-sub text-muted font-xs mt-0.5 num-tabular">
+                  Realized: <span className={getPnlClass(displayPos.realizedPnl)}>{formatSignedCurrency(displayPos.realizedPnl)}</span>
+                </div>
+              )}
             </div>
 
             {/* Cell 3: INVESTED / COST BASIS */}

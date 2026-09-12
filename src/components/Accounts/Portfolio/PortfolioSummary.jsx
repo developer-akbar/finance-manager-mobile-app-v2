@@ -161,16 +161,16 @@ export default function PortfolioSummary({
           </div>
         </div>
 
-        {/* Historical Realized P&L */}
+        {/* Realized P&L */}
         <div className="hero-kpi-card secondary-kpi">
-          <div className="hero-kpi-lbl">HISTORICAL REALIZED P&L</div>
+          <div className="hero-kpi-lbl">REALIZED P&L</div>
           <div className="hero-kpi-val num-tabular">
             <span className={getPnlClass(totalRealizedPnl)}>
               {formatSignedCurrency(totalRealizedPnl)}
             </span>
           </div>
           <div className="hero-kpi-sub">
-            Net realized P&L ({redeemedCount} redeemed)
+            Net realized P&L ({redeemedCount} closed)
           </div>
         </div>
 
