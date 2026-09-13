@@ -272,117 +272,129 @@ export default function Analytics({ backInterceptRef }) {
         </div>
       </div>
 
-      {/* Bar chart */}
-      <div className="an-card">
-        <div className="an-card-title">{period==='Year'?`${selAYear} Monthly`:period==='FY'?`${fyLabel(selFY)} Monthly`:`6 Months to ${new Date(selYear,selMonth,1).toLocaleDateString('en-IN',{month:'short',year:'numeric'})}`}</div>
-        <ResponsiveContainer width="100%" height={150}>
-          <BarChart data={barData} barGap={3} barSize={10}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false}/>
-            <XAxis dataKey="label" tick={{fill:'#4a5a7a',fontSize:10,fontFamily:'Sora'}} axisLine={false} tickLine={false}/>
-            <YAxis hide/>
-            <Tooltip content={<CustomTooltip/>} cursor={{fill:'rgba(255,255,255,0.03)'}}/>
-            <Bar dataKey="income"  fill="#00e5a0" radius={[3,3,0,0]} name="Income"/>
-            <Bar dataKey="expense" fill="#ff4d6a" radius={[3,3,0,0]} name="Expense"/>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Category breakdown */}
-      <div className="an-card">
-        <div className="an-card-hdr">
-          <div className="an-card-title" style={{marginBottom:0}}>By Category</div>
-          <div className="view-toggle">
-            <button className={viewType==='expense'?'active':''} onClick={()=>setViewType('expense')}>Expense</button>
-            <button className={viewType==='income'?'active':''} onClick={()=>setViewType('income')}>Income</button>
+      {/* Main Analytics Content Workspace */}
+      <div className="an-workspace-grid">
+        {/* Left Column: Bar Chart & Account Breakdown */}
+        <div className="an-ws-col">
+          {/* Bar chart */}
+          <div className="an-card">
+            <div className="an-card-title">{period==='Year'?`${selAYear} Monthly`:period==='FY'?`${fyLabel(selFY)} Monthly`:`6 Months to ${new Date(selYear,selMonth,1).toLocaleDateString('en-IN',{month:'short',year:'numeric'})}`}</div>
+            <ResponsiveContainer width="100%" height={160}>
+              <BarChart data={barData} barGap={3} barSize={10}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false}/>
+                <XAxis dataKey="label" tick={{fill:'#4a5a7a',fontSize:10,fontFamily:'Sora'}} axisLine={false} tickLine={false}/>
+                <YAxis hide/>
+                <Tooltip content={<CustomTooltip/>} cursor={{fill:'rgba(255,255,255,0.03)'}}/>
+                <Bar dataKey="income"  fill="#00e5a0" radius={[3,3,0,0]} name="Income"/>
+                <Bar dataKey="expense" fill="#ff4d6a" radius={[3,3,0,0]} name="Expense"/>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
-        </div>
-        {categoryData.length===0 ? (
-          <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>No data for this period</div>
-        ) : (
-          <>
-            <div className="cat-donut-row">
-              <PieChart width={110} height={110}>
-                <Pie data={categoryData} cx={50} cy={50} innerRadius={32} outerRadius={50} dataKey="value" paddingAngle={2} stroke="none">
-                  {categoryData.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}
-                </Pie>
-              </PieChart>
-              <div className="cat-legend">
-                {categoryData.map((d,i)=>(
-                  <div key={d.name} className="cat-legend-row">
-                    <div className="cat-legend-dot" style={{background:COLORS[i%COLORS.length]}}/>
-                    <span className="cat-legend-name">{getCategoryEmoji(d.name)} {d.name}</span>
-                    <span className="cat-legend-pct">{Math.round((d.value/catTotal)*100)}%</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="cat-bar-list">
-              {categoryData.map((d,i)=>(
-                <div key={d.name} className="cat-bar-row">
-                  <div className="cat-bar-icon" style={{background:COLORS[i%COLORS.length]+'22'}}>{getCategoryEmoji(d.name)}</div>
-                  <div className="cat-bar-info">
-                    <div className="cat-bar-name-row">
-                      <span className="cat-bar-name">{d.name}</span>
-                      <span className="cat-bar-amt" style={{color:COLORS[i%COLORS.length]}}>{formatINR(d.value)}</span>
-                    </div>
-                    {showAverage && numMonths>1 && (
-                      <div className="cat-bar-avg">avg {formatINR(d.value/numMonths)}/mo</div>
-                    )}
-                    <div className="progress-track" style={{marginTop:4}}>
-                      <div className="progress-fill" style={{width:`${(d.value/catTotal)*100}%`,background:COLORS[i%COLORS.length]}}/>
-                    </div>
+
+          {/* Account breakdown */}
+          {accountData.length>0 && (
+            <div className="an-card">
+              <div className="an-card-title">By Account</div>
+              {accountData.map(a=>(
+                <div key={a.name} className="an-acct-row">
+                  <div className="an-acct-name">💳 {a.name}</div>
+                  <div className="an-acct-vals">
+                    <span className="amt-income">+{formatINR(a.income)}</span>
+                    <span className="amt-expense">−{formatINR(a.expense)}</span>
                   </div>
                 </div>
               ))}
             </div>
-          </>
-        )}
-      </div>
-
-      {/* Tag breakdown */}
-      {tagData.length > 0 && (
-        <div className="an-card">
-          <div className="an-card-title">Top Tags ({viewType === 'expense' ? 'Expenses' : 'Income'})</div>
-          <div className="cat-breakdown-list">
-            {tagData.map((d, i) => {
-              const pct = Math.round((d.value / tagTotal) * 100);
-              return (
-                <div key={d.name} className="cat-breakdown-item">
-                  <div className="cat-breakdown-icon" style={{ fontSize: '1rem' }}>🏷️</div>
-                  <div className="cat-breakdown-main">
-                    <div className="cat-breakdown-row1">
-                      <span className="cat-breakdown-name" style={{ color: 'var(--accent)', fontWeight: 700 }}>{d.name}</span>
-                      <span className="cat-breakdown-amt">{formatINR(d.value)} <span className="cat-breakdown-pct">({pct}%)</span></span>
-                    </div>
-                    {showAverage && numMonths > 1 && (
-                      <div className="cat-bar-avg">avg {formatINR(d.value / numMonths)}/mo</div>
-                    )}
-                    <div className="progress-track" style={{ marginTop: 4 }}>
-                      <div className="progress-fill" style={{ width: `${pct}%`, background: COLORS[i % COLORS.length] }} />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          )}
         </div>
-      )}
 
-      {/* Account breakdown */}
-      {accountData.length>0 && (
-        <div className="an-card">
-          <div className="an-card-title">By Account</div>
-          {accountData.map(a=>(
-            <div key={a.name} className="an-acct-row">
-              <div className="an-acct-name">💳 {a.name}</div>
-              <div className="an-acct-vals">
-                <span className="amt-income">+{formatINR(a.income)}</span>
-                <span className="amt-expense">−{formatINR(a.expense)}</span>
+        {/* Right Column: Category Breakdown & Tag Breakdown */}
+        <div className="an-ws-col">
+          {/* Category breakdown */}
+          <div className="an-card">
+            <div className="an-card-hdr">
+              <div className="an-card-title" style={{marginBottom:0}}>By Category</div>
+              <div className="view-toggle">
+                <button className={viewType==='expense'?'active':''} onClick={()=>setViewType('expense')}>Expense</button>
+                <button className={viewType==='income'?'active':''} onClick={()=>setViewType('income')}>Income</button>
               </div>
             </div>
-          ))}
+            {categoryData.length===0 ? (
+              <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>No data for this period</div>
+            ) : (
+              <>
+                <div className="cat-donut-row">
+                  <PieChart width={110} height={110}>
+                    <Pie data={categoryData} cx={50} cy={50} innerRadius={32} outerRadius={50} dataKey="value" paddingAngle={2} stroke="none">
+                      {categoryData.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}
+                    </Pie>
+                  </PieChart>
+                  <div className="cat-legend">
+                    {categoryData.map((d,i)=>(
+                      <div key={d.name} className="cat-legend-row">
+                        <div className="cat-legend-dot" style={{background:COLORS[i%COLORS.length]}}/>
+                        <span className="cat-legend-name">{getCategoryEmoji(d.name)} {d.name}</span>
+                        <span className="cat-legend-pct">{Math.round((d.value/catTotal)*100)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="cat-bar-list">
+                  {categoryData.map((d,i)=>(
+                    <div key={d.name} className="cat-bar-row">
+                      <div className="cat-bar-icon" style={{background:COLORS[i%COLORS.length]+'22'}}>{getCategoryEmoji(d.name)}</div>
+                      <div className="cat-bar-info">
+                        <div className="cat-bar-name-row">
+                          <span className="cat-bar-name">{d.name}</span>
+                          <span className="cat-bar-amt" style={{color:COLORS[i%COLORS.length]}}>{formatINR(d.value)}</span>
+                        </div>
+                        {showAverage && numMonths>1 && (
+                          <div className="cat-bar-avg">avg {formatINR(d.value/numMonths)}/mo</div>
+                        )}
+                        <div className="progress-track" style={{marginTop:4}}>
+                          <div className="progress-fill" style={{width:`${(d.value/catTotal)*100}%`,background:COLORS[i%COLORS.length]}}/>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Tag breakdown */}
+          {tagData.length > 0 && (
+            <div className="an-card">
+              <div className="an-card-title">Top Tags ({viewType === 'expense' ? 'Expenses' : 'Income'})</div>
+              <div className="cat-breakdown-list">
+                {tagData.map((d, i) => {
+                  const pct = Math.round((d.value / tagTotal) * 100);
+                  return (
+                    <div key={d.name} className="cat-breakdown-item">
+                      <div className="cat-breakdown-icon">🏷️</div>
+                      <div className="cat-breakdown-main">
+                        <div className="cat-breakdown-row1">
+                          <span className="cat-breakdown-name">{d.name}</span>
+                          <div className="cat-breakdown-values">
+                            <span className="cat-breakdown-amt">{formatINR(d.value)}</span>
+                            <span className="cat-breakdown-pct">{pct}%</span>
+                          </div>
+                        </div>
+                        {showAverage && numMonths > 1 && (
+                          <div className="cat-bar-avg">avg {formatINR(d.value / numMonths)}/mo</div>
+                        )}
+                        <div className="progress-track" style={{ marginTop: 6 }}>
+                          <div className="progress-fill" style={{ width: `${pct}%`, background: COLORS[i % COLORS.length] }} />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       <div className="h-8"/>
     </div>

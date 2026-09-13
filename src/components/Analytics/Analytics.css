@@ -1,37 +1,72 @@
-.analytics-screen { flex:1; min-height:0; overflow-y:auto; }
+.analytics-screen { flex:1; min-height:0; overflow-y:auto; padding-bottom: 32px; }
 
-.analytics-periods { padding:12px var(--page-px) 0; }
+.analytics-periods { padding:14px var(--page-px) 0; }
 .period-tabs { display:flex; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); padding:3px; }
 .period-tab { flex:1; padding:8px 6px; border-radius:var(--r-sm); border:none; background:none; font-size:var(--fs-base); font-weight:600; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); }
 .period-tab.active { background:var(--green); color:#0a0f1e; }
 
 .period-picker-row { display:flex; align-items:center; justify-content:center; gap:16px; padding:10px var(--page-px); }
-.pp-arrow { width:36px; height:36px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); color:var(--text-primary); font-size:var(--fs-3xl); cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.pp-arrow { width:36px; height:36px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); color:var(--text-primary); font-size:var(--fs-3xl); cursor:pointer; display:flex; align-items:center; justify-content:center; transition: var(--transition); }
+.pp-arrow:hover { background: var(--bg-hover); }
 .pp-label { font-size:var(--fs-xl); font-weight:700; color:var(--text-primary); min-width:160px; text-align:center; }
 
-.an-summary { display:flex; gap:10px; padding:10px var(--page-px) 12px; }
+.an-summary { display:flex; gap:12px; padding:10px var(--page-px) 14px; }
+@media (min-width: 768px) {
+  .an-summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+}
 .an-sum-card {
-  flex:1; padding:12px var(--card-p); border-radius:var(--r-lg); border:1px solid var(--border);
-  display:flex; flex-direction:column; gap:3px;
+  flex:1; padding:14px var(--card-p); border-radius:var(--r-lg); border:1px solid var(--border);
+  display:flex; flex-direction:column; gap:4px;
   transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   cursor: pointer;
 }
+.an-sum-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
 .an-sum-card:active {
-  transform: scale(0.96);
+  transform: scale(0.98);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
 }
 .an-sum-card.income  { background: linear-gradient(135deg, rgba(0, 229, 160, 0.14), rgba(0, 184, 122, 0.04)); border-color: rgba(0, 229, 160, 0.25); }
 .an-sum-card.expense { background: linear-gradient(135deg, rgba(255, 77, 106, 0.14), rgba(224, 32, 64, 0.04)); border-color: rgba(255, 77, 106, 0.25); }
 .an-sum-card.savings { background: linear-gradient(135deg, rgba(77, 159, 255, 0.14), rgba(26, 110, 255, 0.04)); border-color: rgba(77, 159, 255, 0.25); }
-.an-sum-label { font-size:var(--fs-xs); font-weight:700; text-transform:uppercase; letter-spacing:0.6px; opacity:0.7; }
+.an-sum-label { font-size:var(--fs-xs); font-weight:700; text-transform:uppercase; letter-spacing:0.6px; opacity:0.75; }
 .an-sum-val   { font-size:var(--fs-2xl); font-weight:800; font-family:var(--font); }
-.an-sum-avg   { font-size:var(--fs-xs); opacity:0.65; font-family:var(--font); }
+.an-sum-avg   { font-size:var(--fs-xs); opacity:0.7; font-family:var(--font); }
 .an-sum-card.income  .an-sum-label, .an-sum-card.income  .an-sum-val, .an-sum-card.income  .an-sum-avg { color:var(--income); }
 .an-sum-card.expense .an-sum-label, .an-sum-card.expense .an-sum-val, .an-sum-card.expense .an-sum-avg { color:var(--expense); }
 .an-sum-card.savings .an-sum-label, .an-sum-card.savings .an-sum-val, .an-sum-card.savings .an-sum-avg { color:var(--blue); }
 
-.an-card { margin:0 var(--page-px) 12px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-xl); padding:var(--card-p); }
+.an-workspace-grid {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 1024px) {
+  .an-workspace-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 0 var(--page-px) 24px;
+    align-items: start;
+  }
+  .an-ws-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .an-ws-col > .an-card {
+    margin: 0 0 16px;
+  }
+}
+
+.an-card { margin:0 var(--page-px) 14px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-xl); padding:var(--card-p); box-shadow: var(--shadow-sm); }
 .an-card-hdr  { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
 .an-card-title{ font-size:var(--fs-lg); font-weight:700; color:var(--text-primary); margin-bottom:12px; }
 .view-toggle  { display:flex; background:var(--bg-input); border-radius:var(--r-sm); padding:2px; }
@@ -58,3 +93,84 @@
 .an-acct-row:last-child { border-bottom:none; }
 .an-acct-name { font-size:var(--fs-base); font-weight:600; }
 .an-acct-vals { display:flex; gap:10px; font-size:var(--fs-md); font-family:var(--font); font-weight:600; }
+
+/* Tag Breakdown Typography & Hierarchy */
+.cat-breakdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cat-breakdown-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.cat-breakdown-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.cat-breakdown-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-md);
+  background: var(--bg-card2);
+  border: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+
+.cat-breakdown-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.cat-breakdown-row1 {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cat-breakdown-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.cat-breakdown-values {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.cat-breakdown-amt {
+  font-size: 0.86rem;
+  font-weight: 700;
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.cat-breakdown-pct {
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  text-align: right;
+}
+

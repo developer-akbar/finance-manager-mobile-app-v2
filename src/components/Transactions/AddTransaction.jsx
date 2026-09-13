@@ -2830,11 +2830,33 @@ export default function AddTransaction({
     } finally { setSaving(false); }
   };
 
-
+  // Escape key listener to close modal
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [onClose]);
 
   return (
     <>
-      <div className="fullscreen-modal" data-type={form.type}>
+      <div
+        className="overlay"
+        onClick={onClose}
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+      />
+      <div
+        className="fullscreen-modal"
+        data-type={form.type}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="add-hdr">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div className="add-title">{form.type === 'Transfer-Out' ? 'Transfer' : form.type || (isEdit ? 'Edit' : 'Add')}</div>

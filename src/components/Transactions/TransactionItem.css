@@ -5,7 +5,7 @@
   border-radius: 10px;
 }
 
-/* Detail sheet */
+/* Detail sheet / modal */
 .dp-sheet {
   max-height: 85dvh;
   padding-bottom: 0;
@@ -13,6 +13,252 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+@media (min-width: 768px) {
+  .dp-sheet {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    transform: translate(-50%, -50%);
+    width: 90%;
+    max-width: 540px;
+    max-height: 85vh;
+    border-radius: var(--r-xl);
+    border: 1px solid var(--border);
+    box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+    background: var(--bg-card);
+    animation: modalZoomIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+/* ── ADAPTIVE TRANSACTION ROW & LEDGER TABLE ── */
+.txn-desktop-ledger {
+  display: none;
+}
+
+.txn-mobile-view {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .txn-dot {
+    display: none;
+  }
+
+  .txn-mobile-view {
+    display: none;
+  }
+
+  .txn-item {
+    padding: 10px 16px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  .txn-item:hover {
+    background: var(--bg-hover) !important;
+  }
+
+  .txn-desktop-ledger {
+    display: grid;
+    grid-template-columns: 105px 75px minmax(110px, 200px) 140px minmax(130px, 300px) minmax(150px, 1.2fr) 110px;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    font-size: 0.84rem;
+  }
+
+  /* Col 1: Date */
+  .td-date {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .td-date-val {
+    font-weight: 700;
+    color: var(--text-primary);
+    font-size: 0.82rem;
+  }
+  .td-time-val {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+
+  /* Col 2: Type Badge */
+  .td-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 0.65rem;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+  .td-badge-income {
+    background: var(--income-bg);
+    color: var(--income);
+    border: 1px solid rgba(77, 159, 255, 0.25);
+  }
+  .td-badge-expense {
+    background: var(--expense-bg);
+    color: var(--expense);
+    border: 1px solid rgba(255, 77, 106, 0.25);
+  }
+  .td-badge-transfer {
+    background: var(--transfer-bg);
+    color: var(--transfer);
+    border: 1px solid rgba(160, 180, 204, 0.25);
+  }
+
+  /* Col 3: Account / Platform */
+  .td-account {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .td-acct-val {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .td-subacct-val {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Col 4: Category */
+  .td-category {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+  .td-cat-pill {
+    display: inline-block;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    width: fit-content;
+    max-width: 100%;
+  }
+  .td-subcat-pill {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    padding-left: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Col 5: Note */
+  .td-note {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .td-desc-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    color: var(--text-primary);
+    min-width: 0;
+  }
+  .td-label-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .td-meta-icon {
+    font-size: 0.8rem;
+    flex-shrink: 0;
+  }
+  .td-age-tag {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-weight: normal;
+    flex-shrink: 0;
+  }
+  .td-desc-sub {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .td-pnl-pill {
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 0.65rem;
+    flex-shrink: 0;
+  }
+  .td-pnl-pill.pos {
+    background: rgba(0, 229, 160, 0.12);
+    color: #00e5a0;
+  }
+  .td-pnl-pill.neg {
+    background: rgba(255, 77, 106, 0.12);
+    color: #ff4d6a;
+  }
+
+  /* Col 6: Actual Description (flexible space) */
+  .td-actual-desc {
+    min-width: 0;
+    overflow: hidden;
+  }
+  .td-desc-text {
+    display: block;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+  }
+
+  /* Col 7: Amount (far right) */
+  .td-amount {
+    text-align: right;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+  }
+  .td-amount-val {
+    font-size: 0.92rem;
+    font-weight: 800;
+    font-family: var(--font);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .td-amount-val.income { color: var(--income); }
+  .td-amount-val.expense { color: var(--expense); }
+  .td-amount-val.transfer { color: var(--transfer); }
 }
 
 .dp-hero {
@@ -127,4 +373,4 @@
   margin-top: 2px;
   letter-spacing: 0.1px;
 }
-
+

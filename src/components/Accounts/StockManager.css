@@ -114,11 +114,25 @@
   gap: 8px;
 }
 
+@media (min-width: 768px) {
+  .stock-item-list {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .stock-item-list {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 .stock-item-card {
   background: var(--bg-card);
   border: 1.5px solid var(--border);
   border-radius: 12px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -127,7 +141,9 @@
 }
 
 .stock-item-card:hover {
-  border-color: rgba(0, 229, 160, 0.3);
+  border-color: rgba(0, 229, 160, 0.4);
+  background: var(--bg-hover);
+  transform: translateY(-1px);
 }
 
 .stock-item-top {

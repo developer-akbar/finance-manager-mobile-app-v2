@@ -8,22 +8,59 @@
 
 .accounts-list {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 14px;
+    padding-bottom: calc(var(--safe-bottom) + 80px);
+    -webkit-overflow-scrolling: touch;
+}
+
+.acct-group-container {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xl);
+    box-shadow: var(--shadow-sm);
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+
+@media (min-width: 768px) {
+    .accounts-list {
+        display: block;
+        column-count: 2;
+        column-gap: 20px;
+        padding: 16px var(--page-px) 32px;
+    }
+    .acct-group-container {
+        display: inline-block;
+        break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+        page-break-inside: avoid;
+        margin-bottom: 20px;
+    }
+}
+
+@media (min-width: 1280px) {
+    .accounts-list {
+        column-count: 3;
+        column-gap: 20px;
+    }
 }
 
 .acct-group-header {
     display: flex;
     align-items: center;
-    padding: 6px var(--page-px);
+    padding: 10px var(--page-px);
     background: var(--gold-bg);
-    border-bottom: 1px solid var(--border);
-    font-size: 0.7rem;
+    border-bottom: 1.5px solid var(--border);
+    font-size: 0.74rem;
     font-weight: 800;
     color: var(--gold);
-    letter-spacing: 0.3px;
+    letter-spacing: 0.4px;
     gap: 10px;
 }
 
@@ -32,10 +69,10 @@
 }
 
 .acct-group-bal {
-    width: 100px;
+    width: 110px;
     text-align: right;
     font-family: var(--font);
-    font-size: 0.78rem;
+    font-size: 0.86rem;
     font-weight: 800;
     flex-shrink: 0;
 }
@@ -45,7 +82,6 @@
     flex-shrink: 0;
 }
 
-/* name text (11px arrow + 10px gap) */
 .acct-group-bal.pos {
     color: var(--income);
 }
@@ -57,12 +93,16 @@
 .acct-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 13px var(--page-px);
+    gap: 12px;
+    padding: 12px var(--page-px);
     border-bottom: 1px solid var(--border-light);
     background: var(--bg-card);
     cursor: pointer;
-    transition: background 0.12s;
+    transition: background 0.12s ease;
+}
+
+.acct-row:hover {
+    background: var(--bg-hover);
 }
 
 .acct-row:active {
@@ -71,7 +111,7 @@
 
 .acct-row-name {
     flex: 1;
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     font-weight: var(--fw-data);
     color: var(--text-primary);
     min-width: 0;
@@ -81,11 +121,11 @@
 }
 
 .acct-row-bal {
-    font-size: 0.78rem;
+    font-size: 0.84rem;
     font-family: var(--font);
     font-weight: var(--fw-data);
     text-align: right;
-    width: 100px;
+    width: 110px;
     flex-shrink: 0;
 }
 

@@ -467,6 +467,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   return (
     <div className="dash-screen">
       <div className="dash-scrollable-content">
+        <div className="app-container">
 
         {/* ── Greeting & Actions ── */}
         <div className="dash-greeting" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -581,94 +582,118 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           </div>
         )}
 
-        {/* ── Net worth card ── */}
-        <div className="dash-nw-card">
-          <div className="dash-nw-top-row">
-            <div>
-              <div className="dash-nw-label">NET WORTH</div>
-              <div className="dash-nw-month">{monthLabel}</div>
+        {/* ── Top Hero Area (Net Worth + Contextual Financial Snapshot) ── */}
+        <div className="dash-desktop-hero-grid">
+          {/* Net worth card */}
+          <div className="dash-nw-card">
+            <div className="dash-nw-top-row">
+              <div>
+                <div className="dash-nw-label">NET WORTH</div>
+                <div className="dash-nw-month">{monthLabel}</div>
+              </div>
+              <button className="dash-eye-btn" onClick={() => setShowNW(v => !v)} aria-label="Toggle visibility">
+                <EyeIcon open={showNW} />
+              </button>
             </div>
-            <button className="dash-eye-btn" onClick={() => setShowNW(v => !v)} aria-label="Toggle visibility">
-              <EyeIcon open={showNW} />
-            </button>
-          </div>
-          <div className="dash-nw-value">
-            {showNW ? formatINR(netWorth) : '₹ ••••••'}
-          </div>
-          <div className="dash-nw-row">
-            <div className="dash-nw-item">
-              <div className="dash-nw-item-l">Assets</div>
-              <div className="dash-nw-item-v income">{showNW ? formatINRCompact(assets) : '••••'}</div>
+            <div className="dash-nw-value">
+              {showNW ? formatINR(netWorth) : '₹ ••••••'}
             </div>
-            <div className="dash-nw-item">
-              <div className="dash-nw-item-l">Liabilities</div>
-              <div className="dash-nw-item-v expense">{showNW ? formatINRCompact(liabilities) : '••••'}</div>
-            </div>
-            <div className="dash-nw-item">
-              <div className="dash-nw-item-l">Saved this month</div>
-              <div className="dash-nw-item-v" style={{ color: totals.balance >= 0 ? 'var(--income)' : 'var(--expense)' }}>
-                {showNW ? formatINRCompact(totals.balance) : '••••'}
+            <div className="dash-nw-row">
+              <div className="dash-nw-item">
+                <div className="dash-nw-item-l">Assets</div>
+                <div className="dash-nw-item-v income">{showNW ? formatINRCompact(assets) : '••••'}</div>
+              </div>
+              <div className="dash-nw-item">
+                <div className="dash-nw-item-l">Liabilities</div>
+                <div className="dash-nw-item-v expense">{showNW ? formatINRCompact(liabilities) : '••••'}</div>
+              </div>
+              <div className="dash-nw-item">
+                <div className="dash-nw-item-l">Saved this month</div>
+                <div className="dash-nw-item-v" style={{ color: totals.balance >= 0 ? 'var(--income)' : 'var(--expense)' }}>
+                  {showNW ? formatINRCompact(totals.balance) : '••••'}
+                </div>
               </div>
             </div>
-          </div>
-          {savingRate !== null && (
-            <div className="dash-saving-rate">
-              <div className="dash-sr-bar">
-                <div className="dash-sr-fill" style={{
-                  width: `${Math.min(100, Math.max(0, savingRate))}%`,
-                  background: savingRate >= 20 ? 'var(--income)' : savingRate >= 0 ? '#f0a500' : 'var(--expense)'
-                }} />
+            {savingRate !== null && (
+              <div className="dash-saving-rate">
+                <div className="dash-sr-bar">
+                  <div className="dash-sr-fill" style={{
+                    width: `${Math.min(100, Math.max(0, savingRate))}%`,
+                    background: savingRate >= 20 ? 'var(--income)' : savingRate >= 0 ? '#f0a500' : 'var(--expense)'
+                  }} />
+                </div>
+                <span className="dash-sr-label">
+                  Monthly Savings Rate: {savingRate >= 0 ? '' : '−'}{Math.abs(savingRate)}%
+                </span>
               </div>
-              <span className="dash-sr-label">
-                Monthly Savings Rate: {savingRate >= 0 ? '' : '−'}{Math.abs(savingRate)}%
-              </span>
+            )}
+          </div>
+
+          {/* Desktop Financial Context & Quick Actions Card */}
+          <div className="dash-snapshot-card">
+            <div className="dash-snapshot-metrics">
+              <div className="dash-snap-metric">
+                <div className="dash-snap-label">Emergency Runway</div>
+                <div className="dash-snap-val">{runwayStats.runwayMonths >= 99 ? '> 5 yrs' : `${runwayStats.runwayMonths.toFixed(1)} mos`}</div>
+                <div className="dash-snap-sub">{formatINRCompact(runwayStats.liquidAssets)} liquid cash</div>
+              </div>
+              <div className="dash-snap-metric">
+                <div className="dash-snap-label">Invested This Month</div>
+                <div className="dash-snap-val" style={{ color: '#818cf8' }}>{formatINRCompact(investmentStats.monthlyInvested)}</div>
+                <div className="dash-snap-sub">{formatINRCompact(investmentStats.totalInvested)} all-time</div>
+              </div>
+              <div className="dash-snap-metric">
+                <div className="dash-snap-label">MoM Expense Pace</div>
+                <div className="dash-snap-val" style={{ color: momStats.pctChange <= 0 ? 'var(--income)' : 'var(--expense)' }}>
+                  {momStats.pctChange >= 0 ? '+' : ''}{Math.round(momStats.pctChange)}%
+                </div>
+                <div className="dash-snap-sub">{formatINRCompact(momStats.thisMonthSpend)} spent</div>
+              </div>
             </div>
-          )}
+
+            {/* Quick shortcuts */}
+            <div className="home-features-grid">
+              {[
+                { id: 'analytics', label: 'Analytics', icon: '📊', onClick: () => navigate('analytics') },
+                { id: 'forecast', label: 'Cashflow', icon: '🔮', onClick: () => setShowForecast(true) },
+                { id: 'groups', label: 'Groups', icon: '👥', onClick: () => setShowGroups(true) },
+                { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
+                { id: 'debt', label: 'Debt Tracker', icon: '🤝', onClick: () => setShowDebtTracker(true) },
+                { id: 'stock', label: 'Stocks & Gold', icon: '🥫', onClick: () => setShowStockManager(true) },
+              ].map(item => (
+                <button
+                  key={item.id}
+                  onClick={item.onClick}
+                  className="home-feature-card"
+                >
+                  <span className="hf-icon">{item.icon}</span>
+                  <span className="hf-label">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* ── Home Feature Grid ── */}
-        <div className="home-features-grid" style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: '10px',
-          margin: '0 var(--page-px) 14px'
-        }}>
+        {/* ── Mobile Quick Actions Grid (< 1024px) ── */}
+        <div className="dash-mobile-shortcuts">
           {[
             { id: 'analytics', label: 'Analytics', icon: '📊', onClick: () => navigate('analytics') },
-            { id: 'forecast', label: 'Cashflow', icon: '🔮', onClick: () => setShowForecast(true) },
-            { id: 'groups', label: 'Group Splits', icon: '👥', onClick: () => setShowGroups(true) },
+            { id: 'forecast', label: 'Cash Flow', icon: '📈', onClick: () => setShowForecast(true) },
+            { id: 'groups', label: 'Groups', icon: '👥', onClick: () => setShowGroups(true) },
             { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
             { id: 'debt', label: 'Debt Tracker', icon: '🤝', onClick: () => setShowDebtTracker(true) },
-            { id: 'stock', label: 'Stock Manager', icon: '🥫', onClick: () => setShowStockManager(true) },
+            { id: 'stock', label: 'Stock Manager', icon: '📈', onClick: () => setShowStockManager(true) },
           ].map(item => (
             <button
               key={item.id}
               onClick={item.onClick}
-              className="home-feature-card"
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                background: 'var(--bg-card)',
-                border: '1.5px solid var(--border)',
-                borderRadius: '16px',
-                padding: '14px 10px',
-                cursor: 'pointer',
-                transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
-                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)'
-              }}
+              className="dash-mobile-shortcut-btn"
             >
-              <span style={{ fontSize: '1.5rem' }}>{item.icon}</span>
-              <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-secondary)', textAlign: 'center', lineHeight: 1.2 }}>
-                {item.label}
-              </span>
+              <span className="dash-mobile-shortcut-icon">{item.icon}</span>
+              <span className="dash-mobile-shortcut-label">{item.label}</span>
             </button>
           ))}
         </div>
-
-
 
         {/* ── Tip of the day ── */}
         <div className="dash-tip-card">
@@ -676,160 +701,162 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           <span className="dash-tip-text">{todayTip.text}</span>
         </div>
 
-        {/* ── Chart Section with Toggle ── */}
-        <div className="dash-section-hdr">
-          <span>{chartView === 'networth' ? 'Net Worth Trend' : '6-Month Overview'}</span>
-          <div className="dash-chart-toggle">
-            <button className={`chart-toggle-btn ${chartView === 'networth' ? 'active' : ''}`} onClick={() => setChartView('networth')}>Trend</button>
-            <button className={`chart-toggle-btn ${chartView === 'overview' ? 'active' : ''}`} onClick={() => setChartView('overview')}>Overview</button>
+        {/* ── Main Analytical Workspace (2-Column Side-by-Side on Desktop) ── */}
+        <div className="dash-main-workspace-grid">
+          {/* Left Column: Trend/Overview Chart + Spending Analytics */}
+          <div className="dash-ws-col">
+            <div className="dash-section-hdr">
+              <span>{chartView === 'networth' ? 'Net Worth Trend' : '6-Month Overview'}</span>
+              <div className="dash-chart-toggle">
+                <button className={`chart-toggle-btn ${chartView === 'networth' ? 'active' : ''}`} onClick={() => setChartView('networth')}>Trend</button>
+                <button className={`chart-toggle-btn ${chartView === 'overview' ? 'active' : ''}`} onClick={() => setChartView('overview')}>Overview</button>
+              </div>
+            </div>
+            <div className="dash-chart-card">
+              {chartView === 'networth' ? (
+                <ResponsiveContainer width="100%" height={175}>
+                  <AreaChart data={netWorthHistory}>
+                    <defs>
+                      <linearGradient id="colorNW" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--green)" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="var(--green)" stopOpacity={0.0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} tickFormatter={v => formatINRCompact(v)} width={38} />
+                    <Tooltip formatter={v => formatINR(v)} contentStyle={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 11 }} />
+                    <Area type="monotone" dataKey="Net Worth" stroke="var(--green)" strokeWidth={2.5} fillOpacity={1} fill="url(#colorNW)" activeDot={{ r: 6 }} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <ResponsiveContainer width="100%" height={175}>
+                  <BarChart data={chartData} barSize={12}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} tickFormatter={v => formatINRCompact(v)} width={38} />
+                    <Tooltip formatter={v => formatINR(v)} contentStyle={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 11 }} />
+                    <Bar dataKey="income" fill="var(--income)" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="expense" fill="var(--expense)" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+
+            {analytics && (
+              <>
+                <div className="dash-section-hdr" style={{ marginTop: 14 }}><span>Spending Analytics</span></div>
+                <div className="dash-analytics-grid">
+                  <div className="dash-stat-card">
+                    <div className="dash-stat-icon">📅</div>
+                    <div className="dash-stat-label">Avg Monthly</div>
+                    <div className="dash-stat-value expense">{formatINRCompact(analytics.avgMonthly)}</div>
+                  </div>
+                  <div className="dash-stat-card">
+                    <div className="dash-stat-icon">📆</div>
+                    <div className="dash-stat-label">Avg Yearly</div>
+                    <div className="dash-stat-value expense">{formatINRCompact(analytics.avgYearly)}</div>
+                  </div>
+                  <div className="dash-stat-card clickable" onClick={() => setPopupMsg(`Peak Month Spending:\nYou have spent ${formatINR(analytics.highestAmt)} in ${analytics.highestMonth}.`)}>
+                    <div className="dash-stat-icon">🔥</div>
+                    <div className="dash-stat-label">Peak Month</div>
+                    <div className="dash-stat-value expense" style={{ fontSize: '0.72rem', fontWeight: 800 }}>
+                      {analytics.highestMonth}
+                    </div>
+                  </div>
+                  <div className="dash-stat-card clickable" onClick={() => setPopupMsg(`Peak Year Spending:\nYou have spent ${formatINR(analytics.peakYearAmt)} in the year ${analytics.peakYear}.`)}>
+                    <div className="dash-stat-icon">👑</div>
+                    <div className="dash-stat-label">Peak Year</div>
+                    <div className="dash-stat-value expense" style={{ fontSize: '0.72rem', fontWeight: 800 }}>
+                      Year {analytics.peakYear}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-        </div>
-        <div style={{ padding: '0 var(--page-px) 10px' }}>
-          <div className="dash-chart-card">
-            {chartView === 'networth' ? (
-              <ResponsiveContainer width="100%" height={160}>
-                <AreaChart data={netWorthHistory}>
-                  <defs>
-                    <linearGradient id="colorNW" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--green)" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="var(--green)" stopOpacity={0.0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} tickFormatter={v => formatINRCompact(v)} width={38} />
-                  <Tooltip formatter={v => formatINR(v)} contentStyle={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 11 }} />
-                  <Area type="monotone" dataKey="Net Worth" stroke="var(--green)" strokeWidth={2.5} fillOpacity={1} fill="url(#colorNW)" activeDot={{ r: 6 }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : (
-              <ResponsiveContainer width="100%" height={160}>
-                <BarChart data={chartData} barSize={10}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} tickFormatter={v => formatINRCompact(v)} width={38} />
-                  <Tooltip formatter={v => formatINR(v)} contentStyle={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 11 }} />
-                  <Bar dataKey="income" fill="var(--income)" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="expense" fill="var(--expense)" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+
+          {/* Right Column: Top Spending + Yearly Analysis / Budgets */}
+          <div className="dash-ws-col">
+            {topCats.length > 0 && (
+              <>
+                <div className="dash-section-hdr">
+                  <span>Top Spending This Month</span>
+                  <button className="dash-section-link" onClick={() => navigate('categories', { type: 'Expense', period: 'Month', year: now.getFullYear(), month: now.getMonth() })}>Details</button>
+                </div>
+                <div className="dash-year-table" style={{ padding: '4px var(--page-px)' }}>
+                  {topCats.map(([cat, amt], i) => {
+                    const maxAmt = topCats[0][1];
+                    const pct = maxAmt > 0 ? (amt / maxAmt) * 100 : 0;
+                    return (
+                      <div key={cat} className="top-cat-row">
+                        <span className="top-cat-rank">#{i + 1}</span>
+                        <div className="top-cat-mid">
+                          <div className="top-cat-name">{cat}</div>
+                          <div className="progress-track" style={{ marginTop: 4 }}>
+                            <div className="progress-fill" style={{ width: `${pct}%`, background: 'var(--expense)', opacity: 0.8 }} />
+                          </div>
+                        </div>
+                        <div className="top-cat-amt">{formatINR(amt)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {analytics && (
+              <>
+                <div className="dash-section-hdr" style={{ marginTop: 14 }}><span>Yearly Analysis</span></div>
+                <div className="dash-year-table">
+                  <div className="dash-year-header">
+                    <span>Year</span><span>Total Spent</span><span>Monthly Avg</span>
+                  </div>
+                  {(showAllYears ? analytics.yearRows : analytics.yearRows.slice(0, 5)).map(r => (
+                    <div key={r.year} className="dash-year-row clickable" onClick={() => navigate('transactions', { year: r.year })}>
+                      <span className="dash-year-yr">{r.year}</span>
+                      <span className="dash-year-total">{formatINRCompact(r.total)}</span>
+                      <span className="dash-year-avg">{formatINRCompact(r.monthly)}</span>
+                    </div>
+                  ))}
+                </div>
+                {analytics.yearRows.length > 5 && (
+                  <div style={{ textAlign: 'center', marginTop: 8 }}>
+                    <button className="dash-section-link" style={{ textTransform: 'none' }} onClick={() => setShowAllYears(v => !v)}>
+                      {showAllYears ? 'Show Less' : `Show More (${analytics.yearRows.length - 5} more)`}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {budgetProgress.length > 0 && (
+              <>
+                <div className="dash-section-hdr" style={{ marginTop: 14 }}>
+                  <span>Budgets</span>
+                  <button className="dash-section-link" onClick={() => navigate('settings')}>Manage</button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {budgetProgress.map(b => (
+                    <div key={b.category} className="budget-detail-card">
+                      <div className="budget-detail-top">
+                        <div className="budget-detail-name">{b.category}</div>
+                        <div className="budget-detail-period">{b.period}</div>
+                      </div>
+                      <div className="budget-detail-vals">
+                        <span style={{ color: b.pct > 85 ? 'var(--expense)' : 'var(--income)' }}>{formatINR(b.spend)}</span>
+                        <span style={{ color: 'var(--text-muted)' }}> / {formatINR(b.amount)}</span>
+                      </div>
+                      <div className="progress-track" style={{ marginTop: 6 }}>
+                        <div className="progress-fill" style={{ width: `${b.pct}%`, background: b.pct > 85 ? 'var(--expense)' : 'var(--green)' }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         </div>
-
-        {/* ── Top spending ── */}
-        {topCats.length > 0 && (
-          <>
-            <div className="dash-section-hdr">
-              <span>Top Spending This Month</span>
-              <button className="dash-section-link" onClick={() => navigate('categories', { type: 'Expense', period: 'Month', year: now.getFullYear(), month: now.getMonth() })}>Details</button>
-            </div>
-            <div style={{ padding: '0 0 14px' }}>
-              <div className="dash-year-table" style={{ borderLeft: 'none', borderRight: 'none', borderRadius: 0, padding: '4px var(--page-px)' }}>
-                {topCats.map(([cat, amt], i) => {
-                  const maxAmt = topCats[0][1];
-                  const pct = maxAmt > 0 ? (amt / maxAmt) * 100 : 0;
-                  return (
-                    <div key={cat} className="top-cat-row">
-                      <span className="top-cat-rank">#{i + 1}</span>
-                      <div className="top-cat-mid">
-                        <div className="top-cat-name">{cat}</div>
-                        <div className="progress-track" style={{ marginTop: 4 }}>
-                          <div className="progress-fill" style={{ width: `${pct}%`, background: 'var(--expense)', opacity: 0.8 }} />
-                        </div>
-                      </div>
-                      <div className="top-cat-amt">{formatINR(amt)}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* ── Spending Analytics Grid (Moved and Restored) ── */}
-        {analytics && (
-          <>
-            <div className="dash-section-hdr"><span>Spending Analytics</span></div>
-            <div className="dash-analytics-grid">
-              <div className="dash-stat-card">
-                <div className="dash-stat-icon">📅</div>
-                <div className="dash-stat-label">Avg Monthly</div>
-                <div className="dash-stat-value expense">{formatINRCompact(analytics.avgMonthly)}</div>
-              </div>
-              <div className="dash-stat-card">
-                <div className="dash-stat-icon">📆</div>
-                <div className="dash-stat-label">Avg Yearly</div>
-                <div className="dash-stat-value expense">{formatINRCompact(analytics.avgYearly)}</div>
-              </div>
-              <div className="dash-stat-card clickable" onClick={() => setPopupMsg(`Peak Month Spending:\nYou have spent ${formatINR(analytics.highestAmt)} in ${analytics.highestMonth}.`)}>
-                <div className="dash-stat-icon">🔥</div>
-                <div className="dash-stat-label">Peak Month</div>
-                <div className="dash-stat-value expense" style={{ fontSize: '0.72rem', fontWeight: 800 }}>
-                  {analytics.highestMonth}
-                </div>
-              </div>
-              <div className="dash-stat-card clickable" onClick={() => setPopupMsg(`Peak Year Spending:\nYou have spent ${formatINR(analytics.peakYearAmt)} in the year ${analytics.peakYear}.`)}>
-                <div className="dash-stat-icon">👑</div>
-                <div className="dash-stat-label">Peak Year</div>
-                <div className="dash-stat-value expense" style={{ fontSize: '0.72rem', fontWeight: 800 }}>
-                  Year {analytics.peakYear}
-                </div>
-              </div>
-            </div>
-
-            {/* Yearly Analysis (Restored and Moved) */}
-            <div className="dash-section-hdr"><span>Yearly Analysis</span></div>
-            <div style={{ padding: '0 0 14px' }}>
-              <div className="dash-year-table" style={{ borderLeft: 'none', borderRight: 'none', borderRadius: 0 }}>
-                <div className="dash-year-header">
-                  <span>Year</span><span>Total Spent</span><span>Monthly Avg</span>
-                </div>
-                {(showAllYears ? analytics.yearRows : analytics.yearRows.slice(0, 5)).map(r => (
-                  <div key={r.year} className="dash-year-row clickable" onClick={() => navigate('transactions', { year: r.year })}>
-                    <span className="dash-year-yr">{r.year}</span>
-                    <span className="dash-year-total">{formatINRCompact(r.total)}</span>
-                    <span className="dash-year-avg">{formatINRCompact(r.monthly)}</span>
-                  </div>
-                ))}
-              </div>
-              {analytics.yearRows.length > 5 && (
-                <div style={{ textAlign: 'center', marginTop: 10 }}>
-                  <button className="dash-section-link" style={{ textTransform: 'none' }} onClick={() => setShowAllYears(v => !v)}>
-                    {showAllYears ? 'Show Less' : `Show More (${analytics.yearRows.length - 5} more)`}
-                  </button>
-                </div>
-              )}
-            </div>
-          </>
-        )}
-
-        {/* ── Budgets ── */}
-        {budgetProgress.length > 0 && (
-          <>
-            <div className="dash-section-hdr">
-              <span>Budgets</span>
-              <button className="dash-section-link" onClick={() => navigate('settings')}>Manage</button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {budgetProgress.map(b => (
-                <div key={b.category} className="budget-detail-card">
-                  <div className="budget-detail-top">
-                    <div className="budget-detail-name">{b.category}</div>
-                    <div className="budget-detail-period">{b.period}</div>
-                  </div>
-                  <div className="budget-detail-vals">
-                    <span style={{ color: b.pct > 85 ? 'var(--expense)' : 'var(--income)' }}>{formatINR(b.spend)}</span>
-                    <span style={{ color: 'var(--text-muted)' }}> / {formatINR(b.amount)}</span>
-                  </div>
-                  <div className="progress-track" style={{ marginTop: 6 }}>
-                    <div className="progress-fill" style={{ width: `${b.pct}%`, background: b.pct > 85 ? 'var(--expense)' : 'var(--green)' }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
 
         {/* ── Custom bottom sheet/popup overlay for detail message dialogs ── */}
         {popupMsg && (
@@ -850,6 +877,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           </>
         )}
 
+        </div> {/* End app-container */}
       </div> {/* End dash-scrollable-content */}
 
       {/* Floating FAB on Dashboard screen */}

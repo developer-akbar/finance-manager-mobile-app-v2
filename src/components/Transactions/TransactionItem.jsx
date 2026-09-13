@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage, calculateAge, checkIsRedeemed } from '../../utils/format.js';
 import { parseInstalmentInfo, getInstalmentSeriesStats } from '../../database/recurring.js';
@@ -10,9 +10,7 @@ import './TransactionItem.css';
 // ── Shared TXN row (used across screens) ────────────────────────────────────
 export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy, runningBalance = null, isNewestInGroup = false }) {
   const { state } = useApp();
-  const [showDetail, setShowDetail] = useState(false);
-  const [isClosingDetail, setIsClosingDetail] = useState(false);
-  const [showEdit, setShowEdit] = useState(false);
+  const [modalMode, setModalMode] = useState(null); // null | 'detail' | 'edit'
   const pressTimer = React.useRef(null);
   const handlerRef = React.useRef(null);
   const prevHandlerRef = React.useRef(null);
@@ -78,22 +76,12 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const hasAccount = !isTransfer && !isInvestment && t.Account;
   const xferAccountLabel = !isInvestment && isTransfer && t.Note ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}` : '';
 
-  const closeDetail = () => {
-    if (showEdit) {
-      setShowEdit(false);
-    } else {
-      setIsClosingDetail(true);
-      setTimeout(() => {
-        setShowDetail(false);
-        setIsClosingDetail(false);
-      }, 350);
-    }
-  };
+  const rawDescription = String(t.Description || t.description || '').trim();
 
   React.useEffect(() => {
     if (!backInterceptRef) return;
-    if (showDetail || showEdit) {
-      const handler = () => closeDetail();
+    if (modalMode) {
+      const handler = () => setModalMode(null);
       handlerRef.current = handler;
       prevHandlerRef.current = backInterceptRef.current;
       backInterceptRef.current = handler;
@@ -104,7 +92,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
       };
     }
     return undefined;
-  }, [showDetail, showEdit, backInterceptRef]);
+  }, [modalMode, backInterceptRef]);
 
   const handlePressStart = (e) => {
     if (onLongPress) {
@@ -148,7 +136,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
 
   const handleTap = () => {
     if (onTap) { onTap(t); return; }
-    setShowDetail(true);
+    setModalMode('detail');
   };
 
   return (
@@ -159,112 +147,198 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
         onMouseDown={handlePressStart} onMouseUp={handlePressEnd} onMouseMove={handlePressMove}
         onTouchStart={handlePressStart} onTouchEnd={handlePressEnd} onTouchMove={handlePressMove}
       >
-        {/* Colored dot */}
+        {/* Mobile / Tablet Left Dot Indicator */}
         <div className={`txn-dot txn-dot-${cls}`} />
-        {/* Content */}
-        <div className="txn-mid">
-          <div className="txn-note-l">
-            {label}
-            {t.receipt_image && <span style={{ marginLeft: 6, fontSize: '0.72rem' }}>🧾</span>}
-            {t.warranty_expiry && <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>🛡️</span>}
-            {ageStr && (
-              <span
-                className="txn-age-text"
-                style={{
-                  marginLeft: 8,
-                  fontSize: '0.7rem',
-                  color: 'var(--text-muted)',
-                  fontWeight: 'normal',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                ({ageStr})
-              </span>
+
+        {/* ── DESKTOP DENSE LEDGER COLUMNS (>= 1024px) ── */}
+        <div className="txn-desktop-ledger">
+          {/* Col 1: Date & Time */}
+          <div className="td-col td-date">
+            <span className="td-date-val">{t.Date || '—'}</span>
+            {t.Time && <span className="td-time-val">{formatTime(t.Time)}</span>}
+          </div>
+
+          {/* Col 2: Type Badge */}
+          <div className="td-col td-type">
+            <span className={`td-badge td-badge-${cls}`}>
+              {isInvestment ? (invType || 'INV') : displayType.toUpperCase()}
+            </span>
+          </div>
+
+          {/* Col 3: Account / Platform */}
+          <div className="td-col td-account">
+            <span className="td-acct-val" title={isTransfer ? (xferAccountLabel || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`) : (t.Account || invBroker || '—')}>
+              {isTransfer ? (xferAccountLabel || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`) : (t.Account || invBroker || '—')}
+            </span>
+            {t.SubAccount && t.SubAccount !== t.Account && !isTransfer && (
+              <span className="td-subacct-val">{t.SubAccount}</span>
             )}
           </div>
-          <div className="txn-sub-l" style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-            {isInvestment ? (
-              <>
-                {invType === 'BUY' && (
-                  <span className="txn-cat-tag" style={{ background: 'rgba(0, 229, 160, 0.15)', color: '#00e5a0', fontWeight: 700, border: '1px solid rgba(0, 229, 160, 0.3)' }}>
-                    BUY
-                  </span>
-                )}
-                {invType === 'SELL' && (
-                  <span className="txn-cat-tag" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', fontWeight: 700, border: '1px solid rgba(245, 158, 11, 0.3)' }}>
-                    SELL
-                  </span>
-                )}
-                {invType === 'UNIT_ADJUSTMENT' && (
-                  <span className="txn-cat-tag" style={{ background: 'rgba(129, 140, 248, 0.15)', color: '#818cf8', fontWeight: 700, border: '1px solid rgba(129, 140, 248, 0.3)' }}>
-                    UNIT ADJ
-                  </span>
-                )}
-                {invType === 'RECONCILIATION' && (
-                  <span className="txn-cat-tag" style={{ background: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', fontWeight: 700, border: '1px solid rgba(6, 182, 212, 0.3)' }}>
-                    RECON
-                  </span>
-                )}
 
-                {invQty !== 0 && (
-                  <span className="txn-time-tag">
-                    {Math.abs(invQty).toFixed(3)} units{invNav > 0 ? ` @ ₹${invNav.toFixed(2)} NAV` : ''}
-                  </span>
-                )}
-
-                {invType === 'SELL' && (invRealizedPnl !== 0 || invCostBasis > 0) && (
-                  <span className="txn-cat-tag" style={{
-                    background: invRealizedPnl >= 0 ? 'rgba(0, 229, 160, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                    color: invRealizedPnl >= 0 ? '#00e5a0' : '#ef4444',
-                    border: `1px solid ${invRealizedPnl >= 0 ? 'rgba(0, 229, 160, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`
-                  }}>
-                    P&L: {invRealizedPnl >= 0 ? '+' : ''}{formatINR(invRealizedPnl)}
-                  </span>
-                )}
-
-                {invBroker && <span className="txn-time-tag">{invBroker}</span>}
-                {t.Time && <span className="txn-time-tag">{formatTime(t.Time)}</span>}
-                {showDate && t.Date && <span className="txn-time-tag" style={{ color: 'var(--text-muted)' }}>{formatDate(t.Date, 'short')}</span>}
-              </>
-            ) : (
-              <>
-                {t.Time && <span className="txn-time-tag txn-time-first">{formatTime(t.Time)}</span>}
-                {showDate && t.Date && <span className="txn-time-tag" style={{ color: 'var(--text-muted)' }}>{formatDate(t.Date, 'short')}</span>}
-                {subLabel && <span className="txn-cat-tag">{subLabel}</span>}
-                {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && <span className="txn-cat-tag">{t.Subcategory}</span>}
-                {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
-                {xferAccountLabel && <span className="txn-time-tag">{xferAccountLabel}</span>}
-              </>
+          {/* Col 4: Category */}
+          <div className="td-col td-category">
+            <span className="td-cat-pill" title={subLabel || t.Category || '—'}>{subLabel || t.Category || '—'}</span>
+            {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && (
+              <span className="td-subcat-pill">{t.Subcategory}</span>
             )}
+          </div>
+
+          {/* Col 5: Note */}
+          <div className="td-col td-note">
+            <div className="td-desc-main">
+              <span className="td-label-text" title={label}>{label}</span>
+              {t.receipt_image && <span className="td-meta-icon" title="Receipt Attached">🧾</span>}
+              {t.warranty_expiry && <span className="td-meta-icon" title="Warranty">🛡️</span>}
+              {ageStr && <span className="td-age-tag">({ageStr})</span>}
+            </div>
+            {isInvestment && invQty !== 0 && (
+              <div className="td-desc-sub">
+                {Math.abs(invQty).toFixed(3)} units{invNav > 0 ? ` @ ₹${invNav.toFixed(2)}` : ''}
+                {invRealizedPnl !== 0 && (
+                  <span className={`td-pnl-pill ${invRealizedPnl >= 0 ? 'pos' : 'neg'}`}>
+                    Realized P&L: {invRealizedPnl >= 0 ? '+' : ''}{formatINR(invRealizedPnl)}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Col 6: Description */}
+          <div className="td-col td-actual-desc" title={rawDescription || undefined}>
+            {rawDescription ? <span className="td-desc-text">{rawDescription}</span> : null}
+          </div>
+
+          {/* Col 7: Amount (far right) */}
+          <div className="td-col td-amount">
+            <span className={`td-amount-val ${cls}`}>
+              {isInvestment
+                ? (invType === 'UNIT_ADJUSTMENT' ? '₹0.00' : `${sign}${formatINR(invEffectiveAmt || amount)}`)
+                : `${sign}${formatINR(amount)}`}
+            </span>
           </div>
         </div>
-        {/* Amount + running balance */}
-        <div className="txn-amt-wrap">
-          <div className={`txn-amt-col ${cls}`}>
-            {isInvestment
-              ? (invType === 'UNIT_ADJUSTMENT' ? '₹0' : `${sign}${formatINR(invEffectiveAmt || amount)}`)
-              : `${sign}${formatINR(amount)}`}
-          </div>
-          {runningBalance !== null && (
-            <div className="txn-running-bal">
-              {isNewestInGroup
-                ? `(Balance ${runningBalance < 0 ? '−' : ''}${formatINR(Math.abs(runningBalance))})`
-                : `(${runningBalance < 0 ? '−' : ''}${formatINR(Math.abs(runningBalance))})`
-              }
+
+        {/* ── MOBILE / TABLET COMPACT CARD VIEW (< 1024px) ── */}
+        <div className="txn-mobile-view">
+          <div className="txn-mid">
+            <div className="txn-note-l">
+              {label}
+              {t.receipt_image && <span style={{ marginLeft: 6, fontSize: '0.72rem' }}>🧾</span>}
+              {t.warranty_expiry && <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>🛡️</span>}
+              {ageStr && (
+                <span
+                  className="txn-age-text"
+                  style={{
+                    marginLeft: 8,
+                    fontSize: '0.7rem',
+                    color: 'var(--text-muted)',
+                    fontWeight: 'normal',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  ({ageStr})
+                </span>
+              )}
             </div>
-          )}
+            <div className="txn-sub-l" style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+              {isInvestment ? (
+                <>
+                  {invType === 'BUY' && (
+                    <span className="txn-cat-tag" style={{ background: 'rgba(0, 229, 160, 0.15)', color: '#00e5a0', fontWeight: 700, border: '1px solid rgba(0, 229, 160, 0.3)' }}>
+                      BUY
+                    </span>
+                  )}
+                  {invType === 'SELL' && (
+                    <span className="txn-cat-tag" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', fontWeight: 700, border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+                      SELL
+                    </span>
+                  )}
+                  {invType === 'UNIT_ADJUSTMENT' && (
+                    <span className="txn-cat-tag" style={{ background: 'rgba(129, 140, 248, 0.15)', color: '#818cf8', fontWeight: 700, border: '1px solid rgba(129, 140, 248, 0.3)' }}>
+                      UNIT ADJ
+                    </span>
+                  )}
+                  {invType === 'RECONCILIATION' && (
+                    <span className="txn-cat-tag" style={{ background: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', fontWeight: 700, border: '1px solid rgba(6, 182, 212, 0.3)' }}>
+                      RECON
+                    </span>
+                  )}
+
+                  {invQty !== 0 && (
+                    <span className="txn-time-tag">
+                      {Math.abs(invQty).toFixed(3)} units{invNav > 0 ? ` @ ₹${invNav.toFixed(2)} NAV` : ''}
+                    </span>
+                  )}
+
+                  {invType === 'SELL' && (invRealizedPnl !== 0 || invCostBasis > 0) && (
+                    <span className="txn-cat-tag" style={{
+                      background: invRealizedPnl >= 0 ? 'rgba(0, 229, 160, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                      color: invRealizedPnl >= 0 ? '#00e5a0' : '#ef4444',
+                      border: `1px solid ${invRealizedPnl >= 0 ? 'rgba(0, 229, 160, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`
+                    }}>
+                      P&L: {invRealizedPnl >= 0 ? '+' : ''}{formatINR(invRealizedPnl)}
+                    </span>
+                  )}
+
+                  {invBroker && <span className="txn-time-tag">{invBroker}</span>}
+                  {t.Time && <span className="txn-time-tag">{formatTime(t.Time)}</span>}
+                  {showDate && t.Date && <span className="txn-time-tag" style={{ color: 'var(--text-muted)' }}>{formatDate(t.Date, 'short')}</span>}
+                </>
+              ) : (
+                <>
+                  {t.Time && <span className="txn-time-tag txn-time-first">{formatTime(t.Time)}</span>}
+                  {showDate && t.Date && <span className="txn-time-tag" style={{ color: 'var(--text-muted)' }}>{formatDate(t.Date, 'short')}</span>}
+                  {subLabel && <span className="txn-cat-tag">{subLabel}</span>}
+                  {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && <span className="txn-cat-tag">{t.Subcategory}</span>}
+                  {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
+                  {xferAccountLabel && <span className="txn-time-tag">{xferAccountLabel}</span>}
+                </>
+              )}
+            </div>
+          </div>
+          {/* Amount + running balance */}
+          <div className="txn-amt-wrap">
+            <div className={`txn-amt-col ${cls}`}>
+              {isInvestment
+                ? (invType === 'UNIT_ADJUSTMENT' ? '₹0' : `${sign}${formatINR(invEffectiveAmt || amount)}`)
+                : `${sign}${formatINR(amount)}`}
+            </div>
+            {runningBalance !== null && (
+              <div className="txn-running-bal">
+                {isNewestInGroup
+                  ? `(Balance ${runningBalance < 0 ? '−' : ''}${formatINR(Math.abs(runningBalance))})`
+                  : `(${runningBalance < 0 ? '−' : ''}${formatINR(Math.abs(runningBalance))})`
+                }
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {showDetail && <DetailSheet t={t} onClose={closeDetail} onCopy={onCopy} backInterceptRef={backInterceptRef} isClosing={isClosingDetail} />}
+      {modalMode === 'detail' && (
+        <DetailSheet
+          t={t}
+          onEdit={() => setModalMode('edit')}
+          onClose={() => setModalMode(null)}
+          onCopy={onCopy}
+          backInterceptRef={backInterceptRef}
+        />
+      )}
+
+      {modalMode === 'edit' && (
+        <AddTransaction
+          editTransaction={t}
+          onClose={() => setModalMode(null)}
+          backInterceptRef={backInterceptRef}
+        />
+      )}
     </>
   );
 }
 
-// ── Detail + Edit sheet ──────────────────────────────────────────────────────
-function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
+// ── Detail sheet ─────────────────────────────────────────────────────────────
+function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
   const { deleteTransaction, updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments, state } = useApp();
-  const [showEdit, setShowEdit] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [showCopyPicker, setShowCopyPicker] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
@@ -345,10 +419,24 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
     });
     onClose();
   };
+
   const handleCopyWithOriginal = () => {
     onCopy(t);
     onClose();
   };
+
+  // Escape key listener to close modal
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [onClose]);
 
   const handleDismiss = (e) => {
     e.stopPropagation();
@@ -358,26 +446,18 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
     onClose();
   };
 
-  if (showEdit) return (
-    <AddTransaction
-      editTransaction={t}
-      onClose={onClose}
-      backInterceptRef={backInterceptRef}
-    />
-  );
-
   return (
     <>
       <div
-        className={`overlay ${isClosing ? 'closing' : ''}`}
+        className="overlay"
         onClick={handleDismiss}
-        onTouchStart={handleDismiss}
-        style={{ pointerEvents: 'auto' }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
       />
       <div
-        className={`bottom-sheet dp-sheet ${isClosing ? 'closing' : ''}`}
+        className="bottom-sheet dp-sheet"
         onClick={(e) => e.stopPropagation()}
-        style={{ pointerEvents: isClosing ? 'none' : 'auto' }}
+        onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="sheet-handle" />
 
@@ -399,7 +479,7 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
         </button>
 
         {/* Hero */}
-        <div className="dp-hero" onClick={() => setShowEdit(true)} style={{ cursor: 'pointer' }}>
+        <div className="dp-hero" onClick={onEdit} style={{ cursor: 'pointer' }}>
           <div className={`dp-amount ${isInvestment ? (invType === 'BUY' ? 'income' : invType === 'SELL' ? 'expense' : 'transfer') : cls}`}>
             {isInvestment ? (invType === 'UNIT_ADJUSTMENT' ? '₹0' : `${invType === 'BUY' ? '+' : ''}${formatINR(invEffectiveAmt || amount)}`) : `${sign}${formatINR(amount)}`}
           </div>
@@ -454,7 +534,7 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
           </div>
         </div>
         {/* Fields */}
-        <div className="dp-fields" onClick={() => setShowEdit(true)} style={{ cursor: 'pointer' }}>
+        <div className="dp-fields" onClick={onEdit} style={{ cursor: 'pointer' }}>
           <DPRow label="Date" value={formatDate(t.Date, 'short')} />
           {t.Time && <DPRow label="Time" value={formatTime(t.Time)} />}
           {isInvestment ? (
@@ -588,7 +668,7 @@ function DetailSheet({ t, onClose, onCopy, backInterceptRef, isClosing }) {
 
         {/* Actions */}
         <div className="dp-actions" style={{ display: 'flex', gap: '10px' }}>
-          <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowEdit(true)}>✏️ Edit</button>
+          <button className="btn btn-secondary" style={{ flex: 1 }} onClick={onEdit}>✏️ Edit</button>
           {onCopy && <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowCopyPicker(true)}>📋 Copy</button>}
           <button className="btn btn-danger" style={{ flex: 1 }} onClick={() => setShowDelete(true)}>🗑 Delete</button>
         </div>

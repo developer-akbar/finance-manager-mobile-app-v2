@@ -459,55 +459,82 @@ export default function Categories({ backInterceptRef, viewParams } = {}) {
         customFrom={customFrom} setFrom={setFrom} customTo={customTo} setTo={setTo}
         periodLabel={periodLabel} />
 
-      <div className="categories-list" style={{ flex: 1, overflow: 'auto' }}>
-        {catData.length > 0 && (
-          <div className="cat-pie-wrap">
-            <ResponsiveContainer width="100%" height={180}>
-              <PieChart>
-                <Pie data={catData} dataKey="amt" nameKey="name" cx="50%" cy="50%" outerRadius={76} innerRadius={38}>
-                  {catData.map((c, i) => <Cell key={i} fill={c.color} />)}
-                </Pie>
-                <Tooltip content={<PieTip />} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+      <div className="cat-workspace-grid">
+        {/* Left Column: Distribution Donut Chart & Investment Charges */}
+        <div className="cat-left-panel">
+          {catData.length > 0 && (
+            <div className="cat-chart-card">
+              <div className="cat-chart-title">Distribution</div>
+              <div className="cat-pie-wrap">
+                <ResponsiveContainer width="100%" height={210}>
+                  <PieChart>
+                    <Pie data={catData} dataKey="amt" nameKey="name" cx="50%" cy="50%" outerRadius={85} innerRadius={46} paddingAngle={2}>
+                      {catData.map((c, i) => <Cell key={i} fill={c.color} />)}
+                    </Pie>
+                    <Tooltip content={<PieTip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="cat-chart-legend">
+                {catData.slice(0, 6).map((c, i) => (
+                  <div key={c.name} className="cat-legend-item">
+                    <span className="cat-legend-dot" style={{ background: c.color }} />
+                    <span className="cat-legend-text">{c.name} ({c.pct}%)</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
-        {catData.length === 0
-          ? <div className="empty-state"><div className="empty-icon">🏷️</div><div className="empty-title">No {catType.toLowerCase()} data</div><div className="empty-desc">{periodLabel}</div></div>
-          : catData.map(c => (
-            <div key={c.name} className="cat-list-row" onClick={() => setDrill(c.name)}>
-              <div className="cat-pct-badge" style={{ background: c.color + '28', color: c.color }}>{c.pct}%</div>
-              <div className="cat-list-name">{c.name}</div>
-              <div className="cat-list-amt" style={{ color: catType === 'Income' ? 'var(--income)' : 'var(--expense)' }}>{formatINR(c.amt)}</div>
-              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11"><path d="M9 18l6-6-6-6" /></svg>
+          {catType === 'Expense' && chargeTxns.length > 0 && (
+            <div
+              className="cat-charges-card"
+              onClick={() => setDrill('Investment Charges')}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)' }}>Investment &amp; Trading Charges</div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>{chargeTxns.length} transaction{chargeTxns.length > 1 ? 's' : ''}</div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Total: {formatINR(chargeTotal)}</div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--primary, #6366f1)', fontWeight: 600 }}>View Details →</div>
+              </div>
             </div>
-          ))
-        }
+          )}
+        </div>
 
-        {catType === 'Expense' && chargeTxns.length > 0 && (
-          <div
-            style={{
-              margin: '16px var(--page-px) 8px',
-              padding: '12px 14px',
-              background: 'var(--card-bg, rgba(255,255,255,0.03))',
-              borderRadius: 12,
-              border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
-              cursor: 'pointer'
-            }}
-            onClick={() => setDrill('Investment Charges')}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)' }}>Investment & Trading Charges</div>
-              <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>{chargeTxns.length} transaction{chargeTxns.length > 1 ? 's' : ''}</div>
+        {/* Right Column: Ranked Category Ledger Table */}
+        <div className="cat-right-panel">
+          {catData.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-icon">🏷️</div>
+              <div className="empty-title">No {catType.toLowerCase()} data</div>
+              <div className="empty-desc">{periodLabel}</div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Total: {formatINR(chargeTotal)}</div>
-              <div style={{ fontSize: '0.74rem', color: 'var(--primary, #6366f1)', fontWeight: 600 }}>View Details →</div>
+          ) : (
+            <div className="cat-ledger-card">
+              <div className="cat-ledger-header">
+                <span>Category Breakdown</span>
+                <span>{catData.length} Categories</span>
+              </div>
+              <div className="cat-ledger-body">
+                {catData.map((c, i) => (
+                  <div key={c.name} className="cat-list-row" onClick={() => setDrill(c.name)}>
+                    <div className="cat-pct-badge" style={{ background: c.color + '28', color: c.color }}>{c.pct}%</div>
+                    <div className="cat-row-main">
+                      <div className="cat-list-name">{c.name}</div>
+                      <div className="progress-track" style={{ marginTop: 4 }}>
+                        <div className="progress-fill" style={{ width: `${c.pct}%`, background: c.color, opacity: 0.85 }} />
+                      </div>
+                    </div>
+                    <div className="cat-list-amt" style={{ color: catType === 'Income' ? 'var(--income)' : 'var(--expense)' }}>{formatINR(c.amt)}</div>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11"><path d="M9 18l6-6-6-6" /></svg>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-        <div style={{ height: 24 }} />
+          )}
+        </div>
       </div>
     </div>
   );

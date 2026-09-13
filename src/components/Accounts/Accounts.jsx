@@ -1748,7 +1748,7 @@ export default function Accounts({ backInterceptRef } = {}) {
           }
 
           return (
-            <div key={grp}>
+            <div key={grp} className="acct-group-container">
               {grpHeader}
               {!isCollapsed && (
                 <>
@@ -1787,7 +1787,7 @@ export default function Accounts({ backInterceptRef } = {}) {
         {grouped.ungrouped.length > 0 && (() => {
           const hasCC = grouped.ungrouped.some(a => isCreditCard(typeof a === 'object' ? a : { name: a.name || a }));
           return (
-            <div>
+            <div className="acct-group-container">
               {(uniqueAccountGroups || []).length > 0 && (
                 <div className="acct-group-header" style={{ opacity: 0.55 }}><span>📋 Ungrouped</span></div>
               )}

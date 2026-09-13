@@ -1186,6 +1186,10 @@ export function AppProvider({ children }) {
   };
 
   const updateSettings = async (data) => {
+    if (data.theme !== undefined) {
+      document.documentElement.setAttribute('data-theme', data.theme);
+      dispatch({ type: 'SET_THEME', payload: data.theme });
+    }
     if (data.accounts       !== undefined) await replaceAccounts(data.accounts);
     if (data.categories     !== undefined) await replaceCategories(catsObjToArr(data.categories));
     if (data.accountGroups  !== undefined) await replaceAccountGroups(data.accountGroups);
@@ -1197,8 +1201,8 @@ export function AppProvider({ children }) {
       const rules = await getAllRecurringRules();
       dispatch({ type:'SET_RECURRING', payload: rules });
     }
-    // Persist simple key-value settings (profileName, pin, pinIdleSeconds, customTags, etc.)
-    const settingsKeys = ['profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'fontDataWeight', 'biometricsEnabled', 'customTags'];
+    // Persist simple key-value settings (profileName, pin, pinIdleSeconds, customTags, theme, etc.)
+    const settingsKeys = ['theme', 'fontSize', 'fontFamily', 'fontDataWeight', 'profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'biometricsEnabled', 'customTags'];
     const changed = {};
     for (const key of settingsKeys) {
       if (data[key] !== undefined) {
@@ -1267,9 +1271,12 @@ export function AppProvider({ children }) {
     if (due.length) await load();
   };
 
+
+
   const setTheme = async (theme) => {
     document.documentElement.setAttribute('data-theme', theme);
     dispatch({ type:'SET_THEME', payload: theme });
+    dispatch({ type:'UPD_SETTINGS', payload: { theme } });
     try { await setSetting('theme', theme); } catch (e) { console.error('setTheme:', e); }
   };
 
