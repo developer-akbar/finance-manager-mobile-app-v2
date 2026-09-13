@@ -352,6 +352,7 @@ function buildSubAccountBalanceMap(transactions) {
 }
 
 import { calculateBrokerageState as calcBrokerState, parseTxnFields as parseFields, resolveInvestmentSubAccount } from '../../utils/brokerageAccounting.js';
+import { calculateMutualFundPositions } from '../../utils/mutualFundPositionEngine.js';
 
 export const parseTxnFields = parseFields;
 export const calculateShareMarketBalances = (txns, brokerConfigList = [], settings = {}) => {
@@ -458,7 +459,118 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   };
 
   // When viewing an account, treat transfer rows as income/expense for that account.
-  const isMFInvestmentSubAccount = Boolean((acctName === 'Mutual Funds Tax Saver' || acctName === 'Liquid Mutual Funds') && subAccountName);
+  const mfState = useMemo(() => calculateMutualFundPositions(allTxns), [allTxns]);
+  const isMFAcct = useMemo(() => {
+    return acctName === 'Mutual Funds Tax Saver' || acctName === 'Liquid Mutual Funds' ||
+      (mfState.positions || []).some(p => p.investmentAccount === acctName);
+  }, [mfState, acctName]);
+  const isMFInvestmentSubAccount = Boolean(isMFAcct && subAccountName);
+  const isShareMarket = acctName === 'Share Market';
+
+  const mfTxnCostImpactMap = useMemo(() => {
+    const map = new Map();
+    const personalPositions = mfState.getPersonalPortfolio
+      ? mfState.getPersonalPortfolio()
+      : (mfState.positions || []).filter(p => p.ownershipTag === 'PERSONAL' || p.ownershipTag === 'MIXED_HOLDING');
+
+    (personalPositions || []).forEach(pos => {
+      (pos.txns || []).forEach(t => {
+        const raw = t.rawTxn;
+        if (!raw) return;
+        let impact = 0;
+        if (t.action === 'BUY') impact = +(t.costBasis || 0);
+        else if (t.action === 'SELL') impact = -(t.costBasis || 0);
+        else if (t.action === 'UNIT_ADJUSTMENT') impact = 0;
+
+        const key = raw._id || raw.ID || raw;
+        map.set(key, (map.get(key) || 0) + impact);
+      });
+    });
+    return map;
+  }, [mfState]);
+
+  const getMFInvestedImpact = (t) => {
+    const key = t._id || t.ID || t;
+    return mfTxnCostImpactMap.get(key) || 0;
+  };
+
+  const mfActiveCost = useMemo(() => {
+    if (!isMFAcct) return 0;
+    const personalPositions = mfState.getPersonalPortfolio
+      ? mfState.getPersonalPortfolio()
+      : (mfState.positions || []).filter(p => p.ownershipTag === 'PERSONAL' || p.ownershipTag === 'MIXED_HOLDING');
+
+    const active = (personalPositions || []).filter(p => {
+      if (p.status !== 'ACTIVE') return false;
+      if (p.investmentAccount !== acctName) return false;
+      if (subAccountName && p.subAccount !== subAccountName) return false;
+      return true;
+    });
+    return active.reduce((sum, p) => sum + (p.remainingCostBasis || 0), 0);
+  }, [isMFAcct, mfState, acctName, subAccountName]);
+
+  const getBrokerTxnCashImpact = (t) => {
+    const f = parseTxnFields(t);
+    if (!f) return 0;
+    const desc = String(t.Description || t.description || '').trim();
+    const note = String(t.Note || t.note || '').trim();
+    const type = String(t['Income/Expense'] || t.type || '').trim();
+    const acct = String(t.Account || t.account || t.FromAccount || t.from_account || '').trim();
+    const dest = String(t.ToAccount || t.to_account || '').trim();
+    const inr = parseFloat(t.INR || t.inr || t.Amount || t.amount || 0);
+
+    if (f.type === 'RECONCILIATION' || desc.startsWith('RECONCILIATION')) {
+      return f.cashImpact;
+    } else if (f.type === 'BUY' && !f.isRecon) {
+      return -inr;
+    } else if (f.type === 'SELL') {
+      return inr;
+    } else if (f.type === 'CHARGE' || note.endsWith('Brokerage Charges') || note === 'Zerodha Charges' || desc.includes('trading charges') || (t.Tags && String(t.Tags).includes('|CHARGE'))) {
+      const debitAmt = inr < 0 ? inr : -Math.abs(inr);
+      return debitAmt;
+    } else if (type === 'Expense') {
+      return -inr;
+    } else if (f.type === 'OTHER_CREDIT_DEBIT' || note === 'Other Credit & Debit') {
+      return inr;
+    } else if (type === 'Transfer-Out' || type.toLowerCase() === 'transfer') {
+      if (acct !== 'Share Market' && dest === 'Share Market') {
+        return inr;
+      } else if (acct === 'Share Market' && dest !== 'Share Market') {
+        return -inr;
+      }
+    }
+    return 0;
+  };
+
+  const brokerageInfo = useMemo(() => {
+    if (!isShareMarket) return null;
+    const smState = calculateShareMarketBalances(allTxns, [], {});
+    if (subAccountName) {
+      const b = smState[subAccountName] || { totalValue: 0, cashBalance: 0, currentMarketValue: 0, investedCost: 0 };
+      const cash = b.cashBalance !== undefined ? b.cashBalance : (b.cash || 0);
+      const invested = b.investedCost || 0;
+      return {
+        currentValue: cash + invested,
+        cash: cash,
+        investments: invested,
+        investedCost: invested,
+        marketValue: b.currentMarketValue || 0
+      };
+    }
+    let totalCash = 0, totalInvested = 0, totalMarketValue = 0;
+    Object.values(smState).forEach(b => {
+      totalCash += (b.cashBalance !== undefined ? b.cashBalance : (b.cash || 0));
+      totalInvested += (b.investedCost || 0);
+      totalMarketValue += (b.currentMarketValue || 0);
+    });
+    return {
+      currentValue: totalCash + totalInvested,
+      cash: totalCash,
+      investments: totalInvested,
+      investedCost: totalInvested,
+      marketValue: totalMarketValue
+    };
+  }, [isShareMarket, allTxns, subAccountName]);
 
   const accountTxnType = (t) => {
     const base = txnType(t);
@@ -482,6 +594,16 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         if (isMFInvestmentSubAccount) {
           return isInvestmentTransactionForSubAccount(t, acctName, subAccountName);
         }
+        if (isShareMarket) {
+          const resolved = resolveInvestmentSubAccount(t, 'Share Market');
+          const broker = t.Brokerage || t.brokerage || '';
+          const isXfer = t['Income/Expense'] === 'Transfer' || t['Income/Expense'] === 'Transfer-Out' || t['Income/Expense'] === 'Transfer-In';
+          if (isXfer) {
+            return (acct === acctName && (fromSub === subAccountName || resolved === subAccountName || broker === subAccountName)) ||
+                   (dest === acctName && (toSub === subAccountName || resolved === subAccountName || broker === subAccountName));
+          }
+          return (acct === acctName || dest === acctName) && (sub === subAccountName || resolved === subAccountName || broker === subAccountName);
+        }
 
         const isXfer = t['Income/Expense'] === 'Transfer' || t['Income/Expense'] === 'Transfer-Out' || t['Income/Expense'] === 'Transfer-In';
         if (isXfer) {
@@ -491,7 +613,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         }
       }
       return acct === acctName || dest === acctName;
-    }), [allTxns, acctName, subAccountName, isMFInvestmentSubAccount]);
+    }), [allTxns, acctName, subAccountName, isMFInvestmentSubAccount, isShareMarket]);
 
   // Compute current CC cycle range based on offset
   const ccCycleRange = useMemo(() => {
@@ -523,53 +645,84 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
       if (period === 'Custom' && customFrom) return d < new Date(customFrom);
       return false;
     });
+    if (isShareMarket) {
+      return beforePeriod.reduce((sum, t) => sum + getBrokerTxnCashImpact(t), 0);
+    }
+    if (isMFAcct) {
+      return beforePeriod.reduce((sum, t) => sum + getMFInvestedImpact(t), 0);
+    }
     return computeBalance(beforePeriod, acctName, subAccountName);
-  }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, acctName, subAccountName, ccCycleRange]);
+  }, [acctTxns, period, viewYear, viewMonth, viewFY, customFrom, acctName, subAccountName, ccCycleRange, isShareMarket, isMFAcct, mfTxnCostImpactMap]);
 
   const periodBalance = useMemo(() => {
+    if (isShareMarket) {
+      return periodTxns.reduce((sum, t) => sum + getBrokerTxnCashImpact(t), 0);
+    }
+    if (isMFAcct) {
+      return periodTxns.reduce((sum, t) => sum + getMFInvestedImpact(t), 0);
+    }
     return computeBalance(periodTxns, acctName, subAccountName);
-  }, [periodTxns, acctName, subAccountName]);
+  }, [periodTxns, acctName, subAccountName, isShareMarket, isMFAcct, mfTxnCostImpactMap]);
 
   const closingBal = openingBal + periodBalance;
 
   // Income/expense/transfer breakdown for the period
   const totals = useMemo(() => {
-    let income = 0, expense = 0, xferIn = 0, xferOut = 0, buysInvested = 0, sellsRedeemed = 0, totalRealizedPnl = 0;
+    let income = 0, expense = 0, xferIn = 0, xferOut = 0, buysInvested = 0, sellsRedeemed = 0, totalRealizedPnl = 0, charges = 0;
     for (const t of periodTxns) {
       const amt = txnAmount(t);
+      const inr = parseFloat(t.INR || t.Amount || amt || 0);
       const type = String(t['Income/Expense'] || '').trim();
       const acct = t.Account || t.FromAccount || '';
       const dest = t.ToAccount || '';
-      const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
-      const tradeVal = parseFloat(t.TradeValue || t.trade_value || t.CostBasis || t.cost_basis || t.INR || t.Amount || 0);
-      const pnl = parseFloat(t.RealizedPnl || t.realized_pnl || 0);
+      const f = isShareMarket ? parseTxnFields(t) : null;
+      const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || (f ? f.type : '') || '').trim().toUpperCase();
+      const tradeVal = parseFloat(t.TradeValue || t.trade_value || t.CostBasis || t.cost_basis || t.INR || t.Amount || inr || 0);
+      const pnl = parseFloat(t.RealizedPnl || t.realized_pnl || (f ? f.realizedPnL : 0) || 0);
 
-      if (invType === 'BUY') {
-        buysInvested += tradeVal;
+      if (isMFAcct) {
+        const costImpact = getMFInvestedImpact(t);
+        if (costImpact > 0) buysInvested += costImpact;
+        else if (costImpact < 0) sellsRedeemed += Math.abs(costImpact);
+        if (pnl !== 0) totalRealizedPnl += pnl;
+      } else if (invType === 'BUY' && (!f || !f.isRecon)) {
+        buysInvested += (isShareMarket ? inr : tradeVal);
       } else if (invType === 'SELL') {
-        sellsRedeemed += tradeVal;
+        sellsRedeemed += (isShareMarket ? inr : tradeVal);
         totalRealizedPnl += pnl;
+      } else if (invType === 'CHARGE') {
+        charges += inr;
       }
 
       if (type === 'Income') income += amt;
       else if (type === 'Expense') expense += amt;
-      else if (type === 'Transfer-Out') {
-        if (acct === acctName) xferOut += amt;
-        if (dest === acctName) xferIn += amt;
+      else if (type === 'Transfer-Out' || type === 'Transfer') {
+        if (acct === acctName || (isShareMarket && acct === 'Share Market')) xferOut += amt;
+        if (dest === acctName || (isShareMarket && dest === 'Share Market')) xferIn += amt;
       }
     }
-    return { income, expense, xferIn, xferOut, buysInvested, sellsRedeemed, totalRealizedPnl };
-  }, [periodTxns, acctName]);
+    return { income, expense, xferIn, xferOut, buysInvested, sellsRedeemed, totalRealizedPnl, charges };
+  }, [periodTxns, acctName, isShareMarket, isMFAcct, mfTxnCostImpactMap]);
 
   const barData = useMemo(() => {
     if (['All', 'Custom'].includes(period)) return [];
+
+    const getBalForTxns = (txnsList) => {
+      if (isShareMarket) {
+        return txnsList.reduce((sum, t) => sum + getBrokerTxnCashImpact(t), 0);
+      }
+      if (isMFAcct) {
+        return txnsList.reduce((sum, t) => sum + getMFInvestedImpact(t), 0);
+      }
+      return computeBalance(txnsList, acctName, subAccountName);
+    };
 
     if (period === 'Year') {
       // Last 6 years ending at viewYear
       return Array.from({ length: 6 }, (_, i) => {
         const yr = viewYear - 5 + i;
         const yearTxns = acctTxns.filter(t => parseDate(t.Date).getFullYear() <= yr);
-        return { name: String(yr), value: computeBalance(yearTxns, acctName, subAccountName) };
+        return { name: String(yr), value: getBalForTxns(yearTxns) };
       });
     }
 
@@ -579,7 +732,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         const fy = viewFY - 5 + i;
         const upTo = fyEnd(fy);
         const fyTxns = acctTxns.filter(t => parseDate(t.Date) <= upTo);
-        return { name: `FY${String(fy).slice(-2)}`, value: computeBalance(fyTxns, acctName, subAccountName) };
+        return { name: `FY${String(fy).slice(-2)}`, value: getBalForTxns(fyTxns) };
       });
     }
 
@@ -595,9 +748,9 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         const td = parseDate(t.Date);
         return td <= new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
       });
-      return { name: MS_S[d.getMonth()], value: computeBalance(upToMonth, acctName, subAccountName) };
+      return { name: MS_S[d.getMonth()], value: getBalForTxns(upToMonth) };
     });
-  }, [acctTxns, acctName, subAccountName, period, viewYear, viewMonth, viewFY, ccCycleOffset]);
+  }, [acctTxns, acctName, subAccountName, period, viewYear, viewMonth, viewFY, ccCycleOffset, isShareMarket]);
 
   const chartTitle = useMemo(() => {
     if (period === 'Year') return '6-Year Balance Trend';
@@ -636,19 +789,32 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
     return { inc, exp, xfr };
   }, [periodTxns, selected, acctName]);
 
+  // Stable position map from original allTxns array for deterministic tie-breaking
+  const orderMap = useMemo(() => {
+    const map = new Map();
+    (allTxns || []).forEach((t, i) => map.set(t._id || t.ID || t, i));
+    return map;
+  }, [allTxns]);
+
   // Running balance map: txn._id → cumulative account balance AFTER that transaction.
-  // Built from ALL account transactions in chronological order (oldest first).
+  // Built from ALL account transactions in deterministic chronological order (oldest first).
   const runningBalMap = useMemo(() => {
     const sorted = [...acctTxns].sort((a, b) => {
       const da = parseDate(a.Date), db = parseDate(b.Date);
       if (da - db !== 0) return da - db;
-      // same date: sort by time ascending
-      return (a.Time || '').localeCompare(b.Time || '');
+      const timeDiff = (a.Time || '').localeCompare(b.Time || '');
+      if (timeDiff !== 0) return timeDiff;
+      // CSV is stored in reverse chronological order (newest at index 0); higher index is older
+      return (orderMap.get(b._id || b.ID || b) ?? 0) - (orderMap.get(a._id || a.ID || a) ?? 0);
     });
     let bal = 0;
     const map = {};
     for (const t of sorted) {
-      if (subAccountName) {
+      if (isShareMarket) {
+        bal += getBrokerTxnCashImpact(t);
+      } else if (isMFAcct) {
+        bal += getMFInvestedImpact(t);
+      } else if (subAccountName) {
         bal += computeBalance([t], acctName, subAccountName);
       } else {
         const amt = txnAmount(t);
@@ -657,27 +823,30 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         const dest = t.ToAccount || '';
         if (type === 'Income' && acct === acctName) bal += amt;
         else if (type === 'Expense' && acct === acctName) bal -= amt;
-        else if (type === 'Transfer-Out') {
+        else if (type === 'Transfer-Out' || type === 'Transfer') {
           if (acct === acctName) bal -= amt;
           if (dest === acctName) bal += amt;
         }
       }
-      map[t._id] = bal;
+      map[t._id || t.ID] = bal;
     }
     return map;
-  }, [acctTxns, acctName, subAccountName]);
+  }, [acctTxns, acctName, subAccountName, isShareMarket, isMFAcct, orderMap, mfTxnCostImpactMap]);
 
   const groups = useMemo(() => {
     const map = {};
     for (const t of [...periodTxns].sort((a, b) => {
       const da = parseDate(a.Date), db = parseDate(b.Date);
       if (da - db !== 0) return db - da; // date descending
-      return (b.Time || '').localeCompare(a.Time || ''); // time descending within same date
+      const timeDiff = (b.Time || '').localeCompare(a.Time || ''); // time descending
+      if (timeDiff !== 0) return timeDiff;
+      // Stable tie-breaker: smaller original index in CSV is newer
+      return (orderMap.get(a._id || a.ID || a) ?? 0) - (orderMap.get(b._id || b.ID || b) ?? 0);
     })) {
       if (!map[t.Date]) map[t.Date] = []; map[t.Date].push(t);
     }
     return Object.entries(map);
-  }, [periodTxns]);
+  }, [periodTxns, orderMap]);
 
   return (
     <div className="acct-detail-screen">
@@ -689,8 +858,11 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           <div className="page-hdr-title">{acctName}{subAccountName ? ` › ${subAccountName}` : ''}</div>
           <div className="page-hdr-sub">{subAccountName ? 'Sub Account' : 'Account'} · {acctTxns.length} total txns</div>
         </div>
-        <div className="entity-badge" style={{ background: closingBal >= 0 ? 'var(--income-bg)' : 'var(--expense-bg)', color: closingBal >= 0 ? 'var(--income)' : 'var(--expense)' }}>
-          {closingBal >= 0 ? '+' : ''}{formatINRCompact(Math.abs(closingBal))}
+        <div className="entity-badge" style={{
+          background: ((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)) >= 0 ? 'var(--income-bg)' : 'var(--expense-bg)',
+          color: ((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)) >= 0 ? 'var(--income)' : 'var(--expense)'
+        }}>
+          {((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)) >= 0 ? '+' : ''}{formatINRCompact(Math.abs((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)))}
         </div>
         <button className="add-fab-sm" onClick={() => { setShowAdd(true); setAddKey(k => k + 1); }} title="Add transaction">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M12 5v14M5 12h14" /></svg>
@@ -698,7 +870,38 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
       </div>
 
       <div className="acct-detail-body" {...(multiMode ? {} : swipe)}>
-        <div style={{ padding: '8px var(--page-px) 4px' }}>
+        {/* Current Investment Account Value banner for Share Market */}
+        {isShareMarket && brokerageInfo && (
+          <div style={{
+            margin: '6px var(--page-px) 8px',
+            padding: '10px 14px',
+            borderRadius: 14,
+            background: 'linear-gradient(135deg, rgba(0, 229, 160, 0.08), rgba(0, 229, 160, 0.02))',
+            border: '1px solid rgba(0, 229, 160, 0.25)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12
+          }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Current Account Value</div>
+              <div style={{ fontSize: '1.05rem', fontWeight: 900, color: 'var(--accent)', marginTop: 2 }}>{formatINR(brokerageInfo.currentValue)}</div>
+            </div>
+            <div style={{ display: 'flex', gap: 14, textAlign: 'right' }}>
+              <div>
+                <div style={{ fontSize: '0.62rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Broker Cash</div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text)', marginTop: 1 }}>{formatINR(brokerageInfo.cash)}</div>
+              </div>
+              <div style={{ width: 1, background: 'var(--border)', alignSelf: 'stretch' }} />
+              <div>
+                <div style={{ fontSize: '0.62rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Invested Value</div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--income)', marginTop: 1 }}>{formatINR(brokerageInfo.investedCost)}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ padding: '4px var(--page-px) 4px' }}>
           <div className="period-tabs">
             {PERIODS.filter(p => p !== 'CC Cycle' || isCC).map(p => <button key={p} className={`period-tab ${period === p ? 'active' : ''}`} onClick={() => { setPeriod(p); if (p === 'CC Cycle') setCcCycleOffset(0); }}>{p}</button>)}
           </div>
@@ -732,17 +935,17 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         {period !== 'All' && (
           <div className="acct-ob-strip">
             <div className="acct-ob-item">
-              <div className="acct-ob-l">Opening</div>
+              <div className="acct-ob-l">{isShareMarket ? 'Opening Cash' : 'Opening'}</div>
               <div className={`acct-ob-v ${openingBal >= 0 ? 'pos' : 'neg'}`}>{openingBal >= 0 ? '+' : ''}{formatINR(Math.abs(openingBal))}</div>
             </div>
             <div className="acct-ob-div" />
             <div className="acct-ob-item">
-              <div className="acct-ob-l">Net change</div>
+              <div className="acct-ob-l">{isShareMarket ? 'Broker Cash Flow' : 'Net change'}</div>
               <div className={`acct-ob-v ${periodBalance >= 0 ? 'pos' : 'neg'}`}>{periodBalance >= 0 ? '+' : ''}{formatINR(Math.abs(periodBalance))}</div>
             </div>
             <div className="acct-ob-div" />
             <div className="acct-ob-item">
-              <div className="acct-ob-l">Closing</div>
+              <div className="acct-ob-l">{isShareMarket ? 'Closing Cash' : 'Closing'}</div>
               <div className={`acct-ob-v ${closingBal >= 0 ? 'pos' : 'neg'}`}>{closingBal >= 0 ? '+' : ''}{formatINR(Math.abs(closingBal))}</div>
             </div>
           </div>
@@ -751,28 +954,28 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         {/* Activity strip — banking / investment style */}
         <div className="acct-banking-row">
           <div className="acct-banking-item">
-            <div className="acct-banking-l">{isMFInvestmentSubAccount ? 'Invested' : 'Deposits'}</div>
-            <div className="acct-banking-v income">{formatINR(isMFInvestmentSubAccount ? (totals.buysInvested || totals.xferIn) : (totals.income + totals.xferIn))}</div>
+            <div className="acct-banking-l">{isMFAcct ? 'Invested' : (isShareMarket ? (totals.buysInvested > 0 ? 'Buys' : 'Deposits') : 'Deposits')}</div>
+            <div className="acct-banking-v income">{formatINR(isMFAcct ? (totals.buysInvested || totals.xferIn) : (isShareMarket ? (totals.buysInvested || totals.xferIn) : (totals.income + totals.xferIn)))}</div>
           </div>
           <div className="acct-banking-div" />
           <div className="acct-banking-item">
-            <div className="acct-banking-l">{isMFInvestmentSubAccount ? 'Redemptions' : 'Withdrawals'}</div>
-            <div className="acct-banking-v expense">{formatINR(isMFInvestmentSubAccount ? (totals.sellsRedeemed || totals.xferOut) : (totals.expense + totals.xferOut))}</div>
+            <div className="acct-banking-l">{isMFAcct ? 'Redemptions' : (isShareMarket ? (totals.sellsRedeemed > 0 ? 'Sells' : 'Withdrawals') : 'Withdrawals')}</div>
+            <div className="acct-banking-v expense">{formatINR(isMFAcct ? (totals.sellsRedeemed || totals.xferOut) : (isShareMarket ? (totals.sellsRedeemed || totals.xferOut) : (totals.expense + totals.xferOut)))}</div>
           </div>
           <div className="acct-banking-div" />
           <div className="acct-banking-item">
-            <div className="acct-banking-l">{isMFInvestmentSubAccount ? 'Realized P&L' : 'Txns'}</div>
-            <div className={`acct-banking-v ${isMFInvestmentSubAccount ? (totals.totalRealizedPnl >= 0 ? 'income' : 'expense') : ''}`}>
-              {isMFInvestmentSubAccount
+            <div className="acct-banking-l">{isMFAcct || isShareMarket ? 'Realized P&L' : 'Txns'}</div>
+            <div className={`acct-banking-v ${(isMFAcct || isShareMarket) ? (totals.totalRealizedPnl >= 0 ? 'income' : 'expense') : ''}`}>
+              {(isMFAcct || isShareMarket)
                 ? `${totals.totalRealizedPnl >= 0 ? '+' : ''}${formatINR(totals.totalRealizedPnl)}`
                 : periodTxns.length}
             </div>
           </div>
           <div className="acct-banking-div" />
           <div className="acct-banking-item">
-            <div className="acct-banking-l">{isMFInvestmentSubAccount ? 'Position' : 'Balance'}</div>
-            <div className={`acct-banking-v ${closingBal >= 0 ? 'income' : 'expense'}`} style={{ fontWeight: 900 }}>
-              {closingBal >= 0 ? '+' : ''}{formatINR(closingBal)}
+            <div className="acct-banking-l">{isMFAcct ? 'Position' : (isShareMarket ? 'Closing Cash' : 'Balance')}</div>
+            <div className={`acct-banking-v ${(isMFAcct ? mfActiveCost : closingBal) >= 0 ? 'income' : 'expense'}`} style={{ fontWeight: 900 }}>
+              {(isMFAcct ? mfActiveCost : closingBal) >= 0 ? '+' : ''}{formatINR(isMFAcct ? mfActiveCost : closingBal)}
             </div>
           </div>
         </div>
@@ -840,7 +1043,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
                     </div>
                   </div>
                   <div className="dg-items">{txns.map((t, ti) => {
-                    const runBal = runningBalMap[t._id];
+                    const runBal = runningBalMap[t._id] !== undefined ? runningBalMap[t._id] : runningBalMap[t.ID];
                     // Show "(Balance X)" only on the very first transaction of the whole list
                     // (gi===0 && ti===0) — the newest transaction in the viewed period.
                     const isOverallNewest = gi === 0 && ti === 0;
@@ -1047,43 +1250,80 @@ export default function Accounts({ backInterceptRef } = {}) {
 
   const shareMarketBalances = useMemo(() => calculateShareMarketBalances(transactions, state.brokerages, state.settings), [transactions, state.brokerages, state.settings]);
 
+  const mfBalances = useMemo(() => {
+    const mfState = calculateMutualFundPositions(transactions);
+    const personalPositions = mfState.getPersonalPortfolio
+      ? mfState.getPersonalPortfolio()
+      : (mfState.positions || []).filter(p => p.ownershipTag === 'PERSONAL' || p.ownershipTag === 'MIXED_HOLDING');
+
+    const acctTotals = {};
+    const subTotals = {};
+    const mfAccts = new Set();
+    const mfSubs = {};
+
+    (personalPositions || []).forEach(p => {
+      const acct = p.investmentAccount;
+      const sub = p.subAccount;
+      if (!acct) return;
+      mfAccts.add(acct);
+      if (!mfSubs[acct]) mfSubs[acct] = new Set();
+      if (sub) mfSubs[acct].add(sub);
+
+      if (p.status === 'ACTIVE') {
+        const cost = p.remainingCostBasis || 0;
+        acctTotals[acct] = (acctTotals[acct] || 0) + cost;
+        if (sub) {
+          if (!subTotals[acct]) subTotals[acct] = {};
+          subTotals[acct][sub] = (subTotals[acct][sub] || 0) + cost;
+        }
+      }
+    });
+
+    return { acctTotals, subTotals, mfAccts, mfSubs };
+  }, [transactions]);
+
   const acctBalances = useMemo(() => {
     const map = buildBalanceMap(transactions);
     if (map['Share Market'] !== undefined) {
       let totalSm = 0;
       Object.values(shareMarketBalances).forEach(b => {
-        totalSm += b.totalValue;
+        const cash = b.cashBalance !== undefined ? b.cashBalance : (b.cash || 0);
+        const invested = b.investedCost || 0;
+        totalSm += (cash + invested);
       });
       map['Share Market'] = totalSm;
     }
+
+    // Generic Mutual Fund Accounts: Balance = Active Invested Cost Basis
+    mfBalances.mfAccts.forEach(acct => {
+      map[acct] = mfBalances.acctTotals[acct] || 0;
+    });
+
     return map;
-  }, [transactions, shareMarketBalances]);
+  }, [transactions, shareMarketBalances, mfBalances]);
 
   const subAcctBalances = useMemo(() => {
     const map = buildSubAccountBalanceMap(transactions);
     if (map['Share Market']) {
       map['Share Market'] = {};
       Object.entries(shareMarketBalances).forEach(([sub, b]) => {
-        map['Share Market'][sub] = b.totalValue;
+        const cash = b.cashBalance !== undefined ? b.cashBalance : (b.cash || 0);
+        const invested = b.investedCost || 0;
+        map['Share Market'][sub] = cash + invested;
       });
     }
 
-    // Mutual Funds Tax Saver platform position
-    if (!map['Mutual Funds Tax Saver']) map['Mutual Funds Tax Saver'] = {};
-    if (map['Mutual Funds Tax Saver']['Ak ETMoney'] === undefined) {
-      map['Mutual Funds Tax Saver']['Ak ETMoney'] = map['Mutual Funds Tax Saver'][''] ?? (acctBalances['Mutual Funds Tax Saver'] || 0);
-    }
-
-    // Liquid Mutual Funds platform positions
-    if (!map['Liquid Mutual Funds']) map['Liquid Mutual Funds'] = {};
-    ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney'].forEach(sub => {
-      if (map['Liquid Mutual Funds'][sub] === undefined) {
-        map['Liquid Mutual Funds'][sub] = 0;
-      }
+    // Generic Mutual Fund Subaccounts: Balance = Active Invested Cost Basis (0 if fully redeemed)
+    mfBalances.mfAccts.forEach(acct => {
+      map[acct] = {};
+      const knownSubs = mfBalances.mfSubs[acct] || new Set();
+      knownSubs.forEach(sub => {
+        map[acct][sub] = mfBalances.subTotals[acct]?.[sub] || 0;
+      });
     });
 
     return map;
-  }, [transactions, shareMarketBalances, acctBalances]);
+  }, [transactions, shareMarketBalances, mfBalances]);
 
   const netWorth = useMemo(() => Object.values(acctBalances).reduce((s, v) => s + v, 0), [acctBalances]);
   const assets = useMemo(() => {
@@ -1201,14 +1441,11 @@ export default function Accounts({ backInterceptRef } = {}) {
     let subAccountsToRender = acctObj.subAccounts || [];
     if (isShareMarket) {
       subAccountsToRender = Object.keys(shareMarketBalances).map(subName => ({ name: subName }));
-    } else if (isMFTaxSaver) {
-      const existingSubs = (acctObj.subAccounts || []).map(s => typeof s === 'string' ? s : (s?.name || s));
-      const allSubs = new Set([...existingSubs, 'Ak ETMoney']);
-      subAccountsToRender = Array.from(allSubs).map(s => ({ name: s }));
-    } else if (isLiquidMF) {
-      const existingSubs = (acctObj.subAccounts || []).map(s => typeof s === 'string' ? s : (s?.name || s));
-      const allSubs = new Set([...existingSubs, 'Fareeda Groww', 'Ammi Groww', 'Ak ETMoney']);
-      subAccountsToRender = Array.from(allSubs).filter(s => s !== 'Groww' || existingSubs.includes('Groww')).map(s => ({ name: s }));
+    } else if (mfBalances.mfAccts.has(name)) {
+      const configuredSubs = (acctObj.subAccounts || []).map(s => typeof s === 'string' ? s : (s?.name || s)).filter(Boolean);
+      const positionSubs = Array.from(mfBalances.mfSubs[name] || []);
+      const allSubs = Array.from(new Set([...configuredSubs, ...positionSubs])).filter(Boolean);
+      subAccountsToRender = allSubs.map(s => ({ name: s }));
     } else {
       subAccountsToRender = (acctObj.subAccounts || []).filter(s => {
         const sName = typeof s === 'string' ? s : (s?.name || '');
@@ -1327,7 +1564,7 @@ export default function Accounts({ backInterceptRef } = {}) {
                     <div>{sub.name}</div>
                     {isShareMarket && shareMarketBalances[sub.name] && (
                       <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 'normal', marginTop: 1 }}>
-                        Cash {shareMarketBalances[sub.name].cashBalance < 0 ? '−' : ''}{formatINR(Math.abs(shareMarketBalances[sub.name].cashBalance))} · Inv {formatINR(shareMarketBalances[sub.name].investedCost)}
+                        Cash {shareMarketBalances[sub.name].cashBalance < 0 ? '−' : ''}{formatINR(Math.abs(shareMarketBalances[sub.name].cashBalance))} · Invested {formatINR(shareMarketBalances[sub.name].investedCost)}
                       </div>
                     )}
                   </div>
