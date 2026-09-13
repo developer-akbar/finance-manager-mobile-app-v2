@@ -636,12 +636,12 @@ export default function AddTransaction({
   const [form, setForm] = useState(() => {
     if (isEdit) {
       const t = editTransaction;
+      const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
       const isInv = Boolean(
-        (t.InvestmentTransactionType && String(t.InvestmentTransactionType).trim()) ||
-        (t.investment_transaction_type && String(t.investment_transaction_type).trim()) ||
+        invType === 'BUY' ||
+        invType === 'SELL' ||
         (t.SecuritySymbol && t.SecurityISIN)
       );
-      const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
 
       let rt = t['Income/Expense'] || 'Expense';
       if (rt === 'Transfer') rt = 'Transfer-Out';
