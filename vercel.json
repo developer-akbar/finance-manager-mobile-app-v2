@@ -1,0 +1,18 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/yahoo/(.*)",
+      "destination": "https://query1.finance.yahoo.com/$1"
+    },
+    {
+      "source": "/api/yahoo2/(.*)",
+      "destination": "https://query2.finance.yahoo.com/$1"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

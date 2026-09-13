@@ -421,15 +421,11 @@ export async function fetchStockPriceFromProvider(position, key, assetType = 'EQ
     }
   }
 
-  // 2. Web Browser Runtime — use Vite proxy if on dev port, fallback to direct query endpoints
+  // 2. Web Browser Runtime — use proxy endpoints (/api/yahoo, /api/yahoo2) with direct fallback
   if (!data) {
-    const isBrowserDev = typeof window !== 'undefined' && window.location && window.location.port === '5173';
-    const endpoints = isBrowserDev ? [
+    const endpoints = [
       `/api/yahoo${targetPath}`,
       `/api/yahoo2${targetPath}`,
-      `https://query1.finance.yahoo.com${targetPath}`,
-      `https://query2.finance.yahoo.com${targetPath}`
-    ] : [
       `https://query1.finance.yahoo.com${targetPath}`,
       `https://query2.finance.yahoo.com${targetPath}`
     ];
