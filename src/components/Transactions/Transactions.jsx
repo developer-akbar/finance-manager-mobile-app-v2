@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, calcTotals, groupByDate, txnType, txnAmount, inputToStorage } from '../../utils/format.js';
+import { parseDate, formatINR, calcTotals, calcReportingTotals, groupByDate, txnType, txnAmount, inputToStorage } from '../../utils/format.js';
 import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
@@ -486,7 +486,7 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
 
   return <>
     {groups.sortedGroups.map(([dk, list]) => {
-      const gt = calcTotals(list);
+      const gt = calcReportingTotals(list);
       const d  = parseDate(list[0].Date);
       const isClosest = dk === groups.closestDk;
       return (
@@ -531,7 +531,7 @@ function MonthlyView({ transactions, year, setYear, onMonthClick }) {
   const data = useMemo(() =>
     MONTHS_S.map((s, mi) => {
       const txns = transactions.filter(t => { const d=parseDate(t.Date); return d.getFullYear()===year&&d.getMonth()===mi; });
-      const tot  = calcTotals(txns);
+      const tot  = calcReportingTotals(txns);
       return { s, mi, income:tot.income, expense:tot.expense, net:tot.balance, count:txns.length };
     }), [transactions, year]);
 
@@ -1248,7 +1248,7 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
   const swipeProps = viewMode === 'daily' && !multiMode ? swipe : {};
 
   const monthTxns   = useMemo(() => transactions.filter(t=>{const d=parseDate(t.Date);return d.getFullYear()===viewYear&&d.getMonth()===viewMonth;}), [transactions,viewYear,viewMonth]);
-  const monthTotals = useMemo(() => calcTotals(monthTxns), [monthTxns]);
+  const monthTotals = useMemo(() => calcReportingTotals(monthTxns), [monthTxns]);
 
   const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
 

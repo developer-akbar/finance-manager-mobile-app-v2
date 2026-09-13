@@ -228,6 +228,23 @@ export const calcTotals = (transactions) => {
   return { income, expense, transfer, balance: income - expense };
 };
 
+export const calcReportingTotals = (transactions) => {
+  let income = 0, expense = 0, transfer = 0, charges = 0;
+  for (const t of transactions) {
+    const amt = txnAmount(t), type = txnType(t);
+    if (type === 'income') income += amt;
+    if (type === 'expense') {
+      if (isInvestmentCharge(t)) {
+        charges += amt;
+      } else {
+        expense += amt;
+      }
+    }
+    if (type === 'transfer') transfer += amt;
+  }
+  return { income, expense, transfer, charges, balance: income - expense };
+};
+
 export const groupByDate = (txns, sort = true) => {
   const g = {};
   for (const t of txns) {
