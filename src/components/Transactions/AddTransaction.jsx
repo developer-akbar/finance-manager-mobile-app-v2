@@ -2328,14 +2328,7 @@ export default function AddTransaction({
     }
   };
 
-  const isInvEdit = Boolean(
-    editTransaction?.InvestmentTransactionType ||
-    editTransaction?.investment_transaction_type ||
-    editTransaction?.Brokerage ||
-    editTransaction?.brokerage ||
-    (editTransaction?.SecuritySymbol && editTransaction?.SecurityISIN)
-  );
-  const isInvMode = Boolean(form.type === 'Investment' || form.type === 'BUY' || form.type === 'SELL' || isInvEdit);
+  const isInvMode = Boolean(form.type === 'Investment' || form.type === 'BUY' || form.type === 'SELL');
 
   const currentTypes = TYPES;
 
@@ -2526,13 +2519,7 @@ export default function AddTransaction({
         }
       } else {
         // Check if saving an investment transaction
-        const isGenericType = form.type === 'Expense' || form.type === 'Income' || form.type.startsWith('Transfer');
-        const isInvSave = !isGenericType && Boolean(
-          form.type === 'Investment' ||
-          form.type === 'BUY' ||
-          form.type === 'SELL' ||
-          (isEdit && (editTransaction?.InvestmentTransactionType || editTransaction?.investment_transaction_type))
-        );
+        const isInvSave = Boolean(form.type === 'Investment' || form.type === 'BUY' || form.type === 'SELL');
 
         if (isInvSave && !isTransfer) {
           const invType = form.type === 'BUY' || form.type === 'SELL' ? form.type : (form.investmentTransactionType || 'BUY');
@@ -2779,10 +2766,12 @@ export default function AddTransaction({
           const thisNote = isInstalmentEdit && instInfo
             ? `${baseNote} (${instInfo.part}/${instInfo.total})`.trim()
             : baseNote;
+          const isChargeEdit = isEdit && editTransaction?.InvestmentTransactionType === 'CHARGE' && form.type === 'Expense';
           const data = {
             Date: inputToStorage(form.date), Time: form.time || '',
             Account: isTransfer ? form.fromAccount : form.account,
-            FromAccount: isTransfer ? form.fromAccount : '', ToAccount: isTransfer ? form.toAccount : '',
+            FromAccount: isTransfer ? form.fromAccount : (isChargeEdit ? (editTransaction?.FromAccount || form.account) : ''),
+            ToAccount: isTransfer ? form.toAccount : '',
             Category: isTransfer ? 'Transfer' : form.category,
             Subcategory: form.subcategory || 'Default',
             Note: thisNote, Description: form.description || '',
@@ -2795,8 +2784,20 @@ export default function AddTransaction({
             serial_no: form.serial_no || '',
             _id: editTransaction?._id,
             SubAccount: isTransfer ? form.fromSubAccount : form.subAccount,
-            FromSubAccount: isTransfer ? form.fromSubAccount : '',
+            FromSubAccount: isTransfer ? form.fromSubAccount : (isChargeEdit ? (form.subAccount || editTransaction?.FromSubAccount || '') : ''),
             ToSubAccount: isTransfer ? form.toSubAccount : '',
+            ...(isChargeEdit ? {
+              InvestmentTransactionType: 'CHARGE',
+              Brokerage: editTransaction?.Brokerage || (isTransfer ? form.fromSubAccount : form.subAccount) || '',
+              SecuritySymbol: editTransaction?.SecuritySymbol || '',
+              SecurityDisplayName: editTransaction?.SecurityDisplayName || '',
+              SecurityISIN: editTransaction?.SecurityISIN || '',
+              TradeValue: totalAmount,
+              CashImpact: -totalAmount,
+              split_group_id: editTransaction?.split_group_id || '',
+              AccountingClassification: editTransaction?.AccountingClassification || 'REAL_INVESTMENT_TRANSACTION',
+              Source: editTransaction?.Source || 'Manual',
+            } : {})
           };
           if (isInstalmentEdit) {
             await updateInstalmentSiblings(editTransaction.recurring_rule_id, data, editTransaction);
