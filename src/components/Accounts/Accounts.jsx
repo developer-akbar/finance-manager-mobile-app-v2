@@ -1063,7 +1063,6 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
             })}
           </>
         }
-        <div style={{ height: 80 }} />
       </div>
       {addDate && <AddTransaction prefillDate={addDate} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={() => setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef} />}
       {showAdd && <AddTransaction key={addKey} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={() => setShowAdd(false)} onSaveAndContinue={() => { }} backInterceptRef={backInterceptRef} />}
@@ -1522,10 +1521,10 @@ export default function Accounts({ backInterceptRef } = {}) {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" width="10" height="10"><path d="M6 9l6 6 6-6" /></svg>
             </button>
           )}
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => setDrill(name)}>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => setDrill(name)}>
             <div className="acct-row-name" style={{ flex: 1 }}>{name}</div>
             <div className={`acct-row-bal ${bal >= 0 ? 'pos' : 'neg'}`} style={{ marginRight: 6 }}>{bal < 0 ? '−' : ''}{formatINR(Math.abs(bal))}</div>
-            <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11"><path d="M9 18l6-6-6-6" /></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11" style={{ flexShrink: 0 }}><path d="M9 18l6-6-6-6" /></svg>
           </div>
         </div>
       );
@@ -1548,22 +1547,23 @@ export default function Accounts({ backInterceptRef } = {}) {
                   key={`${name}-${sub.name}`}
                   className="acct-row"
                   style={{
-                    paddingLeft: '32px',
+                    paddingLeft: '28px',
                     background: 'var(--bg-card2)',
                     borderBottom: '1px solid var(--border-light)',
                     display: 'flex',
                     alignItems: 'center',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    minWidth: 0
                   }}
                   onClick={() => {
                     setDrill(name);
                     setDrillSub(sub.name);
                   }}
                 >
-                  <div className="acct-row-name" style={{ flex: 1, fontSize: '0.8rem', opacity: 0.9 }}>
-                    <div>{sub.name}</div>
+                  <div className="acct-row-name" style={{ flex: 1, fontSize: '0.8rem', opacity: 0.9, minWidth: 0 }}>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub.name}</div>
                     {isShareMarket && shareMarketBalances[sub.name] && (
-                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 'normal', marginTop: 1 }}>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 'normal', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         Cash {shareMarketBalances[sub.name].cashBalance < 0 ? '−' : ''}{formatINR(Math.abs(shareMarketBalances[sub.name].cashBalance))} · Invested {formatINR(shareMarketBalances[sub.name].investedCost)}
                       </div>
                     )}
@@ -1571,7 +1571,7 @@ export default function Accounts({ backInterceptRef } = {}) {
                   <div className={`acct-row-bal ${subBal >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: '0.8rem', marginRight: 6 }}>
                     {subBal < 0 ? '−' : ''}{formatINR(Math.abs(subBal))}
                   </div>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="9" height="9"><path d="M9 18l6-6-6-6" /></svg>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="9" height="9" style={{ flexShrink: 0 }}><path d="M9 18l6-6-6-6" /></svg>
                 </div>
               );
             })}
@@ -1584,11 +1584,11 @@ export default function Accounts({ backInterceptRef } = {}) {
 
   return (
     <div className="accounts-screen">
-      <div className="page-hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ flex: 1 }}>
+      <div className="page-hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+        <div style={{ flex: '1 1 auto', minWidth: 90 }}>
           <div className="page-hdr-title">Accounts</div>
         </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <button
             onClick={() => setShowOptimizer(true)}
             style={{
@@ -1603,6 +1603,7 @@ export default function Accounts({ backInterceptRef } = {}) {
               alignItems: 'center',
               gap: 3,
               cursor: 'pointer',
+              minHeight: 28,
             }}
           >
             <span>💳</span> Card Perks
@@ -1621,6 +1622,7 @@ export default function Accounts({ backInterceptRef } = {}) {
               alignItems: 'center',
               gap: 3,
               cursor: 'pointer',
+              minHeight: 28,
             }}
           >
             <span>📈</span> Portfolio
@@ -1639,6 +1641,7 @@ export default function Accounts({ backInterceptRef } = {}) {
               alignItems: 'center',
               gap: 3,
               cursor: 'pointer',
+              minHeight: 28,
             }}
           >
             <span>🤝</span> Debt Tracker
@@ -1798,7 +1801,6 @@ export default function Accounts({ backInterceptRef } = {}) {
         {uniqueAccounts.length === 0 && (
           <div className="empty-state"><div className="empty-icon">💳</div><div className="empty-title">No accounts yet</div><div className="empty-desc">Add accounts in Settings</div></div>
         )}
-        <div style={{ height: 80 }} />
       </div>
     </div>
   );
