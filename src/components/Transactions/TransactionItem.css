@@ -47,6 +47,36 @@
   min-width: 0;
 }
 
+/* ── TABLET LEDGER LAYOUT (768px – 1023px) ── */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .txn-dot {
+    display: none;
+  }
+
+  .txn-mobile-view {
+    display: none;
+  }
+
+  .txn-item {
+    padding: 8px 14px;
+    transition: background 0.15s ease;
+  }
+
+  .txn-item:hover {
+    background: var(--bg-hover) !important;
+  }
+
+  .txn-desktop-ledger {
+    display: grid;
+    grid-template-columns: 95px 68px minmax(105px, 135px) minmax(100px, 125px) minmax(115px, 1fr) minmax(125px, 1.2fr) 100px;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    font-size: 0.80rem;
+  }
+}
+
+/* ── DESKTOP LEDGER LAYOUT (>= 1024px, 1280px, 1440px, 1920px) ── */
 @media (min-width: 1024px) {
   .txn-dot {
     display: none;
@@ -67,30 +97,40 @@
 
   .txn-desktop-ledger {
     display: grid;
-    grid-template-columns: 105px 75px minmax(110px, 200px) 140px minmax(130px, 300px) minmax(150px, 1.2fr) 110px;
+    grid-template-columns: 105px 75px minmax(120px, 180px) minmax(120px, 160px) minmax(140px, 1fr) minmax(160px, 1.4fr) 115px;
     align-items: center;
     gap: 16px;
     width: 100%;
     font-size: 0.84rem;
   }
+}
 
-  /* Col 1: Date */
+/* ── LEDGER COLUMN STYLING (Shared for >= 768px) ── */
+@media (min-width: 768px) {
+  /* Col 1: Date & Time */
   .td-date {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    min-width: 0;
   }
   .td-date-val {
     font-weight: 700;
     color: var(--text-primary);
     font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
   }
   .td-time-val {
-    font-size: 0.7rem;
+    font-size: 0.70rem;
     color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
   }
 
   /* Col 2: Type Badge */
+  .td-type {
+    display: flex;
+    align-items: center;
+  }
   .td-badge {
     display: inline-flex;
     align-items: center;
@@ -250,7 +290,7 @@
     align-items: center;
   }
   .td-amount-val {
-    font-size: 0.92rem;
+    font-size: 0.94rem;
     font-weight: 800;
     font-family: var(--font);
     font-variant-numeric: tabular-nums;

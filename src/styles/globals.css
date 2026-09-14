@@ -483,6 +483,11 @@ select option {
 }
 .dg-header:hover { background: var(--bg-hover); }
 .dg-header:active { background: var(--bg-hover); }
+@media (min-width: 768px) and (max-width: 1023px) {
+  .dg-header {
+    padding: 8px 14px;
+  }
+}
 @media (min-width: 1024px) {
   .dg-header {
     padding: 10px 16px;

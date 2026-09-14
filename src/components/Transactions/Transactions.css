@@ -56,17 +56,29 @@
 
 
 /* Transaction list */
-.txn-list { flex:1; overflow-y:auto; }
+.txn-list {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: calc(var(--safe-bottom) + 84px);
+}
+@media (min-width: 768px) {
+  .txn-list {
+    padding-bottom: 32px;
+  }
+}
 
 .date-group-container {
-  margin-block: var(--page-px);
-  border: 1px solid var(--border);
+  margin-block: 8px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   overflow: hidden;
+  background: var(--bg-card);
 }
 @media (min-width: 768px) {
   .date-group-container {
     border-radius: var(--r-lg);
-    margin-inline: var(--page-px);
+    margin: 12px var(--page-px);
+    border: 1px solid var(--border);
     box-shadow: var(--shadow-sm);
   }
 }
