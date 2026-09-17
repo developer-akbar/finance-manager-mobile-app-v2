@@ -3,6 +3,9 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, calcTotals, calcReportingTotals, groupByDate, txnType, txnAmount, inputToStorage } from '../../utils/format.js';
 import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
+import TransactionSyncModal from './TransactionSyncModal.jsx';
+import { bundleRelatedTransactions, serializeTransactions } from '../../utils/finmanPayload.js';
+import { toast } from '../Common/Toast.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Transactions.css';
 
@@ -35,6 +38,28 @@ export function BulkSelectionBar({ selected, setSelected, selTotals, allTxns, on
   const [noteVal, setNoteVal] = React.useState('');
 
   const selArr = allTxns.filter(t => selected.has(t._id));
+
+  const handleBulkCopy = async () => {
+    try {
+      const selTxns = allTxns.filter(t => selected.has(t._id));
+      if (!selTxns.length) return;
+      const bundled = bundleRelatedTransactions(selTxns, state.transactions || allTxns);
+      const payloadText = serializeTransactions(bundled.transactions, {
+        source: 'FinMan',
+        exportedAt: new Date().toISOString()
+      });
+      await navigator.clipboard.writeText(payloadText);
+      if (bundled.linkedCount > 0) {
+        toast.success(`Copied ${bundled.selectedCount} selected + ${bundled.linkedCount} linked item${bundled.linkedCount > 1 ? 's' : ''}`);
+      } else {
+        toast.success(`Copied ${bundled.selectedCount} transaction${bundled.selectedCount > 1 ? 's' : ''}`);
+      }
+      onDone();
+    } catch (err) {
+      console.error('Bulk copy failed:', err);
+      toast.error('Copy to clipboard failed.');
+    }
+  };
 
   const filteredCategories = useMemo(() => {
     const wantType = typeVal;
@@ -160,6 +185,15 @@ export function BulkSelectionBar({ selected, setSelected, selTotals, allTxns, on
           )}
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0,position:'relative'}}>
+          <button onClick={handleBulkCopy}
+            style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--accent)'}}
+            title="Copy Selected (FinMan Sync Payload)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="18" height="18">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+          </button>
+
           <button onClick={()=>setShowEditSheet(true)}
             style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--text-secondary)'}}
             title="Bulk Edit Fields">
@@ -1130,12 +1164,31 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
   const [selected,  setSelected]  = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
   const [copyTxn,       setCopyTxn]       = useState(null);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [syncInitialText, setSyncInitialText] = useState('');
 
   const [showScrollTop, setShowScrollTop] = useState(false);
   const scrollRef = useRef(null);
 
   const multiModePrevHandler = React.useRef(null);
   const multiModeHandler = React.useRef(null);
+
+  const handleOpenSyncModal = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.includes('"format"') && text.includes('finman-transactions')) {
+          setSyncInitialText(text);
+          setShowSyncModal(true);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Auto clipboard read skipped:', e);
+    }
+    setSyncInitialText('');
+    setShowSyncModal(true);
+  };
 
   // Sync year and view from dashboard clicks
   useEffect(() => {
@@ -1274,15 +1327,24 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
 
   return (
     <div className="txn-screen" {...swipeProps}>
-      {/* Row 1: [Daily | Monthly] on left, 🔍 on right */}
+      {/* Row 1: [Daily | Monthly] on left, [📋 Paste | 🔍] on right */}
       <div className="txn-header">
         <div className="txn-view-tabs">
           <button className={`txn-view-tab ${viewMode==='daily'?'active':''}`} onClick={()=>setViewMode('daily')}>Daily</button>
           <button className={`txn-view-tab ${viewMode==='monthly'?'active':''}`} onClick={()=>setViewMode('monthly')}>Monthly</button>
         </div>
-        <button className="txn-search-btn" onClick={()=>setViewMode('search')}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        </button>
+        <div className="txn-header-actions">
+          <button className="txn-paste-btn" onClick={handleOpenSyncModal} title="Paste Transactions (Cross-Environment Sync)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="15" height="15">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+            </svg>
+            <span className="txn-paste-btn-lbl">Paste</span>
+          </button>
+          <button className="txn-search-btn" onClick={()=>setViewMode('search')} title="Search Transactions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          </button>
+        </div>
       </div>
 
       {/* Row 2: Month navigator — Daily mode only */}
@@ -1356,6 +1418,14 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
         onSaveAndContinue={() => setCopyTxn({...copyTxn, _id: undefined})}
         backInterceptRef={backInterceptRef}
       />}
+
+      {showSyncModal && (
+        <TransactionSyncModal
+          isOpen={showSyncModal}
+          initialPayloadText={syncInitialText}
+          onClose={() => { setShowSyncModal(false); setSyncInitialText(''); }}
+        />
+      )}
 
       {/* Floating FAB — bottom left */}
       <button className="trans-fab" onClick={onAddTransaction}>

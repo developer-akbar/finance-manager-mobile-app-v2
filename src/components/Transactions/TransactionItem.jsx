@@ -3,6 +3,8 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage, calculateAge, checkIsRedeemed } from '../../utils/format.js';
 import { parseInstalmentInfo, getInstalmentSeriesStats } from '../../database/recurring.js';
 import { resolveInvestmentAccounts } from '../../utils/brokerageAccounting.js';
+import { bundleRelatedTransactions, serializeTransactions } from '../../utils/finmanPayload.js';
+import { toast } from '../Common/Toast.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import ReceiptViewer from '../Common/ReceiptViewer.jsx';
 import './TransactionItem.css';
@@ -425,6 +427,27 @@ function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
     onClose();
   };
 
+  const handleCopyForSync = async () => {
+    try {
+      const bundled = bundleRelatedTransactions([t], state.transactions || []);
+      const payloadText = serializeTransactions(bundled.transactions, {
+        source: 'FinMan',
+        exportedAt: new Date().toISOString()
+      });
+      await navigator.clipboard.writeText(payloadText);
+      if (bundled.linkedCount > 0) {
+        toast.success(`Copied 1 transaction + ${bundled.linkedCount} linked item${bundled.linkedCount > 1 ? 's' : ''}`);
+      } else {
+        toast.success('Copied 1 transaction (FinMan sync payload)');
+      }
+      setShowCopyPicker(false);
+      onClose();
+    } catch (err) {
+      console.error('Single sync copy failed:', err);
+      toast.error('Copy to clipboard failed.');
+    }
+  };
+
   // Escape key listener to close modal
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -690,6 +713,12 @@ function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
               Original date &amp; time
               <div style={{ fontSize: '0.65rem', fontWeight: 400, opacity: 0.75, marginTop: 2 }}>
                 {t.Date ? t.Date.split('-').reverse().join('/') : ''}{t.Time ? ' · ' + t.Time : ''}
+              </div>
+            </button>
+            <button className="btn btn-secondary btn-full" style={{ marginBottom: 10, borderColor: 'var(--accent)', background: 'rgba(0, 229, 160, 0.05)' }} onClick={handleCopyForSync}>
+              ⚡ Copy for Sync (Portable Payload)
+              <div style={{ fontSize: '0.65rem', fontWeight: 400, opacity: 0.75, marginTop: 2, color: 'var(--accent)' }}>
+                Copies complete record &amp; linked charges to clipboard
               </div>
             </button>
             <button className="btn btn-ghost btn-full" onClick={() => setShowCopyPicker(false)}>Cancel</button>

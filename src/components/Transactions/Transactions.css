@@ -13,7 +13,37 @@
 }
 .txn-view-tabs { display:flex; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); padding:2px; }
 .txn-view-tab { padding:6px 16px; border-radius:calc(var(--r-md) - 2px); border:none; background:none; font-size:0.76rem; font-weight:700; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); }
-.txn-view-tab.active { background:var(--green); color:#0a0f1e; }
+.txn-header-actions { display:flex; align-items:center; gap:8px; }
+.txn-paste-btn {
+  height: 34px;
+  padding: 0 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-family: var(--font);
+  transition: var(--transition);
+}
+.txn-paste-btn:hover {
+  background: rgba(0, 229, 160, 0.1);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.txn-paste-btn svg {
+  width: 14px;
+  height: 14px;
+  stroke: var(--accent);
+}
+@media (max-width: 480px) {
+  .txn-paste-btn-lbl { display: none; }
+  .txn-paste-btn { padding: 0; width: 34px; justify-content: center; }
+}
 .txn-search-btn { width:34px; height:34px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); cursor:pointer; display:flex; align-items:center; justify-content:center; transition: var(--transition); }
 .txn-search-btn:hover { background: var(--bg-hover); }
 .txn-search-btn svg { width:15px; height:15px; stroke:var(--text-secondary); }
