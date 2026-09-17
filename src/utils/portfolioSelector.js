@@ -138,8 +138,9 @@ export function getUnifiedPortfolioData(transactions = [], settings = {}) {
         totalProceeds: Math.round(totalProceeds * 100) / 100,
         buyCount: (h.txns || []).length || 1,
         sellCount: (h.txns || []).filter(t => (t.InvestmentTransactionType || t.investment_transaction_type || '').toUpperCase() === 'SELL').length || 1,
-        firstBuyDate: (h.txns && h.txns[0]) ? (h.txns[0].date || h.txns[0].Date || '') : '',
-        lastTransactionDate: h.lastTransactionDate || '',
+        firstBuyDate: h.firstBuyDate || ((h.txns && h.txns[0]) ? (h.txns[0].date || h.txns[0].Date || '') : ''),
+        exitDate: h.exitDate || h.lastTransactionDate || '',
+        lastTransactionDate: h.exitDate || h.lastTransactionDate || '',
         buyLots: h.buyLots || [],
         sellRecords: [],
         txns: h.txns || []

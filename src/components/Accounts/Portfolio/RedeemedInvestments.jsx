@@ -1,8 +1,56 @@
-import React from 'react';
-import { formatINR } from '../../../utils/format.js';
+import React, { useState, useMemo } from 'react';
+import { formatINR, parseDate } from '../../../utils/format.js';
 
 export default function RedeemedInvestments({ positions = [], onSelectPosition }) {
-  const redeemed = positions.filter(p => p.status === 'REDEEMED');
+  const [sortKey, setSortKey] = useState('exitDate');
+  const [sortDir, setSortDir] = useState('desc'); // 'asc' | 'desc'
+
+  const redeemed = useMemo(() => {
+    const list = positions.filter(p => p.status === 'REDEEMED');
+
+    return [...list].sort((a, b) => {
+      let comparison = 0;
+      if (sortKey === 'name') {
+        const nameA = (a.note || a.security || '').toLowerCase();
+        const nameB = (b.note || b.security || '').toLowerCase();
+        comparison = nameA.localeCompare(nameB);
+      } else if (sortKey === 'platform') {
+        const pA = (a.subAccount || '').toLowerCase();
+        const pB = (b.subAccount || '').toLowerCase();
+        comparison = pA.localeCompare(pB);
+      } else if (sortKey === 'qty') {
+        const qtyA = a.sellUnits > 0 ? a.sellUnits : (a.buyUnits > 0 ? a.buyUnits : a.currentUnits || 0);
+        const qtyB = b.sellUnits > 0 ? b.sellUnits : (b.buyUnits > 0 ? b.buyUnits : b.currentUnits || 0);
+        comparison = qtyA - qtyB;
+      } else if (sortKey === 'cost') {
+        const costA = a.buyCost || a.sellCostBasis || 0;
+        const costB = b.buyCost || b.sellCostBasis || 0;
+        comparison = costA - costB;
+      } else if (sortKey === 'pnl') {
+        comparison = (a.realizedPnl || 0) - (b.realizedPnl || 0);
+      } else if (sortKey === 'exitDate') {
+        const dateA = parseDate(a.exitDate || a.lastTransactionDate || 0).getTime();
+        const dateB = parseDate(b.exitDate || b.lastTransactionDate || 0).getTime();
+        comparison = dateA - dateB;
+      }
+
+      return sortDir === 'asc' ? comparison : -comparison;
+    });
+  }, [positions, sortKey, sortDir]);
+
+  const handleHeaderClick = (key) => {
+    if (sortKey === key) {
+      setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'name' || key === 'platform' ? 'asc' : 'desc');
+    }
+  };
+
+  const renderSortIndicator = (key) => {
+    if (sortKey !== key) return null;
+    return <span className="sort-indicator">{sortDir === 'asc' ? ' ↑' : ' ↓'}</span>;
+  };
 
   if (redeemed.length === 0) {
     return (
@@ -31,13 +79,25 @@ export default function RedeemedInvestments({ positions = [], onSelectPosition }
         <table className="holdings-table">
           <thead>
             <tr>
-              <th>Fund / Scheme</th>
-              <th>Platform</th>
+              <th className="sortable-th" onClick={() => handleHeaderClick('name')}>
+                Fund / Scheme{renderSortIndicator('name')}
+              </th>
+              <th className="sortable-th" onClick={() => handleHeaderClick('platform')}>
+                Platform{renderSortIndicator('platform')}
+              </th>
               <th>Folio / Mode</th>
-              <th style={{ textAlign: 'right' }}>Qty / Units Exited</th>
-              <th style={{ textAlign: 'right' }}>Cost Basis</th>
-              <th style={{ textAlign: 'right' }}>Realized P&L</th>
-              <th style={{ textAlign: 'right' }}>Exit Date</th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('qty')}>
+                Qty / Units Exited{renderSortIndicator('qty')}
+              </th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('cost')}>
+                Cost Basis{renderSortIndicator('cost')}
+              </th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('pnl')}>
+                Realized P&L{renderSortIndicator('pnl')}
+              </th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('exitDate')}>
+                Exit Date{renderSortIndicator('exitDate')}
+              </th>
               <th style={{ textAlign: 'center' }}>Details</th>
             </tr>
           </thead>
@@ -46,6 +106,7 @@ export default function RedeemedInvestments({ positions = [], onSelectPosition }
               const isDemat = pos.investmentAccount === 'Share Market' || pos.holdingMode === 'DEMAT';
               const qty = pos.sellUnits > 0 ? pos.sellUnits : (pos.buyUnits > 0 ? pos.buyUnits : pos.currentUnits);
               const qtyDisplay = isDemat ? `${Math.round(qty)} shares` : `${qty.toFixed(3)} units`;
+              const exitDateStr = pos.exitDate || pos.lastTransactionDate || '—';
 
               return (
                 <tr 
@@ -66,37 +127,38 @@ export default function RedeemedInvestments({ positions = [], onSelectPosition }
                       <span className="mode-text">{pos.holdingMode}</span>
                     </div>
                   </td>
-                  <td style={{ textAlign: 'right' }} className="mono">
+                  <td style={{ textAlign: 'right' }} className="mono num-tabular">
                     {qtyDisplay}
                   </td>
-                <td style={{ textAlign: 'right' }}>
-                  {formatINR(pos.buyCost || pos.sellCostBasis)}
-                </td>
-                <td style={{ textAlign: 'right' }} className="font-bold">
-                  {pos.realizedPnl !== 0 ? (
-                    <span className={pos.realizedPnl > 0 ? 'pos' : 'neg'}>
-                      {pos.realizedPnl > 0 ? '+' : ''}{formatINR(pos.realizedPnl)}
-                    </span>
-                  ) : (
-                    '₹0.00'
-                  )}
-                </td>
-                <td style={{ textAlign: 'right' }} className="mono text-muted">
-                  {pos.lastTransactionDate || '—'}
-                </td>
-                <td style={{ textAlign: 'center' }}>
-                  <button 
-                    className="row-view-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectPosition(pos);
-                    }}
-                  >
-                    View
-                  </button>
-                </td>
-              </tr>
-            )})}
+                  <td style={{ textAlign: 'right' }} className="num-tabular font-semibold">
+                    {formatINR(pos.buyCost || pos.sellCostBasis)}
+                  </td>
+                  <td style={{ textAlign: 'right' }} className="font-bold num-tabular">
+                    {pos.realizedPnl !== 0 ? (
+                      <span className={pos.realizedPnl > 0 ? 'pos' : 'neg'}>
+                        {pos.realizedPnl > 0 ? '+' : ''}{formatINR(pos.realizedPnl)}
+                      </span>
+                    ) : (
+                      '₹0.00'
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right' }} className="mono text-muted num-tabular font-semibold">
+                    {exitDateStr}
+                  </td>
+                  <td style={{ textAlign: 'center' }}>
+                    <button 
+                      className="row-view-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectPosition(pos);
+                      }}
+                    >
+                      View
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

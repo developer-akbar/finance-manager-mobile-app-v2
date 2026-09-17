@@ -21,7 +21,8 @@ export default function HoldingsTable({
   onSelectPosition 
 }) {
   const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState('cost-desc'); // 'cost-desc' | 'units-desc' | 'name-asc' | 'value-desc'
+  const [sortKey, setSortKey] = useState('cost');
+  const [sortDir, setSortDir] = useState('desc'); // 'asc' | 'desc'
   const [expandedGroups, setExpandedGroups] = useState({});
 
   // 1. Group active positions by scheme identity
@@ -39,17 +40,61 @@ export default function HoldingsTable({
     }
 
     return [...list].sort((a, b) => {
-      if (sortBy === 'cost-desc') return b.remainingCostBasis - a.remainingCostBasis;
-      if (sortBy === 'value-desc') {
-        const valA = a.valuation?.currentValue || a.remainingCostBasis;
-        const valB = b.valuation?.currentValue || b.remainingCostBasis;
-        return valB - valA;
+      const valA = a.valuation;
+      const valB = b.valuation;
+      let comparison = 0;
+
+      if (sortKey === 'name') {
+        const nameA = (a.note || a.security || '').toLowerCase();
+        const nameB = (b.note || b.security || '').toLowerCase();
+        comparison = nameA.localeCompare(nameB);
+      } else if (sortKey === 'platform') {
+        const pA = (a.subAccount || '').toLowerCase();
+        const pB = (b.subAccount || '').toLowerCase();
+        comparison = pA.localeCompare(pB);
+      } else if (sortKey === 'cost') {
+        comparison = (a.remainingCostBasis || 0) - (b.remainingCostBasis || 0);
+      } else if (sortKey === 'value') {
+        const vA = valA?.isValued ? valA.currentValue : (a.remainingCostBasis || 0);
+        const vB = valB?.isValued ? valB.currentValue : (b.remainingCostBasis || 0);
+        comparison = vA - vB;
+      } else if (sortKey === 'returns') {
+        const pnlA = valA?.isValued ? valA.unrealizedPnl : -Infinity;
+        const pnlB = valB?.isValued ? valB.unrealizedPnl : -Infinity;
+        comparison = pnlA - pnlB;
+      } else if (sortKey === 'oneDay') {
+        const dDiffA = (valA?.isValued && typeof valA.nav === 'number' && typeof valA.previousClose === 'number')
+          ? (valA.nav - valA.previousClose) * (a.currentUnits || 0)
+          : -Infinity;
+        const dDiffB = (valB?.isValued && typeof valB.nav === 'number' && typeof valB.previousClose === 'number')
+          ? (valB.nav - valB.previousClose) * (b.currentUnits || 0)
+          : -Infinity;
+        comparison = dDiffA - dDiffB;
+      } else if (sortKey === 'nav') {
+        const nA = (valA?.isValued && typeof valA.nav === 'number') ? valA.nav : -Infinity;
+        const nB = (valB?.isValued && typeof valB.nav === 'number') ? valB.nav : -Infinity;
+        comparison = nA - nB;
+      } else if (sortKey === 'units') {
+        comparison = (a.currentUnits || 0) - (b.currentUnits || 0);
       }
-      if (sortBy === 'units-desc') return b.currentUnits - a.currentUnits;
-      if (sortBy === 'name-asc') return (a.note || a.security).localeCompare(b.note || b.security);
-      return 0;
+
+      return sortDir === 'asc' ? comparison : -comparison;
     });
-  }, [aggregatedGroups, search, sortBy]);
+  }, [aggregatedGroups, search, sortKey, sortDir]);
+
+  const handleHeaderClick = (key) => {
+    if (sortKey === key) {
+      setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'name' || key === 'platform' ? 'asc' : 'desc');
+    }
+  };
+
+  const renderSortIndicator = (key) => {
+    if (sortKey !== key) return null;
+    return <span className="sort-indicator">{sortDir === 'asc' ? ' ↑' : ' ↓'}</span>;
+  };
 
   const toggleExpand = (groupKey, e) => {
     if (e) e.stopPropagation();
@@ -89,13 +134,20 @@ export default function HoldingsTable({
           />
           <select 
             className="holdings-sort-select"
-            value={sortBy}
-            onChange={e => setSortBy(e.target.value)}
+            value={`${sortKey}-${sortDir}`}
+            onChange={e => {
+              const [k, d] = e.target.value.split('-');
+              setSortKey(k);
+              setSortDir(d);
+            }}
           >
             <option value="cost-desc">Sort: Highest Cost</option>
             <option value="value-desc">Sort: Highest Current Value</option>
+            <option value="returns-desc">Sort: Highest Total Return</option>
+            <option value="oneDay-desc">Sort: Highest 1D Return</option>
             <option value="units-desc">Sort: Most Units</option>
-            <option value="name-asc">Sort: Security Name</option>
+            <option value="name-asc">Sort: Security Name (A-Z)</option>
+            <option value="platform-asc">Sort: Platform (A-Z)</option>
           </select>
         </div>
       </div>
@@ -106,20 +158,36 @@ export default function HoldingsTable({
         </div>
       ) : (
         <>
-          {/* Desktop Table View */}
-          <div className="holdings-table-container desktop-only">
+          {/* Desktop & Tablet Table View (>=768px) */}
+          <div className="holdings-table-container">
             <table className="holdings-table">
               <thead>
                 <tr>
-                  <th>Security / Scheme</th>
-                  <th>Platform</th>
-                  <th>Folios / Mode</th>
-                  <th style={{ textAlign: 'right' }}>Current Value</th>
-                  <th style={{ textAlign: 'right' }}>Invested</th>
-                  <th style={{ textAlign: 'right' }}>Total Returns / P&L</th>
-                  <th style={{ textAlign: 'right' }}>NAV / LTP</th>
-                  <th style={{ textAlign: 'right' }}>Units / Qty & Avg</th>
-                  <th style={{ textAlign: 'center' }}>Action</th>
+                  <th className="sortable-th col-fund" onClick={() => handleHeaderClick('name')}>
+                    Security / Scheme{renderSortIndicator('name')}
+                  </th>
+                  <th className="sortable-th col-platform" onClick={() => handleHeaderClick('platform')}>
+                    Platform{renderSortIndicator('platform')}
+                  </th>
+                  <th className="col-folio">Folios / Mode</th>
+                  <th className="sortable-th col-val text-right" onClick={() => handleHeaderClick('value')}>
+                    Current Value{renderSortIndicator('value')}
+                  </th>
+                  <th className="sortable-th col-cost text-right" onClick={() => handleHeaderClick('cost')}>
+                    Invested{renderSortIndicator('cost')}
+                  </th>
+                  <th className="sortable-th col-pnl text-right" onClick={() => handleHeaderClick('returns')}>
+                    Total Returns / P&L{renderSortIndicator('returns')}
+                  </th>
+                  <th className="sortable-th col-1d text-right" onClick={() => handleHeaderClick('oneDay')}>
+                    1D Return{renderSortIndicator('oneDay')}
+                  </th>
+                  <th className="sortable-th col-nav text-right" onClick={() => handleHeaderClick('nav')}>
+                    NAV / LTP{renderSortIndicator('nav')}
+                  </th>
+                  <th className="sortable-th col-qty text-right" onClick={() => handleHeaderClick('units')}>
+                    Units / Qty & Avg{renderSortIndicator('units')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -129,13 +197,20 @@ export default function HoldingsTable({
                   const metrics = getInvestmentDisplayMetrics(group);
                   const isExpanded = !!expandedGroups[group.positionKey];
 
+                  // 1D Return calculation for holding
+                  const hasOneDay = isValued && typeof val.nav === 'number' && typeof val.previousClose === 'number' && val.previousClose > 0;
+                  const oneDayDiff = hasOneDay ? (val.nav - val.previousClose) : null;
+                  const oneDayAmount = hasOneDay ? oneDayDiff * (group.currentUnits || 0) : null;
+                  const oneDayPercent = hasOneDay ? (oneDayDiff / val.previousClose) * 100 : null;
+
                   return (
                     <React.Fragment key={group.positionKey}>
                       <tr 
                         className={`holdings-table-row clickable ${group.isAggregateGroup ? 'aggregated-row' : ''}`}
                         onClick={() => onSelectPosition(group)}
+                        title="Click to view holding details"
                       >
-                        <td className="fund-cell">
+                        <td className="fund-cell col-fund">
                           <div className="fund-primary-name">{group.note || group.security}</div>
                           <div className="fund-secondary-meta">
                             <span className="mono font-xs text-muted">{group.isin}</span>
@@ -146,10 +221,10 @@ export default function HoldingsTable({
                             )}
                           </div>
                         </td>
-                        <td>
+                        <td className="col-platform">
                           <span className="platform-tag">{group.subAccount}</span>
                         </td>
-                        <td>
+                        <td className="col-folio">
                           <div className="folio-mode-meta">
                             {group.isAggregateGroup ? (
                               <button 
@@ -167,13 +242,13 @@ export default function HoldingsTable({
                             )}
                           </div>
                         </td>
-                        <td style={{ textAlign: 'right' }} className="font-bold current-val-cell num-tabular">
+                        <td className="col-val text-right font-bold current-val-cell num-tabular">
                           {isValued ? formatINR(val.currentValue) : <span className="val-na text-muted">{metrics.unvaluedLabel}</span>}
                         </td>
-                        <td style={{ textAlign: 'right' }} className="mono text-muted num-tabular">
+                        <td className="col-cost text-right mono text-muted num-tabular font-semibold">
                           {formatINR(group.remainingCostBasis)}
                         </td>
-                        <td style={{ textAlign: 'right' }} className="num-tabular">
+                        <td className="col-pnl text-right num-tabular">
                           {isValued ? (
                             <div className={`pnl-sub ${getPnlClass(val.unrealizedPnl)}`}>
                               <div className="font-bold">{formatSignedCurrency(val.unrealizedPnl)}</div>
@@ -185,57 +260,38 @@ export default function HoldingsTable({
                             <span className="val-na text-muted">{metrics.unvaluedLabel}</span>
                           )}
                         </td>
-                        <td style={{ textAlign: 'right' }} className="mono num-tabular">
+                        {/* Dedicated 1D Return Column */}
+                        <td className="col-1d text-right num-tabular">
+                          {hasOneDay ? (
+                            <div className={`pnl-sub ${getPnlClass(oneDayAmount)}`}>
+                              <div className="font-bold">{formatSignedCurrency(oneDayAmount)}</div>
+                              <div className="pnl-pct-small font-semibold">
+                                ({formatSignedPercent(oneDayPercent)})
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="val-na text-muted">—</span>
+                          )}
+                        </td>
+                        <td className="col-nav text-right mono num-tabular">
                           {isValued && typeof val.nav === 'number' ? (
-                            <div>
-                              {(() => {
-                                const assetType = detectAssetType(group);
-                                const dailyChange = isValued && typeof val.nav === 'number'
-                                  ? getTodaysChange(val.nav, val.previousClose, assetType, group.currentUnits, oneDayDisplayMode)
-                                  : null;
-                                return (
-                                  <div className="font-semibold" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px', flexWrap: 'wrap' }}>
-                                    <span>{metrics.priceLabel} ₹{val.nav.toFixed(2)}</span>
-                                    {dailyChange ? (
-                                      <span 
-                                        className={`todays-change font-semibold ${dailyChange.cls}`} 
-                                        style={{ fontSize: '0.72rem', color: dailyChange.color, whiteSpace: 'nowrap', cursor: 'pointer' }} 
-                                        title="Tap 1D change to switch between price/NAV change and position 1D P&L."
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          if (onToggleOneDayDisplayMode) onToggleOneDayDisplayMode(e);
-                                        }}
-                                      >
-                                        {dailyChange.text}
-                                      </span>
-                                    ) : (isValued && typeof val.nav === 'number' ? (
-                                      <span className="todays-change text-muted font-semibold" style={{ fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
-                                        —
-                                      </span>
-                                    ) : null)}
-                                  </div>
-                                );
-                              })()}
-                              {val.asOf && <div className="text-muted font-xs">As of {formatAsOfDate(val.asOf)}{val.asOfTime ? `, ${val.asOfTime}` : ''}</div>}
+                            <div className="nav-cell-wrap">
+                              <div className="nav-val-main font-semibold text-primary">
+                                {metrics.priceLabel} ₹{val.nav.toFixed(2)}
+                              </div>
+                              {val.asOf && (
+                                <div className="nav-as-of-sub text-muted font-xs">
+                                  As of {formatAsOfDate(val.asOf)}{val.asOfTime ? `, ${val.asOfTime}` : ''}
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <span className="val-na text-muted">{metrics.unvaluedLabel}</span>
                           )}
                         </td>
-                        <td style={{ textAlign: 'right' }} className="mono font-xs text-muted num-tabular">
-                          <div>{metrics.formattedQty}</div>
+                        <td className="col-qty text-right mono font-xs text-muted num-tabular">
+                          <div className="font-semibold text-primary">{metrics.formattedQty}</div>
                           <div>{metrics.formattedAvgPrice}</div>
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <button 
-                            className="row-view-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onSelectPosition(group);
-                            }}
-                          >
-                            Details
-                          </button>
                         </td>
                       </tr>
 
@@ -245,52 +301,54 @@ export default function HoldingsTable({
                           const subVal = valuationProvider ? valuationProvider.getValuation(subPos) : null;
                           const subIsValued = subVal && subVal.isValued;
                           const subMetrics = getInvestmentDisplayMetrics(subPos);
+                          const subHasOneDay = subIsValued && typeof subVal.nav === 'number' && typeof subVal.previousClose === 'number' && subVal.previousClose > 0;
+                          const subOneDayDiff = subHasOneDay ? (subVal.nav - subVal.previousClose) : null;
+                          const subOneDayAmount = subHasOneDay ? subOneDayDiff * (subPos.currentUnits || 0) : null;
+                          const subOneDayPercent = subHasOneDay ? (subOneDayDiff / subVal.previousClose) * 100 : null;
+
                           return (
                             <tr 
                               key={subPos.positionKey || idx}
                               className="folio-sub-row clickable"
                               onClick={() => onSelectPosition(subPos)}
+                              title="Click to view folio details"
                             >
-                              <td className="fund-cell sub-row-cell" colSpan={2}>
+                              <td className="fund-cell sub-row-cell col-fund" colSpan={2}>
                                 <div className="sub-row-indent">
                                   ↳ <span className="sub-row-platform">{subPos.subAccount}</span>
                                 </div>
                               </td>
-                              <td>
+                              <td className="col-folio">
                                 <div className="folio-mode-meta">
                                   <span className="folio-text mono text-muted">Folio {subPos.folioNumber}</span>
                                   <span className="mode-text text-muted">{subPos.holdingMode}</span>
                                 </div>
                               </td>
-                              <td style={{ textAlign: 'right' }} className="font-semibold num-tabular">
+                              <td className="col-val text-right font-semibold num-tabular">
                                 {subIsValued ? formatINR(subVal.currentValue) : '—'}
                               </td>
-                              <td style={{ textAlign: 'right' }} className="mono text-muted num-tabular">
+                              <td className="col-cost text-right mono text-muted num-tabular">
                                 {formatINR(subPos.remainingCostBasis)}
                               </td>
-                              <td style={{ textAlign: 'right' }} className="num-tabular">
+                              <td className="col-pnl text-right num-tabular">
                                 {subIsValued ? (
                                   <span className={getPnlClass(subVal.unrealizedPnl)}>
                                     {formatSignedCurrency(subVal.unrealizedPnl)}
                                   </span>
                                 ) : '—'}
                               </td>
-                              <td style={{ textAlign: 'right' }} className="mono text-muted num-tabular">
+                              <td className="col-1d text-right num-tabular">
+                                {subHasOneDay ? (
+                                  <span className={getPnlClass(subOneDayAmount)}>
+                                    {formatSignedCurrency(subOneDayAmount)}
+                                  </span>
+                                ) : '—'}
+                              </td>
+                              <td className="col-nav text-right mono text-muted num-tabular">
                                 {subIsValued ? `${subMetrics.priceLabel} ₹${subVal.nav.toFixed(2)}` : '—'}
                               </td>
-                              <td style={{ textAlign: 'right' }} className="mono font-xs text-muted num-tabular">
+                              <td className="col-qty text-right mono font-xs text-muted num-tabular">
                                 {subMetrics.formattedQty}
-                              </td>
-                              <td style={{ textAlign: 'center' }}>
-                                <button 
-                                  className="row-view-btn sub-btn"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSelectPosition(subPos);
-                                  }}
-                                >
-                                  Folio Details
-                                </button>
                               </td>
                             </tr>
                           );
@@ -303,8 +361,8 @@ export default function HoldingsTable({
             </table>
           </div>
 
-                  {/* Mobile Card View — Clean Groww-Inspired Information Hierarchy */}
-          <div className="holdings-cards-container mobile-only">
+          {/* Mobile Card View (<768px) — Clean Groww-Inspired Information Hierarchy */}
+          <div className="holdings-cards-container">
             {filteredGroups.map(group => {
               const val = group.valuation;
               const isValued = val && val.isValued;

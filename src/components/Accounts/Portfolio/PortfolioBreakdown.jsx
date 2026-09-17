@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { formatINR } from '../../../utils/format.js';
 import { 
   formatSignedCurrency, 
@@ -14,8 +14,11 @@ export default function PortfolioBreakdown({
   valuationVersion, 
   summaryMetrics 
 }) {
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState('desc'); // 'asc' | 'desc'
+
   // Aggregate active and redeemed positions by Asset Class / Category
-  const breakdownData = useMemo(() => {
+  const { rawRows, total1DAmount, total1DPercent } = useMemo(() => {
     const activePositions = positions.filter(p => p.status === 'ACTIVE');
     const redeemedPositions = positions.filter(p => p.status === 'REDEEMED');
 
@@ -42,6 +45,10 @@ export default function PortfolioBreakdown({
         realizedPnl: 0,
         unrealizedPnl: 0,
         returnPercent: null,
+        oneDayAmount: 0,
+        previousDayValuedCost: 0,
+        hasOneDay: false,
+        oneDayPercent: null,
         isFullyValued: false,
         hasPartialValuation: false,
         xirr: null
@@ -67,6 +74,10 @@ export default function PortfolioBreakdown({
           realizedPnl: 0,
           unrealizedPnl: 0,
           returnPercent: null,
+          oneDayAmount: 0,
+          previousDayValuedCost: 0,
+          hasOneDay: false,
+          oneDayPercent: null,
           isFullyValued: false,
           hasPartialValuation: false,
           xirr: null
@@ -84,6 +95,14 @@ export default function PortfolioBreakdown({
         cat.currentValue += val.currentValue;
         cat.valuedCost += (p.remainingCostBasis || 0);
         cat.valuedCount++;
+
+        if (typeof val.nav === 'number' && typeof val.previousClose === 'number' && val.previousClose > 0) {
+          const units = p.currentUnits || 0;
+          const dayDiff = val.nav - val.previousClose;
+          cat.oneDayAmount += (dayDiff * units);
+          cat.previousDayValuedCost += (val.previousClose * units);
+          cat.hasOneDay = true;
+        }
       }
     }
 
@@ -99,6 +118,10 @@ export default function PortfolioBreakdown({
 
     // Compute metrics and XIRR for each category with active or redeemed positions
     const rows = [];
+    let tot1D = 0;
+    let totPrevCost = 0;
+    let totHas1D = false;
+
     for (const catKey of Object.keys(categoryMap)) {
       const cat = categoryMap[catKey];
       if (cat.activeCount === 0 && cat.redeemedPositions.length === 0) {
@@ -118,6 +141,17 @@ export default function PortfolioBreakdown({
         cat.returnPercent = null;
       }
 
+      if (cat.hasOneDay && cat.previousDayValuedCost > 0) {
+        cat.oneDayAmount = Math.round(cat.oneDayAmount * 100) / 100;
+        cat.oneDayPercent = Math.round((cat.oneDayAmount / cat.previousDayValuedCost) * 10000) / 100;
+        tot1D += cat.oneDayAmount;
+        totPrevCost += cat.previousDayValuedCost;
+        totHas1D = true;
+      } else {
+        cat.oneDayAmount = null;
+        cat.oneDayPercent = null;
+      }
+
       cat.activeCost = Math.round(cat.activeCost * 100) / 100;
       cat.currentValue = cat.hasPartialValuation ? Math.round(cat.currentValue * 100) / 100 : null;
       cat.realizedPnl = Math.round(cat.realizedPnl * 100) / 100;
@@ -128,8 +162,60 @@ export default function PortfolioBreakdown({
       rows.push(cat);
     }
 
-    return rows;
+    const tot1DPct = (totHas1D && totPrevCost > 0) 
+      ? Math.round((tot1D / totPrevCost) * 10000) / 100 
+      : null;
+
+    return { 
+      rawRows: rows, 
+      total1DAmount: totHas1D ? Math.round(tot1D * 100) / 100 : null, 
+      total1DPercent: tot1DPct 
+    };
   }, [positions, valuationProvider, valuationVersion]);
+
+  const breakdownData = useMemo(() => {
+    if (!sortKey) return rawRows;
+
+    return [...rawRows].sort((a, b) => {
+      let comparison = 0;
+      if (sortKey === 'category') {
+        comparison = a.label.localeCompare(b.label);
+      } else if (sortKey === 'holdings') {
+        comparison = a.activeCount - b.activeCount;
+      } else if (sortKey === 'cost') {
+        comparison = a.activeCost - b.activeCost;
+      } else if (sortKey === 'value') {
+        comparison = (a.currentValue ?? -Infinity) - (b.currentValue ?? -Infinity);
+      } else if (sortKey === 'oneDay') {
+        comparison = (a.oneDayAmount ?? -Infinity) - (b.oneDayAmount ?? -Infinity);
+      } else if (sortKey === 'unrealized') {
+        comparison = (a.unrealizedPnl ?? -Infinity) - (b.unrealizedPnl ?? -Infinity);
+      } else if (sortKey === 'realized') {
+        comparison = a.realizedPnl - b.realizedPnl;
+      } else if (sortKey === 'xirr') {
+        comparison = (a.xirr ?? -Infinity) - (b.xirr ?? -Infinity);
+      } else if (sortKey === 'coverage') {
+        const covA = a.activeCount > 0 ? a.valuedCount / a.activeCount : 0;
+        const covB = b.activeCount > 0 ? b.valuedCount / b.activeCount : 0;
+        comparison = covA - covB;
+      }
+      return sortDir === 'asc' ? comparison : -comparison;
+    });
+  }, [rawRows, sortKey, sortDir]);
+
+  const handleHeaderClick = (key) => {
+    if (sortKey === key) {
+      setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'category' ? 'asc' : 'desc');
+    }
+  };
+
+  const renderSortIndicator = (key) => {
+    if (sortKey !== key) return null;
+    return <span className="sort-indicator">{sortDir === 'asc' ? ' ↑' : ' ↓'}</span>;
+  };
 
   if (positions.length === 0) {
     return null;
@@ -146,19 +232,38 @@ export default function PortfolioBreakdown({
         </div>
       </div>
 
-      {/* Desktop Table Breakdown */}
-      <div className="breakdown-table-container desktop-only">
+      {/* Desktop & Tablet Table Breakdown (>=768px) */}
+      <div className="breakdown-table-container">
         <table className="breakdown-table">
           <thead>
             <tr>
-              <th>Asset Category</th>
-              <th style={{ textAlign: 'center' }}>Holdings</th>
-              <th style={{ textAlign: 'right' }}>Invested Cost</th>
-              <th style={{ textAlign: 'right' }}>Current Value</th>
-              <th style={{ textAlign: 'right' }}>Unrealized P&L</th>
-              <th style={{ textAlign: 'right' }}>Realized P&L</th>
-              <th style={{ textAlign: 'right' }}>XIRR</th>
-              <th style={{ textAlign: 'center' }}>Valuation Coverage</th>
+              <th className="sortable-th" onClick={() => handleHeaderClick('category')}>
+                Asset Category{renderSortIndicator('category')}
+              </th>
+              <th style={{ textAlign: 'center' }} className="sortable-th" onClick={() => handleHeaderClick('holdings')}>
+                Holdings{renderSortIndicator('holdings')}
+              </th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('cost')}>
+                Invested Cost{renderSortIndicator('cost')}
+              </th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('value')}>
+                Current Value{renderSortIndicator('value')}
+              </th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('oneDay')}>
+                1D Return{renderSortIndicator('oneDay')}
+              </th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('unrealized')}>
+                Unrealized P&L{renderSortIndicator('unrealized')}
+              </th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('realized')}>
+                Realized P&L{renderSortIndicator('realized')}
+              </th>
+              <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('xirr')}>
+                XIRR{renderSortIndicator('xirr')}
+              </th>
+              <th style={{ textAlign: 'center' }} className="sortable-th" onClick={() => handleHeaderClick('coverage')}>
+                Valuation Coverage{renderSortIndicator('coverage')}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -176,6 +281,22 @@ export default function PortfolioBreakdown({
                 </td>
                 <td style={{ textAlign: 'right' }} className="num-tabular font-bold current-val-cell">
                   {cat.currentValue !== null ? formatINR(cat.currentValue) : <span className="text-muted">Not valued</span>}
+                </td>
+                <td style={{ textAlign: 'right' }} className="num-tabular">
+                  {cat.oneDayAmount !== null ? (
+                    <div className={getPnlClass(cat.oneDayAmount)}>
+                      <span className="font-bold">
+                        {cat.oneDayAmount > 0 ? '+' : ''}{formatINR(cat.oneDayAmount)}
+                      </span>
+                      {cat.oneDayPercent !== null && (
+                        <div className="font-xs font-semibold">
+                          ({formatSignedPercent(cat.oneDayPercent)})
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-muted">—</span>
+                  )}
                 </td>
                 <td style={{ textAlign: 'right' }} className="num-tabular">
                   {cat.unrealizedPnl !== null ? (
@@ -233,6 +354,22 @@ export default function PortfolioBreakdown({
                   {summaryMetrics.totalValuedAmount !== null ? formatINR(summaryMetrics.totalValuedAmount) : <span className="text-muted">Not valued</span>}
                 </td>
                 <td style={{ textAlign: 'right' }} className="num-tabular">
+                  {total1DAmount !== null ? (
+                    <div className={getPnlClass(total1DAmount)}>
+                      <span className="font-extrabold">
+                        {total1DAmount > 0 ? '+' : ''}{formatINR(total1DAmount)}
+                      </span>
+                      {total1DPercent !== null && (
+                        <div className="font-xs font-bold">
+                          ({formatSignedPercent(total1DPercent)})
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-muted">—</span>
+                  )}
+                </td>
+                <td style={{ textAlign: 'right' }} className="num-tabular">
                   {summaryMetrics.valuedUnrealizedPnl !== null ? (
                     <div className={getPnlClass(summaryMetrics.valuedUnrealizedPnl)}>
                       <span className="font-extrabold">{formatSignedCurrency(summaryMetrics.valuedUnrealizedPnl)}</span>
@@ -273,8 +410,8 @@ export default function PortfolioBreakdown({
         </table>
       </div>
 
-      {/* Mobile Card Breakdown */}
-      <div className="breakdown-cards-mobile mobile-only">
+      {/* Mobile Card Breakdown (<768px) */}
+      <div className="breakdown-cards-mobile">
         {breakdownData.map(cat => (
           <div key={cat.key} className="breakdown-mobile-card">
             {/* Header: Category Name + Active Count + Clean Single-line Badge */}
@@ -296,17 +433,30 @@ export default function PortfolioBreakdown({
               </div>
             </div>
 
-            {/* Row 1: 2-Column Grid (INVESTED COST & CURRENT VALUE) */}
-            <div className="breakdown-row-grid grid-2">
+            {/* Row 1: 3-Column Grid (INVESTED COST, CURRENT VALUE, 1D RETURN) */}
+            <div className="breakdown-row-grid grid-3">
               <div className="breakdown-metric-col">
                 <span className="breakdown-lbl text-muted uppercase">INVESTED COST</span>
                 <span className="breakdown-val-primary font-bold text-primary num-tabular">{formatINR(cat.activeCost)}</span>
               </div>
-              <div className="breakdown-metric-col text-right">
+              <div className="breakdown-metric-col text-center">
                 <span className="breakdown-lbl text-muted uppercase">CURRENT VALUE</span>
                 <span className="breakdown-val-primary font-bold text-primary num-tabular">
                   {cat.currentValue !== null ? formatINR(cat.currentValue) : <span className="text-muted font-normal text-sm">Not valued</span>}
                 </span>
+              </div>
+              <div className="breakdown-metric-col text-right">
+                <span className="breakdown-lbl text-muted uppercase">1D RETURN</span>
+                {cat.oneDayAmount !== null ? (
+                  <span className={`breakdown-val font-semibold num-tabular ${getPnlClass(cat.oneDayAmount)}`}>
+                    {cat.oneDayAmount > 0 ? '+' : ''}{formatINR(cat.oneDayAmount)}
+                    {cat.oneDayPercent !== null && (
+                      <span className="breakdown-pct-tag"> ({formatSignedPercent(cat.oneDayPercent)})</span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="breakdown-val text-muted num-tabular">—</span>
+                )}
               </div>
             </div>
 

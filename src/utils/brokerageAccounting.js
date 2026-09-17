@@ -1,4 +1,5 @@
 import { activeHoldingsData } from '../database/holdingsData.js';
+import { parseDate } from './format.js';
 
 export function normalizeSymbol(sym) {
   let s = String(sym || '').trim().toUpperCase();
@@ -54,12 +55,18 @@ export function parseTxnFields(t) {
 
   if (type) {
     const isRecon = desc.includes('EntryDate=UNKNOWN') || desc.includes('historical position closure') || desc.includes('Source=CurrentP&L') || desc.includes('reconciliation');
+    const parsedQty = parseFloat(t.Quantity || t.quantity || t.Units || t.units || 0);
+    let parsedCost = parseFloat(t.TradeValue || t.trade_value || 0);
+    if (!parsedCost && parsedQty > 0) {
+      const uPrice = parseFloat(t.UnitPrice || t.unit_price || t.price || 0);
+      if (uPrice > 0) parsedCost = parsedQty * uPrice;
+    }
     return {
       type,
       brokerage: String(t.Brokerage || t.brokerage || t.SubAccount || t.sub_account || t.FromSubAccount || t.from_sub_account || t.ToSubAccount || t.to_sub_account || '').trim(),
       symbol: normalizeSymbol(t.SecuritySymbol || t.security_symbol || t.Note || t.note || ''),
-      qty: parseFloat(t.Quantity || t.quantity || 0),
-      cost: parseFloat(t.TradeValue || t.trade_value || 0),
+      qty: parsedQty,
+      cost: parsedCost,
       costBasis: parseFloat(t.CostBasis || t.cost_basis || 0),
       cashImpact: isRecon ? 0 : parseFloat(t.CashImpact !== undefined && t.CashImpact !== '' ? t.CashImpact : (t.cash_impact !== undefined && t.cash_impact !== '' ? t.cash_impact : (t.INR || t.inr || t.Amount || t.amount || 0))),
       realizedPnL: parseFloat(t.RealizedPnl || t.realized_pnl || 0),
@@ -247,10 +254,18 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
 
     // 3. Security Positions & Cost Basis
     const holdings = {};
-    brokerTxns.forEach(t => {
+    const chronologicalTxns = [...brokerTxns].sort((a, b) => {
+      const da = parseDate(a.date || a.Date);
+      const db = parseDate(b.date || b.Date);
+      return da.getTime() - db.getTime();
+    });
+
+    chronologicalTxns.forEach(t => {
       const f = parseTxnFields(t);
       if (!f) return;
       const isTrade = f.type === 'BUY' || f.type === 'BUY_RECON' || f.type === 'SELL' || f.type === 'OPENING_LOT' || f.type === 'BONUS';
+      const txnDate = t.date || t.Date || '';
+
       if (isTrade && f.symbol) {
         if (!holdings[f.symbol]) {
           holdings[f.symbol] = {
@@ -265,20 +280,23 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
             totalProceeds: 0,
             txns: [],
             buyLots: [],
-            lastTransactionDate: ''
+            firstBuyDate: '',
+            lastTransactionDate: '',
+            exitDate: ''
           };
         }
         const h = holdings[f.symbol];
         h.txns.push(t);
-        if (t.date || t.Date) h.lastTransactionDate = t.date || t.Date;
+        if (txnDate) h.lastTransactionDate = txnDate;
 
         if (f.type === 'BUY' || f.type === 'BUY_RECON' || f.type === 'OPENING_LOT' || f.type === 'BONUS') {
+          if (!h.firstBuyDate && txnDate) h.firstBuyDate = txnDate;
           h.qty += f.qty;
           h.buyQty += f.qty;
           h.buyCost += f.cost;
           h.buyLots.push({
             transactionId: `${f.symbol}-lot-${h.buyLots.length + 1}`,
-            date: t.date || t.Date || '',
+            date: txnDate,
             units: f.qty,
             remainingUnits: 0,
             unitCost: f.qty > 0 ? f.cost / f.qty : 0,
@@ -286,6 +304,7 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
             ownershipTag: 'PERSONAL'
           });
         } else if (f.type === 'SELL') {
+          if (txnDate) h.exitDate = txnDate;
           h.qty -= f.qty;
           h.sellQty += f.qty;
           h.soldCostBasis += f.costBasis;
@@ -308,7 +327,9 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
             totalProceeds: 0,
             txns: [],
             buyLots: [],
-            lastTransactionDate: ''
+            firstBuyDate: '',
+            lastTransactionDate: '',
+            exitDate: ''
           };
         }
         if (f.activeHolding === 'NO') {
@@ -341,7 +362,6 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
         const value = h.qty * price;
         currentMarketValue += value;
 
-        const firstBuyDate = (h.txns && h.txns.length > 0) ? (h.txns[0].date || h.txns[0].Date || '') : '';
         activeHoldings.push({
           symbol: h.symbol,
           qty: h.qty,
@@ -354,7 +374,7 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
           realizedPnL: h.realizedPnL || 0,
           txns: h.txns || [],
           buyLots: h.buyLots || [],
-          firstBuyDate: h.firstBuyDate || firstBuyDate,
+          firstBuyDate: h.firstBuyDate || '',
           lastTransactionDate: h.lastTransactionDate || ''
         });
       } else {
@@ -369,7 +389,9 @@ export function calculateBrokerageState(txns = [], brokerConfigList = [], settin
           totalProceeds: h.totalProceeds || 0,
           txns: h.txns || [],
           buyLots: h.buyLots || [],
-          lastTransactionDate: h.lastTransactionDate || ''
+          firstBuyDate: h.firstBuyDate || '',
+          exitDate: h.exitDate || h.lastTransactionDate || '',
+          lastTransactionDate: h.exitDate || h.lastTransactionDate || ''
         });
       }
     });

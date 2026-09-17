@@ -361,6 +361,7 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
     const sellRecords = [];
     let firstBuyDate = null;
     let lastTransactionDate = null;
+    let lastExitDate = null;
 
     let buyCount = 0;
     let sellCount = 0;
@@ -387,6 +388,7 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
       } else if (t.action === 'SELL') {
         sellCount++;
         sellUnits += t.quantity;
+        lastExitDate = t.date;
 
         // FIFO Lot Consumption
         let unconsumedUnits = t.quantity;
@@ -510,6 +512,7 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
       sellCount,
 
       firstBuyDate,
+      exitDate: lastExitDate || lastTransactionDate || '',
       lastTransactionDate,
 
       status,

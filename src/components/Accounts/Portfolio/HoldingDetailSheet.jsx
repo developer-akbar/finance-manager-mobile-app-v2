@@ -101,7 +101,7 @@ export default function HoldingDetailSheet({
   const underlyingPositions = isAggregated ? position.underlyingPositions : [position];
 
   const [selectedFolioKey, setSelectedFolioKey] = useState('all');
-  const [activeTab, setActiveTab] = useState('txns'); // 'txns' | 'fifo' | 'accounting'
+  const [activeTab, setActiveTab] = useState('txns'); // 'txns' | 'fifo' | 'accounting' (for tablet & mobile)
 
   const isViewingAll = selectedFolioKey === 'all' || !isAggregated;
   const activeFolioPos = isViewingAll 
@@ -226,9 +226,183 @@ export default function HoldingDetailSheet({
     return metrics.formattedAvgPrice ? metrics.formattedAvgPrice.replace(/^(Avg NAV|Avg Price)\s*/, '') : '—';
   }, [isRedeemed, displayPos, exitedUnits, metrics.formattedAvgPrice]);
 
+  const assetType = detectAssetType(displayPos);
+  const dailyChange = !isRedeemed && isValued && typeof activeValuation?.nav === 'number'
+    ? getTodaysChange(activeValuation.nav, activeValuation.previousClose, assetType, displayPos.currentUnits, oneDayDisplayMode)
+    : null;
+
+  const detailXirr = computePositionXIRR(displayPos, activeValuation);
+
+  // Render Transaction History Table Component
+  const renderTxnTable = (isDesktopPanel = false) => {
+    if (sortedTxns.length === 0) {
+      return (
+        <div className="portfolio-empty-state font-xs text-muted">
+          No transactions recorded for this view.
+        </div>
+      );
+    }
+    return (
+      <div className={`sheet-lots-table-wrap ${isDesktopPanel ? 'desktop-panel-table-wrap' : ''}`}>
+        <table className="sheet-lots-table groww-txn-table detail-txn-table">
+          <thead>
+            <tr>
+              <th>Action</th>
+              <th>Date</th>
+              <th style={{ textAlign: 'right' }}>{metrics.qtyLabel}</th>
+              <th style={{ textAlign: 'right' }}>{metrics.priceLabel}</th>
+              <th style={{ textAlign: 'right' }}>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedTxns.map((t, idx) => {
+              const txnInfo = extractTxnDetails(t, metrics.isMf);
+              const isBuy = txnInfo.isBuy;
+              const actionLbl = txnInfo.actionLbl;
+
+              const formattedUnitsStr = metrics.isMf 
+                ? txnInfo.parsedUnits.toFixed(3) 
+                : `${Math.round(txnInfo.parsedUnits)} shares`;
+
+              const priceStr = txnInfo.parsedPrice > 0 ? `₹${txnInfo.parsedPrice.toFixed(2)}` : '—';
+              const tradeValStr = formatINR(txnInfo.parsedVal);
+
+              const isPosAmount = metrics.isMf ? isBuy : !isBuy;
+              const amountSign = metrics.isMf ? '+' : (isBuy ? '-' : '+');
+              const pnlClass = isPosAmount ? 'pos' : 'neg';
+
+              return (
+                <tr key={t.rawTxn?.ID || t.id || idx}>
+                  <td>
+                    <span className={`txn-type-pill ${isBuy ? 'buy' : 'sell'}`}>
+                      {actionLbl}
+                    </span>
+                  </td>
+                  <td className="num-tabular mono font-semibold">{txnInfo.date}</td>
+                  <td style={{ textAlign: 'right' }} className={`mono font-bold num-tabular ${isBuy ? 'pos' : 'neg'}`}>
+                    {isBuy ? '+' : '-'}{formattedUnitsStr}
+                  </td>
+                  <td style={{ textAlign: 'right' }} className="mono text-muted num-tabular font-semibold">
+                    {priceStr}
+                  </td>
+                  <td style={{ textAlign: 'right' }} className={`font-bold num-tabular ${pnlClass}`}>
+                    {amountSign}{tradeValStr}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Render FIFO Lots Table Component
+  const renderFifoTable = (isDesktopPanel = false) => {
+    if (displayLots.length === 0) {
+      return (
+        <div className="portfolio-empty-state font-xs text-muted">
+          No active FIFO lots for this view.
+        </div>
+      );
+    }
+    return (
+      <div className={`sheet-lots-table-wrap ${isDesktopPanel ? 'desktop-panel-table-wrap' : ''}`}>
+        <table className="sheet-lots-table fifo-table detail-fifo-table">
+          <thead>
+            <tr>
+              <th>Acquired</th>
+              <th style={{ textAlign: 'right' }}>Acq Qty</th>
+              <th style={{ textAlign: 'right' }}>Rem Qty</th>
+              <th style={{ textAlign: 'right' }}>{metrics.isMf ? 'NAV' : 'Price'}</th>
+              <th style={{ textAlign: 'right' }}>Rem Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {displayLots.map((lot, idx) => {
+              const origUnits = lot.units !== undefined ? lot.units : (lot.qty || lot.quantity || 0);
+              const remUnits = lot.remainingUnits !== undefined ? lot.remainingUnits : 0;
+              const uCost = lot.unitCost !== undefined ? lot.unitCost : (origUnits > 0 ? lot.costBasis / origUnits : 0);
+
+              return (
+                <tr key={lot.transactionId || idx}>
+                  <td className="num-tabular mono font-semibold">{lot.date}</td>
+                  <td style={{ textAlign: 'right' }} className="num-tabular mono text-muted">
+                    {metrics.isMf ? origUnits.toFixed(3) : Math.round(origUnits)}
+                  </td>
+                  <td style={{ textAlign: 'right' }} className={`num-tabular mono font-bold ${remUnits > 0 ? 'pos' : 'text-muted'}`}>
+                    {metrics.isMf ? remUnits.toFixed(3) : Math.round(remUnits)}
+                  </td>
+                  <td style={{ textAlign: 'right' }} className="num-tabular mono font-semibold">₹{uCost.toFixed(metrics.isMf ? 2 : 2)}</td>
+                  <td style={{ textAlign: 'right' }} className="num-tabular font-bold text-primary">
+                    {formatINR(lot.remainingCostBasis !== undefined ? lot.remainingCostBasis : (remUnits * uCost))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Render Accounting Key-Values Component
+  const renderAccountingContent = () => {
+    return (
+      <div className="sheet-grid-2 detail-accounting-grid">
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">PLATFORM / SUBACCOUNT</span>
+          <span className="sec-val font-semibold text-primary">{displayPos.subAccount}</span>
+        </div>
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">INVESTMENT ACCOUNT</span>
+          <span className="sec-val font-semibold text-primary">{displayPos.investmentAccount}</span>
+        </div>
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">ISIN</span>
+          <span className="sec-val font-semibold mono text-primary">{displayPos.isin || '—'}</span>
+        </div>
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">FOLIO NUMBER</span>
+          <span className="sec-val font-semibold mono text-primary">{displayPos.folioNumber || 'Single Folio'}</span>
+        </div>
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">HOLDING MODE</span>
+          <span className="sec-val font-semibold text-primary">{displayPos.holdingMode || 'PHYSICAL/SOA'}</span>
+        </div>
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">OWNERSHIP SCOPE</span>
+          <span className="sec-val font-semibold text-primary">{displayPos.ownershipTag === 'MIXED_HOLDING' ? 'Mixed Holding' : (displayPos.ownershipTag || 'Individual')}</span>
+        </div>
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">REALIZED P&L</span>
+          <span className="sec-val num-tabular font-bold">
+            {displayPos.realizedPnl !== 0 ? (
+              <span className={displayPos.realizedPnl > 0 ? 'pos' : 'neg'}>
+                {displayPos.realizedPnl > 0 ? '+' : ''}{formatINR(displayPos.realizedPnl)}
+              </span>
+            ) : '₹0.00'}
+          </span>
+        </div>
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">ACCOUNTING METHOD</span>
+          <span className="sec-val font-semibold text-primary">First-In, First-Out (FIFO)</span>
+        </div>
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">TOTAL TRANSACTIONS</span>
+          <span className="sec-val font-semibold mono text-primary">{sortedTxns.length}</span>
+        </div>
+        <div className="sheet-detail-row">
+          <span className="sec-lbl text-muted uppercase">ACTIVE FIFO LOTS</span>
+          <span className="sec-val font-semibold mono text-primary">{displayLots.filter(l => (l.remainingUnits || 0) > 0).length}</span>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="investments-portfolio-screen fund-detail-fullpage">
-      {/* Header Bar */}
+      {/* 1. Header Bar */}
       <div className="portfolio-top-bar">
         <button className="portfolio-back-btn" onClick={onClose} title="Back to Portfolio">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="20" height="20">
@@ -242,170 +416,186 @@ export default function HoldingDetailSheet({
           <div className="portfolio-header-chips flex-gap-xs align-center mt-1">
             {ageInfo.fullStr && <span className="age-text text-muted font-xs">{ageInfo.fullStr}</span>}
             <span className="platform-tag">{displayPos.subAccount || position.subAccount}</span>
+            {position.folioNumber && <span className="platform-tag mono">Folio: {position.folioNumber}</span>}
             {(displayPos.ownershipTag === 'MIXED_HOLDING' || position.ownershipTag === 'MIXED_HOLDING') && (
               <span className="platform-tag mixed-tag">Mixed Holding</span>
             )}
-            {isRedeemed && (
+            {isRedeemed ? (
               <span className="coverage-badge gray">Closed / Redeemed</span>
+            ) : (
+              <span className="coverage-badge green">Active Position</span>
             )}
           </div>
         </div>
       </div>
 
-      <div className="portfolio-scrollable-content">
-        {/* Performance Summary Card (2x2 Grid matching Holdings Cards) */}
-        <div className="portfolio-card detail-hero-card mb-2.5">
-          <div className="detail-hero-grid grid-2">
-            {/* Cell 1: CURRENT VALUE */}
-            <div className="detail-hero-cell">
-              <span className="detail-metric-lbl text-muted uppercase">CURRENT VALUE</span>
-              <div className={`detail-metric-val font-bold num-tabular mt-1 ${isRedeemed ? 'text-muted' : ''}`}>
-                {isRedeemed ? '₹0 (Closed)' : (isValued ? formatINR(activeValuation.currentValue) : <span className="val-na text-muted">{metrics.unvaluedLabel}</span>)}
-              </div>
-            </div>
-
-            {/* Cell 2: UNREALIZED P&L / REALIZED P&L */}
-            <div className="detail-hero-cell text-right">
-              <span className="detail-metric-lbl text-muted uppercase">{isRedeemed ? 'REALIZED P&L' : 'UNREALIZED P&L'}</span>
-              {isRedeemed ? (
-                <div className={`detail-metric-val font-bold num-tabular mt-1 ${getPnlClass(displayPos.realizedPnl)}`}>
-                  {formatSignedCurrency(displayPos.realizedPnl)}
-                </div>
-              ) : isValued ? (
-                <div className={`detail-metric-val font-bold num-tabular mt-1 ${getPnlClass(activeValuation.unrealizedPnl)}`}>
-                  {formatSignedCurrency(activeValuation.unrealizedPnl)}
-                  <span className="pnl-pct-badge font-semibold ml-1">
-                    ({formatSignedPercent(activeValuation.returnPercent)})
-                  </span>
-                </div>
-              ) : (
-                <div className="detail-metric-val text-muted mt-1">—</div>
-              )}
-              {!isRedeemed && displayPos.realizedPnl !== 0 && (
-                <div className="detail-metric-sub text-muted font-xs mt-0.5 num-tabular">
-                  Realized: <span className={getPnlClass(displayPos.realizedPnl)}>{formatSignedCurrency(displayPos.realizedPnl)}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Cell 3: INVESTED / COST BASIS */}
-            <div className="detail-hero-cell mt-2.5">
-              <span className="detail-metric-lbl text-muted uppercase">{isRedeemed ? 'COST BASIS' : 'INVESTED'}</span>
-              <div className="detail-metric-val font-bold num-tabular mt-1 text-primary">
-                {formatINR(isRedeemed ? (displayPos.buyCost || displayPos.soldCostBasis || displayPos.remainingCostBasis) : displayPos.remainingCostBasis)}
-              </div>
-            </div>
-
-            {/* Cell 4: XIRR */}
-            <div className="detail-hero-cell text-right mt-2.5">
-              <span className="detail-metric-lbl text-muted uppercase">XIRR</span>
-              <div className="detail-metric-val font-bold num-tabular mt-1">
-                {(() => {
-                  const detailXirr = computePositionXIRR(displayPos, activeValuation);
-                  return detailXirr !== null ? (
-                    <span className={getPnlClass(detailXirr)}>
-                      {formatSignedPercent(detailXirr)}
-                    </span>
-                  ) : (
-                    <span className="text-muted">—</span>
-                  );
-                })()}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Price / NAV Metadata Card (3-Column Grid) */}
-        <div className="portfolio-card detail-meta-card mb-2.5">
-          <div className="detail-meta-grid grid-3">
-            {/* Column 1: Current NAV / LTP */}
-            <div className="detail-meta-col">
-              <span className="detail-meta-lbl text-muted uppercase">{isRedeemed ? 'Status' : metrics.priceLabel}</span>
-              {(() => {
-                const assetType = detectAssetType(displayPos);
-                const dailyChange = !isRedeemed && isValued && typeof activeValuation?.nav === 'number'
-                  ? getTodaysChange(activeValuation.nav, activeValuation.previousClose, assetType, displayPos.currentUnits, oneDayDisplayMode)
-                  : null;
-                return (
-                  <div className="flex-gap-xs align-baseline flex-wrap mt-1">
-                    <span className="detail-meta-val font-bold text-primary num-tabular">
-                      {isRedeemed ? 'Closed / Exited' : (isValued && typeof activeValuation.nav === 'number' ? `₹${activeValuation.nav.toFixed(2)}` : '—')}
-                    </span>
-                    {dailyChange ? (
-                      <span 
-                        className={`todays-change font-semibold num-tabular ${dailyChange.cls}`} 
-                        style={{ fontSize: '0.68rem', color: dailyChange.color, whiteSpace: 'nowrap', cursor: 'pointer' }} 
-                        title="Tap 1D change to switch between price/NAV change and position 1D P&L."
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (onToggleOneDayDisplayMode) onToggleOneDayDisplayMode(e);
-                        }}
-                      >
-                        {dailyChange.text}
-                      </span>
-                    ) : (!isRedeemed && isValued && typeof activeValuation?.nav === 'number' ? (
-                      <span className="todays-change text-muted font-semibold num-tabular" style={{ fontSize: '0.68rem', whiteSpace: 'nowrap' }}>
-                        —
-                      </span>
-                    ) : null)}
-                  </div>
-                );
-              })()}
+      <div className="portfolio-scrollable-content detail-scrollable-content">
+        {/* 2. Top Cards Grid: Side-by-Side Hero (Performance) + Lifecycle (Metadata) on Desktop/Tablet */}
+        <div className="detail-top-cards-grid mb-2.5">
+          {/* Card A: Financial Performance Hero (Compact 2-Column Grouped KPI Grid) */}
+          <div className="portfolio-card detail-hero-card">
+            <div className="portfolio-card-header mb-2 flex-between align-center">
+              <h4 className="portfolio-card-title detail-card-heading">PERFORMANCE OVERVIEW</h4>
               {isValued && activeValuation?.asOf && !isRedeemed && (
-                <div className="detail-meta-sub text-muted font-xs mt-0.5">
+                <span className="detail-as-of-meta text-muted">
                   As of {formatAsOfDate(activeValuation.asOf)}{activeValuation?.asOfTime ? `, ${activeValuation.asOfTime}` : ''}
-                </div>
+                </span>
               )}
             </div>
+            <div className="detail-hero-grid">
+              {/* Column 1: Value & Cost Group */}
+              <div className="detail-hero-col">
+                {/* Cell 1A: CURRENT VALUE */}
+                <div className="detail-kpi-cell">
+                  <span className="detail-metric-lbl text-muted uppercase">CURRENT VALUE</span>
+                  <div className={`detail-metric-val font-bold num-tabular mt-0.5 ${isRedeemed ? 'text-muted' : 'text-primary'}`}>
+                    {isRedeemed ? '₹0 (Closed)' : (isValued ? formatINR(activeValuation.currentValue) : <span className="val-na text-muted">{metrics.unvaluedLabel}</span>)}
+                  </div>
+                  {dailyChange && !isRedeemed && (
+                    <div 
+                      className={`todays-change font-semibold num-tabular mt-0.5 ${dailyChange.cls}`}
+                      style={{ fontSize: '0.74rem', color: dailyChange.color, cursor: 'pointer' }}
+                      title="Tap 1D change to toggle price vs position P&L"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onToggleOneDayDisplayMode) onToggleOneDayDisplayMode(e);
+                      }}
+                    >
+                      1D: {dailyChange.text}
+                    </div>
+                  )}
+                </div>
 
-            {/* Column 2: Avg NAV / Avg Price */}
-            <div className="detail-meta-col">
-              <span className="detail-meta-lbl text-muted uppercase">{isRedeemed ? 'Avg Acq NAV' : metrics.avgPriceLabel}</span>
-              <span className="detail-meta-val font-semibold num-tabular mt-1">
-                {avgBuyPriceStr}
-              </span>
+                {/* Cell 1B: INVESTED / COST BASIS */}
+                <div className="detail-kpi-cell mt-2.5">
+                  <span className="detail-metric-lbl text-muted uppercase">{isRedeemed ? 'COST BASIS' : 'INVESTED'}</span>
+                  <div className="detail-metric-val secondary font-bold num-tabular mt-0.5 text-primary">
+                    {formatINR(isRedeemed ? (displayPos.buyCost || displayPos.soldCostBasis || displayPos.remainingCostBasis) : displayPos.remainingCostBasis)}
+                  </div>
+                  <div className="detail-metric-sub text-muted font-xs mt-0.5">
+                    {displayLots.length} acquisition {displayLots.length === 1 ? 'lot' : 'lots'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Column 2: Returns & XIRR Group */}
+              <div className="detail-hero-col">
+                {/* Cell 2A: TOTAL P&L / REALIZED P&L */}
+                <div className="detail-kpi-cell">
+                  <span className="detail-metric-lbl text-muted uppercase">{isRedeemed ? 'REALIZED P&L' : 'TOTAL P&L'}</span>
+                  {isRedeemed ? (
+                    <div className={`detail-metric-val font-bold num-tabular mt-0.5 ${getPnlClass(displayPos.realizedPnl)}`}>
+                      {formatSignedCurrency(displayPos.realizedPnl)}
+                    </div>
+                  ) : isValued ? (
+                    <div className={`detail-metric-val font-bold num-tabular mt-0.5 ${getPnlClass(activeValuation.unrealizedPnl)}`}>
+                      {formatSignedCurrency(activeValuation.unrealizedPnl)}
+                      <span className="pnl-pct-badge font-semibold ml-1">
+                        ({formatSignedPercent(activeValuation.returnPercent)})
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="detail-metric-val text-muted mt-0.5">—</div>
+                  )}
+                  {!isRedeemed && displayPos.realizedPnl !== 0 && (
+                    <div className="detail-metric-sub text-muted font-xs mt-0.5 num-tabular">
+                      Realized: <span className={getPnlClass(displayPos.realizedPnl)}>{formatSignedCurrency(displayPos.realizedPnl)}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Cell 2B: ANNUALIZED (XIRR) */}
+                <div className="detail-kpi-cell mt-2.5">
+                  <span className="detail-metric-lbl text-muted uppercase">ANNUALIZED (XIRR)</span>
+                  <div className="detail-metric-val secondary font-bold num-tabular mt-0.5">
+                    {detailXirr !== null ? (
+                      <span className={getPnlClass(detailXirr)}>
+                        {formatSignedPercent(detailXirr)}
+                      </span>
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
+                  </div>
+                  <div className="detail-metric-sub text-muted font-xs mt-0.5">
+                    Cashflow IRR
+                  </div>
+                </div>
+              </div>
             </div>
+          </div>
 
-            {/* Column 3: Total Units / Qty */}
-            <div className="detail-meta-col text-right">
-              <span className="detail-meta-lbl text-muted uppercase">{isRedeemed ? 'Qty Exited' : metrics.qtyLabel}</span>
-              <span className="detail-meta-val font-semibold num-tabular mt-1">
-                {isRedeemed ? (
-                  (displayPos.investmentAccount === 'Share Market' || displayPos.holdingMode === 'DEMAT')
-                    ? `${Math.round(exitedUnits)} shares`
-                    : `${exitedUnits.toFixed(3)} units`
-                ) : (
-                  metrics.rawQty || metrics.formattedQty
-                )}
-              </span>
+          {/* Card B: Position Lifecycle & Security Metadata (Compact 3-Column Info Panel) */}
+          <div className="portfolio-card detail-lifecycle-card">
+            <div className="portfolio-card-header mb-2 flex-between align-center">
+              <h4 className="portfolio-card-title detail-card-heading">POSITION LIFECYCLE & SPECS</h4>
+              <span className="detail-as-of-meta text-muted mono">{displayPos.isin || 'ID'}</span>
+            </div>
+            <div className="detail-lifecycle-grid">
+              {/* Cell 1: Acquired Date */}
+              <div className="lifecycle-cell">
+                <span className="lifecycle-lbl text-muted uppercase">ACQUIRED DATE</span>
+                <span className="lifecycle-val font-semibold mono text-primary">
+                  {displayPos.firstBuyDate || '—'}
+                </span>
+              </div>
+
+              {/* Cell 2: Exit Date / Status */}
+              <div className="lifecycle-cell">
+                <span className="lifecycle-lbl text-muted uppercase">{isRedeemed ? 'EXIT DATE' : 'STATUS'}</span>
+                <span className="lifecycle-val font-semibold mono text-primary">
+                  {isRedeemed ? (displayPos.exitDate || displayPos.lastTransactionDate || '—') : 'Active Holding'}
+                </span>
+              </div>
+
+              {/* Cell 3: Total Units / Qty */}
+              <div className="lifecycle-cell">
+                <span className="lifecycle-lbl text-muted uppercase">{isRedeemed ? 'QTY EXITED' : metrics.qtyLabel}</span>
+                <span className="lifecycle-val font-semibold mono num-tabular text-primary">
+                  {isRedeemed ? (
+                    (displayPos.investmentAccount === 'Share Market' || displayPos.holdingMode === 'DEMAT')
+                      ? `${Math.round(exitedUnits)} shares`
+                      : `${exitedUnits.toFixed(3)} units`
+                  ) : (
+                    metrics.rawQty || metrics.formattedQty
+                  )}
+                </span>
+              </div>
+
+              {/* Cell 4: Avg Price / NAV */}
+              <div className="lifecycle-cell">
+                <span className="lifecycle-lbl text-muted uppercase">{isRedeemed ? 'AVG ACQ NAV' : metrics.avgPriceLabel}</span>
+                <span className="lifecycle-val font-semibold mono num-tabular text-primary">
+                  {avgBuyPriceStr}
+                </span>
+              </div>
+
+              {/* Cell 5: Platform */}
+              <div className="lifecycle-cell">
+                <span className="lifecycle-lbl text-muted uppercase">PLATFORM</span>
+                <span className="lifecycle-val font-semibold text-primary">
+                  {displayPos.subAccount || position.subAccount}
+                </span>
+              </div>
+
+              {/* Cell 6: Folio / Mode */}
+              <div className="lifecycle-cell">
+                <span className="lifecycle-lbl text-muted uppercase">FOLIO / MODE</span>
+                <span className="lifecycle-val font-semibold mono text-primary">
+                  {displayPos.folioNumber || position.folioNumber || displayPos.holdingMode || '—'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Single Folio Metadata Bar (if not aggregated) */}
-        {!isAggregated && position.folioNumber && (
-          <div className="portfolio-card detail-folio-single-card mb-2.5">
-            <div className="card-secondary-grid grid-2">
-              <div>
-                <span className="sec-lbl text-muted uppercase">FOLIO</span>
-                <span className="sec-val font-semibold mono text-primary">{position.folioNumber}</span>
-              </div>
-              <div className="text-right">
-                <span className="sec-lbl text-muted uppercase">PLATFORM</span>
-                <span className="sec-val font-semibold text-primary">{position.subAccount}</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Folios Section (if aggregated / multiple folios) */}
+        {/* 3. Folios Filter Section (if aggregated / multiple folios) */}
         {isAggregated && (
           <div className="portfolio-card detail-folios-card mb-2.5">
             <div className="portfolio-card-header flex-between mb-2">
               <h4 className="portfolio-card-title font-xs text-muted uppercase">
-                FOLIOS ({underlyingPositions.length})
+                UNDERLYING FOLIOS ({underlyingPositions.length})
               </h4>
-              <span className="font-xs text-muted">Select to filter details</span>
+              <span className="font-xs text-muted">Select a folio to inspect tranches</span>
             </div>
 
             <div className="portfolio-pill-selector folio-pills-bar mb-2.5">
@@ -413,7 +603,7 @@ export default function HoldingDetailSheet({
                 className={`portfolio-pill ${selectedFolioKey === 'all' ? 'active' : ''}`}
                 onClick={() => setSelectedFolioKey('all')}
               >
-                All folios ({formatINR(position.remainingCostBasis)})
+                All Folios ({formatINR(position.remainingCostBasis)})
               </button>
               {underlyingPositions.map((p, idx) => (
                 <button
@@ -421,350 +611,186 @@ export default function HoldingDetailSheet({
                   className={`portfolio-pill ${selectedFolioKey === String(idx) ? 'active' : ''}`}
                   onClick={() => setSelectedFolioKey(String(idx))}
                 >
-                  Folio {p.folioNumber}
+                  Folio {p.folioNumber} ({p.subAccount})
                 </button>
               ))}
             </div>
-
-            <div className="folio-cards-grid">
-              {underlyingPositions.map((p, idx) => {
-                const isSelected = selectedFolioKey === String(idx);
-                const pVal = provider ? provider.getValuation(p) : p.valuation;
-                const pIsValued = pVal && pVal.isValued;
-
-                return (
-                  <div
-                    key={p.positionKey || idx}
-                    className={`folio-item-card ${isSelected ? 'selected' : ''}`}
-                    onClick={() => setSelectedFolioKey(String(idx))}
-                  >
-                    <div className="folio-item-head flex-between mb-1.5">
-                      <div>
-                        <div className="font-bold text-sm text-primary mono">Folio {p.folioNumber}</div>
-                        <div className="text-muted font-xs mt-0.5">Platform: {p.subAccount}</div>
-                      </div>
-                      {isSelected && (
-                        <span className="folio-selected-tag">Selected</span>
-                      )}
-                    </div>
-
-                    <div className="card-secondary-grid grid-3 mt-1.5 pt-1.5">
-                      <div>
-                        <span className="sec-lbl text-muted uppercase">UNITS</span>
-                        <span className="sec-val font-semibold num-tabular">
-                          {p.currentUnits ? p.currentUnits.toFixed(3) : '0.000'}
-                        </span>
-                      </div>
-                      <div className="text-center">
-                        <span className="sec-lbl text-muted uppercase">INVESTED</span>
-                        <span className="sec-val font-semibold num-tabular">
-                          {formatINR(p.remainingCostBasis)}
-                        </span>
-                      </div>
-                      <div className="text-right">
-                        <span className="sec-lbl text-muted uppercase">CURRENT VALUE</span>
-                        <span className="sec-val font-bold num-tabular text-primary">
-                          {pIsValued ? formatINR(pVal.currentValue) : '—'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
           </div>
         )}
 
-        {/* Navigation Tabs Bar — Cohesive Pill Selector */}
-        <div className="portfolio-pill-selector detail-pill-selector mb-2.5">
-          <button 
-            className={`portfolio-pill ${activeTab === 'txns' ? 'active' : ''}`}
-            onClick={() => setActiveTab('txns')}
-          >
-            Transaction History ({sortedTxns.length})
-          </button>
-          <button 
-            className={`portfolio-pill ${activeTab === 'fifo' ? 'active' : ''}`}
-            onClick={() => setActiveTab('fifo')}
-          >
-            FIFO Lots ({displayLots.length})
-          </button>
-          <button 
-            className={`portfolio-pill ${activeTab === 'accounting' ? 'active' : ''}`}
-            onClick={() => setActiveTab('accounting')}
-          >
-            Accounting
-          </button>
+        {/* 4A. DESKTOP & TABLET ADAPTIVE GRID (>=768px): All 3 Panels Visible Simultaneously */}
+        <div className="detail-panels-adaptive-grid mb-3">
+          {/* Panel 1: Transaction History */}
+          <div className="portfolio-card detail-panel panel-txns">
+            <div className="detail-panel-header">
+              <div className="flex-between align-center">
+                <h3 className="detail-panel-title">
+                  Transaction History
+                  <span className="count-badge ml-1.5">{sortedTxns.length}</span>
+                </h3>
+              </div>
+              <p className="detail-panel-subtitle text-muted font-xs">All buy, sell, and redemption transactions</p>
+            </div>
+            <div className="detail-panel-body">
+              {renderTxnTable(true)}
+            </div>
+          </div>
+
+          {/* Panel 2: FIFO Lots */}
+          <div className="portfolio-card detail-panel panel-fifo">
+            <div className="detail-panel-header">
+              <div className="flex-between align-center">
+                <h3 className="detail-panel-title">
+                  FIFO Lots
+                  <span className="count-badge ml-1.5">{displayLots.length}</span>
+                </h3>
+              </div>
+              <p className="detail-panel-subtitle text-muted font-xs">Chronological acquisition tranches</p>
+            </div>
+            <div className="detail-panel-body">
+              {renderFifoTable(true)}
+            </div>
+          </div>
+
+          {/* Panel 3: Accounting & Audit */}
+          <div className="portfolio-card detail-panel panel-accounting">
+            <div className="detail-panel-header">
+              <h3 className="detail-panel-title">Accounting & Audit</h3>
+              <p className="detail-panel-subtitle text-muted font-xs">Portfolio metadata and tax classification</p>
+            </div>
+            <div className="detail-panel-body">
+              {renderAccountingContent()}
+            </div>
+          </div>
         </div>
 
-        {/* Tab 1: Transaction History */}
-        {activeTab === 'txns' && (
-          <div className="detail-tab-content">
-            {sortedTxns.length === 0 ? (
-              <div className="portfolio-card portfolio-empty-state font-xs text-muted">
-                No transactions recorded for this view.
+        {/* 4B. MOBILE VIEW (<768px): Tabbed Navigation */}
+        <div className="detail-mobile-tab-view mb-3">
+          {/* Navigation Tabs Bar */}
+          <div className="portfolio-pill-selector detail-pill-selector mb-2.5">
+            <button 
+              className={`portfolio-pill ${activeTab === 'txns' ? 'active' : ''}`}
+              onClick={() => setActiveTab('txns')}
+            >
+              Transactions ({sortedTxns.length})
+            </button>
+            <button 
+              className={`portfolio-pill ${activeTab === 'fifo' ? 'active' : ''}`}
+              onClick={() => setActiveTab('fifo')}
+            >
+              FIFO Lots ({displayLots.length})
+            </button>
+            <button 
+              className={`portfolio-pill ${activeTab === 'accounting' ? 'active' : ''}`}
+              onClick={() => setActiveTab('accounting')}
+            >
+              Accounting
+            </button>
+          </div>
+
+          {/* Active Tab Content for Mobile */}
+          {activeTab === 'txns' && (
+            <div className="portfolio-card detail-tab-card">
+              <div className="mobile-txn-list">
+                {sortedTxns.map((t, idx) => {
+                  const txnInfo = extractTxnDetails(t, metrics.isMf);
+                  const isBuy = txnInfo.isBuy;
+                  const actionLbl = txnInfo.actionLbl;
+
+                  const qtyStr = metrics.isMf 
+                    ? `${txnInfo.parsedUnits.toFixed(3)} units` 
+                    : `${Math.round(txnInfo.parsedUnits)} shares`;
+
+                  const priceStr = txnInfo.parsedPrice > 0 ? `₹${txnInfo.parsedPrice.toFixed(2)}` : '—';
+                  const tradeValStr = formatINR(txnInfo.parsedVal);
+
+                  const isPosAmount = metrics.isMf ? isBuy : !isBuy;
+                  const amountSign = metrics.isMf ? '+' : (isBuy ? '-' : '+');
+                  const pnlClass = isPosAmount ? 'pos' : 'neg';
+
+                  return (
+                    <div key={t.rawTxn?.ID || t.id || idx} className="portfolio-card mobile-txn-card flex-between">
+                      <div>
+                        <div className="flex-gap-xs align-center">
+                          <span className={`txn-action-tag ${isBuy ? 'buy' : 'sell'}`}>
+                            {actionLbl}
+                          </span>
+                          <span className="txn-date text-muted font-xs num-tabular">{txnInfo.date}</span>
+                        </div>
+                        <div className="txn-sub-meta text-muted font-xs mt-1.5 num-tabular">
+                          <span className="mono">{qtyStr}</span>
+                          <span> · </span>
+                          <span className="mono">{metrics.isMf ? 'NAV' : 'Price'} {priceStr}</span>
+                        </div>
+                      </div>
+                      <div className="text-right align-self-start">
+                        <div className={`txn-amount font-bold num-tabular ${pnlClass}`}>
+                          {amountSign}{tradeValStr}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ) : (
-              <>
-                {/* Desktop Table View */}
-                <div className="portfolio-card sheet-lots-table-wrap desktop-only">
-                  <table className="sheet-lots-table groww-txn-table">
-                    <thead>
-                      <tr>
-                        <th>Action</th>
-                        <th>Date</th>
-                        <th style={{ textAlign: 'right' }}>{metrics.qtyLabel}</th>
-                        <th style={{ textAlign: 'right' }}>{metrics.priceLabel}</th>
-                        <th style={{ textAlign: 'right' }}>Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedTxns.map((t, idx) => {
-                        const txnInfo = extractTxnDetails(t, metrics.isMf);
-                        const isBuy = txnInfo.isBuy;
-                        const actionLbl = txnInfo.actionLbl;
+            </div>
+          )}
 
-                        const formattedUnitsStr = metrics.isMf 
-                          ? txnInfo.parsedUnits.toFixed(3) 
-                          : `${Math.round(txnInfo.parsedUnits)} shares`;
+          {activeTab === 'fifo' && (
+            <div className="portfolio-card detail-tab-card">
+              <div className="mobile-fifo-list">
+                {displayLots.map((lot, idx) => {
+                  const origUnits = lot.units !== undefined ? lot.units : (lot.qty || lot.quantity || 0);
+                  const remUnits = lot.remainingUnits !== undefined ? lot.remainingUnits : 0;
+                  const uCost = lot.unitCost !== undefined ? lot.unitCost : (origUnits > 0 ? lot.costBasis / origUnits : 0);
 
-                        const priceStr = txnInfo.parsedPrice > 0 ? `₹${txnInfo.parsedPrice.toFixed(2)}` : '—';
-                        const tradeValStr = formatINR(txnInfo.parsedVal);
-
-                        const isPosAmount = metrics.isMf ? isBuy : !isBuy;
-                        const amountSign = metrics.isMf ? '+' : (isBuy ? '-' : '+');
-                        const pnlClass = isPosAmount ? 'pos' : 'neg';
-
-                        return (
-                          <tr key={t.rawTxn?.ID || t.id || idx}>
-                            <td>
-                              <span className={`txn-type-pill ${isBuy ? 'buy' : 'sell'}`}>
-                                {actionLbl}
-                              </span>
-                            </td>
-                            <td className="num-tabular">{txnInfo.date}</td>
-                            <td style={{ textAlign: 'right' }} className={`mono font-bold num-tabular ${isBuy ? 'pos' : 'neg'}`}>
-                              {isBuy ? '+' : '-'}{formattedUnitsStr}
-                            </td>
-                            <td style={{ textAlign: 'right' }} className="mono text-muted num-tabular">
-                              {priceStr}
-                            </td>
-                            <td style={{ textAlign: 'right' }} className={`font-bold num-tabular ${pnlClass}`}>
-                              {amountSign}{tradeValStr}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Mobile Activity Cards View */}
-                <div className="mobile-txn-list mobile-only">
-                  {sortedTxns.map((t, idx) => {
-                    const txnInfo = extractTxnDetails(t, metrics.isMf);
-                    const isBuy = txnInfo.isBuy;
-                    const actionLbl = txnInfo.actionLbl;
-
-                    const qtyStr = metrics.isMf 
-                      ? `${txnInfo.parsedUnits.toFixed(3)} units` 
-                      : `${Math.round(txnInfo.parsedUnits)} shares`;
-
-                    const priceStr = txnInfo.parsedPrice > 0 ? `₹${txnInfo.parsedPrice.toFixed(2)}` : '—';
-                    const tradeValStr = formatINR(txnInfo.parsedVal);
-
-                    const isPosAmount = metrics.isMf ? isBuy : !isBuy;
-                    const amountSign = metrics.isMf ? '+' : (isBuy ? '-' : '+');
-                    const pnlClass = isPosAmount ? 'pos' : 'neg';
-
-                    return (
-                      <div key={t.rawTxn?.ID || t.id || idx} className="portfolio-card mobile-txn-card flex-between">
+                  return (
+                    <div key={lot.transactionId || idx} className="portfolio-card fifo-lot-card mb-2">
+                      <div className="fifo-card-header flex-between mb-1.5">
                         <div>
-                          <div className="flex-gap-xs align-center">
-                            <span className={`txn-action-tag ${isBuy ? 'buy' : 'sell'}`}>
-                              {actionLbl}
-                            </span>
-                            <span className="txn-date text-muted font-xs num-tabular">{txnInfo.date}</span>
-                          </div>
-                          <div className="txn-sub-meta text-muted font-xs mt-1.5 num-tabular">
-                            <span className="mono">{qtyStr}</span>
-                            <span> · </span>
-                            <span className="mono">{metrics.isMf ? 'NAV' : 'Price'} {priceStr}</span>
-                          </div>
+                          <span className="sec-lbl text-muted uppercase">ACQUIRED</span>
+                          <span className="sec-val font-bold text-primary num-tabular">{lot.date}</span>
                         </div>
-                        <div className="text-right align-self-start">
-                          <div className={`txn-amount font-bold num-tabular ${pnlClass}`}>
-                            {amountSign}{tradeValStr}
-                          </div>
+                        <div className="text-right">
+                          <span className="sec-lbl text-muted uppercase">COST BASIS</span>
+                          <span className="sec-val font-bold num-tabular text-primary">
+                            {formatINR(lot.remainingCostBasis !== undefined ? lot.remainingCostBasis : (remUnits * uCost))}
+                          </span>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        )}
 
-        {/* Tab 2: Acquisition Lots (FIFO) */}
-        {activeTab === 'fifo' && (
-          <div className="detail-tab-content">
-            <div className="portfolio-card mb-2.5">
-              <div className="portfolio-card-header mb-1">
-                <h4 className="portfolio-card-title font-xs text-muted uppercase">FIFO LOTS</h4>
-                <div className="portfolio-card-sub">
-                  Acquisition tranches used to calculate remaining cost basis and realized P&L.
-                </div>
-              </div>
-            </div>
-
-            {displayLots.length === 0 ? (
-              <div className="portfolio-card portfolio-empty-state font-xs text-muted">
-                No active FIFO lots for this view.
-              </div>
-            ) : (
-              <>
-                {/* Desktop View */}
-                <div className="portfolio-card sheet-lots-table-wrap desktop-only">
-                  <table className="sheet-lots-table fifo-table">
-                    <thead>
-                      <tr>
-                        <th>Acquisition Date</th>
-                        <th style={{ textAlign: 'right' }}>Original Units</th>
-                        <th style={{ textAlign: 'right' }}>{metrics.isMf ? 'Original NAV' : 'Acq. Price'}</th>
-                        <th style={{ textAlign: 'right' }}>Original Cost</th>
-                        <th style={{ textAlign: 'right' }}>Remaining Units</th>
-                        <th style={{ textAlign: 'right' }}>Remaining Cost Basis</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {displayLots.map((lot, idx) => {
-                        const origUnits = lot.units !== undefined ? lot.units : (lot.qty || lot.quantity || 0);
-                        const remUnits = lot.remainingUnits !== undefined ? lot.remainingUnits : 0;
-                        const uCost = lot.unitCost !== undefined ? lot.unitCost : (origUnits > 0 ? lot.costBasis / origUnits : 0);
-                        const origCost = lot.costBasis !== undefined ? lot.costBasis : (origUnits * uCost);
-
-                        return (
-                          <tr key={lot.transactionId || idx}>
-                            <td className="num-tabular">{lot.date}</td>
-                            <td style={{ textAlign: 'right' }} className="num-tabular">
-                              {metrics.isMf ? origUnits.toFixed(3) : Math.round(origUnits)}
-                            </td>
-                            <td style={{ textAlign: 'right' }} className="num-tabular">₹{uCost.toFixed(metrics.isMf ? 4 : 2)}</td>
-                            <td style={{ textAlign: 'right' }} className="num-tabular">{formatINR(origCost)}</td>
-                            <td style={{ textAlign: 'right' }} className={`num-tabular font-bold ${remUnits > 0 ? 'pos' : 'text-muted'}`}>
-                              {metrics.isMf ? remUnits.toFixed(3) : Math.round(remUnits)}
-                            </td>
-                            <td style={{ textAlign: 'right' }} className="num-tabular font-bold">
-                              {formatINR(lot.remainingCostBasis !== undefined ? lot.remainingCostBasis : (remUnits * uCost))}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Mobile View */}
-                <div className="mobile-fifo-list mobile-only">
-                  {displayLots.map((lot, idx) => {
-                    const origUnits = lot.units !== undefined ? lot.units : (lot.qty || lot.quantity || 0);
-                    const remUnits = lot.remainingUnits !== undefined ? lot.remainingUnits : 0;
-                    const uCost = lot.unitCost !== undefined ? lot.unitCost : (origUnits > 0 ? lot.costBasis / origUnits : 0);
-                    const origCost = lot.costBasis !== undefined ? lot.costBasis : (origUnits * uCost);
-
-                    return (
-                      <div key={lot.transactionId || idx} className="portfolio-card fifo-lot-card mb-2">
-                        <div className="fifo-card-header flex-between mb-1.5">
-                          <div>
-                            <span className="sec-lbl text-muted uppercase">ACQUIRED</span>
-                            <span className="sec-val font-bold text-primary num-tabular">{lot.date}</span>
-                          </div>
-                          <div className="text-right">
-                            <span className="sec-lbl text-muted uppercase">COST BASIS</span>
-                            <span className="sec-val font-bold num-tabular text-primary">
-                              {formatINR(lot.remainingCostBasis !== undefined ? lot.remainingCostBasis : (remUnits * uCost))}
-                            </span>
-                          </div>
+                      <div className="card-secondary-grid grid-3 pt-1.5 mt-1.5">
+                        <div>
+                          <span className="sec-lbl text-muted uppercase">ACQUIRED QTY</span>
+                          <span className="sec-val font-semibold num-tabular">
+                            {metrics.isMf ? origUnits.toFixed(3) : Math.round(origUnits)}
+                          </span>
                         </div>
-
-                        <div className="card-secondary-grid grid-3 pt-1.5 mt-1.5">
-                          <div>
-                            <span className="sec-lbl text-muted uppercase">ACQUIRED QTY</span>
-                            <span className="sec-val font-semibold num-tabular">
-                              {metrics.isMf ? origUnits.toFixed(3) : Math.round(origUnits)}
-                            </span>
-                          </div>
-                          <div className="text-center">
-                            <span className="sec-lbl text-muted uppercase">REMAINING QTY</span>
-                            <span className={`sec-val font-bold num-tabular ${remUnits > 0 ? 'pos' : 'text-muted'}`}>
-                              {metrics.isMf ? remUnits.toFixed(3) : Math.round(remUnits)}
-                            </span>
-                          </div>
-                          <div className="text-right">
-                            <span className="sec-lbl text-muted uppercase">{metrics.isMf ? 'ORIGINAL NAV' : 'ACQ. PRICE'}</span>
-                            <span className="sec-val font-semibold num-tabular">
-                              ₹{uCost.toFixed(metrics.isMf ? 2 : 2)}
-                            </span>
-                          </div>
+                        <div className="text-center">
+                          <span className="sec-lbl text-muted uppercase">REMAINING QTY</span>
+                          <span className={`sec-val font-bold num-tabular ${remUnits > 0 ? 'pos' : 'text-muted'}`}>
+                            {metrics.isMf ? remUnits.toFixed(3) : Math.round(remUnits)}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="sec-lbl text-muted uppercase">{metrics.isMf ? 'ORIGINAL NAV' : 'ACQ. PRICE'}</span>
+                          <span className="sec-val font-semibold num-tabular">
+                            ₹{uCost.toFixed(metrics.isMf ? 2 : 2)}
+                          </span>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
-        {/* Tab 3: Accounting */}
-        {activeTab === 'accounting' && (
-          <div className="portfolio-card detail-accounting-card mb-2.5">
-            <div className="portfolio-card-header mb-3">
-              <h4 className="portfolio-card-title font-xs text-muted uppercase">ACCOUNTING & AUDIT METADATA</h4>
+          {activeTab === 'accounting' && (
+            <div className="portfolio-card detail-tab-card">
+              {renderAccountingContent()}
             </div>
-            <div className="sheet-grid-2">
-              <div className="sheet-detail-row">
-                <span className="sec-lbl text-muted uppercase">PLATFORM / SUBACCOUNT</span>
-                <span className="sec-val font-semibold text-primary">{displayPos.subAccount}</span>
-              </div>
-              <div className="sheet-detail-row">
-                <span className="sec-lbl text-muted uppercase">INVESTMENT ACCOUNT</span>
-                <span className="sec-val font-semibold text-primary">{displayPos.investmentAccount}</span>
-              </div>
-              <div className="sheet-detail-row">
-                <span className="sec-lbl text-muted uppercase">ISIN</span>
-                <span className="sec-val font-semibold mono text-primary">{displayPos.isin}</span>
-              </div>
-              <div className="sheet-detail-row">
-                <span className="sec-lbl text-muted uppercase">FOLIO NUMBER</span>
-                <span className="sec-val font-semibold mono text-primary">{displayPos.folioNumber || 'Single Folio'}</span>
-              </div>
-              <div className="sheet-detail-row">
-                <span className="sec-lbl text-muted uppercase">HOLDING MODE</span>
-                <span className="sec-val font-semibold text-primary">{displayPos.holdingMode}</span>
-              </div>
-              <div className="sheet-detail-row">
-                <span className="sec-lbl text-muted uppercase">OWNERSHIP SCOPE</span>
-                <span className="sec-val font-semibold text-primary">{displayPos.ownershipTag === 'MIXED_HOLDING' ? 'Mixed Holding' : (displayPos.ownershipTag || 'Individual')}</span>
-              </div>
-              <div className="sheet-detail-row">
-                <span className="sec-lbl text-muted uppercase">REALIZED P&L</span>
-                <span className="sec-val num-tabular font-bold">
-                  {displayPos.realizedPnl !== 0 ? (
-                    <span className={displayPos.realizedPnl > 0 ? 'pos' : 'neg'}>
-                      {displayPos.realizedPnl > 0 ? '+' : ''}{formatINR(displayPos.realizedPnl)}
-                    </span>
-                  ) : '₹0.00'}
-                </span>
-              </div>
-              <div className="sheet-detail-row">
-                <span className="sec-lbl text-muted uppercase">ACCOUNTING METHOD</span>
-                <span className="sec-val font-semibold text-primary">First-In, First-Out (FIFO)</span>
-              </div>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );

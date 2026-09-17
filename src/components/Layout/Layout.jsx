@@ -35,6 +35,25 @@ export default function Layout({ children, onNavTap }) {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const scrollTargetRef = useRef(null);
 
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    try {
+      const saved = localStorage.getItem('finman_sidebar_collapsed');
+      return saved !== null ? saved === 'true' : true; // Default to collapsed
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleSidebar = () => {
+    setIsSidebarCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('finman_sidebar_collapsed', String(next));
+      } catch {}
+      return next;
+    });
+  };
+
   const theme = state.theme || state.settings?.theme || 'dark';
 
   const toggleTheme = () => {
@@ -108,25 +127,42 @@ export default function Layout({ children, onNavTap }) {
   return (
     <div className="app-shell">
       {/* ── DESKTOP SIDEBAR (>= 1024px) ── */}
-      <aside className="desktop-sidebar">
+      <aside className={`desktop-sidebar ${isSidebarCollapsed ? 'collapsed' : 'expanded'}`}>
         <div className="sidebar-brand">
-          <div className="brand-logo-wrap">
+          <div 
+            className="brand-logo-wrap" 
+            onClick={toggleSidebar} 
+            style={{ cursor: 'pointer' }}
+            title={isSidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+          >
             <img src="/icon-xhdpi.png" alt="FinMan" className="brand-logo" onError={(e) => { e.target.style.display = 'none'; }} />
             <div className="brand-title-group">
               <div className="brand-name">FinMan</div>
               <div className="brand-version">v2.2</div>
             </div>
           </div>
+          <button 
+            className="sidebar-collapse-toggle-btn"
+            onClick={toggleSidebar}
+            title={isSidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            aria-label={isSidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="toggle-chevron-icon">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
         </div>
 
         <nav className="sidebar-nav">
-          {DESKTOP_NAV.map(({ id, label, Icon }) => {
+          {DESKTOP_NAV.map(({ id, label, Icon }, idx) => {
             const isActive = state.currentView === id;
             return (
               <button
                 key={id}
                 className={`sidebar-nav-item ${isActive ? 'active' : ''}`}
                 onClick={() => handleNavClick(id)}
+                title={isSidebarCollapsed ? label : undefined}
+                style={{ '--nav-idx': idx }}
               >
                 <div className="sidebar-item-icon">
                   <Icon />
@@ -141,9 +177,9 @@ export default function Layout({ children, onNavTap }) {
         <div className="sidebar-footer">
           <button className="theme-toggle-btn" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}>
             {theme === 'dark' ? <SunIco /> : <MoonIco />}
-            <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+            <span className="theme-toggle-label">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
           </button>
-          <div className="sidebar-user-info">
+          <div className="sidebar-user-info" title="Ledger Active">
             <div className="user-dot" />
             <span className="user-status">Ledger Active</span>
           </div>

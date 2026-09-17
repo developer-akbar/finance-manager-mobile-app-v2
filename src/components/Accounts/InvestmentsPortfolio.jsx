@@ -152,56 +152,58 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
 
       {/* Filter Bar — Cascading Order: Scope -> Account -> Platform */}
       <div className="portfolio-compact-filter-bar">
-        {/* 1. Scope Filter */}
-        <div className="compact-filter-item">
-          <label className="compact-filter-lbl">Scope</label>
-          <div className="compact-select-wrapper">
-            <select 
-              className="compact-filter-select"
-              value={scopeFilter}
-              onChange={e => handleScopeChange(e.target.value)}
-            >
-              <option value="personal">My Portfolio</option>
-              <option value="father">External Holdings</option>
-              <option value="all">All Holdings</option>
-            </select>
-            <span className="compact-select-arrow">▼</span>
+        <div className="portfolio-filter-group-wrap">
+          {/* 1. Scope Filter */}
+          <div className="compact-filter-item">
+            <label className="compact-filter-lbl">Scope</label>
+            <div className="compact-select-wrapper">
+              <select 
+                className="compact-filter-select"
+                value={scopeFilter}
+                onChange={e => handleScopeChange(e.target.value)}
+              >
+                <option value="personal">My Portfolio</option>
+                <option value="father">External Holdings</option>
+                <option value="all">All Holdings</option>
+              </select>
+              <span className="compact-select-arrow">▼</span>
+            </div>
           </div>
-        </div>
 
-        {/* 2. Account Filter */}
-        <div className="compact-filter-item account-item">
-          <label className="compact-filter-lbl">Account</label>
-          <div className="compact-select-wrapper">
-            <select 
-              className="compact-filter-select"
-              value={accountFilter}
-              onChange={e => handleAccountChange(e.target.value)}
-            >
-              <option value="all">All Accounts</option>
-              {availableAccounts.map(a => (
-                <option key={a} value={a}>{a}</option>
-              ))}
-            </select>
-            <span className="compact-select-arrow">▼</span>
+          {/* 2. Account Filter */}
+          <div className="compact-filter-item account-item">
+            <label className="compact-filter-lbl">Account</label>
+            <div className="compact-select-wrapper">
+              <select 
+                className="compact-filter-select"
+                value={accountFilter}
+                onChange={e => handleAccountChange(e.target.value)}
+              >
+                <option value="all">All Accounts</option>
+                {availableAccounts.map(a => (
+                  <option key={a} value={a}>{a}</option>
+                ))}
+              </select>
+              <span className="compact-select-arrow">▼</span>
+            </div>
           </div>
-        </div>
 
-        {/* 3. Platform Filter */}
-        <div className="compact-filter-item">
-          <label className="compact-filter-lbl">Platform</label>
-          <div className="compact-select-wrapper">
-            <select 
-              className="compact-filter-select"
-              value={platformFilter}
-              onChange={e => setPlatformFilter(e.target.value)}
-            >
-              <option value="all">All Platforms</option>
-              {availablePlatforms.map(p => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-            <span className="compact-select-arrow">▼</span>
+          {/* 3. Platform Filter */}
+          <div className="compact-filter-item">
+            <label className="compact-filter-lbl">Platform</label>
+            <div className="compact-select-wrapper">
+              <select 
+                className="compact-filter-select"
+                value={platformFilter}
+                onChange={e => setPlatformFilter(e.target.value)}
+              >
+                <option value="all">All Platforms</option>
+                {availablePlatforms.map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              <span className="compact-select-arrow">▼</span>
+            </div>
           </div>
         </div>
 
