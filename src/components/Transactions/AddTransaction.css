@@ -58,11 +58,13 @@
 /* Inline picker */
 .picker-room {
   border-top: 1px solid var(--border);
-  min-height: 32dvh;
-  max-height: 50dvh;
+  max-height: 45dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--bg-card2);
+  flex-shrink: 0;
 }
 
 .picker-sheet-inline {
@@ -70,6 +72,7 @@
   flex-direction: column;
   height: 100%;
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -95,7 +98,7 @@
   border: 1px solid var(--input-border);
   border-radius: var(--r-lg);
   padding: 6px 12px;
-  margin: 6px var(--page-px) 10px;
+  margin: 6px var(--page-px) 8px;
 }
 
 .picker-sheet-inline .picker-search-icon {
@@ -131,7 +134,10 @@
 /* Section labels + scrollable content */
 .picker-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .picker-section-label {
@@ -140,7 +146,7 @@
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  padding: 10px var(--page-px) 4px;
+  padding: 8px var(--page-px) 4px;
 }
 
 /* Recent — horizontal wrapping chip row with top breathing room */
@@ -151,7 +157,7 @@
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  padding: 8px var(--page-px);
+  padding: 6px var(--page-px);
   margin-top: 2px;
 }
 
@@ -159,10 +165,12 @@
   display: none;
 }
 
-/* All — 3-column chip grid */
+/* All — 3-column chip grid on mobile portrait */
 .picker-chip-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 0 var(--page-px) 14px;
 }
 
 /* Chips shared */
@@ -170,11 +178,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px 7px;
+  padding: 10px 6px;
   cursor: pointer;
   border: 1.5px solid var(--border);
+  border-radius: var(--r-md);
   background: var(--bg-card2);
-  font-size: 0.75rem;
+  font-size: 0.74rem;
   font-weight: var(--fw-data);
   color: var(--text-primary);
   font-family: var(--font);
@@ -184,8 +193,7 @@
   text-overflow: ellipsis;
   transition: background 0.12s, border-color 0.12s;
   line-height: 1.2;
-  text-wrap: auto;
-  min-height: 56px;
+  min-height: 48px;
   box-sizing: border-box;
 }
 
@@ -210,8 +218,8 @@
 .picker-recent-row .picker-chip {
   flex: 0 0 auto;
   border-radius: var(--r-full);
-  padding: 8px 14px;
-  min-height: 29px;
+  padding: 6px 14px;
+  min-height: 28px;
   width: auto;
   max-width: fit-content;
 }
@@ -226,6 +234,72 @@
   text-decoration: underline;
   text-underline-offset: 2px;
   opacity: 0.8;
+}
+
+/* Landscape mode responsive overrides */
+@media (orientation: landscape) and (max-height: 550px) {
+  .add-hdr {
+    padding: 6px var(--page-px) 4px;
+  }
+  .type-tabs {
+    padding: 4px var(--page-px) 4px;
+    gap: 4px;
+  }
+  .type-tab {
+    padding: 4px 2px;
+    font-size: 0.72rem;
+  }
+  .amount-row {
+    padding: 4px var(--page-px) 2px;
+  }
+  .amount-prefix {
+    font-size: 1.2rem;
+  }
+  .form-input-amount {
+    font-size: 1.4rem;
+    padding: 2px 0;
+  }
+  .add-form {
+    padding: 4px var(--page-px) 8px;
+    gap: 8px;
+  }
+  .add-form .form-group {
+    grid-template-columns: 100px 1fr;
+    gap: 6px;
+  }
+  .picker-room {
+    max-height: 46dvh;
+  }
+  .picker-sheet-inline .picker-sheet-hdr {
+    padding: 4px var(--page-px);
+  }
+  .picker-sheet-inline .picker-search-wrap {
+    padding: 4px 10px;
+    margin: 4px var(--page-px) 4px;
+  }
+  .picker-recent-row {
+    padding: 4px var(--page-px);
+    gap: 6px;
+  }
+  .picker-recent-row .picker-chip {
+    padding: 4px 10px;
+    min-height: 24px;
+    font-size: 0.68rem;
+  }
+  .picker-chip-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 6px;
+    padding: 0 var(--page-px) 8px;
+  }
+  .picker-chip {
+    min-height: 38px;
+    padding: 6px 8px;
+    font-size: 0.72rem;
+  }
+  .picker-section-label {
+    padding: 4px var(--page-px) 2px;
+    font-size: 0.58rem;
+  }
 }
 
 .picker-empty {

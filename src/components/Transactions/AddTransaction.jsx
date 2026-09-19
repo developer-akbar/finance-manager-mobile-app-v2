@@ -1077,19 +1077,25 @@ export default function AddTransaction({
 
   React.useEffect(() => {
     if (!backInterceptRef) return;
-    if (reorderScreen) {
-      // While reorder overlay is open, Back closes it (not the whole AddTransaction)
+    if (viewingReceipt) {
+      backInterceptRef.current = () => setViewingReceipt(false);
+    } else if (smsModal) {
+      backInterceptRef.current = () => setSmsModal(false);
+    } else if (showRecurring) {
+      backInterceptRef.current = () => setShowRecurring(false);
+    } else if (reorderScreen) {
       backInterceptRef.current = () => setReorderScreen(null);
+    } else if (pickerState) {
+      backInterceptRef.current = () => setPickerState(null);
     } else {
       backInterceptRef.current = onClose;
     }
     return () => {
-      // Only clear if we set it — don't clear if something else took over
-      if (backInterceptRef.current === onClose || reorderScreen) {
+      if (backInterceptRef.current === onClose || reorderScreen || pickerState || showRecurring || smsModal || viewingReceipt) {
         backInterceptRef.current = null;
       }
     };
-  }, [backInterceptRef, onClose, reorderScreen]);
+  }, [backInterceptRef, onClose, reorderScreen, pickerState, showRecurring, smsModal, viewingReceipt]);
 
   // Open first appropriate field on mount (add/copy/prefill)
   React.useEffect(() => {

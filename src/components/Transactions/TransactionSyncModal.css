@@ -10,7 +10,8 @@
   align-items: center;
   justify-content: center;
   z-index: 99999;
-  padding: 16px;
+  padding: max(16px, var(--safe-top)) max(16px, var(--safe-right)) max(16px, var(--safe-bottom)) max(16px, var(--safe-left));
+  box-sizing: border-box;
   animation: syncFadeIn 0.2s ease-out;
 }
 
@@ -25,7 +26,7 @@
   border-radius: 18px;
   width: 100%;
   max-width: 860px;
-  max-height: 90vh;
+  max-height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 32px);
   display: flex;
   flex-direction: column;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 4px 16px rgba(0, 229, 160, 0.08);

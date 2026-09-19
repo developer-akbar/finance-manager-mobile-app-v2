@@ -1278,21 +1278,22 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
     }
   };
 
-  // Handle back button interception for multi-mode
+  // Handle back button interception for sync modal, calendar, and multi-mode
   React.useEffect(() => {
     if (!backInterceptRef) return;
-    if (multiMode) {
-      multiModePrevHandler.current = backInterceptRef.current;
-      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
-      backInterceptRef.current = multiModeHandler.current;
+    if (showSyncModal) {
+      backInterceptRef.current = () => { setShowSyncModal(false); setSyncInitialText(''); };
+    } else if (showCal) {
+      backInterceptRef.current = () => setShowCal(false);
+    } else if (multiMode) {
+      backInterceptRef.current = () => { setMultiMode(false); setSelected(new Set()); };
     } else {
-      if (backInterceptRef.current === multiModeHandler.current) {
-        backInterceptRef.current = multiModePrevHandler.current;
-        multiModePrevHandler.current = null;
-        multiModeHandler.current = null;
-      }
+      backInterceptRef.current = null;
     }
-  }, [multiMode]); // Removed backInterceptRef from deps
+    return () => {
+      if (backInterceptRef.current) backInterceptRef.current = null;
+    };
+  }, [showSyncModal, showCal, multiMode, backInterceptRef]);
 
   const prevMonth = () => { if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1); };
   const nextMonth = () => { if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1); };

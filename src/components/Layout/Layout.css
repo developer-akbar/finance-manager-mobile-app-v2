@@ -1,7 +1,7 @@
 .global-scroll-top-btn {
   position: fixed;
   bottom: calc(var(--nav-height, 56px) + var(--safe-bottom, 0px) + 16px);
-  right: 18px;
+  right: calc(18px + var(--safe-right, 0px));
   width: 40px;
   height: 40px;
   border-radius: 50%;

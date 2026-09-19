@@ -16,38 +16,60 @@ import './SplashScreen.css';
 /**
  * Safe-area injection — runs synchronously before React paints.
  * Sets data-cap-android attribute so the CSS fallback kicks in immediately,
- * then tries to measure a more precise value.
+ * then measures precise inset values across portrait and landscape.
  */
 function applyAndroidSafeArea() {
   try {
     if (!window.Capacitor) return;
     if (window.Capacitor.getPlatform?.() !== 'android') return;
 
-    // Apply CSS class immediately — gives 36px top / 56px bottom fallback via CSS
+    // Apply CSS class immediately
     document.documentElement.setAttribute('data-cap-android', '');
 
-    // After paint, probe env() values for precise measurement
-    requestAnimationFrame(() => {
+    const updateInsets = () => {
       try {
         const probe = document.createElement('div');
-        probe.style.cssText = 'position:fixed;top:env(safe-area-inset-top,0px);left:0;right:0;height:1px;pointer-events:none;opacity:0;';
+        probe.style.cssText = 'position:fixed;top:env(safe-area-inset-top,0px);bottom:env(safe-area-inset-bottom,0px);left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);pointer-events:none;opacity:0;';
         document.body.appendChild(probe);
-        const topPx = probe.getBoundingClientRect().top;
+        const rect = probe.getBoundingClientRect();
         document.body.removeChild(probe);
 
-        // Probe for bottom inset
-        const probe2 = document.createElement('div');
-        probe2.style.cssText = 'position:fixed;bottom:env(safe-area-inset-bottom,0px);left:0;right:0;height:1px;pointer-events:none;opacity:0;';
-        document.body.appendChild(probe2);
-        const bottomFromEdge = window.innerHeight - probe2.getBoundingClientRect().bottom;
-        document.body.removeChild(probe2);
+        const topPx = rect.top;
+        const bottomFromEdge = window.innerHeight - rect.bottom;
+        const leftPx = rect.left;
+        const rightFromEdge = window.innerWidth - rect.right;
+        const isLandscape = window.innerWidth > window.innerHeight;
 
-        if (topPx > 4 && topPx < 80)
-          document.documentElement.style.setProperty('--safe-top', topPx + 'px');
-        if (bottomFromEdge > 4 && bottomFromEdge < 120)
-          document.documentElement.style.setProperty('--safe-bottom', bottomFromEdge + 'px');
+        if (topPx >= 0 && topPx < 120) {
+          document.documentElement.style.setProperty(
+            '--safe-top',
+            topPx > 0 ? topPx + 'px' : (isLandscape ? '0px' : '32px')
+          );
+        }
+        if (bottomFromEdge >= 0 && bottomFromEdge < 140) {
+          document.documentElement.style.setProperty(
+            '--safe-bottom',
+            bottomFromEdge > 0 ? bottomFromEdge + 'px' : (isLandscape ? '16px' : '16px')
+          );
+        }
+        if (leftPx >= 0 && leftPx < 120) {
+          document.documentElement.style.setProperty(
+            '--safe-left',
+            leftPx > 0 ? leftPx + 'px' : (isLandscape ? '24px' : '0px')
+          );
+        }
+        if (rightFromEdge >= 0 && rightFromEdge < 120) {
+          document.documentElement.style.setProperty(
+            '--safe-right',
+            rightFromEdge > 0 ? rightFromEdge + 'px' : (isLandscape ? '24px' : '0px')
+          );
+        }
       } catch { /* keep CSS fallbacks */ }
-    });
+    };
+
+    requestAnimationFrame(updateInsets);
+    window.addEventListener('resize', updateInsets, { passive: true });
+    window.addEventListener('orientationchange', () => setTimeout(updateInsets, 100), { passive: true });
   } catch { /* silent */ }
 }
 applyAndroidSafeArea();
