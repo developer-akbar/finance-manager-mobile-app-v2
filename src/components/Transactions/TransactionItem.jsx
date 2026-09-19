@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage, calculateAge, checkIsRedeemed } from '../../utils/format.js';
+import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage, calculateAge, checkIsRedeemed, getUserFacingTags } from '../../utils/format.js';
 import { parseInstalmentInfo, getInstalmentSeriesStats } from '../../database/recurring.js';
 import { resolveInvestmentAccounts } from '../../utils/brokerageAccounting.js';
 import { bundleRelatedTransactions, serializeTransactions } from '../../utils/finmanPayload.js';
 import { toast } from '../Common/Toast.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import ReceiptViewer from '../Common/ReceiptViewer.jsx';
+import InvestmentPlansModal from '../Investments/InvestmentPlansModal.jsx';
 import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
@@ -343,6 +344,7 @@ function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
   const { deleteTransaction, updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments, state } = useApp();
   const [showDelete, setShowDelete] = useState(false);
   const [showCopyPicker, setShowCopyPicker] = useState(false);
+  const [showPlanModal, setShowPlanModal] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [viewingReceipt, setViewingReceipt] = useState(false);
 
@@ -590,7 +592,7 @@ function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
               )}
               {invType === 'SELL' && <DPRow label="Realized P&L" value={`${invRealizedPnl >= 0 ? '+' : ''}${formatINR(invRealizedPnl)}`} />}
               {t.Description && <DPRow label="Description" value={t.Description} />}
-              {t.Tags && <DPRow label="Tags" value={t.Tags} />}
+              {getUserFacingTags(t.Tags).length > 0 && <DPRow label="Tags" value={getUserFacingTags(t.Tags).join(', ')} />}
             </>
           ) : (
             <>
@@ -606,7 +608,7 @@ function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
               </>}
               {t.Note && <DPRow label="Note" value={t.Note} />}
               {t.Description && <DPRow label="Description" value={t.Description} />}
-              {t.Tags && <DPRow label="Tags" value={t.Tags} />}
+              {getUserFacingTags(t.Tags).length > 0 && <DPRow label="Tags" value={getUserFacingTags(t.Tags).join(', ')} />}
               {isInstalment && instalmentStats && (
                 <DPRow
                   label="Instalment Info"
@@ -690,11 +692,38 @@ function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
         )}
 
         {/* Actions */}
-        <div className="dp-actions" style={{ display: 'flex', gap: '10px' }}>
-          <button className="btn btn-secondary" style={{ flex: 1 }} onClick={onEdit}>✏️ Edit</button>
-          {onCopy && <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowCopyPicker(true)}>📋 Copy</button>}
-          <button className="btn btn-danger" style={{ flex: 1 }} onClick={() => setShowDelete(true)}>🗑 Delete</button>
+        <div className="dp-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" style={{ flex: 1, minWidth: '70px' }} onClick={onEdit}>✏️ Edit</button>
+          {onCopy && <button className="btn btn-secondary" style={{ flex: 1, minWidth: '70px' }} onClick={() => setShowCopyPicker(true)}>📋 Copy</button>}
+          {isInvestment && (
+            <button
+              className="btn btn-secondary"
+              style={{ flex: 1, minWidth: '95px', borderColor: 'rgba(56, 189, 248, 0.4)', color: '#38bdf8' }}
+              onClick={() => setShowPlanModal(true)}
+              title="Create recurring SIP / investment plan from this transaction"
+            >
+              📈 Plan
+            </button>
+          )}
+          <button className="btn btn-danger" style={{ flex: 1, minWidth: '70px' }} onClick={() => setShowDelete(true)}>🗑 Delete</button>
         </div>
+
+        {/* Create Investment Plan Modal */}
+        {showPlanModal && (
+          <InvestmentPlansModal
+            isOpen={true}
+            onClose={() => setShowPlanModal(false)}
+            initialCreateFromTxn={t}
+            onLogPlan={onCopy ? (plan) => {
+              setShowPlanModal(false);
+              onClose();
+              onCopy({
+                ...t,
+                _fromPlan: plan,
+              });
+            } : null}
+          />
+        )}
         {/* Copy date picker popup */}
         {showCopyPicker && onCopy && (
           <div className="dp-delete-confirm">
@@ -715,10 +744,22 @@ function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
                 {t.Date ? t.Date.split('-').reverse().join('/') : ''}{t.Time ? ' · ' + t.Time : ''}
               </div>
             </button>
-            <button className="btn btn-secondary btn-full" style={{ marginBottom: 10, borderColor: 'var(--accent)', background: 'rgba(0, 229, 160, 0.05)' }} onClick={handleCopyForSync}>
-              ⚡ Copy for Sync (Portable Payload)
-              <div style={{ fontSize: '0.65rem', fontWeight: 400, opacity: 0.75, marginTop: 2, color: 'var(--accent)' }}>
-                Copies complete record &amp; linked charges to clipboard
+            <button
+              className="btn btn-secondary btn-full"
+              style={{
+                marginBottom: 10,
+                borderColor: 'var(--accent)',
+                background: 'rgba(0, 229, 160, 0.05)',
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+                textAlign: 'center',
+                padding: '10px 12px'
+              }}
+              onClick={handleCopyForSync}
+            >
+              ⚡ Copy for Sync
+              <div style={{ fontSize: '0.68rem', fontWeight: 400, opacity: 0.85, marginTop: 3, color: 'var(--accent)', lineHeight: 1.3 }}>
+                Copies complete transaction + linked records
               </div>
             </button>
             <button className="btn btn-ghost btn-full" onClick={() => setShowCopyPicker(false)}>Cancel</button>

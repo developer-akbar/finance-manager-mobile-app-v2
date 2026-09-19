@@ -5,7 +5,7 @@
 import { Capacitor } from '@capacitor/core';
 
 const IDB_NAME    = 'finman_v2';
-const IDB_VERSION = 11; // v11 — investment_transactions and brokerages tables
+const IDB_VERSION = 12; // v12 — investment_plans table and store
 
 // Each store and its primary key field
 const STORE_DEFS = [
@@ -22,6 +22,7 @@ const STORE_DEFS = [
   { name:'inventory',               key:'id'  },
   { name:'investment_transactions', key:'id'  },
   { name:'brokerages',              key:'id'  },
+  { name:'investment_plans',         key:'id'  },
 ];
 
 const storeKey = (store) => STORE_DEFS.find(s => s.name === store)?.key ?? 'id';
@@ -396,6 +397,30 @@ const applySchema = async (db) => {
     name TEXT UNIQUE,
     bank_account TEXT,
     owner TEXT
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS investment_plans (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    frequency TEXT DEFAULT 'monthly',
+    planned_amount REAL DEFAULT 0,
+    investment_type TEXT DEFAULT 'BUY',
+    owner TEXT DEFAULT 'Myself',
+    investment_account TEXT DEFAULT '',
+    funding_account TEXT DEFAULT '',
+    brokerage TEXT DEFAULT '',
+    sub_account TEXT DEFAULT '',
+    security_symbol TEXT DEFAULT '',
+    security_isin TEXT DEFAULT '',
+    security_name TEXT DEFAULT '',
+    folio TEXT DEFAULT '',
+    holding_mode TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    tags TEXT DEFAULT '',
+    next_due_date TEXT DEFAULT '',
+    active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT ''
   );`);
 };
 

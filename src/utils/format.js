@@ -8,6 +8,8 @@ export const formatINR = (amount, decimals = 0) => {
   });
 };
 
+export const formatCurrency = formatINR;
+
 export const formatINRCompact = (amount) => {
   const num = Math.abs(parseFloat(amount) || 0);
   if (num >= 10_000_000) return `₹${(num / 10_000_000).toFixed(1)}Cr`;
@@ -299,5 +301,73 @@ export const cleanNumericInput = (val, allowNegative = false) => {
   }
   return isNeg ? `-${cleaned}` : cleaned;
 };
+
+// ── Tag Classification & Filtering Helpers ─────────────────────────────────────
+export const isSystemTag = (tag) => {
+  if (!tag) return false;
+  const raw = String(tag).trim();
+  if (!raw) return false;
+  const t = raw.toLowerCase().replace(/^#/, '');
+  if (!t) return false;
+
+  // 1. Stock inventory & lot tracking tags
+  if (t === 'stock' || t === 'consumed' || t === 'lent' || t === 'instalment' || t === 'inventory' || t === 'charge' || t === 'ledger' || t === 'stocktrade' || t === 'realizedpl') return true;
+  if (t.startsWith('stock ') || t.startsWith('stock_ref_') || t.startsWith('inv_charge') || t.startsWith('charge_ref_')) return true;
+
+  // 2. Structured key-value metadata (Ownership:..., Folio:..., Mode:..., ISIN:..., Split_Group:..., PAN:..., KYC:...)
+  if (/^(inv_charge|ownership|folio|mode|isin|split_group|trade_id|order_id|pan|kyc):/i.test(t)) return true;
+
+  // 3. Broker / System namespaces or pipe-delimited markers
+  if (t.includes('|')) {
+    if (/^(zerodha|groww|fareeda groww|mf|ownership|folio|mode|isin|stock|inv_charge)\|/i.test(t) ||
+        /\|(ledger|stocktrade|charge|realizedpl|holding|ownership|folio|mode|isin|inv_charge|positionstatus|positionrecon|charges|othercreditdebit|dividend|corporateaction|redemption|purchase|unitadjustment)/i.test(t) ||
+        t.startsWith('zerodha|') || t.startsWith('groww|') || t.startsWith('fareeda groww|') || t.startsWith('mf|')) {
+      return true;
+    }
+  }
+
+  // 4. Any compound string with internal identifiers
+  if (t.includes('inv_charge:') || t.includes('stock_ref_') || t.includes('#stock_ref_')) return true;
+
+  return false;
+};
+
+export const getUserFacingTags = (raw) => {
+  if (!raw) return [];
+  // Tags in transactions are stored comma-separated, semicolon-separated, or newline-separated
+  const rawList = Array.isArray(raw)
+    ? raw
+    : String(raw).split(/[,;\n]/);
+
+  const cleanList = [];
+  for (const item of rawList) {
+    const trimmed = String(item).trim();
+    if (!trimmed) continue;
+    if (isSystemTag(trimmed)) continue;
+
+    // In case a space-separated compound string had a system tag (e.g. #stock #consumed #stock_ref_...)
+    if (trimmed.includes(' ') && (trimmed.toLowerCase().includes('stock') || trimmed.toLowerCase().includes('inv_charge') || trimmed.includes('|'))) {
+      const subTokens = trimmed.split(/\s+/);
+      for (const sub of subTokens) {
+        if (!isSystemTag(sub) && sub.trim()) {
+          const subClean = sub.trim().startsWith('#') ? sub.trim() : `#${sub.trim()}`;
+          if (!cleanList.some(existing => existing.toLowerCase() === subClean.toLowerCase())) {
+            cleanList.push(subClean);
+          }
+        }
+      }
+      continue;
+    }
+
+    const clean = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
+    if (!cleanList.some(existing => existing.toLowerCase() === clean.toLowerCase())) {
+      cleanList.push(clean);
+    }
+  }
+  return cleanList;
+};
+
+
+
 
 

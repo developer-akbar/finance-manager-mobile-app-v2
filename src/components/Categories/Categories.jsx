@@ -288,9 +288,27 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
               onDeleted={() => { setMultiMode(false); setSelected(new Set()); }} />}
             {groupedTxns.map(([dk, txns]) => {
               const gt = calcTotals(txns), d = parseDate(txns[0].Date);
+              const groupIds = txns.map(t => t._id);
+              const selectedCountInGroup = groupIds.filter(id => selected.has(id)).length;
+              const allDateSel = groupIds.length > 0 && selectedCountInGroup === groupIds.length;
+              const isDateIndeterminate = selectedCountInGroup > 0 && selectedCountInGroup < groupIds.length;
+
+              const handleGroupToggle = (e) => {
+                e?.stopPropagation?.();
+                setSelected(prev => {
+                  const next = new Set(prev);
+                  if (allDateSel) {
+                    groupIds.forEach(id => next.delete(id));
+                  } else {
+                    groupIds.forEach(id => next.add(id));
+                  }
+                  return next;
+                });
+              };
+
               return (
                 <div key={dk} className="date-group-container">
-                  <div className="dg-header" onClick={multiMode ? null : () => { setAddDate(txns[0].Date); setAddCat(catName); }}>
+                  <div className="dg-header" onClick={multiMode ? handleGroupToggle : () => { setAddDate(txns[0].Date); setAddCat(catName); }}>
                     <div className="dg-left">
                       <div className="dg-day">{d.getDate()}</div>
                       <div className="dg-meta">
@@ -298,9 +316,27 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
                         <div className="dg-month">{MS_S[d.getMonth()]} {d.getFullYear()}</div>
                       </div>
                     </div>
-                    <div className="dg-totals">
-                      {gt.income > 0 && <span className="dg-inc">+{formatINR(gt.income)}</span>}
-                      {gt.expense > 0 && <span className="dg-exp">−{formatINR(gt.expense)}</span>}
+                    <div className="dg-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div className="dg-totals">
+                        {gt.income > 0 && <span className="dg-inc">+{formatINR(gt.income)}</span>}
+                        {gt.expense > 0 && <span className="dg-exp">−{formatINR(gt.expense)}</span>}
+                      </div>
+                      {multiMode && (
+                        <div
+                          className="dg-select-box"
+                          onClick={handleGroupToggle}
+                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allDateSel}
+                            ref={el => { if (el) el.indeterminate = isDateIndeterminate; }}
+                            onChange={handleGroupToggle}
+                            style={{ cursor: 'pointer', transform: 'scale(1.2)', accentColor: 'var(--accent)' }}
+                            title={allDateSel ? 'Deselect date' : 'Select all for date'}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="dg-items">{txns.map(t => <TransactionItem key={t._id} transaction={t}

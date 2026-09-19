@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { v4 as uuid } from 'uuid';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { inputToStorage, toInputDate, nowTimeStr, formatINR, cleanNumericInput } from '../../utils/format.js';
+import { inputToStorage, toInputDate, nowTimeStr, formatINR, cleanNumericInput, isSystemTag, getUserFacingTags } from '../../utils/format.js';
 import { resolveInvestmentAccounts, calculateGrowwCharges, resolveKnownFolioAndMode } from '../../utils/brokerageAccounting.js';
 import { resolveSecurity, searchSecurities, cleanSecurityToNote } from '../../utils/securityResolution.js';
 import './AddTransaction.css';
@@ -12,6 +12,7 @@ import {
 } from '../../database/recurring.js';
 import { parseBankSMS } from '../../utils/smsParser.js';
 import ReceiptViewer from '../Common/ReceiptViewer.jsx';
+import InvestmentPlanPickerModal from '../Investments/InvestmentPlanPickerModal.jsx';
 
 const TYPES = [
   { id: 'Expense', label: 'Expense', cls: 'expense' },
@@ -467,13 +468,14 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
 // ── Main AddTransaction ────────────────────────────────────────────────────
 export default function AddTransaction({
   onClose, onSaveAndContinue = null, editTransaction = null, copyTransaction = null,
+  planTransaction = null,
   prefillDate = null, prefillAccount = null, prefillCategory = null,
   prefillType = null, prefillFromAccount = null, prefillToAccount = null, prefillAmount = null, prefillNote = null, prefillTags = null,
   prefillSubAccount = null,
   backInterceptRef = null, onSaveInstalment = null
 }) {
-  const { state, navigate, addTransaction, updateTransaction, createRecurringRule, updateInstalmentSiblings } = useApp();
-  const { accounts = [], categories = {}, transactions = [] } = state || {};
+  const { state, navigate, addTransaction, updateTransaction, deleteTransaction, createRecurringRule, updateInstalmentSiblings, advancePlanDueDate } = useApp();
+  const { accounts = [], categories = {}, transactions = [], investmentPlans = [] } = state || {};
   const isEdit = !!editTransaction;
 
   // Helper to check if an account belongs to Investments group
@@ -583,6 +585,60 @@ export default function AddTransaction({
 
   // Reorder overlay state (stays inside AddTransaction — no navigation needed)
   const [reorderScreen, setReorderScreen] = useState(null);
+
+  // Dedicated Investment Plan (SIP) picker modal state
+  const [showPlanPicker, setShowPlanPicker] = useState(false);
+
+  const handleSelectPlan = useCallback((p) => {
+    const invTxnType = (p.investment_type || 'BUY').toUpperCase();
+    const today = toInputDate(new Date());
+    const nowTime = nowTimeStr();
+
+    setForm(prev => ({
+      ...prev,
+      type: 'Investment',
+      // Reset execution values for this month's actual execution
+      date: today,
+      time: nowTime,
+      amount: '',
+      tradeValue: '',
+      quantity: '',
+      unitPrice: '',
+      costBasis: '',
+      actualAmount: '',
+      realizedPnl: '',
+      brokerageCharges: '',
+      exchangeCharges: '',
+      sttCharges: '',
+      sebiCharges: '',
+      stampDutyCharges: '',
+      gstCharges: '',
+      dpCharges: '',
+      otherCharges: '',
+      
+      // Copy template & routing fields from Plan
+      investmentTransactionType: invTxnType,
+      owner: p.owner || prev.owner || 'Myself',
+      investmentAccount: p.investment_account || prev.investmentAccount || '',
+      account: p.investment_account || prev.investmentAccount || '',
+      fundingAccount: invTxnType === 'BUY' ? (p.funding_account || prev.fundingAccount || '') : '',
+      settlementAccount: invTxnType === 'SELL' ? (p.funding_account || prev.settlementAccount || '') : '',
+      subAccount: p.sub_account || prev.subAccount || '',
+      brokerage: p.sub_account || p.brokerage || prev.brokerage || '',
+      securitySymbol: p.security_symbol || prev.securitySymbol || '',
+      securityDisplayName: p.security_name || p.name || prev.securityDisplayName || '',
+      securityISIN: p.security_isin || prev.securityISIN || '',
+      folio: p.folio || prev.folio || '',
+      holdingMode: p.holding_mode || prev.holdingMode || 'DEMAT',
+      note: p.note || p.name || prev.note || '',
+      description: p.description || prev.description || '',
+      tags: getUserFacingTags(p.tags || prev.tags || '').join(', '),
+      planId: p.id,
+      source: 'Investment Plan',
+    }));
+
+    setShowPlanPicker(false);
+  }, []);
 
   // Picker state for inline sheet below form
   const [pickerState, setPickerState] = useState(null); // {type, label, value, items, recent, onSelect, exclude?, onReorder?}
@@ -721,7 +777,7 @@ export default function AddTransaction({
         subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '',
         note: cleanNote,
         description: t.Description || t.description || '',
-        tags: t.Tags || t.tags || '',
+        tags: getUserFacingTags(t.Tags || t.tags || '').join(', '),
         receipt_image: t.receipt_image || '',
         warranty_expiry: t.warranty_expiry || '',
         serial_no: t.serial_no || '',
@@ -758,19 +814,182 @@ export default function AddTransaction({
         source: t.Source || t.source || ''
       };
     }
+    if (planTransaction || copyTransaction?._fromPlan) {
+      const p = planTransaction || copyTransaction._fromPlan;
+      const invTxnType = (p.investment_type || p.investmentTransactionType || 'BUY').toUpperCase();
+      const pAmt = p.planned_amount ? String(p.planned_amount) : '';
+      return {
+        type: 'Investment',
+        amount: pAmt,
+        date: todayVal(),
+        time: nowTimeStr(),
+        account: p.investment_account || p.investmentAccount || '',
+        fromAccount: '',
+        toAccount: '',
+        category: p.investment_account || p.investmentAccount || '',
+        subcategory: '',
+        note: p.note || p.name || p.security_name || '',
+        description: p.description || '',
+        tags: getUserFacingTags(p.tags || '').join(', '),
+        receipt_image: '',
+        warranty_expiry: '',
+        serial_no: '',
+        subAccount: p.sub_account || p.subAccount || p.brokerage || '',
+        fromSubAccount: invTxnType === 'BUY' ? '' : (p.sub_account || p.subAccount || p.brokerage || ''),
+        toSubAccount: invTxnType === 'BUY' ? (p.sub_account || p.subAccount || p.brokerage || '') : '',
+        investmentAccount: p.investment_account || p.investmentAccount || '',
+        fundingAccount: invTxnType === 'BUY' ? (p.funding_account || p.fundingAccount || '') : '',
+        settlementAccount: invTxnType === 'SELL' ? (p.funding_account || p.fundingAccount || '') : '',
+        owner: p.owner || 'Myself',
+        folio: p.folio || '',
+        holdingMode: p.holding_mode || p.holdingMode || '',
+        showAdvanced: false,
+        investmentTransactionType: invTxnType,
+        settlementMode: 'ACTUAL',
+        securitySymbol: p.security_symbol || p.securitySymbol || '',
+        securityDisplayName: p.security_name || p.securityDisplayName || p.name || '',
+        securityISIN: p.security_isin || p.securityISIN || '',
+        quantity: '',
+        unitPrice: '',
+        tradeValue: pAmt,
+        actualAmount: '',
+        costBasis: '',
+        realizedPnl: '',
+        brokerageCharges: '',
+        exchangeCharges: '',
+        sttCharges: '',
+        sebiCharges: '',
+        stampDutyCharges: '',
+        gstCharges: '',
+        dpCharges: '',
+        otherCharges: '',
+        brokerage: p.sub_account || p.subAccount || p.brokerage || '',
+        source: 'Investment Plan',
+        planId: p.id || null,
+      };
+    }
     if (isCopy) {
       const t = copyTransaction;
+      const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+      const isInv = Boolean(
+        invType === 'BUY' ||
+        invType === 'SELL' ||
+        (t.SecuritySymbol && t.SecurityISIN) ||
+        (t.AccountingClassification && t.AccountingClassification.includes('INVESTMENT'))
+      );
+
       let rt = t['Income/Expense'] || 'Expense';
       if (rt === 'Transfer') rt = 'Transfer-Out';
+
+      if (isInv) {
+        const res = resolveInvestmentAccounts(t, accounts);
+        const invTxnType = invType === 'SELL' ? 'SELL' : 'BUY';
+        const initialInvestmentAccount = res.investmentAccount || t.InvestmentAccount || t.Category || t.ToAccount || '';
+        const initialFundingAccount = invTxnType === 'BUY' ? res.bankAccount : '';
+        const initialSettlementAccount = invTxnType === 'SELL' ? res.bankAccount : '';
+        const initialSubAccount = res.subAccount || t.SubAccount || t.sub_account || t.FromSubAccount || t.to_sub_account || t.Brokerage || t.brokerage || '';
+
+        // Extract tags for ownership, folio, holding mode
+        const rawTags = t.Tags || t.tags || '';
+        const extractTag = (tagsStr, key) => {
+          if (!tagsStr) return '';
+          const m = String(tagsStr).match(new RegExp(`(?:^|[|,]\\s*)${key}:\\s*([^|,]+)`, 'i'));
+          return m ? m[1].trim() : '';
+        };
+        const rawOwnership = (
+          t.OwnershipTag ||
+          t.ownership_tag ||
+          extractTag(rawTags, 'Ownership') ||
+          extractTag(t.Description || '', 'Ownership') ||
+          ''
+        ).toUpperCase().trim();
+
+        let initialOwner = 'Myself';
+        if (rawOwnership === 'EXTERNAL' || rawOwnership === 'FATHER_EXTERNAL' || rawOwnership === 'EXTERNAL_FATHER') {
+          initialOwner = 'External';
+        } else if (rawOwnership === 'PERSONAL') {
+          initialOwner = 'Myself';
+        } else if ((t.Note || '').toLowerCase().includes('father') || (t.Description || '').toLowerCase().includes('father') || (t.Description || '').toLowerCase().includes('external')) {
+          initialOwner = 'External';
+        }
+
+        const initialFolio = extractTag(rawTags, 'Folio') || t.FolioNumber || t.folio_number || '';
+        let initialHoldingMode = t.HoldingMode || t.holding_mode || extractTag(rawTags, 'Mode') || '';
+        if (!initialHoldingMode && initialSubAccount) {
+          if (initialSubAccount.toLowerCase().includes('groww') || initialSubAccount.toLowerCase().includes('zerodha')) initialHoldingMode = 'DEMAT';
+          else if (initialSubAccount.toLowerCase().includes('etmoney')) initialHoldingMode = 'NON_DEMAT';
+        }
+
+        const rawMode = t.SettlementMode || t.settlement_mode || '';
+        const initialSettlementMode = rawMode && String(rawMode).trim().toUpperCase() === 'BREAKDOWN' ? 'BREAKDOWN' : 'ACTUAL';
+        const cleanNote = stripInstalmentSuffix(t.Note || t.note || '');
+
+        return {
+          type: 'Investment',
+          amount: '',
+          date: toInputDate(t.Date) || todayVal(),
+          time: t.Time || nowTimeStr(),
+          account: initialInvestmentAccount,
+          fromAccount: '',
+          toAccount: '',
+          category: t.Category || initialInvestmentAccount || '',
+          subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '',
+          note: cleanNote,
+          description: t.Description || t.description || '',
+          tags: getUserFacingTags(t.Tags || t.tags || '').join(', '),
+          receipt_image: '',
+          warranty_expiry: '',
+          serial_no: '',
+          subAccount: initialSubAccount,
+          fromSubAccount: invTxnType === 'BUY' ? '' : initialSubAccount,
+          toSubAccount: invTxnType === 'BUY' ? initialSubAccount : '',
+          investmentAccount: initialInvestmentAccount,
+          fundingAccount: initialFundingAccount,
+          settlementAccount: initialSettlementAccount,
+          owner: initialOwner,
+          folio: initialFolio,
+          holdingMode: initialHoldingMode,
+          showAdvanced: false,
+          investmentTransactionType: invTxnType,
+          settlementMode: initialSettlementMode,
+          securitySymbol: t.SecuritySymbol || t.security_symbol || '',
+          securityDisplayName: t.SecurityDisplayName || t.security_display_name || cleanNote || '',
+          securityISIN: t.SecurityISIN || t.security_isin || '',
+          quantity: '',
+          unitPrice: '',
+          tradeValue: '',
+          actualAmount: '',
+          costBasis: '',
+          realizedPnl: '',
+          brokerageCharges: '',
+          exchangeCharges: '',
+          sttCharges: '',
+          sebiCharges: '',
+          stampDutyCharges: '',
+          gstCharges: '',
+          dpCharges: '',
+          otherCharges: '',
+          brokerage: initialSubAccount,
+          source: t.Source || t.source || 'Manual'
+        };
+      }
+
       return {
-        type: rt, amount: String(t.INR || t.Amount || ''), date: toInputDate(t.Date) || todayVal(), time: t.Time || nowTimeStr(),
-        account: rt.startsWith('Transfer') ? '' : (t.Account || ''), fromAccount: rt.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
-        toAccount: rt.startsWith('Transfer') ? (t.ToAccount || '') : '', category: t.Category || '',
-        subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '', note: t.Note || '', description: t.Description || '',
-        tags: t.Tags || t.tags || '',
-        receipt_image: t.receipt_image || '',
-        warranty_expiry: t.warranty_expiry || '',
-        serial_no: t.serial_no || '',
+        type: rt,
+        amount: String(t.INR || t.Amount || t.amount || ''),
+        date: toInputDate(t.Date) || todayVal(),
+        time: t.Time || nowTimeStr(),
+        account: rt.startsWith('Transfer') ? '' : (t.Account || ''),
+        fromAccount: rt.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
+        toAccount: rt.startsWith('Transfer') ? (t.ToAccount || '') : '',
+        category: t.Category || '',
+        subcategory: t.Subcategory && t.Subcategory !== 'Default' ? t.Subcategory : '',
+        note: t.Note || '',
+        description: t.Description || '',
+        tags: getUserFacingTags(t.Tags || t.tags || '').join(', '),
+        receipt_image: '',
+        warranty_expiry: '',
+        serial_no: '',
         subAccount: t.SubAccount || t.sub_account || '',
         fromSubAccount: t.FromSubAccount || t.from_sub_account || t.SubAccount || t.sub_account || '',
         toSubAccount: t.ToSubAccount || t.to_sub_account || '',
@@ -817,7 +1036,7 @@ export default function AddTransaction({
       subcategory: '',
       note: prefillNote || '',
       description: '',
-      tags: prefillTags || '',
+      tags: getUserFacingTags(prefillTags || '').join(', '),
       receipt_image: '',
       warranty_expiry: '',
       serial_no: '',
@@ -865,7 +1084,7 @@ export default function AddTransaction({
   const [isTagsExpanded, setIsTagsExpanded] = useState(false);
 
   const selectedTagsCount = useMemo(() => {
-    return (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean).length;
+    return getUserFacingTags(form.tags || '').length;
   }, [form.tags]);
 
   const handleNumberFocus = useCallback((e) => {
@@ -1356,18 +1575,10 @@ export default function AddTransaction({
 
   const allAvailableTags = useMemo(() => {
     const seen = new Set();
-    const isSystemTag = (tag) => {
-      const t = tag.toLowerCase().trim();
-      return t === '#stock' || t === '#consumed' || t === '#lent' || t === '#instalment' || t.startsWith('#stock_ref_');
-    };
     for (const t of transactions) {
       if (t.Tags) {
-        t.Tags.split(',').forEach(tag => {
-          const clean = tag.trim().toLowerCase();
-          if (clean && !isSystemTag(clean)) {
-            seen.add(clean.startsWith('#') ? clean : `#${clean}`);
-          }
-        });
+        const cleanUserTags = getUserFacingTags(t.Tags);
+        cleanUserTags.forEach(tag => seen.add(tag));
       }
       const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
       if (matches) {
@@ -2407,9 +2618,18 @@ export default function AddTransaction({
 
       // Extract hashtags from Note & Description and combine with manual tags
       const noteAndDesc = `${baseNote} ${form.description || ''}`;
-      const extractedHashtags = (noteAndDesc.match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g) || []).map(t => t.toLowerCase());
-      const manualTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean).map(t => t.startsWith('#') ? t : `#${t}`);
-      const combinedTags = Array.from(new Set([...manualTags, ...extractedHashtags])).join(', ');
+      const extractedHashtags = (noteAndDesc.match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g) || []).filter(t => !isSystemTag(t)).map(t => t.toLowerCase());
+      const manualTags = getUserFacingTags(form.tags || '');
+
+      // Preserve any existing system tags if editing an existing record
+      const originalSystemTags = isEdit
+        ? (editTransaction?.Tags || editTransaction?.tags || '')
+            .split(/[,|\n]/)
+            .map(t => t.trim())
+            .filter(isSystemTag)
+        : [];
+
+      const combinedTags = Array.from(new Set([...originalSystemTags, ...manualTags, ...extractedHashtags])).join(', ');
 
       // Derive sanitized dependent field values based on current active transaction type & parent accounts
       const mainAcctName = isTransfer ? (form.fromAccount || '') : (form.account || form.investmentAccount || '');
@@ -2590,17 +2810,13 @@ export default function AddTransaction({
           const structuredInvTag = invTagTokens.join('|');
 
           // Filter out previous structured tokens from manual tags
-          const cleanManualTags = (form.tags || '')
-            .split(',')
-            .map(t => t.trim())
-            .filter(Boolean)
-            .filter(t => !t.startsWith('Ownership:') && !t.startsWith('Folio:') && !t.startsWith('Mode:'))
-            .map(t => t.startsWith('#') ? t.toLowerCase() : `#${t.toLowerCase()}`);
+          const cleanManualTags = getUserFacingTags(form.tags || '');
+          const extractedInvHashtags = (noteAndDesc.match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g) || []).filter(t => !isSystemTag(t)).map(t => t.toLowerCase());
 
           const finalInvTags = Array.from(new Set([
             structuredInvTag,
             ...cleanManualTags,
-            ...extractedHashtags
+            ...extractedInvHashtags
           ])).join(', ');
 
           const isExternal = ownerTag === 'EXTERNAL';
@@ -2715,6 +2931,13 @@ export default function AddTransaction({
             await updateTransaction(invTxnId, invData);
           } else {
             await addTransaction(invData);
+            if (form.planId && advancePlanDueDate) {
+              try {
+                await advancePlanDueDate(form.planId, form.date);
+              } catch (err) {
+                console.warn('Failed to advance plan due date:', err);
+              }
+            }
           }
 
           // ── Linked Brokerage Charge Transaction (Zerodha Charge Pattern) ──────────
@@ -2726,13 +2949,16 @@ export default function AddTransaction({
 
           if (totCharges > 0 && !isExternal) {
             const chargeTxnId = existingCharge ? (existingCharge._id || existingCharge.id || existingCharge.ID) : uuid();
+            const chargeSourceAcct = isFundedFromBank ? fundingBankAcct : (currentInvAcct || 'Share Market');
+            const chargeFromSub = isFundedFromBank ? '' : currentSubAcct;
+
             const chargeData = {
               _id: chargeTxnId,
               ID: chargeTxnId,
               Date: inputToStorage(form.date),
               Time: form.time || '',
-              Account: currentInvAcct || 'Share Market',
-              FromAccount: currentInvAcct || 'Share Market',
+              Account: chargeSourceAcct,
+              FromAccount: chargeSourceAcct,
               ToAccount: '',
               Category: 'Investment Charges',
               Subcategory: currentSubAcct || 'Default',
@@ -2746,7 +2972,7 @@ export default function AddTransaction({
               Tags: `${currentSubAcct || 'Brokerage'}|Ledger|CHARGE #inv_charge:${invTxnId}`,
               split_group_id: `inv_charge_${invTxnId}`,
               SubAccount: currentSubAcct,
-              FromSubAccount: currentSubAcct,
+              FromSubAccount: chargeFromSub,
               ToSubAccount: '',
               InvestmentTransactionType: 'CHARGE',
               Brokerage: currentSubAcct,
@@ -2811,6 +3037,13 @@ export default function AddTransaction({
             await updateTransaction(editTransaction._id, data);
           } else {
             await addTransaction(data);
+            if (form.planId && advancePlanDueDate) {
+              try {
+                await advancePlanDueDate(form.planId, form.date);
+              } catch (err) {
+                console.warn('Failed to advance plan due date:', err);
+              }
+            }
           }
         }
       }
@@ -3016,6 +3249,20 @@ export default function AddTransaction({
                 >
                   🔴 SELL
                 </button>
+                {!isEdit && (investmentPlans || []).filter(p => p.active !== false).length > 0 && (
+                  <button
+                    type="button"
+                    style={{
+                      padding: '8px 12px', borderRadius: 'var(--r-md)', fontWeight: 700, fontSize: '0.78rem',
+                      background: 'rgba(56, 189, 248, 0.12)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)',
+                      cursor: 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 5
+                    }}
+                    onClick={() => setShowPlanPicker(true)}
+                    title="Choose from recurring Investment Plans (SIP)"
+                  >
+                    <span>📊</span> Plan
+                  </button>
+                )}
               </div>
 
               {/* Owner Selector */}
@@ -4246,8 +4493,8 @@ export default function AddTransaction({
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, width: '100%' }}>
                   {allAvailableTags.map(tag => {
-                    const currentTags = (form.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-                    const isSelected = currentTags.includes(tag.toLowerCase()) ||
+                    const currentTags = getUserFacingTags(form.tags || '');
+                    const isSelected = currentTags.some(t => t.toLowerCase() === tag.toLowerCase()) ||
                       ((form.note || '') + ' ' + (form.description || '')).toLowerCase().includes(tag.toLowerCase());
                     return (
                       <button
@@ -4256,9 +4503,9 @@ export default function AddTransaction({
                         onClick={() => {
                           let nextTags;
                           if (isSelected) {
-                            nextTags = currentTags.filter(t => t !== tag.toLowerCase());
+                            nextTags = currentTags.filter(t => t.toLowerCase() !== tag.toLowerCase());
                           } else {
-                            nextTags = [...currentTags, tag.toLowerCase()];
+                            nextTags = [...currentTags, tag];
                           }
                           set('tags', nextTags.join(', '));
                         }}
@@ -4449,6 +4696,14 @@ export default function AddTransaction({
           onClose={() => setViewingReceipt(false)}
         />
       )}
+
+      {/* Dedicated Investment Plan (SIP) Picker Modal */}
+      <InvestmentPlanPickerModal
+        isOpen={showPlanPicker}
+        onClose={() => setShowPlanPicker(false)}
+        plans={investmentPlans || []}
+        onSelectPlan={handleSelectPlan}
+      />
     </>
   );
 }

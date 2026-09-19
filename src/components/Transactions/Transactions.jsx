@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, calcTotals, calcReportingTotals, groupByDate, txnType, txnAmount, inputToStorage } from '../../utils/format.js';
+import { parseDate, formatINR, calcTotals, calcReportingTotals, groupByDate, txnType, txnAmount, inputToStorage, isSystemTag, getUserFacingTags } from '../../utils/format.js';
 import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import TransactionSyncModal from './TransactionSyncModal.jsx';
@@ -38,6 +38,20 @@ export function BulkSelectionBar({ selected, setSelected, selTotals, allTxns, on
   const [noteVal, setNoteVal] = React.useState('');
 
   const selArr = allTxns.filter(t => selected.has(t._id));
+
+  // Escape key listener for bulk edit & delete confirmation sheets
+  React.useEffect(() => {
+    if (!confirm && !showEditSheet) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.stopPropagation();
+        if (confirm) setConfirm(false);
+        if (showEditSheet) setShowEditSheet(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [confirm, showEditSheet]);
 
   const handleBulkCopy = async () => {
     try {
@@ -158,23 +172,25 @@ export function BulkSelectionBar({ selected, setSelected, selTotals, allTxns, on
     onDone(); // Clears selection mode
   };
 
-  if (!selected.size) return null;
-
   return (
     <>
       <div className="search-sel-bar">
         <div style={{display:'flex',alignItems:'center',gap:6,flex:1,flexWrap:'wrap'}}>
-          <input 
-            type="checkbox" 
-            checked={allSel}
-            ref={el => {
-              if (el) el.indeterminate = isIndeterminate;
-            }}
-            onChange={handleSelectAllToggle}
-            style={{ marginRight: 6, transform: 'scale(1.2)', cursor: 'pointer' }}
-            title="Toggle All Visible"
-          />
-          <span style={{fontWeight:800,fontSize:'0.82rem'}}>{selected.size} selected</span>
+          <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',userSelect:'none'}}>
+            <input 
+              type="checkbox" 
+              checked={allSel}
+              ref={el => {
+                if (el) el.indeterminate = isIndeterminate;
+              }}
+              onChange={handleSelectAllToggle}
+              style={{ cursor: 'pointer', transform: 'scale(1.2)', accentColor: 'var(--accent)' }}
+              title={allSel ? "Deselect All Visible" : "Select All Visible"}
+            />
+            <span style={{fontWeight:800,fontSize:'0.82rem'}}>
+              {selected.size} of {allVisibleIds.length} selected
+            </span>
+          </label>
           {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
           {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
           {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
@@ -185,26 +201,30 @@ export function BulkSelectionBar({ selected, setSelected, selTotals, allTxns, on
           )}
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0,position:'relative'}}>
-          <button onClick={handleBulkCopy}
-            style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--accent)'}}
-            title="Copy Selected (FinMan Sync Payload)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="18" height="18">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-            </svg>
-          </button>
+          {selected.size > 0 && (
+            <>
+              <button onClick={handleBulkCopy}
+                style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--accent)'}}
+                title="Copy Selected (FinMan Sync Payload)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="18" height="18">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+              </button>
 
-          <button onClick={()=>setShowEditSheet(true)}
-            style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--text-secondary)'}}
-            title="Bulk Edit Fields">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="18" height="18"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          </button>
-          
-          <button onClick={()=>setConfirm(true)}
-            style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--expense)'}}
-            title="Delete Selected">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="18" height="18"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-          </button>
+              <button onClick={()=>setShowEditSheet(true)}
+                style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--text-secondary)'}}
+                title="Bulk Edit Fields">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="18" height="18"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              </button>
+              
+              <button onClick={()=>setConfirm(true)}
+                style={{background:'none',border:'none',cursor:'pointer',padding:'4px',display:'flex',alignItems:'center',color:'var(--expense)'}}
+                title="Delete Selected">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="18" height="18"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+              </button>
+            </>
+          )}
           <button style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,cursor:'pointer',fontSize:'0.82rem'}} onClick={onDone}>Done</button>
         </div>
       </div>
@@ -466,7 +486,7 @@ const MONTHS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','N
 const MONTHS_F = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 // ── Date-grouped list ─────────────────────────────────────────────────────────
-function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLongPress, onTap, backInterceptRef, onCopy }) {
+function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLongPress, onTap, onToggleDate, backInterceptRef, onCopy }) {
   const closestRef = useRef(null);
   const hasScrolledInitial = useRef(false);
 
@@ -523,9 +543,23 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
       const gt = calcReportingTotals(list);
       const d  = parseDate(list[0].Date);
       const isClosest = dk === groups.closestDk;
+      const groupIds = list.map(t => t._id);
+      const allDateSel = groupIds.length > 0 && groupIds.every(id => selected.has(id));
+      const isDateIndeterminate = !allDateSel && groupIds.some(id => selected.has(id));
+
+      const handleGroupToggle = (e) => {
+        e?.stopPropagation?.();
+        if (onToggleDate) {
+          onToggleDate(groupIds, allDateSel);
+        }
+      };
+
       return (
         <div key={dk} ref={isClosest ? closestRef : null} className="date-group-container">
-          <div className="dg-header" onClick={() => onDateTap && onDateTap(list[0].Date)}>
+          <div
+            className="dg-header"
+            onClick={multiMode ? handleGroupToggle : (() => onDateTap && onDateTap(list[0].Date))}
+          >
             <div className="dg-left">
               <div className="dg-day">{d.getDate()}</div>
               <div className="dg-meta">
@@ -533,9 +567,27 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
                 <div className="dg-month">{MONTHS_S[d.getMonth()]} {d.getFullYear()}</div>
               </div>
             </div>
-            <div className="dg-totals">
-              {gt.income  > 0 && <span className="dg-inc">+{formatINR(gt.income)}</span>}
-              {gt.expense > 0 && <span className="dg-exp">−{formatINR(gt.expense)}</span>}
+            <div className="dg-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div className="dg-totals">
+                {gt.income  > 0 && <span className="dg-inc">+{formatINR(gt.income)}</span>}
+                {gt.expense > 0 && <span className="dg-exp">−{formatINR(gt.expense)}</span>}
+              </div>
+              {multiMode && (
+                <div
+                  className="dg-select-box"
+                  onClick={handleGroupToggle}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={allDateSel}
+                    ref={el => { if (el) el.indeterminate = isDateIndeterminate; }}
+                    onChange={handleGroupToggle}
+                    style={{ cursor: 'pointer', transform: 'scale(1.2)', accentColor: 'var(--accent)' }}
+                    title={allDateSel ? 'Deselect date' : 'Select all for date'}
+                  />
+                </div>
+              )}
             </div>
           </div>
           <div className="dg-items">
@@ -660,6 +712,23 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     }
   }, [multiMode]); // Removed backInterceptRef from deps
 
+  // Handle keyboard Escape for search view multiMode
+  React.useEffect(() => {
+    if (!multiMode) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        if (showFilter || copyTxn) return;
+        const activeOverlays = document.querySelectorAll('.overlay, .bottom-sheet, .modal-backdrop, .modal-overlay, .dialog-overlay');
+        if (activeOverlays.length > 0) return;
+        e.stopPropagation();
+        setMultiMode(false);
+        setSelected(new Set());
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [multiMode, showFilter, copyTxn]);
+
   // Reset offset when period changes
   const handlePeriodChange = (p) => { setSelPeriod(p); setPeriodOffset(0); };
   const swipe = useSwipe(
@@ -751,15 +820,13 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
 
       // Scoped text matching
       if (q.startsWith('#')) {
-        const cleanTag = q.replace(/^#/, '');
-        const tagList = (t.Tags || '').split(',').map(x => x.trim().toLowerCase().replace(/^#/, ''));
-        if (scopeTags && tagList.includes(cleanTag)) return true;
-
+        const cleanTag = q.slice(1);
+        const userTags = getUserFacingTags(t.Tags).map(x => x.replace(/^#/, '').toLowerCase());
+        if (scopeTags && userTags.includes(cleanTag)) return true;
         const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const hashRegex = new RegExp(`(^|\\s)#${escapeRegex(cleanTag)}(\\b|\\s|$)`, 'i');
-        if (scopeNotes && hashRegex.test(t.Note || '')) return true;
-        if (scopeDesc && hashRegex.test(t.Description || '')) return true;
-        if (scopeTags && hashRegex.test(t.Tags || '')) return true;
+        if (scopeTags && hashRegex.test(t.Note || '')) return true;
+        if (scopeTags && hashRegex.test(t.Description || '')) return true;
         return false;
       }
 
@@ -767,7 +834,10 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       const matches = [];
       if (scopeNotes && t.Note && t.Note.toLowerCase().includes(q)) matches.push(true);
       if (scopeDesc && t.Description && t.Description.toLowerCase().includes(q)) matches.push(true);
-      if (scopeTags && t.Tags && t.Tags.toLowerCase().includes(q)) matches.push(true);
+      if (scopeTags && t.Tags) {
+        const userTags = getUserFacingTags(t.Tags).map(x => x.toLowerCase());
+        if (userTags.some(ut => ut.includes(q))) matches.push(true);
+      }
       if (t.Category && t.Category.toLowerCase().includes(q)) matches.push(true);
       if (t.Subcategory && t.Subcategory.toLowerCase().includes(q)) matches.push(true);
       if (t.Account && t.Account.toLowerCase().includes(q)) matches.push(true);
@@ -804,20 +874,23 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     const seen = new Set();
     for (const t of transactions) {
       if (t.Tags) {
-        t.Tags.split(',').forEach(tag => {
-          const clean = tag.trim().toLowerCase();
-          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
-        });
+        const cleanUserTags = getUserFacingTags(t.Tags);
+        cleanUserTags.forEach(tag => seen.add(tag));
       }
       const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
-      if (matches) matches.forEach(m => seen.add(m.toLowerCase()));
+      if (matches) {
+        matches.forEach(m => {
+          const clean = m.toLowerCase();
+          if (!isSystemTag(clean)) seen.add(clean);
+        });
+      }
     }
     try {
       const custom = JSON.parse(state.settings?.customTags || '[]');
       if (Array.isArray(custom)) {
         custom.forEach(ct => {
           const clean = String(ct).trim().toLowerCase();
-          if (clean) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
+          if (clean && !isSystemTag(clean)) seen.add(clean.startsWith('#') ? clean : `#${clean}`);
         });
       }
     } catch {}
@@ -1295,6 +1368,23 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
     };
   }, [showSyncModal, showCal, multiMode, backInterceptRef]);
 
+  // Handle keyboard Escape for main Transactions screen
+  React.useEffect(() => {
+    if (!multiMode) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        if (showSyncModal || showCal || addDate || copyTxn) return;
+        const activeOverlays = document.querySelectorAll('.overlay, .bottom-sheet, .modal-backdrop, .modal-overlay, .dialog-overlay');
+        if (activeOverlays.length > 0) return;
+        e.stopPropagation();
+        setMultiMode(false);
+        setSelected(new Set());
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [multiMode, showSyncModal, showCal, addDate, copyTxn]);
+
   const prevMonth = () => { if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1); };
   const nextMonth = () => { if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1); };
   const swipe = useSwipe(nextMonth, prevMonth);
@@ -1305,6 +1395,34 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
   const monthTotals = useMemo(() => calcReportingTotals(monthTxns), [monthTxns]);
 
   const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
+
+  const handleToggleDate = (dateIds, isAllSelected) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (isAllSelected) {
+        dateIds.forEach(id => next.delete(id));
+      } else {
+        dateIds.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const allMonthIds = useMemo(() => monthTxns.map(t => t._id), [monthTxns]);
+  const allMonthSel = allMonthIds.length > 0 && allMonthIds.every(id => selected.has(id));
+  const isMonthIndeterminate = !allMonthSel && allMonthIds.some(id => selected.has(id));
+
+  const handleSelectMonthToggle = () => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (allMonthSel) {
+        allMonthIds.forEach(id => next.delete(id));
+      } else {
+        allMonthIds.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  };
 
   const handleCopy = (txn) => {
     // Pass txn as-is — the copy picker in DetailSheet sets date/time based on user choice.
@@ -1351,12 +1469,33 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
       {/* Row 2: Month navigator — Daily mode only */}
       {viewMode==='daily' && (
         <div className="txn-month-row">
-          <button className="pp-arrow" onClick={prevMonth}>‹</button>
+          <button className="pp-arrow" onClick={prevMonth} disabled={multiMode} style={multiMode ? { opacity: 0.3, cursor: 'default' } : {}}>‹</button>
           <div className="month-title-btn">
             <span className="month-name">{MONTHS_F[viewMonth]}</span>
             <span className="month-yr">{viewYear}</span>
           </div>
-          <button className="pp-arrow" onClick={nextMonth}>›</button>
+          {multiMode ? (
+            <button
+              type="button"
+              className="month-sel-all-btn"
+              onClick={handleSelectMonthToggle}
+              style={{
+                fontSize: '0.74rem',
+                padding: '4px 10px',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-card2)',
+                color: 'var(--accent)',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+              title={allMonthSel ? 'Deselect entire month' : 'Select all transactions in this month'}
+            >
+              {allMonthSel ? 'Deselect Month' : isMonthIndeterminate ? 'Select All Month' : 'Select Month'}
+            </button>
+          ) : (
+            <button className="pp-arrow" onClick={nextMonth}>›</button>
+          )}
         </div>
       )}
 
@@ -1382,7 +1521,7 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
           <div ref={scrollRef} className="txn-list" onScroll={handleScroll}>
             {monthTxns.length===0
               ? <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">No transactions</div><div className="empty-desc">{MONTHS_F[viewMonth]} {viewYear}</div></div>
-              : <DateGroupedList isActive={isActive} txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
+              : <DateGroupedList isActive={isActive} txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} onToggleDate={handleToggleDate} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
             }
           </div>
         </>

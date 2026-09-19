@@ -14,11 +14,16 @@ import {
   getAccountMapping, replaceAccountMapping,
   getCategories, replaceCategories,
   getBudgets, setBudget, deleteBudget, replaceBudgets,
+  getAllInvestmentPlans, saveInvestmentPlan,
+  updateInvestmentPlan as dbUpdatePlan,
+  deleteInvestmentPlan as dbDeletePlan,
+  advancePlanDueDate as dbAdvancePlanDate,
   getDB,
 } from '../database/index.js';
 import { DEFAULT_ACCOUNT_GROUPS, DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES } from '../database/defaults.js';
 import { v4 as uuid } from 'uuid';
 import { parseDate } from '../utils/format.js';
+import { reconcileHistoricalCharges } from '../utils/brokerageAccounting.js';
 
 const Ctx = createContext(null);
 export const useApp = () => { const c = useContext(Ctx); if (!c) throw new Error('useApp outside AppProvider'); return c; };
@@ -89,6 +94,7 @@ const INIT = {
   accountGroups: [], budgets: [], settings: {},
   theme: 'dark', fontSize: 1.0, fontFamily: 'Sora', fontDataWeight: 'regular',
   recurringRules: [],
+  investmentPlans: [],
   loading: true, error: null, importProgress: null,
   currentView: 'dashboard',
   brokerages: [],
@@ -107,6 +113,10 @@ function reducer(s, a) {
     case 'SET_FONTFAMILY':     return { ...s, fontFamily: a.payload };
     case 'SET_FONTDATAWEIGHT':   return { ...s, fontDataWeight: a.payload };
     case 'SET_RECURRING':        return { ...s, recurringRules: a.payload };
+    case 'SET_INVESTMENT_PLANS': return { ...s, investmentPlans: a.payload };
+    case 'ADD_INVESTMENT_PLAN':  return { ...s, investmentPlans: [a.payload, ...(s.investmentPlans || [])] };
+    case 'UPD_INVESTMENT_PLAN':  return { ...s, investmentPlans: (s.investmentPlans || []).map(p => p.id === a.payload.id ? a.payload : p) };
+    case 'DEL_INVESTMENT_PLAN':  return { ...s, investmentPlans: (s.investmentPlans || []).filter(p => p.id !== a.payload) };
     case 'UPD_SETTINGS': return { ...s, settings: { ...s.settings, ...a.payload } };
     case 'NAVIGATE': 
       return { 
@@ -127,10 +137,10 @@ export function AppProvider({ children }) {
 
   const load = useCallback(async () => {
     try {
-      const [txns, accts, catsArr, aGroups, aMapping, budgets, settings, recurringRules] = await Promise.all([
+      const [txns, accts, catsArr, aGroups, aMapping, budgets, settings, recurringRules, investmentPlans] = await Promise.all([
         getTransactions(), getAccounts(), getCategories(),
         getAccountGroups(), getAccountMapping(), getBudgets(), getAllSettings(),
-        getAllRecurringRules(),
+        getAllRecurringRules(), getAllInvestmentPlans(),
       ]);
 
       let brokerages = [];
@@ -178,6 +188,7 @@ export function AppProvider({ children }) {
           accountMapping: aMapping || [],
           budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
           recurringRules: recurringRules || [],
+          investmentPlans: investmentPlans || [],
           brokerages: brokerages || [],
         }});
         return;
@@ -503,6 +514,26 @@ export function AppProvider({ children }) {
         await load();
         return;
       }
+
+      // Safe Historical Charge Reconciliation
+      const normAccounts = normalizeAccounts(accts);
+      try {
+        const { updatedCharges, count } = reconcileHistoricalCharges(txns, normAccounts);
+        if (count > 0) {
+          console.log(`[Reconciliation] Auto-reconciling ${count} historical charge(s)...`);
+          for (const uc of updatedCharges) {
+            const id = uc._id || uc.id || uc.ID;
+            await dbUpdate(id, uc);
+            const idx = txns.findIndex(t => (t._id || t.id || t.ID) === id);
+            if (idx !== -1) {
+              txns[idx] = { ...txns[idx], ...uc };
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to auto-reconcile historical charges:', err);
+      }
+
       const theme     = settings.theme     || 'dark';
       const fontSize  = parseFloat(settings.fontSize  || '1.0');
       const fontFamily = settings.fontFamily || 'Sora';
@@ -526,12 +557,13 @@ export function AppProvider({ children }) {
           accountMapping: aMapping || [],
           budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
           recurringRules: recurringRules || [],
+          investmentPlans: investmentPlans || [],
           brokerages: brokerages || [],
         },
       });
     } catch (e) {
       console.error('AppContext load error:', e);
-      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'regular', recurringRules:[], brokerages:[] } });
+      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'regular', recurringRules:[], investmentPlans:[], brokerages:[] } });
     }
   }, []);
 
@@ -1310,6 +1342,38 @@ export function AppProvider({ children }) {
   const saveBudget   = async (cat, amount, period) => { await setBudget(cat, amount, period); dispatch({ type:'SET_BUDGETS', payload: await getBudgets() }); };
   const removeBudget = async (cat) => { await deleteBudget(cat); dispatch({ type:'SET_BUDGETS', payload: await getBudgets() }); };
 
+  const addInvestmentPlan = async (plan) => {
+    const saved = await saveInvestmentPlan(plan);
+    dispatch({ type: 'ADD_INVESTMENT_PLAN', payload: saved });
+    return saved;
+  };
+
+  const updateInvestmentPlan = async (id, plan) => {
+    const updated = await dbUpdatePlan(id, plan);
+    dispatch({ type: 'UPD_INVESTMENT_PLAN', payload: updated });
+    return updated;
+  };
+
+  const deleteInvestmentPlan = async (id) => {
+    await dbDeletePlan(id);
+    dispatch({ type: 'DEL_INVESTMENT_PLAN', payload: id });
+    return id;
+  };
+
+  const advancePlanDueDate = async (id, executedDateStr) => {
+    const updated = await dbAdvancePlanDate(id, executedDateStr);
+    if (updated) {
+      dispatch({ type: 'UPD_INVESTMENT_PLAN', payload: updated });
+    }
+    return updated;
+  };
+
+  const refreshInvestmentPlans = async () => {
+    const plans = await getAllInvestmentPlans();
+    dispatch({ type: 'SET_INVESTMENT_PLANS', payload: plans });
+    return plans;
+  };
+
   return (
     <Ctx.Provider value={{
       state, dispatch, load, navigate, clearNavParams,
@@ -1322,6 +1386,8 @@ export function AppProvider({ children }) {
       updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight,
       createRecurringRule, modifyRecurringRule, removeRecurringRule, processDueRepeat,
       saveBudget, removeBudget,
+      addInvestmentPlan, updateInvestmentPlan, deleteInvestmentPlan,
+      advancePlanDueDate, refreshInvestmentPlans,
     }}>
       {children}
     </Ctx.Provider>

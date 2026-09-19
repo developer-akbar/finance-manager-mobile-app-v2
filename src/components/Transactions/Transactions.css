@@ -223,3 +223,31 @@
 .bulk-menu-item:hover, .bulk-menu-item:active {
   background: var(--bg-surface-hover, rgba(255, 255, 255, 0.06));
 }
+
+/* Multi-select date & month affordances */
+.dg-select-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.month-sel-all-btn {
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  padding: 5px 12px;
+  border-radius: var(--r-md);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.month-sel-all-btn:hover, .month-sel-all-btn:active {
+  background: rgba(0, 229, 160, 0.12);
+  border-color: var(--accent);
+}
+

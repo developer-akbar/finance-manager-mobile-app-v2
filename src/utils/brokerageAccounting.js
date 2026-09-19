@@ -513,10 +513,14 @@ export function resolveInvestmentAccounts(t, accounts = []) {
       bankAccount = fromAcct;
     } else if (acct && acct.toLowerCase() !== investmentAccount.toLowerCase() && !invAcctNames.has(acct.toLowerCase())) {
       bankAccount = acct;
+    } else if (cat && cat.toLowerCase() !== investmentAccount.toLowerCase() && !invAcctNames.has(cat.toLowerCase())) {
+      bankAccount = cat;
     }
   } else {
     if (toAcct && toAcct.toLowerCase() !== investmentAccount.toLowerCase() && !invAcctNames.has(toAcct.toLowerCase())) {
       bankAccount = toAcct;
+    } else if (cat && cat.toLowerCase() !== investmentAccount.toLowerCase() && !invAcctNames.has(cat.toLowerCase())) {
+      bankAccount = cat;
     } else if (acct && acct.toLowerCase() !== investmentAccount.toLowerCase() && !invAcctNames.has(acct.toLowerCase())) {
       bankAccount = acct;
     }
@@ -806,4 +810,91 @@ export function resolveKnownFolioAndMode({
   }
 
   return { folio: '', holdingMode: 'DEMAT', isResolved: false };
+}
+
+/**
+ * Safe Historical Charge Reconciliation
+ * Scans transactions and returns an array of updated charge records where
+ * a linked investment charge was routed to an investment asset account (e.g. Liquid Mutual Funds)
+ * instead of the parent transaction's deterministic funding bank account (e.g. Canara).
+ *
+ * Rules:
+ * - Does NOT mutate parent records.
+ * - Does NOT create synthetic transactions.
+ * - Does NOT change amounts, IDs, dates, trade values, cost basis, or realized PnL.
+ * - Only updates charge.Account and charge.FromAccount when parent funding account is deterministic.
+ */
+export function reconcileHistoricalCharges(transactions = [], accounts = []) {
+  if (!transactions || transactions.length === 0) return { updatedCharges: [], count: 0 };
+
+  const uniqueAccounts = accounts && accounts.length > 0 ? accounts : [];
+  const updatedCharges = [];
+
+  for (const t of transactions) {
+    const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+    const isCharge = invType === 'CHARGE' || t.Category === 'Investment Charges' || (t.Tags && String(t.Tags).includes('|CHARGE'));
+    if (!isCharge) continue;
+
+    const chargeId = t._id || t.id || t.ID;
+
+    // Discover parent transaction
+    let parent = null;
+    let linkedParentId = null;
+
+    if (t.split_group_id && t.split_group_id.startsWith('inv_charge_')) {
+      linkedParentId = t.split_group_id.replace('inv_charge_', '');
+    }
+    if (!linkedParentId && t.Tags) {
+      const m = String(t.Tags).match(/#inv_charge:([^\s,|]+)/);
+      if (m) linkedParentId = m[1];
+    }
+
+    if (linkedParentId) {
+      parent = transactions.find(tx => (tx._id || tx.id || tx.ID) === linkedParentId);
+    }
+
+    if (!parent) {
+      // Fallback matching by Date, SubAccount/Brokerage, and timestamps
+      const parentCandidates = transactions.filter(tx => {
+        if ((tx._id || tx.id || tx.ID) === chargeId) return false;
+        const txInvType = (tx.InvestmentTransactionType || tx.investment_transaction_type || '').toUpperCase();
+        if (txInvType !== 'BUY' && txInvType !== 'SELL') return false;
+        if (tx.Date !== t.Date) return false;
+        const txSub = (tx.SubAccount || tx.sub_account || tx.Brokerage || '').trim().toLowerCase();
+        const cSub = (t.SubAccount || t.sub_account || t.Subcategory || t.Brokerage || '').trim().toLowerCase();
+        if (txSub && cSub && txSub !== cSub) return false;
+        return true;
+      });
+
+      if (parentCandidates.length === 1) {
+        parent = parentCandidates[0];
+      }
+    }
+
+    if (!parent) continue; // Standalone or ambiguous charge -> preserve as-is
+
+    const res = resolveInvestmentAccounts(parent, uniqueAccounts);
+    const parentInvAcct = res.investmentAccount || parent.InvestmentAccount || parent.Category || parent.ToAccount || '';
+    const parentFundAcct = res.bankAccount || (parent.InvestmentTransactionType === 'BUY' ? (parent.Account || parent.FromAccount) : (parent.Category || parent.ToAccount)) || '';
+    const isFundedFromBank = Boolean(parentFundAcct && parentFundAcct.toLowerCase() !== parentInvAcct.toLowerCase());
+
+    const expectedChargeAcct = isFundedFromBank ? parentFundAcct : (parentInvAcct || 'Share Market');
+    const currentChargeAcct = t.Account || t.FromAccount || '';
+    const currentFromAcct = t.FromAccount || t.Account || '';
+
+    if (expectedChargeAcct && (currentChargeAcct !== expectedChargeAcct || currentFromAcct !== expectedChargeAcct)) {
+      // Only modify Account and FromAccount
+      updatedCharges.push({
+        ...t,
+        Account: expectedChargeAcct,
+        FromAccount: expectedChargeAcct,
+        FromSubAccount: isFundedFromBank ? '' : (t.FromSubAccount || t.SubAccount || ''),
+      });
+    }
+  }
+
+  return {
+    updatedCharges,
+    count: updatedCharges.length
+  };
 }

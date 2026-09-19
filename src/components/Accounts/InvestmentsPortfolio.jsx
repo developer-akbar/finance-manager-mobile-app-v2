@@ -12,6 +12,8 @@ import HoldingDetailSheet from './Portfolio/HoldingDetailSheet.jsx';
 import RedeemedInvestments from './Portfolio/RedeemedInvestments.jsx';
 import PortfolioDataIssues from './Portfolio/PortfolioDataIssues.jsx';
 import InvestmentActivity from './Portfolio/InvestmentActivity.jsx';
+import InvestmentPlansModal from '../Investments/InvestmentPlansModal.jsx';
+import AddTransaction from '../Transactions/AddTransaction.jsx';
 
 import './InvestmentsPortfolio.css';
 
@@ -26,6 +28,8 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
   const [accountFilter, setAccountFilter] = useState('all'); // 'all' | account name
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [oneDayDisplayMode, setOneDayDisplayMode] = useState('unit'); // 'unit' | 'position'
+  const [showPlansModal, setShowPlansModal] = useState(false);
+  const [planToLog, setPlanToLog] = useState(null);
 
   const toggleOneDayDisplayMode = (e) => {
     if (e && typeof e.stopPropagation === 'function') {
@@ -122,6 +126,17 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           <div className="portfolio-main-subtitle">Mutual Funds, Share Market & ETFs</div>
         </div>
         <div className="portfolio-header-actions">
+          <button
+            className="portfolio-refresh-btn"
+            onClick={() => setShowPlansModal(true)}
+            title="Manage recurring SIP and investment plans"
+            style={{ borderColor: 'rgba(59, 130, 246, 0.4)', color: '#3b82f6' }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14">
+              <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+            <span>Plans</span>
+          </button>
           <button 
             className="portfolio-refresh-btn"
             onClick={() => refreshValuations(true)}
@@ -355,6 +370,28 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
 
         <div style={{ height: 40 }} />
       </div>
+
+      {/* Investment Plans Management Modal */}
+      {showPlansModal && (
+        <InvestmentPlansModal
+          isOpen={showPlansModal}
+          onClose={() => setShowPlansModal(false)}
+          onLogPlan={(plan) => {
+            setShowPlansModal(false);
+            setPlanToLog(plan);
+          }}
+        />
+      )}
+
+      {/* Log Transaction from Plan */}
+      {planToLog && (
+        <AddTransaction
+          planTransaction={planToLog}
+          onClose={() => setPlanToLog(null)}
+          onSaveAndContinue={() => setPlanToLog(null)}
+          backInterceptRef={backInterceptRef}
+        />
+      )}
     </div>
   );
 }

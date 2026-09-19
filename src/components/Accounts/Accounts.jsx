@@ -9,6 +9,7 @@ import CardOptimizer from './CardOptimizer.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import StockManager from './StockManager.jsx';
 import InvestmentsPortfolio from './InvestmentsPortfolio.jsx';
+import InvestmentPlansModal from '../Investments/InvestmentPlansModal.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import { activeHoldingsData } from '../../database/holdingsData.js';
@@ -1027,9 +1028,27 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
                 return acc;
               }, { income: 0, expense: 0 });
               const d = parseDate(txns[0].Date);
+              const groupIds = txns.map(t => t._id);
+              const selectedCountInGroup = groupIds.filter(id => selected.has(id)).length;
+              const allDateSel = groupIds.length > 0 && selectedCountInGroup === groupIds.length;
+              const isDateIndeterminate = selectedCountInGroup > 0 && selectedCountInGroup < groupIds.length;
+
+              const handleGroupToggle = (e) => {
+                e?.stopPropagation?.();
+                setSelected(prev => {
+                  const next = new Set(prev);
+                  if (allDateSel) {
+                    groupIds.forEach(id => next.delete(id));
+                  } else {
+                    groupIds.forEach(id => next.add(id));
+                  }
+                  return next;
+                });
+              };
+
               return (
                 <div key={dk} className="date-group-container">
-                  <div className="dg-header" onClick={multiMode ? null : () => setAddDate(txns[0].Date)}>
+                  <div className="dg-header" onClick={multiMode ? handleGroupToggle : () => setAddDate(txns[0].Date)}>
                     <div className="dg-left">
                       <div className="dg-day">{d.getDate()}</div>
                       <div className="dg-meta">
@@ -1037,9 +1056,27 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
                         <div className="dg-month">{MS_S[d.getMonth()]} {d.getFullYear()}</div>
                       </div>
                     </div>
-                    <div className="dg-totals">
-                      {gt.income > 0 && <span className="dg-inc">+{formatINR(gt.income)}</span>}
-                      {gt.expense > 0 && <span className="dg-exp">−{formatINR(gt.expense)}</span>}
+                    <div className="dg-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div className="dg-totals">
+                        {gt.income > 0 && <span className="dg-inc">+{formatINR(gt.income)}</span>}
+                        {gt.expense > 0 && <span className="dg-exp">−{formatINR(gt.expense)}</span>}
+                      </div>
+                      {multiMode && (
+                        <div
+                          className="dg-select-box"
+                          onClick={handleGroupToggle}
+                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allDateSel}
+                            ref={el => { if (el) el.indeterminate = isDateIndeterminate; }}
+                            onChange={handleGroupToggle}
+                            style={{ cursor: 'pointer', transform: 'scale(1.2)', accentColor: 'var(--accent)' }}
+                            title={allDateSel ? 'Deselect date' : 'Select all for date'}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="dg-items">{txns.map((t, ti) => {
@@ -1084,6 +1121,8 @@ export default function Accounts({ backInterceptRef } = {}) {
   const [showGroups, setShowGroups] = useState(false);
   const [showStockManager, setShowStockManager] = useState(false);
   const [showInvestments, setShowInvestments] = useState(false);
+  const [showInvestmentPlans, setShowInvestmentPlans] = useState(false);
+  const [planToLog, setPlanToLog] = useState(null);
   const [settlePrefill, setSettlePrefill] = useState(null);
 
   // Handle double-tap reset for Accounts tab
@@ -1096,6 +1135,8 @@ export default function Accounts({ backInterceptRef } = {}) {
       setShowGroups(false);
       setShowStockManager(false);
       setShowInvestments(false);
+      setShowInvestmentPlans(false);
+      setPlanToLog(null);
       setSettlePrefill(null);
       setCollapsedGroups(new Set());
       setExpandedAccounts(new Set());
@@ -1238,13 +1279,15 @@ export default function Accounts({ backInterceptRef } = {}) {
       backInterceptRef.current = () => setShowDebtTracker(false);
     } else if (showInvestments) {
       backInterceptRef.current = () => setShowInvestments(false);
+    } else if (showInvestmentPlans) {
+      backInterceptRef.current = () => setShowInvestmentPlans(false);
     } else if (drill) {
       backInterceptRef.current = () => setDrill(null);
     } else {
       backInterceptRef.current = null;
     }
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
-  }, [showDebtTracker, showInvestments, drill, backInterceptRef]);
+  }, [showDebtTracker, showInvestments, showInvestmentPlans, drill, backInterceptRef]);
 
 
   const shareMarketBalances = useMemo(() => calculateShareMarketBalances(transactions, state.brokerages, state.settings), [transactions, state.brokerages, state.settings]);
@@ -1757,30 +1800,54 @@ export default function Accounts({ backInterceptRef } = {}) {
                 <>
                   {accts.map(renderAcctRow)}
                   {grp === 'Investments' && (
-                    <button
-                      onClick={() => setShowInvestments(true)}
-                      className="investments-portfolio-banner-btn"
-                      style={{
-                        margin: '8px 12px',
-                        width: 'calc(100% - 24px)',
-                        padding: '10px 12px',
-                        borderRadius: '12px',
-                        background: 'linear-gradient(135deg, rgba(0, 229, 160, 0.08), rgba(0, 229, 160, 0.02))',
-                        border: '1.5px dashed rgba(0, 229, 160, 0.3)',
-                        color: 'var(--accent)',
-                        fontSize: '0.78rem',
-                        fontWeight: 700,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '6px',
-                        cursor: 'pointer',
-                        transition: 'all 0.25s ease',
-                        boxSizing: 'border-box'
-                      }}
-                    >
-                      📈 View Investment Portfolio Dashboard
-                    </button>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', margin: '8px 12px' }}>
+                      <button
+                        onClick={() => setShowInvestments(true)}
+                        className="investments-portfolio-banner-btn"
+                        style={{
+                          width: '100%',
+                          padding: '10px 12px',
+                          borderRadius: '12px',
+                          background: 'linear-gradient(135deg, rgba(0, 229, 160, 0.08), rgba(0, 229, 160, 0.02))',
+                          border: '1.5px dashed rgba(0, 229, 160, 0.3)',
+                          color: 'var(--accent)',
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          cursor: 'pointer',
+                          transition: 'all 0.25s ease',
+                          boxSizing: 'border-box'
+                        }}
+                      >
+                        📈 View Investment Portfolio Dashboard
+                      </button>
+                      <button
+                        onClick={() => setShowInvestmentPlans(true)}
+                        className="investments-portfolio-banner-btn"
+                        style={{
+                          width: '100%',
+                          padding: '9px 12px',
+                          borderRadius: '12px',
+                          background: 'rgba(59, 130, 246, 0.06)',
+                          border: '1.5px solid rgba(59, 130, 246, 0.25)',
+                          color: '#3b82f6',
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          cursor: 'pointer',
+                          transition: 'all 0.25s ease',
+                          boxSizing: 'border-box'
+                        }}
+                      >
+                        📋 Recurring Investment Plans / SIPs
+                      </button>
+                    </div>
                   )}
                 </>
               )}
@@ -1802,6 +1869,28 @@ export default function Accounts({ backInterceptRef } = {}) {
           <div className="empty-state"><div className="empty-icon">💳</div><div className="empty-title">No accounts yet</div><div className="empty-desc">Add accounts in Settings</div></div>
         )}
       </div>
+
+      {/* Investment Plans Management Modal */}
+      {showInvestmentPlans && (
+        <InvestmentPlansModal
+          isOpen={showInvestmentPlans}
+          onClose={() => setShowInvestmentPlans(false)}
+          onLogPlan={(plan) => {
+            setShowInvestmentPlans(false);
+            setPlanToLog(plan);
+          }}
+        />
+      )}
+
+      {/* Log Transaction from Plan */}
+      {planToLog && (
+        <AddTransaction
+          planTransaction={planToLog}
+          onClose={() => setPlanToLog(null)}
+          onSaveAndContinue={() => setPlanToLog(null)}
+          backInterceptRef={backInterceptRef}
+        />
+      )}
     </div>
   );
 }
