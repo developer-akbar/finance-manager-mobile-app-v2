@@ -58,7 +58,7 @@
   }
 
   .txn-item {
-    padding: 8px 14px;
+    padding: 8px 14px !important;
     transition: background 0.15s ease;
   }
 
@@ -87,7 +87,7 @@
   }
 
   .txn-item {
-    padding: 10px 16px;
+    padding: 10px 16px !important;
     transition: background 0.15s ease, border-color 0.15s ease;
   }
 

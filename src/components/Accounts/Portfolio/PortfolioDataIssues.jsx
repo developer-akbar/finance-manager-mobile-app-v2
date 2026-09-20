@@ -43,15 +43,6 @@ export default function PortfolioDataIssues({ positions = [], onSelectPosition }
               <div className="data-issue-units neg">
                 {pos.currentUnits.toFixed(3)} Units
               </div>
-              <button 
-                className="row-view-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectPosition(pos);
-                }}
-              >
-                Inspect Lots
-              </button>
             </div>
           </div>
         ))}

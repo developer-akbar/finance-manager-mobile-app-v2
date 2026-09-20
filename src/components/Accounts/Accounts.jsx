@@ -860,8 +860,10 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           <div className="page-hdr-sub">{subAccountName ? 'Sub Account' : 'Account'} · {acctTxns.length} total txns</div>
         </div>
         <div className="entity-badge" style={{
-          background: ((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)) >= 0 ? 'var(--income-bg)' : 'var(--expense-bg)',
-          color: ((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)) >= 0 ? 'var(--income)' : 'var(--expense)'
+          background: 'var(--theme-header-btn-bg, var(--bg-card2))',
+          color: 'var(--theme-header-btn-color, var(--text-primary))',
+          border: '1px solid var(--border)',
+          fontWeight: 700
         }}>
           {((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)) >= 0 ? '+' : ''}{formatINRCompact(Math.abs((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)))}
         </div>
@@ -1640,8 +1642,8 @@ export default function Accounts({ backInterceptRef } = {}) {
               fontSize: '0.7rem',
               fontWeight: 700,
               border: '1px solid var(--border)',
-              background: 'var(--bg-card2)',
-              color: 'var(--accent)',
+              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
+              color: 'var(--theme-header-btn-color, var(--text-primary))',
               display: 'flex',
               alignItems: 'center',
               gap: 3,
@@ -1659,8 +1661,8 @@ export default function Accounts({ backInterceptRef } = {}) {
               fontSize: '0.7rem',
               fontWeight: 700,
               border: '1px solid var(--border)',
-              background: 'var(--bg-card2)',
-              color: 'var(--accent)',
+              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
+              color: 'var(--theme-header-btn-color, var(--text-primary))',
               display: 'flex',
               alignItems: 'center',
               gap: 3,
@@ -1678,8 +1680,8 @@ export default function Accounts({ backInterceptRef } = {}) {
               fontSize: '0.7rem',
               fontWeight: 700,
               border: '1px solid var(--border)',
-              background: 'var(--bg-card2)',
-              color: 'var(--accent)',
+              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
+              color: 'var(--theme-header-btn-color, var(--text-primary))',
               display: 'flex',
               alignItems: 'center',
               gap: 3,

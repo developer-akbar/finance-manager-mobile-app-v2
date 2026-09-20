@@ -33,14 +33,15 @@ const DESKTOP_NAV = [
 export default function Layout({ children, onNavTap }) {
   const { state, navigate, setTheme } = useApp();
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [logoLoaded, setLogoLoaded] = useState(true);
   const scrollTargetRef = useRef(null);
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     try {
       const saved = localStorage.getItem('finman_sidebar_collapsed');
-      return saved !== null ? saved === 'true' : true; // Default to collapsed
+      return saved !== null ? saved === 'true' : false;
     } catch {
-      return true;
+      return false;
     }
   });
 
@@ -101,6 +102,7 @@ export default function Layout({ children, onNavTap }) {
       '.settings-root',
       '.categories-list',
       '.accounts-list',
+      '.analytics-scrollable-content',
       '.analytics-screen',
       '.txn-monthly-list',
       '.txn-screen-body',
@@ -129,28 +131,34 @@ export default function Layout({ children, onNavTap }) {
       {/* ── DESKTOP SIDEBAR (>= 1024px) ── */}
       <aside className={`desktop-sidebar ${isSidebarCollapsed ? 'collapsed' : 'expanded'}`}>
         <div className="sidebar-brand">
-          <div 
-            className="brand-logo-wrap" 
-            onClick={toggleSidebar} 
+          <div
+            className="brand-logo-wrap"
+            onClick={toggleSidebar}
             style={{ cursor: 'pointer' }}
             title={isSidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSidebar(); }}
           >
-            <img src="/icon-xhdpi.png" alt="FinMan" className="brand-logo" onError={(e) => { e.target.style.display = 'none'; }} />
-            <div className="brand-title-group">
-              <div className="brand-name">FinMan</div>
-              <div className="brand-version">v2.2</div>
-            </div>
+            <img
+              src="/icon-xhdpi.png"
+              alt="FinMan"
+              className="brand-logo"
+              onError={() => setLogoLoaded(false)}
+              style={{ display: logoLoaded ? 'block' : 'none' }}
+            />
+            {!logoLoaded && (
+              <div className="brand-logo brand-logo-fallback">
+                FM
+              </div>
+            )}
+            {!isSidebarCollapsed && (
+              <div className="brand-title-group">
+                <div className="brand-name">FinMan</div>
+                <div className="brand-version">v2.2</div>
+              </div>
+            )}
           </div>
-          <button 
-            className="sidebar-collapse-toggle-btn"
-            onClick={toggleSidebar}
-            title={isSidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
-            aria-label={isSidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="toggle-chevron-icon">
-              <path d="M15 18l-6-6 6-6" />
-            </svg>
-          </button>
         </div>
 
         <nav className="sidebar-nav">
@@ -167,7 +175,7 @@ export default function Layout({ children, onNavTap }) {
                 <div className="sidebar-item-icon">
                   <Icon />
                 </div>
-                <span className="sidebar-item-label">{label}</span>
+                {!isSidebarCollapsed && <span className="sidebar-item-label">{label}</span>}
                 {isActive && <div className="sidebar-active-pill" />}
               </button>
             );

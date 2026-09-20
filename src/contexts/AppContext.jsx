@@ -88,11 +88,56 @@ const normalizeAccounts = (raw) =>
         cardLast4: a.cardLast4 || a.card_last4 || '',
         subAccounts: a.subAccounts || [] });
 
+// ── Header Theme Colors ──────────────────────────────────────────────────────
+export const HEADER_COLORS = [
+  { id: 'default', name: 'Default', hex: '#0a0f1e', lightHex: '#f3f6fb', lightHeader: 'rgba(255,255,255,0.85)', darkHeader: 'rgba(10,15,30,0.85)', lightText: '#0d1b2a', darkText: '#f0f4ff' },
+  { id: 'red',      name: 'Red',     hex: '#e11d48', lightHex: '#e11d48', lightHeader: 'linear-gradient(135deg, #e11d48, #be123c)', darkHeader: 'linear-gradient(135deg, #240c14, #141d2e)', lightText: '#ffffff', darkText: '#f0f4ff' },
+  { id: 'pink',     name: 'Pink',    hex: '#ec4899', lightHex: '#ec4899', lightHeader: 'linear-gradient(135deg, #ec4899, #db2777)', darkHeader: 'linear-gradient(135deg, #260e1d, #141d2e)', lightText: '#ffffff', darkText: '#f0f4ff' },
+  { id: 'green',    name: 'Green',   hex: '#059669', lightHex: '#059669', lightHeader: 'linear-gradient(135deg, #059669, #047857)', darkHeader: 'linear-gradient(135deg, #0a211a, #141d2e)', lightText: '#ffffff', darkText: '#f0f4ff' },
+  { id: 'blue',     name: 'Blue',    hex: '#2563eb', lightHex: '#2563eb', lightHeader: 'linear-gradient(135deg, #2563eb, #1d4ed8)', darkHeader: 'linear-gradient(135deg, #0e1b38, #141d2e)', lightText: '#ffffff', darkText: '#f0f4ff' },
+  { id: 'darkgray', name: 'Dark Gray', hex: '#374151', lightHex: '#374151', lightHeader: 'linear-gradient(135deg, #374151, #1f2937)', darkHeader: 'linear-gradient(135deg, #1b202c, #141d2e)', lightText: '#ffffff', darkText: '#f0f4ff' },
+];
+
+export function applyHeaderColor(colorId = 'default', currentTheme = 'dark') {
+  const color = HEADER_COLORS.find(c => c.id === colorId) || HEADER_COLORS[0];
+  document.documentElement.setAttribute('data-header-color', color.id);
+  const isLight = currentTheme === 'light';
+
+  if (color.id === 'default') {
+    document.documentElement.style.removeProperty('--theme-header-bg');
+    document.documentElement.style.removeProperty('--theme-header-text');
+    document.documentElement.style.removeProperty('--theme-header-sub');
+    document.documentElement.style.removeProperty('--theme-header-btn-bg');
+    document.documentElement.style.removeProperty('--theme-header-btn-color');
+    document.documentElement.style.removeProperty('--theme-header-border');
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', isLight ? '#f3f6fb' : '#0a0f1e');
+    return;
+  }
+
+  const bg = isLight ? color.lightHeader : color.darkHeader;
+  const text = isLight ? color.lightText : color.darkText;
+  const sub = isLight ? 'rgba(255,255,255,0.85)' : 'var(--text-muted)';
+  const btnBg = isLight ? 'rgba(255,255,255,0.2)' : 'var(--bg-card)';
+  const btnColor = isLight ? '#ffffff' : 'var(--text-primary)';
+  const border = isLight ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.08)';
+
+  document.documentElement.style.setProperty('--theme-header-bg', bg);
+  document.documentElement.style.setProperty('--theme-header-text', text);
+  document.documentElement.style.setProperty('--theme-header-sub', sub);
+  document.documentElement.style.setProperty('--theme-header-btn-bg', btnBg);
+  document.documentElement.style.setProperty('--theme-header-btn-color', btnColor);
+  document.documentElement.style.setProperty('--theme-header-border', border);
+
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', isLight ? color.hex : '#0a0f1e');
+}
+
 // ── Reducer ───────────────────────────────────────────────────────────────────
 const INIT = {
   transactions: [], accounts: [], categories: {},
   accountGroups: [], budgets: [], settings: {},
-  theme: 'dark', fontSize: 1.0, fontFamily: 'Sora', fontDataWeight: 'regular',
+  theme: 'dark', headerColor: 'default', fontSize: 1.0, fontFamily: 'Sora', fontDataWeight: 'regular',
   recurringRules: [],
   investmentPlans: [],
   loading: true, error: null, importProgress: null,
@@ -109,6 +154,7 @@ function reducer(s, a) {
     case 'SET_BUDGETS':  return { ...s, budgets: a.payload };
     case 'SET_IMPORT':   return { ...s, importProgress: a.payload };
     case 'SET_THEME':    return { ...s, theme: a.payload };
+    case 'SET_HEADERCOLOR': return { ...s, headerColor: a.payload };
     case 'SET_FONTSIZE': return { ...s, fontSize: a.payload };
     case 'SET_FONTFAMILY':     return { ...s, fontFamily: a.payload };
     case 'SET_FONTDATAWEIGHT':   return { ...s, fontDataWeight: a.payload };
@@ -167,11 +213,13 @@ export function AppProvider({ children }) {
         await setSetting('sub_accounts_migrated_v2', 'true');
         const [seedAccts, seedCats, seedGroups] = await Promise.all([getAccounts(), getCategories(), getAccountGroups()]);
         const theme     = settings.theme     || 'dark';
+        const headerColor = settings.headerColor || 'default';
         const fontSize  = parseFloat(settings.fontSize  || '1.0');
         const fontFamily = settings.fontFamily || 'Sora';
         const fontDataWeight = settings.fontDataWeight || 'regular';
         const fwMap = { light: '400', regular: '500', bold: '700' };
         document.documentElement.setAttribute('data-theme', theme);
+        applyHeaderColor(headerColor, theme);
         document.documentElement.style.setProperty('--fs-scale', String(fontSize));
         document.documentElement.style.setProperty('--fw-data', fwMap[fontDataWeight] || '400');
         document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
@@ -186,7 +234,7 @@ export function AppProvider({ children }) {
           categoriesArr: seedCats || [],
           accountGroups: seedGroups || [],
           accountMapping: aMapping || [],
-          budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
+          budgets, settings, theme, headerColor, fontSize, fontFamily, fontDataWeight,
           recurringRules: recurringRules || [],
           investmentPlans: investmentPlans || [],
           brokerages: brokerages || [],
@@ -535,11 +583,13 @@ export function AppProvider({ children }) {
       }
 
       const theme     = settings.theme     || 'dark';
+      const headerColor = settings.headerColor || 'default';
       const fontSize  = parseFloat(settings.fontSize  || '1.0');
       const fontFamily = settings.fontFamily || 'Sora';
       const fontDataWeight = settings.fontDataWeight || 'regular';
       const fwMap = { light: '400', regular: '500', bold: '700' };
       document.documentElement.setAttribute('data-theme', theme);
+      applyHeaderColor(headerColor, theme);
       document.documentElement.style.setProperty('--fs-scale', String(fontSize));
       document.documentElement.style.setProperty('--fw-data', fwMap[fontDataWeight] || '400');
       document.documentElement.style.setProperty('--font', fontFamily === 'Sora' ? "'Sora', sans-serif" : 
@@ -555,15 +605,14 @@ export function AppProvider({ children }) {
           categoriesArr: catsArr || [],
           accountGroups: aGroups || [],
           accountMapping: aMapping || [],
-          budgets, settings, theme, fontSize, fontFamily, fontDataWeight,
+          budgets, settings, theme, headerColor, fontSize, fontFamily, fontDataWeight,
           recurringRules: recurringRules || [],
           investmentPlans: investmentPlans || [],
           brokerages: brokerages || [],
         },
       });
     } catch (e) {
-      console.error('AppContext load error:', e);
-      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'regular', recurringRules:[], investmentPlans:[], brokerages:[] } });
+      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', headerColor:'default', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'regular', recurringRules:[], investmentPlans:[], brokerages:[] } });
     }
   }, []);
 
@@ -1234,7 +1283,7 @@ export function AppProvider({ children }) {
       dispatch({ type:'SET_RECURRING', payload: rules });
     }
     // Persist simple key-value settings (profileName, pin, pinIdleSeconds, customTags, theme, etc.)
-    const settingsKeys = ['theme', 'fontSize', 'fontFamily', 'fontDataWeight', 'profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'biometricsEnabled', 'customTags'];
+    const settingsKeys = ['theme', 'headerColor', 'fontSize', 'fontFamily', 'fontDataWeight', 'profileName', 'pin', 'pinIdleSeconds', 'name', 'backupSchedule', 'lastBackupCheck', 'backupHistory', 'biometricsEnabled', 'customTags'];
     const changed = {};
     for (const key of settingsKeys) {
       if (data[key] !== undefined) {
@@ -1303,13 +1352,19 @@ export function AppProvider({ children }) {
     if (due.length) await load();
   };
 
-
-
   const setTheme = async (theme) => {
     document.documentElement.setAttribute('data-theme', theme);
     dispatch({ type:'SET_THEME', payload: theme });
     dispatch({ type:'UPD_SETTINGS', payload: { theme } });
+    applyHeaderColor(state.headerColor || state.settings?.headerColor || 'default', theme);
     try { await setSetting('theme', theme); } catch (e) { console.error('setTheme:', e); }
+  };
+
+  const setHeaderColor = async (colorId) => {
+    applyHeaderColor(colorId, state.theme || state.settings?.theme || 'dark');
+    dispatch({ type:'SET_HEADERCOLOR', payload: colorId });
+    dispatch({ type:'UPD_SETTINGS', payload: { headerColor: colorId } });
+    try { await setSetting('headerColor', colorId); } catch (e) { console.error('setHeaderColor:', e); }
   };
 
   const setFontSize = async (scale) => {
@@ -1383,7 +1438,7 @@ export function AppProvider({ children }) {
       deleteAccountTransactions, deleteCategoryTransactions, deleteSubcategoryTransactions,
       renameSubAccount, deleteSubAccountTransactions,
       importData, cancelImport, clearAllData, analyseImport,
-      updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight,
+      updateSettings, setTheme, setHeaderColor, setFontSize, setFontFamily, setFontDataWeight,
       createRecurringRule, modifyRecurringRule, removeRecurringRule, processDueRepeat,
       saveBudget, removeBudget,
       addInvestmentPlan, updateInvestmentPlan, deleteInvestmentPlan,

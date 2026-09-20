@@ -2827,8 +2827,9 @@ function BudgetsManager({ onBack }) {
 // Appearance Manager
 // ─────────────────────────────────────────────
 function AppearanceManager({ onBack }) {
-  const { state, updateSettings, setTheme, setFontSize, setFontFamily, setFontDataWeight } = useApp();
+  const { state, updateSettings, setTheme, setHeaderColor, setFontSize, setFontFamily, setFontDataWeight } = useApp();
   const { theme, fontSize } = state;
+  const headerColor = state.headerColor || state.settings?.headerColor || 'default';
   const fontDataWeight = state.fontDataWeight || 'regular';
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
@@ -2881,6 +2882,59 @@ function AppearanceManager({ onBack }) {
             </div>
             <div style={{ padding: '4px 10px', borderRadius: 'var(--r-full)', background: theme === 'dark' ? 'var(--bg-card2)' : 'var(--bg-card)', border: '1px solid var(--border)', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
               {theme === 'dark' ? 'Dark' : 'Light'}
+            </div>
+          </div>
+        </div>
+
+        {/* App Theme / Header Color */}
+        <div className="mgr-section-label">App Theme Color</div>
+        <div className="settings-card" style={{ margin: '0 var(--page-px) 16px' }}>
+          <div style={{ padding: '14px var(--page-px)' }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 12 }}>
+              Sets header and status accent tone. Semantic financial colors (income, expense, transfer) remain unchanged.
+            </div>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              {[
+                { id: 'default', name: 'Default', hex: theme === 'dark' ? '#1a2540' : '#e2e8f0', label: 'Default' },
+                { id: 'red',      name: 'Red',     hex: '#e11d48', label: 'Red' },
+                { id: 'pink',     name: 'Pink',    hex: '#ec4899', label: 'Pink' },
+                { id: 'green',    name: 'Green',   hex: '#059669', label: 'Green' },
+                { id: 'blue',     name: 'Blue',    hex: '#2563eb', label: 'Blue' },
+                { id: 'darkgray', name: 'Dark Gray', hex: '#374151', label: 'Dark Gray' },
+              ].map(c => {
+                const isSelected = headerColor === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setHeaderColor(c.id)}
+                    title={c.name}
+                    aria-label={`Select ${c.name} theme`}
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: '50%',
+                      background: c.hex,
+                      border: isSelected ? '3px solid var(--accent)' : '2px solid var(--border)',
+                      boxShadow: isSelected ? '0 0 12px rgba(0, 229, 160, 0.4)' : 'var(--shadow-sm)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      transform: isSelected ? 'scale(1.1)' : 'scale(1)',
+                      transition: 'all 0.18s ease',
+                      outline: 'none',
+                      padding: 0,
+                    }}
+                  >
+                    {isSelected && (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -3166,8 +3220,8 @@ export default function Settings({ backInterceptRef } = {}) {
 
   return (
     <div className="settings-root">
-      <div className="settings-title-row">
-        <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>Settings</div>
+      <div className="page-hdr settings-main-hdr">
+        <div className="page-hdr-title">Settings</div>
       </div>
 
       {/* Profile card — top of settings */}
@@ -3179,78 +3233,90 @@ export default function Settings({ backInterceptRef } = {}) {
           <div className="settings-profile-name">{state.settings?.profileName || state.settings?.name || 'Your Name'}</div>
           <div className="settings-profile-sub">{state.settings?.pin ? '🔒 PIN enabled' : 'Finance Manager v2'}</div>
         </div>
-        <button className="settings-profile-edit-btn" onClick={e => { e.stopPropagation(); setScreen('profile'); }}>Edit</button>
+        <div className="settings-profile-stats-desktop">
+          <span className="settings-profile-stat-badge">{txnCount.toLocaleString()} Transactions</span>
+          <span className="settings-profile-stat-badge">{acctCount} Accounts</span>
+          <span className="settings-profile-stat-badge">{catCount} Categories</span>
+        </div>
+        <button className="settings-profile-edit-btn" onClick={e => { e.stopPropagation(); setScreen('profile'); }}>Edit Profile</button>
       </div>
 
-      {/* Appearance */}
-      <div className="settings-group-label">Appearance</div>
-      <div className="settings-card">
-        <div className="settings-row" onClick={() => setScreen('appearance')}>
-          <div className="settings-row-icon" style={{ background: 'rgba(255,193,7,0.15)' }}>🎨</div>
-          <div className="settings-row-content"><div className="settings-row-title">Appearance</div><div className="settings-row-sub">Theme, font size, and font family</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-        </div>
-      </div>
-
-      {/* Data */}
-      <div className="settings-group-label">Data</div>
-      <div className="settings-card">
-        <div className="settings-row" onClick={() => setScreen('data')}>
-          <div className="settings-row-icon" style={{ background: 'rgba(77,159,255,0.15)' }}>📊</div>
-          <div className="settings-row-content"><div className="settings-row-title">Data Management</div><div className="settings-row-sub">{txnCount.toLocaleString()} transactions · Encrypted Backups</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-        </div>
-      </div>
-
-      {/* Manage */}
-      <div className="settings-group-label">Manage</div>
-      <div className="settings-card">
-        <div className="settings-row" onClick={() => setScreen('groups')}>
-          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>👥</div>
-          <div className="settings-row-content"><div className="settings-row-title">Group Splits &amp; Trips</div><div className="settings-row-sub">Splitwise-style trip expenses, debt simplification &amp; slips</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-        </div>
-        <div className="settings-row" onClick={() => setScreen('warranty')}>
-          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>🛡️</div>
-          <div className="settings-row-content"><div className="settings-row-title">Warranty &amp; Receipts</div><div className="settings-row-sub">Track gadget warranty expiries and bill photos</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-        </div>
-        <div className="settings-row" onClick={() => setScreen('recurring')}>
-          <div className="settings-row-icon" style={{ background: 'rgba(99,179,237,0.15)' }}>🔁</div>
-          <div className="settings-row-content">
-            <div className="settings-row-title">Recurring</div>
-            <div className="settings-row-sub">{(state.recurringRules || []).filter(r => r.rule_type === 'repeat' && r.status === 'active').length} active repeat rules</div>
+      <div className="settings-hub-grid">
+        {/* Column 1: Appearance & System */}
+        <div className="settings-hub-group">
+          <div className="settings-group-label">Appearance &amp; System</div>
+          <div className="settings-card">
+            <div className="settings-row" onClick={() => setScreen('appearance')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(255,193,7,0.15)' }}>🎨</div>
+              <div className="settings-row-content"><div className="settings-row-title">Appearance</div><div className="settings-row-sub">Theme, font size, and font family</div></div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
           </div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-        </div>
-        <div className="settings-row" onClick={() => setScreen('tags')}>
-          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>#️⃣</div>
-          <div className="settings-row-content"><div className="settings-row-title">Tags &amp; Hashtags</div><div className="settings-row-sub">Manage, rename, and clean cross-cutting tags</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-        </div>
-        <div className="settings-row" onClick={() => setScreen('accounts')}>
-          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.12)' }}>💳</div>
-          <div className="settings-row-content"><div className="settings-row-title">Accounts</div><div className="settings-row-sub">{acctCount} accounts</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-        </div>
-        <div className="settings-row" onClick={() => setScreen('categories')}>
-          <div className="settings-row-icon" style={{ background: 'rgba(167,139,250,0.15)' }}>🏷️</div>
-          <div className="settings-row-content"><div className="settings-row-title">Categories</div><div className="settings-row-sub">{catCount} categories</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-        </div>
-        <div className="settings-row" onClick={() => setScreen('budgets')}>
-          <div className="settings-row-icon" style={{ background: 'rgba(255,209,102,0.15)' }}>🎯</div>
-          <div className="settings-row-content"><div className="settings-row-title">Budgets</div><div className="settings-row-sub">{state.budgets?.length || 0} budgets set</div></div>
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-        </div>
-      </div>
 
-      {/* About */}
-      <div className="settings-group-label">About</div>
-      <div className="settings-card">
-        <div className="settings-row">
-          <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.12)' }}>💰</div>
-          <div className="settings-row-content"><div className="settings-row-title">FinMan</div><div className="settings-row-sub">v2.2.1.3 — Built for you by Akbar 💚</div></div>
+          <div className="settings-group-label">About</div>
+          <div className="settings-card">
+            <div className="settings-row">
+              <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.12)' }}>💰</div>
+              <div className="settings-row-content"><div className="settings-row-title">FinMan</div><div className="settings-row-sub">v2.2.1.3 — Built for you by Akbar 💚</div></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Column 2: Data & Automation */}
+        <div className="settings-hub-group">
+          <div className="settings-group-label">Data &amp; Automation</div>
+          <div className="settings-card">
+            <div className="settings-row" onClick={() => setScreen('data')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(77,159,255,0.15)' }}>📊</div>
+              <div className="settings-row-content"><div className="settings-row-title">Data Management</div><div className="settings-row-sub">{txnCount.toLocaleString()} transactions · Encrypted Backups</div></div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
+            <div className="settings-row" onClick={() => setScreen('recurring')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(99,179,237,0.15)' }}>🔁</div>
+              <div className="settings-row-content">
+                <div className="settings-row-title">Recurring Rules</div>
+                <div className="settings-row-sub">{(state.recurringRules || []).filter(r => r.rule_type === 'repeat' && r.status === 'active').length} active repeat rules</div>
+              </div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
+            <div className="settings-row" onClick={() => setScreen('warranty')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>🛡️</div>
+              <div className="settings-row-content"><div className="settings-row-title">Warranty &amp; Receipts</div><div className="settings-row-sub">Track gadget warranty expiries and bill photos</div></div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
+          </div>
+        </div>
+
+        {/* Column 3: Manage Structure & Tools */}
+        <div className="settings-hub-group">
+          <div className="settings-group-label">Manage &amp; Structure</div>
+          <div className="settings-card">
+            <div className="settings-row" onClick={() => setScreen('accounts')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.12)' }}>💳</div>
+              <div className="settings-row-content"><div className="settings-row-title">Accounts</div><div className="settings-row-sub">{acctCount} accounts</div></div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
+            <div className="settings-row" onClick={() => setScreen('categories')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(167,139,250,0.15)' }}>🏷️</div>
+              <div className="settings-row-content"><div className="settings-row-title">Categories</div><div className="settings-row-sub">{catCount} categories</div></div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
+            <div className="settings-row" onClick={() => setScreen('budgets')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(255,209,102,0.15)' }}>🎯</div>
+              <div className="settings-row-content"><div className="settings-row-title">Budgets</div><div className="settings-row-sub">{state.budgets?.length || 0} budgets set</div></div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
+            <div className="settings-row" onClick={() => setScreen('tags')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>#️⃣</div>
+              <div className="settings-row-content"><div className="settings-row-title">Tags &amp; Hashtags</div><div className="settings-row-sub">Manage, rename, and clean cross-cutting tags</div></div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
+            <div className="settings-row" onClick={() => setScreen('groups')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>👥</div>
+              <div className="settings-row-content"><div className="settings-row-title">Group Splits &amp; Trips</div><div className="settings-row-sub">Splitwise-style trip expenses, debt simplification &amp; slips</div></div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
+          </div>
         </div>
       </div>
 

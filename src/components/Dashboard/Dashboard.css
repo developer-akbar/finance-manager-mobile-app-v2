@@ -1,7 +1,17 @@
 .dash-screen  { flex:1; overflow:hidden; display:flex; flex-direction:column; position:relative; }
 .dash-scrollable-content { flex:1; overflow-y:auto; padding-bottom:80px; }
-.dash-greeting { padding:14px var(--page-px) 8px; }
-.dash-hello   { font-size:1.25rem; font-weight:800; color:var(--text-primary); letter-spacing:-0.3px; }
+.dash-greeting {
+  padding: calc(var(--safe-top) + 12px) var(--page-px) 12px;
+  background: var(--theme-header-bg, var(--bg-base));
+  border-bottom: 1px solid var(--theme-header-border, var(--border));
+  flex-shrink: 0;
+}
+@media (min-width: 1024px) {
+  .dash-greeting {
+    padding: calc(var(--safe-top) + 14px) var(--page-px) 14px;
+  }
+}
+.dash-hello   { font-size:1.25rem; font-weight:800; color:var(--theme-header-text, var(--text-primary)); letter-spacing:-0.3px; }
 
 /* ── Credit Card Due Alerts on Dashboard ── */
 .dash-alerts-container {

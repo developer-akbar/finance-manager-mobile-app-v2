@@ -98,7 +98,6 @@ export default function RedeemedInvestments({ positions = [], onSelectPosition }
               <th style={{ textAlign: 'right' }} className="sortable-th" onClick={() => handleHeaderClick('exitDate')}>
                 Exit Date{renderSortIndicator('exitDate')}
               </th>
-              <th style={{ textAlign: 'center' }}>Details</th>
             </tr>
           </thead>
           <tbody>
@@ -145,22 +144,70 @@ export default function RedeemedInvestments({ positions = [], onSelectPosition }
                   <td style={{ textAlign: 'right' }} className="mono text-muted num-tabular font-semibold">
                     {exitDateStr}
                   </td>
-                  <td style={{ textAlign: 'center' }}>
-                    <button 
-                      className="row-view-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectPosition(pos);
-                      }}
-                    >
-                      View
-                    </button>
-                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+      </div>
+
+      {/* Mobile Card View (<768px) */}
+      <div className="holdings-cards-container redeemed-cards-container">
+        {redeemed.map(pos => {
+          const isDemat = pos.investmentAccount === 'Share Market' || pos.holdingMode === 'DEMAT';
+          const qty = pos.sellUnits > 0 ? pos.sellUnits : (pos.buyUnits > 0 ? pos.buyUnits : pos.currentUnits);
+          const qtyDisplay = isDemat ? `${Math.round(qty)} shares` : `${qty.toFixed(3)} units`;
+          const exitDateStr = pos.exitDate || pos.lastTransactionDate || '—';
+
+          return (
+            <div
+              key={pos.positionKey}
+              className="holding-mobile-card clickable redeemed-mobile-card"
+              onClick={() => onSelectPosition(pos)}
+            >
+              <div className="holding-card-header flex-between align-start">
+                <div className="holding-card-title-box">
+                  <div className="holding-card-name line-clamp-2">{pos.note || pos.security}</div>
+                  <div className="holding-card-sub-meta text-muted flex-gap-xs align-center mt-1">
+                    <span className="platform-tag">{pos.subAccount}</span>
+                    {pos.folioNumber && (
+                      <span className="folio-text mono font-xs text-muted">Folio {pos.folioNumber}</span>
+                    )}
+                    <span className="mode-text font-xs text-muted">{pos.holdingMode}</span>
+                  </div>
+                </div>
+
+                <div className="card-primary-hero text-right">
+                  <span className="hero-lbl text-muted uppercase block">REALIZED P&L</span>
+                  <div className={`hero-val font-extrabold num-tabular ${pos.realizedPnl > 0 ? 'pos' : pos.realizedPnl < 0 ? 'neg' : ''}`}>
+                    {pos.realizedPnl !== 0 ? (
+                      <>
+                        {pos.realizedPnl > 0 ? '+' : ''}{formatINR(pos.realizedPnl)}
+                      </>
+                    ) : (
+                      '₹0.00'
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="card-secondary-grid grid-3 mt-2">
+                <div className="sec-col">
+                  <span className="sec-lbl text-muted uppercase">COST BASIS</span>
+                  <span className="sec-val font-semibold num-tabular">{formatINR(pos.buyCost || pos.sellCostBasis)}</span>
+                </div>
+                <div className="sec-col text-center">
+                  <span className="sec-lbl text-muted uppercase">QTY EXITED</span>
+                  <span className="sec-val font-semibold mono num-tabular">{qtyDisplay}</span>
+                </div>
+                <div className="sec-col text-right">
+                  <span className="sec-lbl text-muted uppercase">EXIT DATE</span>
+                  <span className="sec-val font-semibold mono num-tabular text-muted">{exitDateStr}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

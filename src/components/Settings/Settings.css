@@ -274,6 +274,152 @@
   background: var(--bg-hover);
 }
 
+/* ── Settings Main Hub Responsive Grid Layout ── */
+.settings-hub-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.settings-hub-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-profile-stats-desktop {
+  display: none;
+}
+
+/* Tablet (768px – 1279px) */
+@media (min-width: 768px) {
+  .settings-root {
+    padding: 0 0 40px;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+  }
+
+  .settings-title-row {
+    padding: 20px 0 14px;
+  }
+
+  .settings-profile-card {
+    border-radius: var(--r-xl);
+    border: 1px solid var(--border);
+    margin: 0 var(--page-px) 20px;
+    box-shadow: var(--shadow-sm);
+    padding: 16px 20px;
+  }
+
+  .settings-profile-stats-desktop {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: 8px;
+  }
+
+  .settings-profile-stat-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    background: var(--bg-card2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 10px;
+    white-space: nowrap;
+  }
+
+  .settings-hub-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    align-items: start;
+    padding: 0 var(--page-px);
+  }
+
+  .settings-hub-group:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .settings-group-label {
+    padding: 4px 4px 8px;
+  }
+
+  .settings-card {
+    border-radius: var(--r-xl);
+    border: 1px solid var(--border);
+    margin: 0 0 16px;
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+/* Desktop (>= 1280px) */
+@media (min-width: 1280px) {
+  .settings-root {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0 0 48px;
+  }
+
+  .settings-title-row {
+    padding: 24px 0 18px;
+  }
+
+  .settings-profile-card {
+    margin: 0 var(--page-px) 24px;
+    padding: 20px 24px;
+    background: linear-gradient(135deg, var(--bg-card), var(--bg-card2));
+    max-width: 1520px;
+  }
+
+  .settings-hub-grid {
+    max-width: 1520px;
+    padding: 0 var(--page-px);
+  }
+
+  .settings-profile-avatar {
+    width: 52px;
+    height: 52px;
+    font-size: 1.5rem;
+  }
+
+  .settings-profile-name {
+    font-size: 1.1rem;
+  }
+
+  .settings-profile-sub {
+    font-size: 0.76rem;
+  }
+
+  .settings-hub-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+
+  .settings-hub-group:last-child {
+    grid-column: auto;
+  }
+
+  .settings-card {
+    margin: 0 0 20px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .settings-card:hover {
+    box-shadow: var(--shadow-md);
+  }
+
+  .settings-row {
+    padding: 14px 16px;
+  }
+
+  .settings-row:hover {
+    background: var(--bg-hover);
+  }
+}
+
 /* Toggle Switch styles */
 .toggle-switch {
   position: relative;

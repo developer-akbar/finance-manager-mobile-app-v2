@@ -1,4 +1,35 @@
-.analytics-screen { flex:1; min-height:0; overflow-y:auto; padding-bottom: 32px; }
+.analytics-screen {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.analytics-scrollable-content {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 32px;
+}
+
+.analytics-scrollable-content::-webkit-scrollbar {
+  width: 6px;
+}
+.analytics-scrollable-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+.analytics-scrollable-content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
 
 .analytics-periods { padding:14px var(--page-px) 0; }
 .period-tabs { display:flex; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); padding:3px; }

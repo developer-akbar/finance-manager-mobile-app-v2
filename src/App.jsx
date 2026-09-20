@@ -14,7 +14,7 @@ import './styles/globals.css';
 import './SplashScreen.css';
 
 /**
- * Safe-area injection — runs synchronously before React paints.
+ * Safe-area injection — runs synchronously before React paints and on orientation changes.
  * Sets data-cap-android attribute so the CSS fallback kicks in immediately,
  * then measures precise inset values across portrait and landscape.
  */
@@ -38,18 +38,22 @@ function applyAndroidSafeArea() {
         const bottomFromEdge = window.innerHeight - rect.bottom;
         const leftPx = rect.left;
         const rightFromEdge = window.innerWidth - rect.right;
-        const isLandscape = window.innerWidth > window.innerHeight;
+
+        // Detect landscape reliably across orientation API and window dimensions
+        const isLandscape = window.screen?.orientation?.type
+          ? window.screen.orientation.type.includes('landscape')
+          : (window.innerWidth > window.innerHeight);
 
         if (topPx >= 0 && topPx < 120) {
           document.documentElement.style.setProperty(
             '--safe-top',
-            topPx > 0 ? topPx + 'px' : (isLandscape ? '0px' : '32px')
+            topPx > 0 ? topPx + 'px' : (isLandscape ? '24px' : '32px')
           );
         }
         if (bottomFromEdge >= 0 && bottomFromEdge < 140) {
           document.documentElement.style.setProperty(
             '--safe-bottom',
-            bottomFromEdge > 0 ? bottomFromEdge + 'px' : (isLandscape ? '16px' : '16px')
+            bottomFromEdge > 0 ? bottomFromEdge + 'px' : '16px'
           );
         }
         if (leftPx >= 0 && leftPx < 120) {
@@ -69,7 +73,9 @@ function applyAndroidSafeArea() {
 
     requestAnimationFrame(updateInsets);
     window.addEventListener('resize', updateInsets, { passive: true });
-    window.addEventListener('orientationchange', () => setTimeout(updateInsets, 100), { passive: true });
+    window.addEventListener('orientationchange', () => {
+      [50, 150, 300, 500].forEach(delay => setTimeout(updateInsets, delay));
+    }, { passive: true });
   } catch { /* silent */ }
 }
 applyAndroidSafeArea();
@@ -111,6 +117,43 @@ function AppInner() {
   const [addKey,  setAddKey]    = useState(0);
   const [backupDue, setBackupDue] = useState(false);
 
+  // Global viewport & orientation alignment safety
+  React.useEffect(() => {
+    const handleViewportChange = () => {
+      window.scrollTo(0, 0);
+      if (document.documentElement.scrollLeft !== 0) document.documentElement.scrollLeft = 0;
+      if (document.body.scrollLeft !== 0) document.body.scrollLeft = 0;
+      const root = document.getElementById('root');
+      if (root && root.scrollLeft !== 0) root.scrollLeft = 0;
+      const shell = document.querySelector('.app-shell');
+      if (shell && shell.scrollLeft !== 0) shell.scrollLeft = 0;
+
+      // Reset horizontal scroll on all non-table scrollable surfaces
+      document.querySelectorAll('.dash-screen, .dash-scrollable-content, .txn-screen, .txn-list-body, .accounts-screen, .accounts-list, .settings-screen, .settings-root, .categories-screen, .categories-list, .layout-body, .layout-screen').forEach(el => {
+        if (el && el.scrollLeft !== 0) el.scrollLeft = 0;
+      });
+
+      applyAndroidSafeArea();
+    };
+
+    window.addEventListener('resize', handleViewportChange, { passive: true });
+    window.addEventListener('orientationchange', () => {
+      handleViewportChange();
+      [50, 150, 300, 500].forEach(delay => setTimeout(handleViewportChange, delay));
+    }, { passive: true });
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleViewportChange, { passive: true });
+    }
+    return () => {
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('orientationchange', handleViewportChange);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', handleViewportChange);
+      }
+    };
+  }, []);
+
   // Process due repeat transactions on app open
   React.useEffect(() => {
     if (!state.loading) processDueRepeat();
@@ -147,7 +190,7 @@ function AppInner() {
         wasScrolled = true;
         window.dispatchEvent(new CustomEvent('transactions-nav-tap'));
       } else {
-        const scrollables = activeEl.querySelectorAll('.sub-body, .acct-detail-body, .cat-detail-body, .dash-scrollable-content, .settings-root, .accounts-list, .categories-list, .analytics-screen, .txn-monthly-list');
+        const scrollables = activeEl.querySelectorAll('.sub-body, .acct-detail-body, .cat-detail-body, .dash-scrollable-content, .settings-root, .accounts-list, .categories-list, .analytics-scrollable-content, .analytics-screen, .txn-monthly-list');
         scrollables.forEach(el => {
           if (el.scrollTop > 10) {
             wasScrolled = true;

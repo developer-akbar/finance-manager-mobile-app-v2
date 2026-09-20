@@ -130,7 +130,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
             className="portfolio-refresh-btn"
             onClick={() => setShowPlansModal(true)}
             title="Manage recurring SIP and investment plans"
-            style={{ borderColor: 'rgba(59, 130, 246, 0.4)', color: '#3b82f6' }}
+            style={{ borderColor: 'rgba(59, 130, 246, 0.4)' }}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14">
               <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -142,6 +142,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
             onClick={() => refreshValuations(true)}
             disabled={isFetchingValuations}
             title="Refresh live market & NAV prices"
+            style={{ borderColor: 'rgba(59, 130, 246, 0.4)' }}
           >
             <svg 
               className={isFetchingValuations ? 'spinning' : ''} 

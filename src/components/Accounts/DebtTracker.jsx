@@ -267,7 +267,7 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
             type="text"
             className="form-input"
             style={{ fontSize: '0.82rem', padding: '8px 12px' }}
-            placeholder="Search person (e.g. Suri, Ramesh)..."
+            placeholder="Search person..."
             value={search}
             onChange={e => setSearch(e.target.value)}
           />

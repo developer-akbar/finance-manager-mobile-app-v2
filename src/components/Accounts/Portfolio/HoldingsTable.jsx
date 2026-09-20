@@ -166,9 +166,6 @@ export default function HoldingsTable({
                   <th className="sortable-th col-fund" onClick={() => handleHeaderClick('name')}>
                     Security / Scheme{renderSortIndicator('name')}
                   </th>
-                  <th className="sortable-th col-platform" onClick={() => handleHeaderClick('platform')}>
-                    Platform{renderSortIndicator('platform')}
-                  </th>
                   <th className="col-folio">Folios / Mode</th>
                   <th className="sortable-th col-val text-right" onClick={() => handleHeaderClick('value')}>
                     Current Value{renderSortIndicator('value')}
@@ -214,15 +211,15 @@ export default function HoldingsTable({
                           <div className="fund-primary-name">{group.note || group.security}</div>
                           <div className="fund-secondary-meta">
                             <span className="mono font-xs text-muted">{group.isin}</span>
-                            {group.ownershipTag !== 'PERSONAL' && (
+                            {group.subAccount && (
+                              <span className="platform-tag">{group.subAccount}</span>
+                            )}
+                            {group.ownershipTag && group.ownershipTag !== 'PERSONAL' && group.ownershipTag !== 'MIXED_HOLDING' && (
                               <span className={`ownership-pill platform-tag ${group.ownershipTag.toLowerCase()}`}>
                                 {group.ownershipTag}
                               </span>
                             )}
                           </div>
-                        </td>
-                        <td className="col-platform">
-                          <span className="platform-tag">{group.subAccount}</span>
                         </td>
                         <td className="col-folio">
                           <div className="folio-mode-meta">
@@ -313,9 +310,9 @@ export default function HoldingsTable({
                               onClick={() => onSelectPosition(subPos)}
                               title="Click to view folio details"
                             >
-                              <td className="fund-cell sub-row-cell col-fund" colSpan={2}>
+                              <td className="fund-cell sub-row-cell col-fund">
                                 <div className="sub-row-indent">
-                                  ↳ <span className="sub-row-platform">{subPos.subAccount}</span>
+                                  ↳ <span className="platform-tag">{subPos.subAccount}</span>
                                 </div>
                               </td>
                               <td className="col-folio">
@@ -381,9 +378,6 @@ export default function HoldingsTable({
                         <div className="holding-card-name line-clamp-2">{group.note || group.security}</div>
                         <div className="holding-card-sub-meta text-muted flex-gap-xs align-center mt-1">
                           <span className="platform-tag">{group.subAccount}</span>
-                          {group.ownershipTag === 'MIXED_HOLDING' && (
-                            <span className="platform-tag mixed-tag">MIXED HOLDING</span>
-                          )}
                           {group.isAggregateGroup && (
                             <button 
                               className="folio-expand-badge-btn"

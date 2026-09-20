@@ -466,51 +466,51 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
 
   return (
     <div className="dash-screen">
+      {/* ── Greeting & Actions (Full width theme header) ── */}
+      <div className="dash-greeting" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="dash-hello">{greeting}{name ? `, ${name}` : ' 👋'}</div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            onClick={() => navigate('analytics')}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 14,
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
+              color: 'var(--theme-header-btn-color, var(--text-primary))',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              cursor: 'pointer',
+            }}
+          >
+            <span>📊</span> Analytics
+          </button>
+          <button
+            onClick={() => setShowForecast(true)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 14,
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
+              color: 'var(--theme-header-btn-color, var(--text-primary))',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              cursor: 'pointer',
+            }}
+          >
+            <span>📈</span> Cash Flow
+          </button>
+        </div>
+      </div>
+
       <div className="dash-scrollable-content">
         <div className="app-container">
-
-        {/* ── Greeting & Actions ── */}
-        <div className="dash-greeting" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div className="dash-hello">{greeting}{name ? `, ${name}` : ' 👋'}</div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              onClick={() => navigate('analytics')}
-              style={{
-                padding: '6px 10px',
-                borderRadius: 14,
-                fontSize: '0.74rem',
-                fontWeight: 700,
-                border: '1px solid var(--border)',
-                background: 'var(--bg-card2)',
-                color: 'var(--text-primary)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-                cursor: 'pointer',
-              }}
-            >
-              <span>📊</span> Analytics
-            </button>
-            <button
-              onClick={() => setShowForecast(true)}
-              style={{
-                padding: '6px 10px',
-                borderRadius: 14,
-                fontSize: '0.74rem',
-                fontWeight: 700,
-                border: '1px solid var(--border)',
-                background: 'var(--bg-card2)',
-                color: 'var(--accent)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-                cursor: 'pointer',
-              }}
-            >
-              <span>📈</span> Cash Flow
-            </button>
-          </div>
-        </div>
 
         {/* ── SMS / UPI Clipboard Detection Banner ── */}
         {detectedSmsTxn && (

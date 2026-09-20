@@ -208,9 +208,9 @@ export default function Analytics({ backInterceptRef }) {
             borderRadius: 14,
             fontSize: '0.75rem',
             fontWeight: 700,
-            border: '1px solid var(--border)',
-            background: 'var(--bg-card2)',
-            color: 'var(--accent)',
+            border: '1px solid var(--theme-header-border, var(--border))',
+            background: 'var(--theme-header-btn-bg, var(--bg-card2))',
+            color: 'var(--theme-header-btn-color, var(--accent))',
             display: 'flex',
             alignItems: 'center',
             gap: 6,
@@ -221,8 +221,9 @@ export default function Analytics({ backInterceptRef }) {
         </button>
       </div>
 
-      {/* Period selector */}
-      <div className="analytics-periods">
+      <div className="analytics-scrollable-content">
+        {/* Period selector */}
+        <div className="analytics-periods">
         <div className="period-tabs">
           {PERIODS.map(p=>(
             <button key={p} className={`period-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</button>
@@ -395,8 +396,7 @@ export default function Analytics({ backInterceptRef }) {
           )}
         </div>
       </div>
-
-      <div className="h-8"/>
     </div>
+  </div>
   );
 }

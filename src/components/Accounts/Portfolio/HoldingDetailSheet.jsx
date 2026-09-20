@@ -372,7 +372,7 @@ export default function HoldingDetailSheet({
         </div>
         <div className="sheet-detail-row">
           <span className="sec-lbl text-muted uppercase">OWNERSHIP SCOPE</span>
-          <span className="sec-val font-semibold text-primary">{displayPos.ownershipTag === 'MIXED_HOLDING' ? 'Mixed Holding' : (displayPos.ownershipTag || 'Individual')}</span>
+          <span className="sec-val font-semibold text-primary">{displayPos.ownershipTag === 'MIXED_HOLDING' ? 'Personal' : (displayPos.ownershipTag || 'Individual')}</span>
         </div>
         <div className="sheet-detail-row">
           <span className="sec-lbl text-muted uppercase">REALIZED P&L</span>
@@ -410,22 +410,9 @@ export default function HoldingDetailSheet({
           </svg>
         </button>
         <div className="portfolio-top-titles" style={{ minWidth: 0, flex: 1 }}>
-          <h2 className="portfolio-main-title holding-card-name" title={position.note || position.security}>
+          <h2 className="portfolio-main-title holding-card-name" title={position.note || position.security} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '1.05rem', fontWeight: 800 }}>
             {position.note || position.security}
           </h2>
-          <div className="portfolio-header-chips flex-gap-xs align-center mt-1">
-            {ageInfo.fullStr && <span className="age-text text-muted font-xs">{ageInfo.fullStr}</span>}
-            <span className="platform-tag">{displayPos.subAccount || position.subAccount}</span>
-            {position.folioNumber && <span className="platform-tag mono">Folio: {position.folioNumber}</span>}
-            {(displayPos.ownershipTag === 'MIXED_HOLDING' || position.ownershipTag === 'MIXED_HOLDING') && (
-              <span className="platform-tag mixed-tag">Mixed Holding</span>
-            )}
-            {isRedeemed ? (
-              <span className="coverage-badge gray">Closed / Redeemed</span>
-            ) : (
-              <span className="coverage-badge green">Active Position</span>
-            )}
-          </div>
         </div>
       </div>
 
@@ -537,6 +524,9 @@ export default function HoldingDetailSheet({
                 <span className="lifecycle-val font-semibold mono text-primary">
                   {displayPos.firstBuyDate || '—'}
                 </span>
+                {ageInfo.fullStr && (
+                  <span className="lifecycle-sub text-muted font-xs block mt-0.5">{ageInfo.fullStr}</span>
+                )}
               </div>
 
               {/* Cell 2: Exit Date / Status */}
