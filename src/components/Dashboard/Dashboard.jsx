@@ -10,6 +10,7 @@ import CardOptimizer from '../Accounts/CardOptimizer.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import StockManager from '../Accounts/StockManager.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
+import { calculateIncomeMilestones } from '../../utils/milestones.js';
 import './Dashboard.css';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -47,7 +48,11 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   const [popupMsg, setPopupMsg] = useState(''); // Custom detail sheet popup
   const [showAllYears, setShowAllYears] = useState(false);
   const [showForecast, setShowForecast] = useState(false);
+  const [showMilestones, setShowMilestones] = useState(false);
   const [detectedSmsTxn, setDetectedSmsTxn] = useState(null);
+
+  // Derive income milestones dynamically in O(N) single pass over ledger
+  const incomeMilestones = useMemo(() => calculateIncomeMilestones(transactions), [transactions]);
 
   // Sub-screen navigation states
   const [showGroups, setShowGroups] = useState(false);
@@ -59,7 +64,9 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   // Sync back button intercepts dynamically
   useEffect(() => {
     if (!backInterceptRef) return;
-    if (showGroups) {
+    if (showMilestones) {
+      backInterceptRef.current = () => setShowMilestones(false);
+    } else if (showGroups) {
       backInterceptRef.current = () => setShowGroups(false);
     } else if (showOptimizer) {
       backInterceptRef.current = () => setShowOptimizer(false);
@@ -75,7 +82,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
     return () => {
       if (backInterceptRef) backInterceptRef.current = null;
     };
-  }, [showGroups, showOptimizer, showDebtTracker, showStockManager, showForecast, backInterceptRef]);
+  }, [showMilestones, showGroups, showOptimizer, showDebtTracker, showStockManager, showForecast, backInterceptRef]);
 
   // Auto-detect SMS / UPI transaction copied to clipboard
   useEffect(() => {
@@ -103,6 +110,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   // Handle Home tab tap to reset sub-views
   useEffect(() => {
     const handleReset = () => {
+      setShowMilestones(false);
       setShowForecast(false);
       setShowAllYears(false);
       setPopupMsg('');
@@ -110,6 +118,19 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
     window.addEventListener('reset-dashboard-view', handleReset);
     return () => window.removeEventListener('reset-dashboard-view', handleReset);
   }, []);
+
+  // Handle keyboard Escape for milestones modal
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        if (showMilestones) {
+          setShowMilestones(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showMilestones]);
 
   const hour = now.getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -469,7 +490,52 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
       {/* ── Greeting & Actions (Full width theme header) ── */}
       <div className="dash-greeting" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="dash-hello">{greeting}{name ? `, ${name}` : ' 👋'}</div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button
+            type="button"
+            className="dash-milestones-btn"
+            onClick={() => setShowMilestones(true)}
+            title="Financial Milestones & Achievements"
+            aria-label="Financial Milestones"
+            style={{
+              padding: '6px 9px',
+              borderRadius: 14,
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              border: '1px solid var(--border)',
+              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
+              color: 'var(--theme-header-btn-color, var(--text-primary))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              position: 'relative',
+            }}
+          >
+            <span style={{ fontSize: '0.95rem', lineHeight: 1 }}>🏆</span>
+            {incomeMilestones.achievedCount > 0 && (
+              <span className="dash-milestones-badge" style={{
+                position: 'absolute',
+                top: -3,
+                right: -3,
+                minWidth: 14,
+                height: 14,
+                borderRadius: 7,
+                background: 'var(--income)',
+                color: '#0a0f1e',
+                fontSize: '0.55rem',
+                fontWeight: 900,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 3px',
+                lineHeight: 1,
+                border: '1.5px solid var(--theme-header-bg, var(--bg-base))'
+              }}>
+                {incomeMilestones.achievedCount}
+              </span>
+            )}
+          </button>
           <button
             onClick={() => navigate('analytics')}
             style={{
@@ -858,6 +924,14 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           </div>
         </div>
 
+        {/* ── Financial Milestones & Achievements Modal / Sheet ── */}
+        {showMilestones && (
+          <FinancialMilestonesModal
+            incomeMilestones={incomeMilestones}
+            onClose={() => setShowMilestones(false)}
+          />
+        )}
+
         {/* ── Custom bottom sheet/popup overlay for detail message dialogs ── */}
         {popupMsg && (
           <>
@@ -889,6 +963,79 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           </svg>
         </button>
       )}
+    </div>
+  );
+}
+
+// ── Financial Milestones & Achievements Modal Component ────────────────────────
+function FinancialMilestonesModal({ incomeMilestones, onClose }) {
+  const { milestones, totalIncome, achievedCount, totalCount } = incomeMilestones;
+  const pct = totalCount > 0 ? Math.round((achievedCount / totalCount) * 100) : 0;
+
+  return (
+    <div className="milestones-modal-wrap">
+      <div className="overlay" onClick={onClose} />
+      <div className="milestones-modal-card">
+        <div className="sheet-handle mobile-only-sheet-handle" style={{ marginTop: 10 }} />
+        <div className="milestones-modal-hdr">
+          <div className="milestones-hdr-left">
+            <span className="milestones-hdr-icon">🏆</span>
+            <div>
+              <div className="milestones-hdr-title">Financial Milestones</div>
+              <div className="milestones-hdr-sub">{achievedCount} of {totalCount} Achieved · {pct}% Unlocked</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            style={{ fontSize: '1.1rem', padding: '4px 8px', lineHeight: 1 }}
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="milestones-summary-box">
+          <div className="milestones-summary-row">
+            <span className="milestones-summary-label">Total Cumulative Income</span>
+            <span className="milestones-summary-val">{formatINR(totalIncome)}</span>
+          </div>
+          <div className="progress-track" style={{ height: 6, borderRadius: 3, marginTop: 4 }}>
+            <div
+              className="progress-fill"
+              style={{
+                width: `${pct}%`,
+                background: 'linear-gradient(90deg, var(--green), #4d9fff)',
+                borderRadius: 3,
+              }}
+            />
+          </div>
+        </div>
+
+        <div className="milestones-list-scroll">
+          {milestones.map(m => (
+            <div key={m.id} className={`milestone-row ${m.achieved ? 'achieved' : 'locked'}`}>
+              <div className="milestone-status-badge">
+                {m.achieved ? '🏆' : '🔒'}
+              </div>
+              <div className="milestone-content">
+                <div className="milestone-top-line">
+                  <span className="milestone-tag">{m.label}</span>
+                  <span className="milestone-title">{m.desc}</span>
+                </div>
+                <div className="milestone-bottom-line">
+                  {m.achieved ? (
+                    <span>✓ Achieved on {m.achievedFormattedDate}</span>
+                  ) : (
+                    <span>🔒 Not achieved yet · Need {formatINR(Math.max(0, m.amount - totalIncome))} more</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

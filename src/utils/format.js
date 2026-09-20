@@ -402,3 +402,5 @@ export const filterNoteSuggestions = (suggestions, query, limit = 15) => {
   }
   return result;
 };
+
+export { calculateIncomeMilestones, MILESTONE_DEFINITIONS } from './milestones.js';

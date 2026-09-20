@@ -599,3 +599,197 @@
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+/* ── FINANCIAL MILESTONES MODAL & ACHIEVEMENTS ── */
+.dash-milestones-btn:hover {
+  filter: brightness(1.1);
+}
+.dash-milestones-btn:active {
+  transform: scale(0.94);
+}
+.milestones-modal-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+@media (min-width: 768px) {
+  .milestones-modal-wrap {
+    align-items: center;
+    padding: 24px;
+  }
+}
+.milestones-modal-card {
+  position: relative;
+  z-index: 1000;
+  width: 100%;
+  max-width: 540px;
+  max-height: 88dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-xl);
+  border-top-left-radius: var(--r-xl);
+  border-top-right-radius: var(--r-xl);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-bottom: calc(var(--safe-bottom) + 12px);
+  overflow: hidden;
+  animation: slideUpModal 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@media (min-width: 768px) {
+  .milestones-modal-card {
+    border-radius: var(--r-2xl);
+    padding-bottom: 20px;
+    max-height: 82vh;
+  }
+}
+@keyframes slideUpModal {
+  from { transform: translateY(30px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.milestones-modal-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.milestones-hdr-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.milestones-hdr-icon {
+  font-size: 1.6rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.milestones-hdr-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+.milestones-hdr-sub {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.milestones-summary-box {
+  background: var(--bg-card2);
+  border-radius: var(--r-lg);
+  padding: 10px 14px;
+  margin: 12px 18px 0;
+  border: 1px solid var(--border-light);
+}
+.milestones-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.milestones-summary-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.milestones-summary-val {
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: var(--income);
+  font-family: var(--font);
+}
+.milestones-list-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.milestone-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--r-lg);
+  transition: all 0.15s;
+}
+.milestone-row.achieved {
+  background: linear-gradient(135deg, rgba(0, 229, 160, 0.09), rgba(0, 229, 160, 0.02));
+  border: 1px solid rgba(0, 229, 160, 0.3);
+}
+.milestone-row.locked {
+  background: var(--bg-card2);
+  border: 1px solid var(--border-light);
+  opacity: 0.7;
+}
+.milestone-status-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+.milestone-row.achieved .milestone-status-badge {
+  background: rgba(0, 229, 160, 0.18);
+  color: var(--income);
+}
+.milestone-row.locked .milestone-status-badge {
+  background: var(--bg-input);
+  color: var(--text-muted);
+}
+.milestone-content {
+  flex: 1;
+  min-width: 0;
+}
+.milestone-top-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.milestone-tag {
+  font-size: 0.72rem;
+  font-weight: 800;
+  font-family: var(--font);
+  padding: 1px 7px;
+  border-radius: 8px;
+}
+.milestone-row.achieved .milestone-tag {
+  background: var(--income);
+  color: #0a0f1e;
+}
+.milestone-row.locked .milestone-tag {
+  background: var(--border);
+  color: var(--text-muted);
+}
+.milestone-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.milestone-bottom-line {
+  font-size: 0.7rem;
+  font-weight: 600;
+  margin-top: 3px;
+}
+.milestone-row.achieved .milestone-bottom-line {
+  color: var(--income);
+}
+.milestone-row.locked .milestone-bottom-line {
+  color: var(--text-muted);
+}
