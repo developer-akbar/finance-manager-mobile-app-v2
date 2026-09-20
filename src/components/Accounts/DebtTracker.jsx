@@ -1,19 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { formatINR, formatINRCompact, parseDate, txnAmount, txnType } from '../../utils/format.js';
+import { formatINR, formatINRCompact, parseDate, txnAmount, txnType, extractPersonName } from '../../utils/format.js';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
 import './DebtTracker.css';
 
-export function extractPersonName(rawNote) {
-  if (!rawNote) return 'Unspecified';
-  let s = rawNote.replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
-  // Strip directional prefixes
-  s = s.replace(/^(to\s*:?|from\s*:?|lend\s*to\s*:?|lend\s*from\s*:?|borrow\s*from\s*:?|given\s*to\s*:?|received\s*from\s*:?|return\s*from\s*:?|repay\s*to\s*:?|paid\s*to\s*:?)\s+/i, '');
-  s = s.replace(/\s+(return|settlement|repayment|lent|borrowed|advance)$/i, '');
-  s = s.trim();
-  if (!s) return 'Unspecified';
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
 
 export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
   const { state } = useApp();
@@ -37,9 +27,8 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
   }, [editTxn, selectedPerson, onBack, backInterceptRef]);
 
-  // Extract and calculate FIFO Itemized Debt Ledgers
+  // Extract and calculate FIFO Itemized Debt Ledgers with strict Person Scope
   const { totalReceivable, totalPayable, personLedgers } = useMemo(() => {
-    let rec = 0, pay = 0;
     const ledgerMap = {};
 
     for (const t of transactions) {
@@ -56,7 +45,9 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
 
       if (!isLendAccount && !isBorrowAccount) continue;
 
+      // Extract genuine person counterparty
       const personKey = extractPersonName(rawNote);
+      if (!personKey) continue;
 
       if (!ledgerMap[personKey]) {
         ledgerMap[personKey] = {
@@ -79,12 +70,10 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
         const isGiving = toAcct === 'lend' || (type === 'expense' && acct === 'lend') || /^(to|lend\s*to|given\s*to)\s+/i.test(rawNote);
         if (isGiving) {
           p.lent += amt;
-          rec += amt;
           p.rawTxns.push({ ...t, _role: 'lent', _amt: amt });
         } else {
           // Receiving repayment from someone
           p.received += amt;
-          rec -= amt;
           p.rawTxns.push({ ...t, _role: 'received', _amt: amt });
         }
       } else if (isBorrowAccount) {
@@ -92,12 +81,10 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
         const isBorrowing = acct === 'borrow' || (type === 'income' && acct === 'borrow') || /^(borrow\s*from|from|received\s*from)\s+/i.test(rawNote);
         if (isBorrowing) {
           p.borrowed += amt;
-          pay += amt;
           p.rawTxns.push({ ...t, _role: 'borrowed', _amt: amt });
         } else {
           // Repaying money to someone
           p.repaid += amt;
-          pay -= amt;
           p.rawTxns.push({ ...t, _role: 'repaid', _amt: amt });
         }
       }
@@ -195,9 +182,15 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
       };
     }).sort((a, b) => Math.abs(b.netBalance) - Math.abs(a.netBalance));
 
+    let recSum = 0, paySum = 0;
+    for (const p of list) {
+      if (p.netBalance > 0.5) recSum += p.netBalance;
+      if (p.netBalance < -0.5) paySum += Math.abs(p.netBalance);
+    }
+
     return {
-      totalReceivable: Math.max(0, rec),
-      totalPayable: Math.max(0, pay),
+      totalReceivable: Math.round(recSum * 100) / 100,
+      totalPayable: Math.round(paySum * 100) / 100,
       personLedgers: list,
     };
   }, [transactions]);
@@ -262,33 +255,25 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
         </div>
 
         {/* Search & Filter Pills */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <input
-            type="text"
-            className="form-input"
-            style={{ fontSize: '0.82rem', padding: '8px 12px' }}
-            placeholder="Search person..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
+        <div className="debt-controls-wrap">
+          <div className="debt-search-wrap">
+            <input
+              type="text"
+              className="form-input"
+              style={{ fontSize: '0.82rem', padding: '8px 12px' }}
+              placeholder="Search person..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
 
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div className="debt-filter-tabs">
             {['pending', 'all', 'settled'].map(mode => (
               <button
                 key={mode}
+                type="button"
                 onClick={() => setFilterMode(mode)}
-                style={{
-                  flex: 1,
-                  padding: '6px 0',
-                  borderRadius: 20,
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  textTransform: 'capitalize',
-                  border: filterMode === mode ? '1.5px solid var(--accent)' : '1px solid var(--border)',
-                  background: filterMode === mode ? 'rgba(0, 229, 160, 0.15)' : 'var(--bg-card)',
-                  color: filterMode === mode ? 'var(--accent)' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                }}
+                className={`debt-filter-tab ${filterMode === mode ? 'active' : ''}`}
               >
                 {mode === 'pending' ? '⏳ Pending' : mode === 'settled' ? '✓ Settled' : 'All Persons'}
               </button>
@@ -299,7 +284,7 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
         {/* Person Cards List */}
         <div className="debt-person-list">
           {filteredPersons.length === 0 ? (
-            <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 30, fontSize: '0.85rem' }}>
+            <div className="debt-empty-state">
               {search ? 'No matching persons found.' : filterMode === 'pending' ? 'No pending debt or lending dues! 🎉' : 'No records found.'}
             </div>
           ) : (

@@ -404,3 +404,4 @@ export const filterNoteSuggestions = (suggestions, query, limit = 15) => {
 };
 
 export { calculateIncomeMilestones, MILESTONE_DEFINITIONS } from './milestones.js';
+export { extractPersonName } from './debtTrackerUtils.js';

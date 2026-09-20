@@ -14,13 +14,15 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .debt-summary-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 14px 16px;
+  padding: 14px 18px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 
@@ -34,18 +36,18 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .debt-summary-divider {
   width: 1px;
-  height: 36px;
+  height: 38px;
   background: var(--border);
-  margin: 0 14px;
+  margin: 0 16px;
 }
 
 .debt-summary-label {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -53,28 +55,119 @@
 }
 
 .debt-summary-val {
-  font-size: 1.15rem;
+  font-size: 1.22rem;
   font-weight: 800;
 }
 .debt-summary-val.pos { color: var(--income); }
 .debt-summary-val.neg { color: var(--expense); }
 
-.debt-person-list {
+/* Controls (Search & Filter) */
+.debt-controls-wrap {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+}
+
+.debt-search-wrap {
+  width: 100%;
+}
+
+.debt-filter-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.debt-filter-tab {
+  flex: 1;
+  padding: 6px 0;
+  border-radius: 20px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: capitalize;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.debt-filter-tab.active {
+  border: 1.5px solid var(--accent);
+  background: rgba(0, 229, 160, 0.15);
+  color: var(--accent);
+}
+
+@media (min-width: 768px) {
+  .debt-controls-wrap {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  .debt-search-wrap {
+    flex: 1;
+    max-width: 420px;
+  }
+  .debt-filter-tabs {
+    flex: 0 0 auto;
+    min-width: 340px;
+  }
+}
+
+/* Person Cards List — Adaptive Responsive Grid (Mobile 1-col, Tablet 2-col, Desktop 3-col, Wide 4-col) */
+.debt-person-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (min-width: 600px) {
+  .debt-person-list {
+    grid-template-columns: repeat(auto-fill, minmax(285px, 1fr));
+    gap: 14px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .debt-person-list {
+    grid-template-columns: repeat(auto-fill, minmax(295px, 1fr));
+    gap: 16px;
+  }
+}
+
+.debt-empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--text-muted);
+  padding: 36px 20px;
+  font-size: 0.85rem;
+  background: var(--bg-card);
+  border: 1px dashed var(--border);
+  border-radius: 14px;
 }
 
 .debt-person-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 12px 14px;
+  padding: 13px 15px;
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   gap: 8px;
   cursor: pointer;
-  transition: transform 0.12s, border-color 0.12s;
+  transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.debt-person-card:hover {
+  border-color: var(--border-hover, rgba(255, 255, 255, 0.2));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
 }
 
 .debt-person-card:active {
@@ -86,17 +179,23 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
 }
 
 .debt-person-name {
   font-size: 0.92rem;
   font-weight: 700;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .debt-person-bal {
-  font-size: 0.88rem;
+  font-size: 0.86rem;
   font-weight: 800;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .debt-person-bal.pos { color: var(--income); }
 .debt-person-bal.neg { color: var(--expense); }
@@ -133,6 +232,10 @@
   color: var(--accent);
   cursor: pointer;
   transition: all 0.12s;
+}
+
+.debt-settle-btn:hover {
+  background: rgba(0, 229, 160, 0.2);
 }
 
 .debt-settle-btn:active {
