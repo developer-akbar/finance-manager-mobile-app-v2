@@ -367,10 +367,10 @@
   }
 
   .settings-profile-card {
-    margin: 0 var(--page-px) 24px;
+    margin: 14px var(--page-px) 24px;
     padding: 20px 24px;
     background: linear-gradient(135deg, var(--bg-card), var(--bg-card2));
-    max-width: 1520px;
+    /* max-width: 1520px; */
   }
 
   .settings-hub-grid {

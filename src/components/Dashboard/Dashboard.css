@@ -257,7 +257,7 @@
     grid-template-columns: 1.05fr 0.95fr;
     gap: 16px;
     padding: 0 var(--page-px);
-    margin-bottom: 12px;
+    margin: 14px 0 14px;
     align-items: stretch;
   }
   .dash-desktop-hero-grid > .dash-nw-card {
