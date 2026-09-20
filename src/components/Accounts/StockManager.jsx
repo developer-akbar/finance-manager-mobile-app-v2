@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { formatINR } from '../../utils/format.js';
+import { formatINR, normalizeSuggestionQuery } from '../../utils/format.js';
 import {
   getInventoryItems,
   addInventoryPurchase,
@@ -1178,9 +1178,9 @@ export default function StockManager({ onBack, backInterceptRef }) {
                                   setActiveStoreEditSug(true);
                                 }}
                               />
-                              {activeStoreEditSug && storeSuggestions.filter(s => s.toLowerCase().includes((editFormData.notes || '').toLowerCase())).length > 0 && (
+                              {activeStoreEditSug && storeSuggestions.filter(s => s.toLowerCase().includes(normalizeSuggestionQuery(editFormData.notes).toLowerCase())).length > 0 && (
                                 <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 100, maxHeight: 120, overflowY: 'auto' }}>
-                                  {storeSuggestions.filter(s => s.toLowerCase().includes((editFormData.notes || '').toLowerCase())).map(item => (
+                                  {storeSuggestions.filter(s => s.toLowerCase().includes(normalizeSuggestionQuery(editFormData.notes).toLowerCase())).map(item => (
                                     <div
                                       key={item}
                                       className="note-sug-item"
@@ -1724,9 +1724,9 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             setActiveItemSugIdx(idx);
                           }}
                         />
-                        {activeItemSugIdx === idx && itemSuggestions.filter(s => s.toLowerCase().includes(item.name.toLowerCase())).length > 0 && (
+                        {activeItemSugIdx === idx && itemSuggestions.filter(s => s.toLowerCase().includes(normalizeSuggestionQuery(item.name).toLowerCase())).length > 0 && (
                           <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 100, maxHeight: 150, overflowY: 'auto' }}>
-                            {itemSuggestions.filter(s => s.toLowerCase().includes(item.name.toLowerCase())).map(s => (
+                            {itemSuggestions.filter(s => s.toLowerCase().includes(normalizeSuggestionQuery(item.name).toLowerCase())).map(s => (
                               <div
                                 key={s}
                                 className="note-sug-item"
@@ -1950,9 +1950,9 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             setActiveStoreSugIdx(idx);
                           }}
                         />
-                        {activeStoreSugIdx === idx && storeSuggestions.filter(s => s.toLowerCase().includes(item.notes.toLowerCase())).length > 0 && (
+                        {activeStoreSugIdx === idx && storeSuggestions.filter(s => s.toLowerCase().includes(normalizeSuggestionQuery(item.notes).toLowerCase())).length > 0 && (
                           <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 100, maxHeight: 150, overflowY: 'auto' }}>
-                            {storeSuggestions.filter(s => s.toLowerCase().includes(item.notes.toLowerCase())).map(s => (
+                            {storeSuggestions.filter(s => s.toLowerCase().includes(normalizeSuggestionQuery(item.notes).toLowerCase())).map(s => (
                               <div
                                 key={s}
                                 className="note-sug-item"

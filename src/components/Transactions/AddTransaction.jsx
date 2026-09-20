@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { v4 as uuid } from 'uuid';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { inputToStorage, toInputDate, nowTimeStr, formatINR, cleanNumericInput, isSystemTag, getUserFacingTags } from '../../utils/format.js';
+import { inputToStorage, toInputDate, nowTimeStr, formatINR, cleanNumericInput, isSystemTag, getUserFacingTags, normalizeSuggestionQuery } from '../../utils/format.js';
 import { resolveInvestmentAccounts, calculateGrowwCharges, resolveKnownFolioAndMode } from '../../utils/brokerageAccounting.js';
 import { resolveSecurity, searchSecurities, cleanSecurityToNote } from '../../utils/securityResolution.js';
 import './AddTransaction.css';
@@ -1675,12 +1675,14 @@ export default function AddTransaction({
     reader.readAsDataURL(file);
   };
 
-  const getRecentAndMostUsedNotes = (targetType = form.type) => {
+  const getRecentAndMostUsedNotes = (targetType = form.type, targetCategory = null) => {
     const isTargetXfer = targetType.toLowerCase().startsWith('transfer');
     const matchingTxns = transactions.filter(t => {
       const tType = (t['Income/Expense'] || 'Expense').toLowerCase();
-      if (isTargetXfer) return tType.startsWith('transfer');
-      return tType === targetType.toLowerCase();
+      const typeMatch = isTargetXfer ? tType.startsWith('transfer') : tType === targetType.toLowerCase();
+      if (!typeMatch) return false;
+      if (targetCategory && t.Category && t.Category.toLowerCase() !== targetCategory.toLowerCase()) return false;
+      return true;
     });
 
     // Compute frequencies of each note (stripped of instalment suffixes)
@@ -2481,8 +2483,9 @@ export default function AddTransaction({
       noteUserEditedRef.current = true;
     }
     set('note', v);
-    if (v.trim().length > 0) {
-      const q = v.toLowerCase(), seen = new Set();
+    const norm = normalizeSuggestionQuery(v);
+    if (norm.length > 0) {
+      const q = norm.toLowerCase(), seen = new Set();
       if (isInvMode) {
         const sugs = investmentSecurities
           .map(s => s.note || cleanSecurityToNote(s.symbol) || s.symbol)
@@ -2515,8 +2518,9 @@ export default function AddTransaction({
     setPickerState(null);
     setNoteFocused(true);
     // Never show suggestions on empty Note field; do NOT mark as manually edited
-    if (form.note && form.note.trim()) {
-      const q = form.note.toLowerCase(), seen = new Set();
+    const norm = normalizeSuggestionQuery(form.note);
+    if (norm.length > 0) {
+      const q = norm.toLowerCase(), seen = new Set();
       if (isInvMode) {
         const sugs = investmentSecurities
           .map(s => s.note || cleanSecurityToNote(s.symbol) || s.symbol)
@@ -3137,10 +3141,11 @@ export default function AddTransaction({
             <button key={tp.id} className={`type-tab ${tp.cls} ${form.type === tp.id ? 'active' : ''}`} onClick={() => {
               set('type', tp.id);
               if (noteFocused) {
-                if (!form.note || !form.note.trim()) {
+                const norm = normalizeSuggestionQuery(form.note);
+                if (!norm) {
                   setNoteSugs(getRecentAndMostUsedNotes(tp.id));
                 } else {
-                  const q = form.note.toLowerCase(), seen = new Set();
+                  const q = norm.toLowerCase(), seen = new Set();
                   const matched = transactions
                     .filter(t => (t['Income/Expense'] || 'Expense').toLowerCase() === tp.id.toLowerCase())
                     .map(t => stripInstalmentSuffix(t.Note || ''))
@@ -4313,10 +4318,17 @@ export default function AddTransaction({
                         onChange={e => {
                           const val = e.target.value;
                           setSplits(prev => prev.map((item, i) => i === idx ? { ...item, note: val } : item));
-                          setSplitNoteSugs(getRecentAndMostUsedNotes(form.type, s.category).filter(n => {
-                            const noteStr = typeof n === 'object' ? n.note : n;
-                            return noteStr.toLowerCase().includes(val.toLowerCase());
-                          }));
+                          const norm = normalizeSuggestionQuery(val);
+                          const allSugs = getRecentAndMostUsedNotes(form.type, s.category);
+                          if (!norm) {
+                            setSplitNoteSugs(allSugs);
+                          } else {
+                            const q = norm.toLowerCase();
+                            setSplitNoteSugs(allSugs.filter(n => {
+                              const noteStr = typeof n === 'object' ? n.note : n;
+                              return noteStr.toLowerCase().includes(q);
+                            }));
+                          }
                         }}
                       />
                       {splitNoteFocusedIdx === idx && splitNoteSugs.length > 0 && (

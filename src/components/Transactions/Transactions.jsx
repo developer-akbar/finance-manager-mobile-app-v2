@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, calcTotals, calcReportingTotals, groupByDate, txnType, txnAmount, inputToStorage, isSystemTag, getUserFacingTags } from '../../utils/format.js';
+import { parseDate, formatINR, calcTotals, calcReportingTotals, groupByDate, txnType, txnAmount, inputToStorage, isSystemTag, getUserFacingTags, normalizeSuggestionQuery } from '../../utils/format.js';
 import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import TransactionSyncModal from './TransactionSyncModal.jsx';
@@ -665,20 +665,20 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     el.setAttribute('spellcheck', 'true');
     el.setAttribute('autocapitalize', 'sentences');
   };
-  const [query,     setQuery]     = useState('');
-  const [debouncedQ,setDebouncedQ]= useState('');
-  const debTimer = useRef(null);
-  const [noteSugs,  setNoteSugs]  = useState([]);
-  const [showFilter,setShowFilter]= useState(false);
-  const [selAccts,  setSelAccts]  = useState(new Set());
-  const [selCats,   setSelCats]   = useState(new Set());
-  const [selPeriod, setSelPeriod] = useState('All');
-  const [periodOffset, setPeriodOffset] = useState(0); // for prev/next navigation
-  const [customFrom,setFrom]      = useState('');
-  const [customTo,  setTo]        = useState('');
-  const [selected,  setSelected]  = useState(new Set());
-  const [multiMode, setMultiMode] = useState(false);
-  const [copyTxn,   setCopyTxn]   = useState(null);
+  const [draftQuery,    setDraftQuery]    = useState('');
+  const [committedQuery,setCommittedQuery]= useState('');
+  const [isSearching,   setIsSearching]   = useState(false);
+  const [noteSugs,      setNoteSugs]      = useState([]);
+  const [showFilter,    setShowFilter]    = useState(false);
+  const [selAccts,      setSelAccts]      = useState(new Set());
+  const [selCats,       setSelCats]       = useState(new Set());
+  const [selPeriod,     setSelPeriod]     = useState('All');
+  const [periodOffset,  setPeriodOffset]  = useState(0); // for prev/next navigation
+  const [customFrom,    setFrom]          = useState('');
+  const [customTo,      setTo]            = useState('');
+  const [selected,      setSelected]      = useState(new Set());
+  const [multiMode,     setMultiMode]     = useState(false);
+  const [copyTxn,       setCopyTxn]       = useState(null);
 
   // Advanced Search Scope & Multi-Filter Query Builder
   const [scopeNotes, setScopeNotes] = useState(true);
@@ -690,44 +690,50 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   const [onlyWarranty, setOnlyWarranty]   = useState(false);
 
   const now = new Date();
-  const multiModePrevHandler = React.useRef(null);
-  const multiModeHandler = React.useRef(null);
 
   const allAcctNames = useMemo(() => (accounts||[]).map(a=>a?.name||a).filter(Boolean).sort(), [accounts]);
   const allCatNames  = useMemo(() => Object.keys(categories||{}).sort(), [categories]);
 
-  // Handle back button interception for multi-mode
+  // Handle back button interception hierarchy:
+  // 1. If filter popup is open -> Android Back closes ONLY the filter popup
+  // 2. If in multiMode -> Android Back exits multiMode
+  // 3. Otherwise -> Android Back exits Search view and returns to Transactions
   React.useEffect(() => {
     if (!backInterceptRef) return;
-    if (multiMode) {
-      multiModePrevHandler.current = backInterceptRef.current;
-      multiModeHandler.current = () => { setMultiMode(false); setSelected(new Set()); };
-      backInterceptRef.current = multiModeHandler.current;
-    } else {
-      if (backInterceptRef.current === multiModeHandler.current) {
-        backInterceptRef.current = multiModePrevHandler.current;
-        multiModePrevHandler.current = null;
-        multiModeHandler.current = null;
-      }
+    if (showFilter) {
+      backInterceptRef.current = () => setShowFilter(false);
+    } else if (multiMode) {
+      backInterceptRef.current = () => { setMultiMode(false); setSelected(new Set()); };
+    } else if (onClose) {
+      backInterceptRef.current = onClose;
     }
-  }, [multiMode]); // Removed backInterceptRef from deps
+    return () => {
+      if (backInterceptRef.current === onClose) {
+        backInterceptRef.current = null;
+      }
+    };
+  }, [showFilter, multiMode, onClose, backInterceptRef]);
 
-  // Handle keyboard Escape for search view multiMode
+  // Handle keyboard Escape for search view
   React.useEffect(() => {
-    if (!multiMode) return;
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' || e.key === 'Esc') {
-        if (showFilter || copyTxn) return;
-        const activeOverlays = document.querySelectorAll('.overlay, .bottom-sheet, .modal-backdrop, .modal-overlay, .dialog-overlay');
-        if (activeOverlays.length > 0) return;
-        e.stopPropagation();
-        setMultiMode(false);
-        setSelected(new Set());
+        if (showFilter) {
+          e.stopPropagation();
+          setShowFilter(false);
+          return;
+        }
+        if (multiMode) {
+          e.stopPropagation();
+          setMultiMode(false);
+          setSelected(new Set());
+          return;
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [multiMode, showFilter, copyTxn]);
+  }, [multiMode, showFilter]);
 
   // Reset offset when period changes
   const handlePeriodChange = (p) => { setSelPeriod(p); setPeriodOffset(0); };
@@ -780,77 +786,127 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     return '';
   }, [periodRange, selPeriod]);
 
-  const hasQuery = debouncedQ.trim().length > 0 || selAccts.size > 0 || selCats.size > 0 || selPeriod !== 'All' || minAmount || maxAmount || txnTypeFilter !== 'All' || onlyWarranty;
+  const hasQuery = committedQuery.trim().length > 0 || selAccts.size > 0 || selCats.size > 0 || selPeriod !== 'All' || minAmount || maxAmount || txnTypeFilter !== 'All' || onlyWarranty || !scopeNotes || !scopeDesc || !scopeTags;
 
+  // Single-pass high performance filter based strictly on committed query and active filters
   const results = useMemo(() => {
     if (!hasQuery) return [];
-    const q = debouncedQ.trim().toLowerCase();
+    const q = committedQuery.trim().toLowerCase();
     const minA = parseFloat(minAmount);
     const maxA = parseFloat(maxAmount);
+    const hasMinA = !isNaN(minA);
+    const hasMaxA = !isNaN(maxA);
+    const isTagSearch = q.startsWith('#');
+    const cleanTag = isTagSearch ? q.slice(1) : '';
+    const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const hashRegex = isTagSearch && cleanTag ? new RegExp(`(^|\\s)#${escapeRegex(cleanTag)}(\\b|\\s|$)`, 'i') : null;
 
-    return transactions.filter(t => {
-      const d = parseDate(t.Date);
+    const matched = [];
+    for (let i = 0; i < transactions.length; i++) {
+      const t = transactions[i];
       const amt = parseFloat(t.INR || t.Amount || 0);
 
-      // Period filter
-      if (periodRange) {
-        if (d < periodRange.start || d > periodRange.end) return false;
-      } else if (selPeriod === 'Custom' && customFrom && customTo) {
-        if (d < new Date(customFrom) || d > new Date(customTo + 'T23:59:59')) return false;
-      }
-
       // Amount filter
-      if (!isNaN(minA) && amt < minA) return false;
-      if (!isNaN(maxA) && amt > maxA) return false;
+      if (hasMinA && amt < minA) continue;
+      if (hasMaxA && amt > maxA) continue;
 
       // Type filter
       const tp = (t['Income/Expense'] || 'Expense').toLowerCase();
-      if (txnTypeFilter === 'Expense' && tp !== 'expense') return false;
-      if (txnTypeFilter === 'Income' && tp !== 'income') return false;
-      if (txnTypeFilter === 'Transfer' && !tp.startsWith('transfer')) return false;
+      if (txnTypeFilter === 'Expense' && tp !== 'expense') continue;
+      if (txnTypeFilter === 'Income' && tp !== 'income') continue;
+      if (txnTypeFilter === 'Transfer' && !tp.startsWith('transfer')) continue;
 
       // Warranty / Receipt filter
-      if (onlyWarranty && !t.warranty_expiry && !t.receipt_image && !t.serial_no) return false;
+      if (onlyWarranty && !t.warranty_expiry && !t.receipt_image && !t.serial_no) continue;
 
       // Account & Category filter
-      if (selAccts.size > 0 && !selAccts.has(t.Account) && !selAccts.has(t.FromAccount) && !selAccts.has(t.ToAccount)) return false;
-      if (selCats.size > 0 && !selCats.has(t.Category)) return false;
+      if (selAccts.size > 0 && !selAccts.has(t.Account) && !selAccts.has(t.FromAccount) && !selAccts.has(t.ToAccount)) continue;
+      if (selCats.size > 0 && !selCats.has(t.Category)) continue;
 
-      if (!q) return true;
+      // Period filter (only parse date if period is actively filtered)
+      if (periodRange) {
+        const d = parseDate(t.Date);
+        if (d < periodRange.start || d > periodRange.end) continue;
+      } else if (selPeriod === 'Custom' && customFrom && customTo) {
+        const d = parseDate(t.Date);
+        if (d < new Date(customFrom) || d > new Date(customTo + 'T23:59:59')) continue;
+      }
+
+      if (!q) {
+        matched.push(t);
+        continue;
+      }
 
       // Scoped text matching
-      if (q.startsWith('#')) {
-        const cleanTag = q.slice(1);
-        const userTags = getUserFacingTags(t.Tags).map(x => x.replace(/^#/, '').toLowerCase());
-        if (scopeTags && userTags.includes(cleanTag)) return true;
-        const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const hashRegex = new RegExp(`(^|\\s)#${escapeRegex(cleanTag)}(\\b|\\s|$)`, 'i');
-        if (scopeTags && hashRegex.test(t.Note || '')) return true;
-        if (scopeTags && hashRegex.test(t.Description || '')) return true;
-        return false;
+      if (isTagSearch) {
+        let tagMatched = false;
+        if (scopeTags && t.Tags) {
+          const userTags = getUserFacingTags(t.Tags).map(x => x.replace(/^#/, '').toLowerCase());
+          if (userTags.includes(cleanTag)) tagMatched = true;
+        }
+        if (!tagMatched && scopeTags && hashRegex) {
+          if (hashRegex.test(t.Note || '') || hashRegex.test(t.Description || '')) tagMatched = true;
+        }
+        if (tagMatched) matched.push(t);
+        continue;
       }
 
       // Standard text search with scope flags
-      const matches = [];
-      if (scopeNotes && t.Note && t.Note.toLowerCase().includes(q)) matches.push(true);
-      if (scopeDesc && t.Description && t.Description.toLowerCase().includes(q)) matches.push(true);
-      if (scopeTags && t.Tags) {
+      let isMatch = false;
+      if (scopeNotes && t.Note && t.Note.toLowerCase().includes(q)) isMatch = true;
+      else if (scopeDesc && t.Description && t.Description.toLowerCase().includes(q)) isMatch = true;
+      else if (scopeTags && t.Tags) {
         const userTags = getUserFacingTags(t.Tags).map(x => x.toLowerCase());
-        if (userTags.some(ut => ut.includes(q))) matches.push(true);
+        if (userTags.some(ut => ut.includes(q))) isMatch = true;
       }
-      if (t.Category && t.Category.toLowerCase().includes(q)) matches.push(true);
-      if (t.Subcategory && t.Subcategory.toLowerCase().includes(q)) matches.push(true);
-      if (t.Account && t.Account.toLowerCase().includes(q)) matches.push(true);
-      if (t.FromAccount && t.FromAccount.toLowerCase().includes(q)) matches.push(true);
-      if (t.ToAccount && t.ToAccount.toLowerCase().includes(q)) matches.push(true);
+      else if (t.Category && t.Category.toLowerCase().includes(q)) isMatch = true;
+      else if (t.Subcategory && t.Subcategory.toLowerCase().includes(q)) isMatch = true;
+      else if (t.Account && t.Account.toLowerCase().includes(q)) isMatch = true;
+      else if (t.FromAccount && t.FromAccount.toLowerCase().includes(q)) isMatch = true;
+      else if (t.ToAccount && t.ToAccount.toLowerCase().includes(q)) isMatch = true;
 
-      return matches.length > 0;
-    }).sort((a, b) => parseDate(b.Date) - parseDate(a.Date));
-  }, [transactions, debouncedQ, selPeriod, periodRange, selAccts, selCats, customFrom, customTo, minAmount, maxAmount, txnTypeFilter, onlyWarranty, scopeNotes, scopeDesc, scopeTags, hasQuery]);
+      if (isMatch) matched.push(t);
+    }
+    return matched;
+  }, [transactions, committedQuery, selPeriod, periodRange, selAccts, selCats, customFrom, customTo, minAmount, maxAmount, txnTypeFilter, onlyWarranty, scopeNotes, scopeDesc, scopeTags, hasQuery]);
+
+  // Derived Applicable Facets & Counts (Excel-like dynamic values in O(N))
+  const { applicableAccounts, applicableCategories, facetCounts } = useMemo(() => {
+    if (!hasQuery) {
+      return {
+        applicableAccounts: allAcctNames,
+        applicableCategories: allCatNames,
+        facetCounts: { accounts: {}, categories: {} }
+      };
+    }
+
+    const acctCounts = {};
+    const catCounts = {};
+
+    for (let i = 0; i < results.length; i++) {
+      const t = results[i];
+      if (t.Account) acctCounts[t.Account] = (acctCounts[t.Account] || 0) + 1;
+      if (t.FromAccount && t.FromAccount !== t.Account) acctCounts[t.FromAccount] = (acctCounts[t.FromAccount] || 0) + 1;
+      if (t.ToAccount && t.ToAccount !== t.Account) acctCounts[t.ToAccount] = (acctCounts[t.ToAccount] || 0) + 1;
+      if (t.Category) catCounts[t.Category] = (catCounts[t.Category] || 0) + 1;
+    }
+
+    // Keep all accounts that have matching results OR are currently selected in selAccts (with 0 count if no matches)
+    const appAccts = allAcctNames.filter(a => acctCounts[a] > 0 || selAccts.has(a));
+    // Keep all categories that have matching results OR are currently selected in selCats (with 0 count if no matches)
+    const appCats = allCatNames.filter(c => catCounts[c] > 0 || selCats.has(c));
+
+    return {
+      applicableAccounts: appAccts,
+      applicableCategories: appCats,
+      facetCounts: { accounts: acctCounts, categories: catCounts }
+    };
+  }, [hasQuery, results, allAcctNames, allCatNames, selAccts, selCats]);
 
   const totals = useMemo(() => {
     let inc = 0, exp = 0, xfr = 0;
-    for (const t of results) {
+    for (let i = 0; i < results.length; i++) {
+      const t = results[i];
       const tp = txnType(t), amt = txnAmount(t);
       if (tp === 'income') inc += amt;
       else if (tp === 'expense') exp += amt;
@@ -861,7 +917,9 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
 
   const selTotals = useMemo(() => {
     let inc = 0, exp = 0, xfr = 0;
-    for (const t of results.filter(r => selected.has(r._id))) {
+    for (let i = 0; i < results.length; i++) {
+      const t = results[i];
+      if (!selected.has(t._id)) continue;
       const tp = txnType(t), amt = txnAmount(t);
       if (tp === 'income') inc += amt;
       else if (tp === 'expense') exp += amt;
@@ -872,17 +930,12 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
 
   const allAvailableTags = useMemo(() => {
     const seen = new Set();
-    for (const t of transactions) {
+    const limit = Math.min(transactions.length, 500);
+    for (let i = 0; i < limit; i++) {
+      const t = transactions[i];
       if (t.Tags) {
         const cleanUserTags = getUserFacingTags(t.Tags);
         cleanUserTags.forEach(tag => seen.add(tag));
-      }
-      const matches = ((t.Note || '') + ' ' + (t.Description || '')).match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g);
-      if (matches) {
-        matches.forEach(m => {
-          const clean = m.toLowerCase();
-          if (!isSystemTag(clean)) seen.add(clean);
-        });
       }
     }
     try {
@@ -901,17 +954,18 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   }, [transactions, state.settings?.customTags]);
 
   const stripInstalment = (note) => {
-    // Strip installment suffixes like "(5/12)", "(2/6)" from note suggestions
     return (note || '').replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
   };
 
   const handleNoteInput = v => {
-    setQuery(v);
-    if (v.trim()) {
-      const q = v.toLowerCase(), seen = new Set();
+    setDraftQuery(v);
+
+    const norm = normalizeSuggestionQuery(v);
+    if (norm) {
+      const q = norm.toLowerCase(), seen = new Set();
       const sugs = [];
-      for (const t of transactions) {
-        const raw = t.Note; if (!raw) continue;
+      for (let i = 0; i < transactions.length; i++) {
+        const raw = transactions[i].Note; if (!raw) continue;
         const stripped = stripInstalment(raw);
         if (!stripped.toLowerCase().includes(q)) continue;
         if (seen.has(stripped)) continue;
@@ -921,12 +975,19 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       }
       setNoteSugs(sugs);
     } else { setNoteSugs([]); }
-    // Do NOT auto-trigger search on debounce — wait for Enter or suggestion select
   };
 
-  const triggerSearch = (v) => {
-    setDebouncedQ(v ?? query);
+  const commitSearch = (overrideValue) => {
+    const val = overrideValue !== undefined ? overrideValue : draftQuery;
+    setDraftQuery(val);
     setNoteSugs([]);
+    if (val !== committedQuery) {
+      setIsSearching(true);
+      setTimeout(() => {
+        setCommittedQuery(val);
+        setIsSearching(false);
+      }, 20);
+    }
   };
 
   const toggleSel  = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
@@ -936,114 +997,264 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   const PERIODS = ['All', 'Weekly', 'Monthly', 'Yearly', 'FY', 'Custom'];
   const canNav  = selPeriod !== 'All' && selPeriod !== 'Custom';
 
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (committedQuery.trim()) count += 1;
+    if (selAccts.size > 0) count += selAccts.size;
+    if (selCats.size > 0) count += selCats.size;
+    if (selPeriod !== 'All') count += 1;
+    if (txnTypeFilter !== 'All') count += 1;
+    if (minAmount) count += 1;
+    if (maxAmount) count += 1;
+    if (onlyWarranty) count += 1;
+    if (!scopeNotes || !scopeDesc || !scopeTags) count += 1;
+    return count;
+  }, [committedQuery, selAccts, selCats, selPeriod, txnTypeFilter, minAmount, maxAmount, onlyWarranty, scopeNotes, scopeDesc, scopeTags]);
+
+  const handleClearAll = () => {
+    setDraftQuery('');
+    setCommittedQuery('');
+    setNoteSugs([]);
+    setIsSearching(false);
+    setSelAccts(new Set());
+    setSelCats(new Set());
+    setSelPeriod('All');
+    setPeriodOffset(0);
+    setMinAmount('');
+    setMaxAmount('');
+    setTxnTypeFilter('All');
+    setOnlyWarranty(false);
+    setScopeNotes(true);
+    setScopeDesc(true);
+    setScopeTags(true);
+    setFrom('');
+    setTo('');
+  };
+
+  // Applied Filter Chips
+  const appliedFilters = useMemo(() => {
+    const list = [];
+    if (committedQuery.trim()) {
+      const qText = committedQuery.trim();
+      list.push({
+        id: 'query',
+        label: `"${qText}"`,
+        onRemove: () => {
+          setDraftQuery('');
+          setCommittedQuery('');
+          setNoteSugs([]);
+        }
+      });
+    }
+    if (txnTypeFilter !== 'All') {
+      list.push({
+        id: 'type',
+        label: `Type: ${txnTypeFilter}`,
+        onRemove: () => setTxnTypeFilter('All')
+      });
+    }
+    if (minAmount && maxAmount) {
+      list.push({
+        id: 'amount',
+        label: `₹${minAmount} – ₹${maxAmount}`,
+        onRemove: () => { setMinAmount(''); setMaxAmount(''); }
+      });
+    } else if (minAmount) {
+      list.push({
+        id: 'minAmount',
+        label: `≥ ₹${minAmount}`,
+        onRemove: () => setMinAmount('')
+      });
+    } else if (maxAmount) {
+      list.push({
+        id: 'maxAmount',
+        label: `≤ ₹${maxAmount}`,
+        onRemove: () => setMaxAmount('')
+      });
+    }
+    if (onlyWarranty) {
+      list.push({
+        id: 'warranty',
+        label: '🛡️ Receipt / Warranty',
+        onRemove: () => setOnlyWarranty(false)
+      });
+    }
+    if (selPeriod !== 'All') {
+      list.push({
+        id: 'period',
+        label: selPeriod === 'Custom' ? `Custom: ${customFrom || '…'} to ${customTo || '…'}` : `${selPeriod}${periodLabel ? ` (${periodLabel})` : ''}`,
+        onRemove: () => { setSelPeriod('All'); setPeriodOffset(0); setFrom(''); setTo(''); }
+      });
+    }
+    selAccts.forEach(a => {
+      list.push({
+        id: `acct-${a}`,
+        label: a,
+        onRemove: () => toggleAcct(a)
+      });
+    });
+    selCats.forEach(c => {
+      list.push({
+        id: `cat-${c}`,
+        label: c,
+        onRemove: () => toggleCat(c)
+      });
+    });
+    return list;
+  }, [committedQuery, txnTypeFilter, minAmount, maxAmount, onlyWarranty, selPeriod, periodLabel, customFrom, customTo, selAccts, selCats]);
+
   return (
     <div className="search-view" {...swipe}>
-      {/* Search bar */}
-      <div className="search-bar-row">
-        <button className="back-btn" onClick={onClose}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-        </button>
-        <div className="search-input-wrap">
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" style={{width:14,height:14,flexShrink:0}}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input ref={textInputRef} autoFocus type="text" className="search-input" value={query}
-            onChange={e => handleNoteInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { e.target.blur(); triggerSearch(); } }}
-            onBlur={() => setTimeout(() => setNoteSugs([]), 180)}
-            placeholder="Search note, category, account…"/>
-          {(query || debouncedQ) && (
-            <button className="search-clear" onClick={() => {
-              setQuery(''); setDebouncedQ(''); setNoteSugs([]);
-              if (debTimer.current) clearTimeout(debTimer.current);
-            }}>✕</button>
-          )}
-          {noteSugs.length > 0 && (
-            <div className="note-sug-list" style={{top:'calc(100% + 4px)'}}>
-              {noteSugs.map(s => <div key={s} className="note-sug-item" onMouseDown={() => { setQuery(s); triggerSearch(s); setNoteSugs([]); }}>{s}</div>)}
+      <div className="search-workspace-layout">
+        {/* Persistent left filter panel for desktop / tablet */}
+        <aside className="search-desktop-filters">
+          <SearchFilterControls
+            scopeNotes={scopeNotes} setScopeNotes={setScopeNotes}
+            scopeDesc={scopeDesc} setScopeDesc={setScopeDesc}
+            scopeTags={scopeTags} setScopeTags={setScopeTags}
+            minAmount={minAmount} setMinAmount={setMinAmount}
+            maxAmount={maxAmount} setMaxAmount={setMaxAmount}
+            txnTypeFilter={txnTypeFilter} setTxnTypeFilter={setTxnTypeFilter}
+            onlyWarranty={onlyWarranty} setOnlyWarranty={setOnlyWarranty}
+            PERIODS={PERIODS} selPeriod={selPeriod} handlePeriodChange={handlePeriodChange}
+            customFrom={customFrom} setFrom={setFrom}
+            customTo={customTo} setTo={setTo}
+            allAcctNames={allAcctNames} selAccts={selAccts} toggleAcct={toggleAcct}
+            allCatNames={allCatNames} categories={categories} selCats={selCats} toggleCat={toggleCat}
+            applicableAccounts={applicableAccounts} applicableCategories={applicableCategories} facetCounts={facetCounts}
+            appliedFilters={appliedFilters}
+            activeFilterCount={activeFilterCount}
+            onClearAll={handleClearAll}
+            isDesktop={true}
+          />
+        </aside>
+
+        {/* Main search and results area */}
+        <div className="search-desktop-content">
+          {/* Search bar */}
+          <div className="search-bar-row">
+            <button className="back-btn" onClick={onClose} title="Back">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+            </button>
+            <div className="search-input-wrap">
+              <button
+                type="button"
+                className="search-commit-btn"
+                onClick={() => commitSearch()}
+                title="Search"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" style={{width:15,height:15,flexShrink:0}}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              </button>
+              <input ref={textInputRef} autoFocus type="text" className="search-input" value={draftQuery}
+                onChange={e => handleNoteInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.target.blur();
+                    commitSearch();
+                  }
+                }}
+                onBlur={() => setTimeout(() => setNoteSugs([]), 180)}
+                placeholder="Search note, category, account…"/>
+              {(draftQuery || committedQuery) && (
+                <button type="button" className="search-clear" onClick={() => {
+                  setDraftQuery(''); setCommittedQuery(''); setIsSearching(false); setNoteSugs([]);
+                }} title="Clear search">✕</button>
+              )}
+              {noteSugs.length > 0 && (
+                <div className="note-sug-list" style={{top:'calc(100% + 4px)'}}>
+                  {noteSugs.map(s => <div key={s} className="note-sug-item" onMouseDown={() => { commitSearch(s); }}>{s}</div>)}
+                </div>
+              )}
+            </div>
+            <button className="filter-btn mobile-only-filter-btn" onClick={() => setShowFilter(true)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{width:15,height:15}}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+              {activeFilterCount > 0 && <span className="filter-active-dot"/>}
+            </button>
+          </div>
+
+          {/* Period nav bar — shown when a navigable period is selected */}
+          {canNav && (
+            <div className="period-nav-bar">
+              <div className="period-nav-inner">
+                <button className="period-nav-btn" onClick={() => setPeriodOffset(o => o + 1)}>‹</button>
+                <span className="period-nav-label">{periodLabel}</span>
+                <button className="period-nav-btn" onClick={() => setPeriodOffset(o => o - 1)}>›</button>
+              </div>
             </div>
           )}
-        </div>
-        <button className="filter-btn" onClick={() => setShowFilter(true)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{width:15,height:15}}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-          {(selAccts.size + selCats.size > 0 || selPeriod !== 'All') && <span className="filter-active-dot"/>}
-        </button>
-      </div>
 
-      {/* Period nav bar — shown when a navigable period is selected */}
-      {canNav && (
-        <div className="period-nav-bar">
-          <div className="period-nav-inner">
-            <button className="period-nav-btn" onClick={() => setPeriodOffset(o => o + 1)}>‹</button>
-            <span className="period-nav-label">{periodLabel}</span>
-            <button className="period-nav-btn" onClick={() => setPeriodOffset(o => o - 1)}>›</button>
-          </div>
-        </div>
-      )}
+          {/* Multi-select summary bar */}
+          {multiMode && <BulkSelectionBar selected={selected} setSelected={setSelected} selTotals={selTotals} allTxns={results}
+            onDone={()=>{setMultiMode(false);setSelected(new Set());}}
+            onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
 
-      {/* Multi-select summary bar */}
-      {multiMode && <BulkSelectionBar selected={selected} setSelected={setSelected} selTotals={selTotals} allTxns={results}
-        onDone={()=>{setMultiMode(false);setSelected(new Set());}}
-        onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
+          {/* Totals bar */}
+          {!isSearching && hasQuery && results.length > 0 && (
+            <div className="search-totals-bar">
+              <div className="search-total-item"><div className="search-total-l">Income</div><div className="search-total-v" style={{color:'var(--income)'}}>{formatINR(totals.inc)}</div></div>
+              <div className="search-total-item"><div className="search-total-l">Expenses</div><div className="search-total-v" style={{color:'var(--expense)'}}>{formatINR(totals.exp)}</div></div>
+              <div className="search-total-item"><div className="search-total-l">Transfer</div><div className="search-total-v" style={{color:'var(--transfer)'}}>{formatINR(totals.xfr)}</div></div>
+              <div className="search-total-item"><div className="search-total-l">Count</div><div className="search-total-v">{results.length}</div></div>
+            </div>
+          )}
 
-      {/* Totals bar */}
-      {hasQuery && results.length > 0 && (
-        <div className="search-totals-bar">
-          <div className="search-total-item"><div className="search-total-l">Income</div><div className="search-total-v" style={{color:'var(--income)'}}>{formatINR(totals.inc)}</div></div>
-          <div className="search-total-item"><div className="search-total-l">Expenses</div><div className="search-total-v" style={{color:'var(--expense)'}}>{formatINR(totals.exp)}</div></div>
-          <div className="search-total-item"><div className="search-total-l">Transfer</div><div className="search-total-v" style={{color:'var(--transfer)'}}>{formatINR(totals.xfr)}</div></div>
-          <div className="search-total-item"><div className="search-total-l">Count</div><div className="search-total-v">{results.length}</div></div>
-        </div>
-      )}
-
-      {/* Results */}
-      <div className="search-list">
-        {!hasQuery ? (
-          <div className="empty-state" style={{ padding: '24px 16px' }}>
-            <div className="empty-icon">🔍</div>
-            <div className="empty-title">Search transactions</div>
-            <div className="empty-desc" style={{ marginBottom: 18 }}>Type a note, category, account, or tap a tag</div>
-            {allAvailableTags.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', maxWidth: 360, margin: '0 auto' }}>
-                {allAvailableTags.map(tag => (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => {
-                      setQuery(tag);
-                      triggerSearch(tag);
-                    }}
-                    style={{
-                      padding: '6px 14px',
-                      borderRadius: 18,
-                      fontSize: '0.78rem',
-                      fontWeight: 600,
-                      border: '1px solid var(--border)',
-                      background: 'var(--bg-card2)',
-                      color: 'var(--accent)',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                    }}
-                  >
-                    {tag}
-                  </button>
-                ))}
+          {/* Results Area */}
+          <div className="search-list">
+            {isSearching ? (
+              <div className="search-loading-state" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', gap: 12 }}>
+                <div className="loader-spinner" style={{ width: 28, height: 28, borderWidth: 3, margin: 0 }} />
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>Searching transactions…</span>
               </div>
-            )}
+            ) : !hasQuery ? (
+              <div className="empty-state" style={{ padding: '24px 16px' }}>
+                <div className="empty-icon">🔍</div>
+                <div className="empty-title">Search transactions</div>
+                <div className="empty-desc" style={{ marginBottom: 18 }}>Type a note, category, account, or tap a tag</div>
+                {allAvailableTags.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', maxWidth: 360, margin: '0 auto' }}>
+                    {allAvailableTags.map(tag => (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          commitSearch(tag);
+                        }}
+                        style={{
+                          padding: '6px 14px',
+                          borderRadius: 18,
+                          fontSize: '0.78rem',
+                          fontWeight: 600,
+                          border: '1px solid var(--border)',
+                          background: 'var(--bg-card2)',
+                          color: 'var(--accent)',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : results.length === 0 ? (
+              <div className="empty-state"><div className="empty-icon">😶</div><div className="empty-title">No results</div></div>
+            ) : results.map(t => (
+              <TransactionItem key={t._id} transaction={t}
+                selected={selected.has(t._id)}
+                showDate={true}
+                backInterceptRef={backInterceptRef}
+                onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
+                onTap={multiMode ? () => toggleSel(t) : undefined}
+                onCopy={txn => setCopyTxn({ ...txn, _id: undefined })}/>
+            ))}
+            <div style={{height: 80}}/>
           </div>
-        ) : results.length === 0 ? (
-          <div className="empty-state"><div className="empty-icon">😶</div><div className="empty-title">No results</div></div>
-        ) : results.map(t => (
-          <TransactionItem key={t._id} transaction={t}
-            selected={selected.has(t._id)}
-            showDate={true}
-            backInterceptRef={backInterceptRef}
-            onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }}
-            onTap={multiMode ? () => toggleSel(t) : undefined}
-            onCopy={txn => setCopyTxn({ ...txn, _id: undefined })}/>
-        ))}
-        <div style={{height: 80}}/>
+        </div>
       </div>
 
-      {/* Filter sheet */}
+      {/* Filter sheet for mobile / small screens */}
       {showFilter && (
         <>
           <div className="overlay" onClick={() => setShowFilter(false)}/>
@@ -1051,157 +1262,28 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
             <div className="sheet-handle" style={{marginTop:14}}/>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'0 var(--page-px) 10px',borderBottom:'1px solid var(--border)'}}>
               <div style={{fontWeight:800,fontSize:'0.9rem'}}>Search &amp; Filter Options</div>
-              <button className="btn btn-ghost btn-sm" onClick={() => {
-                setSelAccts(new Set()); setSelCats(new Set()); setSelPeriod('All'); setPeriodOffset(0);
-                setMinAmount(''); setMaxAmount(''); setTxnTypeFilter('All'); setOnlyWarranty(false);
-                setScopeNotes(true); setScopeDesc(true); setScopeTags(true);
-                setShowFilter(false);
-              }}>Clear all</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowFilter(false)}>Close</button>
             </div>
-            <div style={{overflow:'auto',flex:1,padding:'10px var(--page-px)',display:'flex',flexDirection:'column',gap:14}}>
-              
-              {/* Search Target Scope Checkboxes */}
-              <div className="filter-section" style={{marginBottom:0}}>
-                <div className="filter-section-label">Search Query In (Target Scope)</div>
-                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                  <div className="filter-check-row" style={{background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8}} onClick={() => setScopeNotes(p => !p)}>
-                    <div className={`filter-check-box ${scopeNotes ? 'checked' : ''}`}>{scopeNotes && '✓'}</div>
-                    <div className="filter-check-label">Notes</div>
-                  </div>
-                  <div className="filter-check-row" style={{background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8}} onClick={() => setScopeDesc(p => !p)}>
-                    <div className={`filter-check-box ${scopeDesc ? 'checked' : ''}`}>{scopeDesc && '✓'}</div>
-                    <div className="filter-check-label">Description</div>
-                  </div>
-                  <div className="filter-check-row" style={{background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8}} onClick={() => setScopeTags(p => !p)}>
-                    <div className={`filter-check-box ${scopeTags ? 'checked' : ''}`}>{scopeTags && '✓'}</div>
-                    <div className="filter-check-label">#Tags</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Amount Range Filter */}
-              <div className="filter-section" style={{marginBottom:0}}>
-                <div className="filter-section-label">Amount Range (₹)</div>
-                <div style={{display:'flex',gap:8}}>
-                  <input
-                    type="number"
-                    className="form-input"
-                    placeholder="Min ₹ (e.g. 1000)"
-                    value={minAmount}
-                    onChange={e => setMinAmount(e.target.value)}
-                    style={{flex:1,background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8,border:'1px solid var(--border)'}}
-                  />
-                  <input
-                    type="number"
-                    className="form-input"
-                    placeholder="Max ₹ (e.g. 50000)"
-                    value={maxAmount}
-                    onChange={e => setMaxAmount(e.target.value)}
-                    style={{flex:1,background:'var(--bg-card2)',padding:'6px 10px',borderRadius:8,border:'1px solid var(--border)'}}
-                  />
-                </div>
-              </div>
-
-              {/* Transaction Type Filter */}
-              <div className="filter-section" style={{marginBottom:0}}>
-                <div className="filter-section-label">Transaction Type</div>
-                <div style={{display:'flex',gap:6}}>
-                  {['All', 'Expense', 'Income', 'Transfer'].map(t => (
-                    <button
-                      key={t}
-                      className={`chip ${txnTypeFilter === t ? 'active' : ''}`}
-                      onClick={() => setTxnTypeFilter(t)}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Quick Presets & Warranty Toggle */}
-              <div className="filter-section" style={{marginBottom:0}}>
-                <div className="filter-section-label">Special Filters</div>
-                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                  <button
-                    className={`chip ${minAmount === '5000' ? 'active' : ''}`}
-                    onClick={() => { setMinAmount(minAmount === '5000' ? '' : '5000'); }}
-                  >
-                    💎 High Value (&gt; ₹5,000)
-                  </button>
-                  <button
-                    className={`chip ${onlyWarranty ? 'active' : ''}`}
-                    onClick={() => setOnlyWarranty(p => !p)}
-                  >
-                    🛡️ Has Receipt / Warranty
-                  </button>
-                </div>
-              </div>
-
-              {/* Period Filter */}
-              <div className="filter-section" style={{marginBottom:0}}>
-                <div className="filter-section-label">Period</div>
-                <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                  {PERIODS.map(p => <button key={p} className={`chip ${selPeriod === p ? 'active' : ''}`} onClick={() => handlePeriodChange(p)}>{p}</button>)}
-                </div>
-                {selPeriod === 'Custom' && (
-                  <div style={{display:'flex',gap:8,marginTop:8}}>
-                    <input type="date" className="form-input" style={{flex:1}} value={customFrom} onChange={e => setFrom(e.target.value)}/>
-                    <input type="date" className="form-input" style={{flex:1}} value={customTo} onChange={e => setTo(e.target.value)}/>
-                  </div>
-                )}
-              </div>
-
-              {/* Accounts Filter */}
-              {allAcctNames.length > 0 && (
-                <div className="filter-section" style={{marginBottom:0}}>
-                  <div className="filter-section-label">Accounts</div>
-                  <div className="filter-checkbox-list">
-                    {allAcctNames.map(a => (
-                      <div key={a} className="filter-check-row" onClick={() => toggleAcct(a)}>
-                        <div className={`filter-check-box ${selAccts.has(a) ? 'checked' : ''}`}>{selAccts.has(a) && '✓'}</div>
-                        <div className="filter-check-label">{a}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Categories Filter */}
-              {allCatNames.length > 0 && (() => {
-                const expenseCats = allCatNames.filter(c => (categories?.[c]?.type || 'Expense') === 'Expense');
-                const incomeCats  = allCatNames.filter(c => (categories?.[c]?.type || 'Expense') === 'Income');
-                return (
-                  <div className="filter-section" style={{marginBottom:0}}>
-                    <div className="filter-section-label">Categories</div>
-                    {expenseCats.length > 0 && (
-                      <>
-                        <div style={{fontSize:'0.6rem',fontWeight:700,color:'var(--expense)',textTransform:'uppercase',letterSpacing:'0.5px',padding:'6px 0 4px'}}>Expense</div>
-                        <div className="filter-checkbox-list">
-                          {expenseCats.map(c => (
-                            <div key={c} className="filter-check-row" onClick={() => toggleCat(c)}>
-                              <div className={`filter-check-box ${selCats.has(c) ? 'checked' : ''}`}>{selCats.has(c) && '✓'}</div>
-                              <div className="filter-check-label">{c}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                    {incomeCats.length > 0 && (
-                      <>
-                        <div style={{fontSize:'0.6rem',fontWeight:700,color:'var(--income)',textTransform:'uppercase',letterSpacing:'0.5px',padding:'6px 0 4px'}}>Income</div>
-                        <div className="filter-checkbox-list">
-                          {incomeCats.map(c => (
-                            <div key={c} className="filter-check-row" onClick={() => toggleCat(c)}>
-                              <div className={`filter-check-box ${selCats.has(c) ? 'checked' : ''}`}>{selCats.has(c) && '✓'}</div>
-                              <div className="filter-check-label">{c}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                );
-              })()}
+            <div style={{overflow:'auto',flex:1,padding:'10px var(--page-px)'}}>
+              <SearchFilterControls
+                scopeNotes={scopeNotes} setScopeNotes={setScopeNotes}
+                scopeDesc={scopeDesc} setScopeDesc={setScopeDesc}
+                scopeTags={scopeTags} setScopeTags={setScopeTags}
+                minAmount={minAmount} setMinAmount={setMinAmount}
+                maxAmount={maxAmount} setMaxAmount={setMaxAmount}
+                txnTypeFilter={txnTypeFilter} setTxnTypeFilter={setTxnTypeFilter}
+                onlyWarranty={onlyWarranty} setOnlyWarranty={setOnlyWarranty}
+                PERIODS={PERIODS} selPeriod={selPeriod} handlePeriodChange={handlePeriodChange}
+                customFrom={customFrom} setFrom={setFrom}
+                customTo={customTo} setTo={setTo}
+                allAcctNames={allAcctNames} selAccts={selAccts} toggleAcct={toggleAcct}
+                allCatNames={allCatNames} categories={categories} selCats={selCats} toggleCat={toggleCat}
+                applicableAccounts={applicableAccounts} applicableCategories={applicableCategories} facetCounts={facetCounts}
+                appliedFilters={appliedFilters}
+                activeFilterCount={activeFilterCount}
+                onClearAll={handleClearAll}
+                isDesktop={false}
+              />
             </div>
             <div style={{padding:'10px var(--page-px) 0'}}>
               <button className="btn btn-primary btn-full" onClick={() => setShowFilter(false)}>Apply Filters</button>
@@ -1218,6 +1300,240 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
           backInterceptRef={backInterceptRef}
         />
       )}
+    </div>
+  );
+}
+
+// ── SearchFilterControls — shared between desktop panel and mobile sheet ─────
+function SearchFilterControls({
+  scopeNotes, setScopeNotes,
+  scopeDesc, setScopeDesc,
+  scopeTags, setScopeTags,
+  minAmount, setMinAmount,
+  maxAmount, setMaxAmount,
+  txnTypeFilter, setTxnTypeFilter,
+  onlyWarranty, setOnlyWarranty,
+  PERIODS, selPeriod, handlePeriodChange,
+  customFrom, setFrom,
+  customTo, setTo,
+  allAcctNames, selAccts, toggleAcct,
+  allCatNames, categories, selCats, toggleCat,
+  applicableAccounts, applicableCategories, facetCounts,
+  appliedFilters,
+  activeFilterCount,
+  onClearAll,
+  isDesktop = false,
+}) {
+  const displayAccts = applicableAccounts || allAcctNames;
+  const displayCats = applicableCategories || allCatNames;
+  const expenseCats = displayCats.filter(c => (categories?.[c]?.type || 'Expense') === 'Expense');
+  const incomeCats  = displayCats.filter(c => (categories?.[c]?.type || 'Expense') === 'Income');
+
+  return (
+    <div className={`search-filter-controls ${isDesktop ? 'desktop-panel' : 'sheet-panel'}`}>
+      {isDesktop && (
+        <div className="search-filter-panel-hdr">
+          <div className="search-filter-panel-title">
+            <span>Filters</span>
+            {activeFilterCount > 0 && (
+              <span className="search-filter-badge">{activeFilterCount}</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="search-filter-sections-scroll">
+        {/* Applied Filters Chips Area */}
+        {appliedFilters && appliedFilters.length > 0 && (
+          <div className="applied-filters-section">
+            <div className="applied-filters-hdr">
+              <span className="applied-filters-label">Applied Filters ({appliedFilters.length})</span>
+              <button type="button" className="btn-clear-applied" onClick={onClearAll}>Clear all</button>
+            </div>
+            <div className="applied-filters-chips">
+              {appliedFilters.map(af => (
+                <span key={af.id} className="applied-filter-chip">
+                  <span className="applied-chip-text">{af.label}</span>
+                  <button
+                    type="button"
+                    className="applied-chip-remove"
+                    onClick={af.onRemove}
+                    title="Remove filter"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Section 1: Search Target Scope Checkboxes */}
+        <div className="filter-section">
+          <div className="filter-section-label">Search Query In (Target Scope)</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div className="filter-check-row" style={{ background: 'var(--bg-card2)', padding: '6px 10px', borderRadius: 8 }} onClick={() => setScopeNotes(p => !p)}>
+              <div className={`filter-check-box ${scopeNotes ? 'checked' : ''}`}>{scopeNotes && '✓'}</div>
+              <div className="filter-check-label">Notes</div>
+            </div>
+            <div className="filter-check-row" style={{ background: 'var(--bg-card2)', padding: '6px 10px', borderRadius: 8 }} onClick={() => setScopeDesc(p => !p)}>
+              <div className={`filter-check-box ${scopeDesc ? 'checked' : ''}`}>{scopeDesc && '✓'}</div>
+              <div className="filter-check-label">Description</div>
+            </div>
+            <div className="filter-check-row" style={{ background: 'var(--bg-card2)', padding: '6px 10px', borderRadius: 8 }} onClick={() => setScopeTags(p => !p)}>
+              <div className={`filter-check-box ${scopeTags ? 'checked' : ''}`}>{scopeTags && '✓'}</div>
+              <div className="filter-check-label">#Tags</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Section 2: Amount Range Filter */}
+        <div className="filter-section">
+          <div className="filter-section-label">Amount Range (₹)</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="number"
+              className="form-input"
+              placeholder="Min ₹ (e.g. 1000)"
+              value={minAmount}
+              onChange={e => setMinAmount(e.target.value)}
+              style={{ flex: 1, background: 'var(--bg-card2)', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)' }}
+            />
+            <input
+              type="number"
+              className="form-input"
+              placeholder="Max ₹ (e.g. 50000)"
+              value={maxAmount}
+              onChange={e => setMaxAmount(e.target.value)}
+              style={{ flex: 1, background: 'var(--bg-card2)', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)' }}
+            />
+          </div>
+        </div>
+
+        {/* Section 3: Transaction Type Filter */}
+        <div className="filter-section">
+          <div className="filter-section-label">Transaction Type</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {['All', 'Expense', 'Income', 'Transfer'].map(t => (
+              <button
+                key={t}
+                type="button"
+                className={`chip ${txnTypeFilter === t ? 'active' : ''}`}
+                onClick={() => setTxnTypeFilter(t)}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Section 4: Period Filter */}
+        <div className="filter-section">
+          <div className="filter-section-label">Period</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {PERIODS.map(p => (
+              <button
+                key={p}
+                type="button"
+                className={`chip ${selPeriod === p ? 'active' : ''}`}
+                onClick={() => handlePeriodChange(p)}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          {selPeriod === 'Custom' && (
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <input type="date" className="form-input" style={{ flex: 1 }} value={customFrom} onChange={e => setFrom(e.target.value)} />
+              <input type="date" className="form-input" style={{ flex: 1 }} value={customTo} onChange={e => setTo(e.target.value)} />
+            </div>
+          )}
+        </div>
+
+        {/* Section 5: Accounts Filter */}
+        {displayAccts.length > 0 && (
+          <div className="filter-section">
+            <div className="filter-section-label">Accounts {selAccts.size > 0 && `(${selAccts.size} selected)`}</div>
+            <div className="filter-checkbox-list">
+              {displayAccts.map(a => (
+                <div key={a} className={`filter-check-row ${selAccts.has(a) ? 'selected' : ''}`} onClick={() => toggleAcct(a)}>
+                  <div className="filter-check-left">
+                    <div className={`filter-check-box ${selAccts.has(a) ? 'checked' : ''}`}>{selAccts.has(a) && '✓'}</div>
+                    <div className="filter-check-label">{a}</div>
+                  </div>
+                  {facetCounts?.accounts && facetCounts.accounts[a] !== undefined && (
+                    <span className="filter-check-count">{facetCounts.accounts[a]}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Section 6: Categories Filter */}
+        {displayCats.length > 0 && (
+          <div className="filter-section">
+            <div className="filter-section-label">Categories {selCats.size > 0 && `(${selCats.size} selected)`}</div>
+            {expenseCats.length > 0 && (
+              <>
+                <div style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--expense)', textTransform: 'uppercase', letterSpacing: '0.5px', padding: '6px 0 4px' }}>Expense</div>
+                <div className="filter-checkbox-list">
+                  {expenseCats.map(c => (
+                    <div key={c} className={`filter-check-row ${selCats.has(c) ? 'selected' : ''}`} onClick={() => toggleCat(c)}>
+                      <div className="filter-check-left">
+                        <div className={`filter-check-box ${selCats.has(c) ? 'checked' : ''}`}>{selCats.has(c) && '✓'}</div>
+                        <div className="filter-check-label">{c}</div>
+                      </div>
+                      {facetCounts?.categories && facetCounts.categories[c] !== undefined && (
+                        <span className="filter-check-count">{facetCounts.categories[c]}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            {incomeCats.length > 0 && (
+              <>
+                <div style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--income)', textTransform: 'uppercase', letterSpacing: '0.5px', padding: '6px 0 4px', marginTop: 6 }}>Income</div>
+                <div className="filter-checkbox-list">
+                  {incomeCats.map(c => (
+                    <div key={c} className={`filter-check-row ${selCats.has(c) ? 'selected' : ''}`} onClick={() => toggleCat(c)}>
+                      <div className="filter-check-left">
+                        <div className={`filter-check-box ${selCats.has(c) ? 'checked' : ''}`}>{selCats.has(c) && '✓'}</div>
+                        <div className="filter-check-label">{c}</div>
+                      </div>
+                      {facetCounts?.categories && facetCounts.categories[c] !== undefined && (
+                        <span className="filter-check-count">{facetCounts.categories[c]}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Section 7: Special Filters (Moved to Bottom) */}
+        <div className="filter-section">
+          <div className="filter-section-label">Special Filters</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className={`chip ${minAmount === '5000' ? 'active' : ''}`}
+              onClick={() => { setMinAmount(minAmount === '5000' ? '' : '5000'); }}
+            >
+              💎 High Value (&gt; ₹5,000)
+            </button>
+            <button
+              type="button"
+              className={`chip ${onlyWarranty ? 'active' : ''}`}
+              onClick={() => setOnlyWarranty(p => !p)}
+            >
+              🛡️ Has Receipt / Warranty
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

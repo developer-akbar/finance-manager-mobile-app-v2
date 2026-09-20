@@ -367,7 +367,38 @@ export const getUserFacingTags = (raw) => {
   return cleanList;
 };
 
+// ── Note Suggestion Normalization ──────────────────────────────────────────
+/**
+ * Normalizes input query for note autocomplete/suggestion queries by trimming
+ * leading and trailing whitespace while leaving internal spacing intact.
+ * @param {string} query
+ * @returns {string}
+ */
+export const normalizeSuggestionQuery = (query) => {
+  return String(query || '').trim();
+};
 
-
-
-
+/**
+ * Filter note suggestions by normalized query without mutating displayed input.
+ * @param {Array<string|object>} suggestions
+ * @param {string} query
+ * @param {number} limit
+ * @returns {Array<string|object>}
+ */
+export const filterNoteSuggestions = (suggestions, query, limit = 15) => {
+  const norm = normalizeSuggestionQuery(query).toLowerCase();
+  if (!norm) return [];
+  const seen = new Set();
+  const result = [];
+  for (const item of (suggestions || [])) {
+    const noteStr = typeof item === 'object' && item !== null ? (item.note || '') : String(item || '');
+    if (!noteStr) continue;
+    const lower = noteStr.toLowerCase();
+    if (lower.includes(norm) && !seen.has(lower)) {
+      seen.add(lower);
+      result.push(item);
+      if (limit && result.length >= limit) break;
+    }
+  }
+  return result;
+};
