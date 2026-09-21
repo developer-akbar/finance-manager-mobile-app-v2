@@ -8,6 +8,7 @@ import {
   getCanonicalProductName,
   DEFAULT_STOCK_CATEGORIES
 } from '../../utils/stockInventoryNormalization.js';
+import { aggregateProductPhysicalQuantities } from '../../utils/stockPhysicalQuantity.js';
 import {
   getInventoryItems,
   addInventoryPurchase,
@@ -228,6 +229,12 @@ export default function StockManager({ onBack, backInterceptRef }) {
     if (!selectedProduct) return null;
     return canonicalProducts.find(p => p.productName === selectedProduct) || null;
   }, [canonicalProducts, selectedProduct]);
+
+  // Physical quantity aggregation for active product
+  const activeProductPhysical = useMemo(() => {
+    if (!activeProductData || !activeProductData.batches) return null;
+    return aggregateProductPhysicalQuantities(activeProductData.batches);
+  }, [activeProductData]);
 
   // Batches for active product filtered by variant
   const activeProductBatches = useMemo(() => {
@@ -795,14 +802,25 @@ export default function StockManager({ onBack, backInterceptRef }) {
                 <div className="stock-prod-stat-item">
                   <div className="stock-prod-stat-label">Purchased</div>
                   <div className="stock-prod-stat-value">{formatFraction(activeProductData.totalPurchasedQty)}</div>
+                  {activeProductPhysical?.hasPhysicalData && activeProductPhysical.purchasedDisplay && (
+                    <div className="stock-prod-stat-phys">{activeProductPhysical.purchasedDisplay}</div>
+                  )}
                 </div>
                 <div className="stock-prod-stat-item">
                   <div className="stock-prod-stat-label">Consumed</div>
                   <div className="stock-prod-stat-value" style={{ color: 'var(--text-muted)' }}>{formatFraction(activeProductData.totalConsumedQty)}</div>
+                  {activeProductPhysical?.hasPhysicalData && activeProductPhysical.consumedDisplay && (
+                    <div className="stock-prod-stat-phys" style={{ color: 'var(--text-muted)' }}>{activeProductPhysical.consumedDisplay}</div>
+                  )}
                 </div>
                 <div className="stock-prod-stat-item">
                   <div className="stock-prod-stat-label">Available</div>
                   <div className="stock-prod-stat-value" style={{ color: 'var(--green)' }}>{formatFraction(activeProductData.totalRemainingQty)}</div>
+                  {activeProductPhysical?.hasPhysicalData && activeProductPhysical.remainingDisplay && (
+                    <div className="stock-prod-stat-phys" style={{ color: activeProductData.totalRemainingQty > 0 ? 'var(--green)' : 'var(--text-muted)' }}>
+                      {activeProductPhysical.remainingDisplay}
+                    </div>
+                  )}
                 </div>
                 <div className="stock-prod-stat-item">
                   <div className="stock-prod-stat-label">Total MRP</div>

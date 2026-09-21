@@ -248,6 +248,54 @@ export const parseStockLine = (rawLine, txn = {}, lineIdx = 0) => {
   productName = productName.replace(/^(?:stock\s+)?unavailable\s+/i, '').trim();
   if (!variantStr) variantStr = 'Standard';
 
+  // 4b. Explicit deterministic recovery for verified legacy Standard patterns
+  if (variantStr === 'Standard') {
+    // 1. Triple multiplier pattern 1A: e.g. "Santoor white 125g*5*2"
+    const tripleA = itemHeader.match(/(?:^|\s+)([\d\.]+)\s*(g|gm|gms|kg|ml|l|ltr|litre|litres)\s*[\*xX]\s*(\d+)\s*[\*xX]\s*(\d+)/i);
+    if (tripleA) {
+      const u = (tripleA[2].toLowerCase() === 'litre' || tripleA[2].toLowerCase() === 'litres') ? 'L' : tripleA[2];
+      variantStr = `${tripleA[1]}${u}*${tripleA[3]}*${tripleA[4]}`;
+      subQty = parseFloat(tripleA[1]) || 1;
+      subUnit = u;
+    } else {
+      // 2. Triple multiplier pattern 1B: e.g. "Cinthol 6*100g*4"
+      const tripleB = itemHeader.match(/(?:^|\s+)(\d+)\s*[\*xX]\s*([\d\.]+)\s*(g|gm|gms|kg|ml|l|ltr|litre|litres)\s*[\*xX]\s*(\d+)/i);
+      if (tripleB) {
+        const u = (tripleB[3].toLowerCase() === 'litre' || tripleB[3].toLowerCase() === 'litres') ? 'L' : tripleB[3];
+        variantStr = `${tripleB[1]}*${tripleB[2]}${u}*${tripleB[4]}`;
+        subQty = parseFloat(tripleB[2]) || 1;
+        subUnit = u;
+      } else {
+        // 3. Leading count multiplier: e.g. "Cinthol 9*100g", "pestro 4*750ml", "Pestro glass cleaner 3*500ml", "Pestro dish gel 4*750ml"
+        const countUnit = itemHeader.match(/(?:^|\s+)(\d+)\s*[\*xX]\s*([\d\.]+)\s*(g|gm|gms|kg|ml|l|ltr|litre|litres)(?:\s+|$|:)/i);
+        if (countUnit) {
+          const u = (countUnit[3].toLowerCase() === 'litre' || countUnit[3].toLowerCase() === 'litres') ? 'L' : countUnit[3];
+          variantStr = `${countUnit[1]}*${countUnit[2]}${u}`;
+          subQty = parseFloat(countUnit[2]) || 1;
+          subUnit = u;
+        } else {
+          // 4. Explicit '1litre' / '1liter' in name e.g. "Honey 1litre"
+          const litreMatch = itemHeader.match(/(?:^|\s+)([\d\.]+)\s*(litre|liter|litres)(?:\s+|$|:)/i);
+          if (litreMatch) {
+            variantStr = `${litreMatch[1]}L`;
+            subQty = parseFloat(litreMatch[1]) || 1;
+            subUnit = 'L';
+          } else {
+            // 5. Explicit count multiplier e.g. "toothbrush 6*2"
+            if (cleanLine.toLowerCase().includes('toothbrush')) {
+              const tbMatch = itemHeader.match(/(\d+)\s*[\*xX]\s*(\d+)/);
+              if (tbMatch) {
+                variantStr = `${tbMatch[1]}*${tbMatch[2]}`;
+                subQty = parseFloat(tbMatch[1]) || 1;
+                subUnit = 'pcs';
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // 5. Parse Price Tokens
   const flatTokens = [];
   priceSegments.forEach(seg => {

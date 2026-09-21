@@ -642,6 +642,14 @@
   color: var(--text-primary);
 }
 
+.stock-prod-stat-phys {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-secondary, #a0aec0);
+  line-height: 1.2;
+  margin-top: 1px;
+}
+
 .stock-variant-pills {
   display: flex;
   gap: 6px;
