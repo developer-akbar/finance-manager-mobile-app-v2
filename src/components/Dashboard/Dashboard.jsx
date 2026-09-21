@@ -725,7 +725,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
                 { id: 'groups', label: 'Groups', icon: '👥', onClick: () => setShowGroups(true) },
                 { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
                 { id: 'debt', label: 'Debt Tracker', icon: '🤝', onClick: () => setShowDebtTracker(true) },
-                { id: 'stock', label: 'Stocks & Gold', icon: '🥫', onClick: () => setShowStockManager(true) },
+                { id: 'stock', label: 'Stock Inventory', icon: '🥫', onClick: () => setShowStockManager(true) },
               ].map(item => (
                 <button
                   key={item.id}
@@ -748,7 +748,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
             { id: 'groups', label: 'Groups', icon: '👥', onClick: () => setShowGroups(true) },
             { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
             { id: 'debt', label: 'Debt Tracker', icon: '🤝', onClick: () => setShowDebtTracker(true) },
-            { id: 'stock', label: 'Stock Manager', icon: '📈', onClick: () => setShowStockManager(true) },
+            { id: 'stock', label: 'Stock Inventory', icon: '📈', onClick: () => setShowStockManager(true) },
           ].map(item => (
             <button
               key={item.id}
