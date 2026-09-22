@@ -199,6 +199,10 @@ function AppInner() {
         });
       }
     }
+    // Always reset dashboard sub-screens when Dashboard nav is tapped
+    if (id === 'dashboard') {
+      window.dispatchEvent(new CustomEvent('reset-dashboard-view'));
+    }
     // If already at top and inside deep navigation, return to parent view
     if (!wasScrolled) {
       if (id === 'categories') {

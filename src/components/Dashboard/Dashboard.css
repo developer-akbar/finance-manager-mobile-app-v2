@@ -396,7 +396,7 @@
   .dash-snapshot-card .home-features-grid {
     margin: 12px 0 0 !important;
     padding: 0 !important;
-    grid-template-columns: repeat(6, 1fr) !important;
+    grid-template-columns: repeat(5, 1fr) !important;
     gap: 8px !important;
   }
   .dash-snapshot-card .home-feature-card {

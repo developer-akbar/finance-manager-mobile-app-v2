@@ -3,12 +3,12 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount, isLifestyleExpense } from '../../utils/format.js';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { ccBalances, isCreditCard, ccDaysUntilDue, ccNextDueDate } from '../Accounts/Accounts.jsx';
-import CashFlowForecast from '../Forecast/CashFlowForecast.jsx';
 import { parseBankSMS } from '../../utils/smsParser.js';
 import DebtTracker from '../Accounts/DebtTracker.jsx';
 import CardOptimizer from '../Accounts/CardOptimizer.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import StockManager from '../Accounts/StockManager.jsx';
+import InvestmentsPortfolio from '../Accounts/InvestmentsPortfolio.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
 import { useDueAlertState } from '../../hooks/useDueAlertState.js';
 import { calculateIncomeMilestones } from '../../utils/milestones.js';
@@ -49,7 +49,6 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   const [chartView, setChartView] = useState('networth'); // 'networth' or 'overview'
   const [popupMsg, setPopupMsg] = useState(''); // Custom detail sheet popup
   const [showAllYears, setShowAllYears] = useState(false);
-  const [showForecast, setShowForecast] = useState(false);
   const [showMilestones, setShowMilestones] = useState(false);
   const [detectedSmsTxn, setDetectedSmsTxn] = useState(null);
 
@@ -57,6 +56,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   const incomeMilestones = useMemo(() => calculateIncomeMilestones(transactions), [transactions]);
 
   // Sub-screen navigation states
+  const [showPortfolio, setShowPortfolio] = useState(false);
   const [showGroups, setShowGroups] = useState(false);
   const [showOptimizer, setShowOptimizer] = useState(false);
   const [showDebtTracker, setShowDebtTracker] = useState(false);
@@ -68,6 +68,8 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
     if (!backInterceptRef) return;
     if (showMilestones) {
       backInterceptRef.current = () => setShowMilestones(false);
+    } else if (showPortfolio) {
+      backInterceptRef.current = () => setShowPortfolio(false);
     } else if (showGroups) {
       backInterceptRef.current = () => setShowGroups(false);
     } else if (showOptimizer) {
@@ -76,15 +78,13 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
       backInterceptRef.current = () => setShowDebtTracker(false);
     } else if (showStockManager) {
       backInterceptRef.current = () => setShowStockManager(false);
-    } else if (showForecast) {
-      backInterceptRef.current = () => setShowForecast(false);
     } else {
       backInterceptRef.current = null;
     }
     return () => {
       if (backInterceptRef) backInterceptRef.current = null;
     };
-  }, [showMilestones, showGroups, showOptimizer, showDebtTracker, showStockManager, showForecast, backInterceptRef]);
+  }, [showMilestones, showPortfolio, showGroups, showOptimizer, showDebtTracker, showStockManager, backInterceptRef]);
 
   // Auto-detect SMS / UPI transaction copied to clipboard
   useEffect(() => {
@@ -113,7 +113,12 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   useEffect(() => {
     const handleReset = () => {
       setShowMilestones(false);
-      setShowForecast(false);
+      setShowPortfolio(false);
+      setShowGroups(false);
+      setShowOptimizer(false);
+      setShowDebtTracker(false);
+      setShowStockManager(false);
+      setSettlePrefill(null);
       setShowAllYears(false);
       setPopupMsg('');
     };
@@ -439,8 +444,8 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
     };
   }, [transactions]);
 
-  if (showForecast) {
-    return <CashFlowForecast onBack={() => setShowForecast(false)} backInterceptRef={backInterceptRef} />;
+  if (showPortfolio) {
+    return <InvestmentsPortfolio onBack={() => setShowPortfolio(false)} backInterceptRef={backInterceptRef} />;
   }
 
   if (showGroups) {
@@ -539,42 +544,6 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
                 {incomeMilestones.achievedCount}
               </span>
             )}
-          </button>
-          <button
-            onClick={() => navigate('analytics')}
-            style={{
-              padding: '6px 10px',
-              borderRadius: 14,
-              fontSize: '0.74rem',
-              fontWeight: 700,
-              border: '1px solid var(--border)',
-              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
-              color: 'var(--theme-header-btn-color, var(--text-primary))',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              cursor: 'pointer',
-            }}
-          >
-            <span>📊</span> Analytics
-          </button>
-          <button
-            onClick={() => setShowForecast(true)}
-            style={{
-              padding: '6px 10px',
-              borderRadius: 14,
-              fontSize: '0.74rem',
-              fontWeight: 700,
-              border: '1px solid var(--border)',
-              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
-              color: 'var(--theme-header-btn-color, var(--text-primary))',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              cursor: 'pointer',
-            }}
-          >
-            <span>📈</span> Cash Flow
           </button>
         </div>
       </div>
@@ -748,12 +717,11 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
             {/* Quick shortcuts */}
             <div className="home-features-grid">
               {[
-                { id: 'analytics', label: 'Analytics', icon: '📊', onClick: () => navigate('analytics') },
-                { id: 'forecast', label: 'Cashflow', icon: '🔮', onClick: () => setShowForecast(true) },
-                { id: 'groups', label: 'Groups', icon: '👥', onClick: () => setShowGroups(true) },
-                { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
+                { id: 'portfolio', label: 'Portfolio', icon: '📈', onClick: () => setShowPortfolio(true) },
                 { id: 'debt', label: 'Debt Tracker', icon: '🤝', onClick: () => setShowDebtTracker(true) },
                 { id: 'stock', label: 'Stock Inventory', icon: '🥫', onClick: () => setShowStockManager(true) },
+                { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
+                { id: 'groups', label: 'Groups', icon: '👥', onClick: () => setShowGroups(true) },
               ].map(item => (
                 <button
                   key={item.id}
@@ -772,11 +740,11 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
         <div className="dash-mobile-shortcuts">
           {[
             { id: 'analytics', label: 'Analytics', icon: '📊', onClick: () => navigate('analytics') },
-            { id: 'forecast', label: 'Cash Flow', icon: '📈', onClick: () => setShowForecast(true) },
-            { id: 'groups', label: 'Groups', icon: '👥', onClick: () => setShowGroups(true) },
-            { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
+            { id: 'portfolio', label: 'Portfolio', icon: '📈', onClick: () => setShowPortfolio(true) },
             { id: 'debt', label: 'Debt Tracker', icon: '🤝', onClick: () => setShowDebtTracker(true) },
-            { id: 'stock', label: 'Stock Inventory', icon: '📈', onClick: () => setShowStockManager(true) },
+            { id: 'stock', label: 'Stock Inventory', icon: '🥫', onClick: () => setShowStockManager(true) },
+            { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
+            { id: 'groups', label: 'Groups', icon: '👥', onClick: () => setShowGroups(true) },
           ].map(item => (
             <button
               key={item.id}

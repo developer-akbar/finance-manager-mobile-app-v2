@@ -98,7 +98,6 @@ export default function Layout({ children, onNavTap }) {
       '.acct-detail-body',
       '.cat-detail-body',
       '.debt-tracker-body',
-      '.forecast-body',
       '.settings-root',
       '.categories-list',
       '.accounts-list',
@@ -123,6 +122,9 @@ export default function Layout({ children, onNavTap }) {
       onNavTap?.(id);
     } else {
       navigate(id);
+      if (id === 'dashboard') {
+        window.dispatchEvent(new CustomEvent('reset-dashboard-view'));
+      }
     }
   };
 
