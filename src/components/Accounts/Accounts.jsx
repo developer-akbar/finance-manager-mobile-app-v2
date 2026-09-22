@@ -12,6 +12,7 @@ import InvestmentsPortfolio from './InvestmentsPortfolio.jsx';
 import InvestmentPlansModal from '../Investments/InvestmentPlansModal.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
+import { useDueAlertState } from '../../hooks/useDueAlertState.js';
 import { activeHoldingsData } from '../../database/holdingsData.js';
 import './Accounts.css';
 
@@ -1168,68 +1169,7 @@ export default function Accounts({ backInterceptRef } = {}) {
     return () => { if (backInterceptRef) backInterceptRef.current = null; };
   }, [settlePrefill, showGroups, showOptimizer, showDebtTracker, showStockManager, drill, backInterceptRef]);
 
-  const PAID_ALERT_STORAGE = 'finman-paid-due-alerts';
-  const DISMISS_ALERT_STORAGE = 'finman-dismissed-due-alerts';
-
-  const [paidDueAlerts, setPaidDueAlerts] = useState(() => {
-    if (typeof localStorage === 'undefined') return new Set();
-    try {
-      const raw = localStorage.getItem(PAID_ALERT_STORAGE);
-      const arr = raw ? JSON.parse(raw) : [];
-      return new Set(Array.isArray(arr) ? arr : []);
-    } catch (e) {
-      return new Set();
-    }
-  });
-
-  const [dismissedDueAlerts, setDismissedDueAlerts] = useState(() => {
-    if (typeof localStorage === 'undefined') return {};
-    try {
-      const raw = localStorage.getItem(DISMISS_ALERT_STORAGE);
-      const obj = raw ? JSON.parse(raw) : {};
-      return (obj && typeof obj === 'object') ? obj : {};
-    } catch (e) {
-      return {};
-    }
-  });
-
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return;
-    try {
-      localStorage.setItem(PAID_ALERT_STORAGE, JSON.stringify([...paidDueAlerts]));
-    } catch (e) {
-      // ignore localStorage failures
-    }
-  }, [paidDueAlerts]);
-
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return;
-    try {
-      localStorage.setItem(DISMISS_ALERT_STORAGE, JSON.stringify(dismissedDueAlerts));
-    } catch (e) {
-      // ignore localStorage failures
-    }
-  }, [dismissedDueAlerts]);
-
-  const todayKey = new Date().toISOString().split('T')[0];
-
-  const markPaid = (acctName) => {
-    setPaidDueAlerts(prev => {
-      if (prev.has(acctName)) return prev;
-      const next = new Set(prev);
-      next.add(acctName);
-      return next;
-    });
-    setDismissedDueAlerts(prev => {
-      const next = { ...prev };
-      delete next[acctName];
-      return next;
-    });
-  };
-
-  const markDismissed = (acctName) => {
-    setDismissedDueAlerts(prev => ({ ...prev, [acctName]: todayKey }));
-  };
+  const { paidDueAlerts, dismissedDueAlerts, todayKey, markPaid, markDismissed } = useDueAlertState();
 
   // Compute due-date alerts for all configured CC accounts
   const dueAlerts = useMemo(() => {

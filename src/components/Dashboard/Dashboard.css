@@ -17,54 +17,139 @@
 .dash-alerts-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 0 0 12px;
+  gap: 6px;
+  padding: 0 0 8px;
 }
 .dash-alert-banner {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 10px;
   background: linear-gradient(135deg, rgba(255, 77, 106, 0.15), rgba(255, 77, 106, 0.05));
   border-top: 1px solid rgba(255, 77, 106, 0.25);
   border-bottom: 1px solid rgba(255, 77, 106, 0.25);
   border-left: none;
   border-right: none;
   border-radius: 0;
-  padding: 12px var(--page-px);
+  padding: 8px var(--page-px);
   cursor: pointer;
   transition: var(--transition-spring);
 }
-@media (min-width: 768px) {
-  .dash-alert-banner {
-    border: 1px solid rgba(255, 77, 106, 0.3);
-    border-radius: var(--r-lg);
-    margin: 0 var(--page-px);
-  }
+.dash-alert-banner:hover {
+  background: linear-gradient(135deg, rgba(255, 77, 106, 0.2), rgba(255, 77, 106, 0.08));
 }
-.dash-alert-banner:active {
-  transform: scale(0.98);
+.dash-alert-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
 }
 .dash-alert-icon {
-  font-size: 1.4rem;
+  font-size: 1.25rem;
+  line-height: 1;
+  flex-shrink: 0;
 }
 .dash-alert-body {
-  flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .dash-alert-title {
   font-size: 0.82rem;
   font-weight: 800;
   color: var(--text-primary);
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dash-alert-subtitle {
   font-size: 0.7rem;
   color: var(--text-secondary);
-  margin-top: 2px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-alert-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.dash-alert-action-btn {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: var(--r-full, 9999px);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.dash-alert-btn-paid {
+  background: var(--income, #10b981);
+  color: #ffffff;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.dash-alert-btn-paid:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+.dash-alert-btn-paid:active {
+  transform: scale(0.96);
+}
+.dash-alert-btn-dismiss {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  border-color: var(--border, rgba(255, 255, 255, 0.12));
+}
+.dash-alert-btn-dismiss:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+.dash-alert-btn-dismiss:active {
+  transform: scale(0.96);
 }
 .dash-alert-arrow {
   color: var(--expense);
   font-weight: 900;
-  font-size: 1rem;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+  margin-left: 2px;
+  transition: transform 0.15s ease;
+}
+.dash-alert-banner:hover .dash-alert-arrow {
+  transform: translateX(2px);
+}
+
+/* Tablet: 2-column grid */
+@media (min-width: 640px) {
+  .dash-alerts-container {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    padding: 8px var(--page-px) 4px;
+  }
+  .dash-alert-banner {
+    border: 1px solid rgba(255, 77, 106, 0.3);
+    border-radius: var(--r-lg, 12px);
+    margin: 0;
+    padding: 8px 12px;
+  }
+}
+
+/* Large Desktop: 3-column grid */
+@media (min-width: 1024px) {
+  .dash-alerts-container {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    padding: 10px var(--page-px) 4px;
+  }
 }
 
 /* ── Net worth card ── */

@@ -10,6 +10,7 @@ import CardOptimizer from '../Accounts/CardOptimizer.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import StockManager from '../Accounts/StockManager.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
+import { useDueAlertState } from '../../hooks/useDueAlertState.js';
 import { calculateIncomeMilestones } from '../../utils/milestones.js';
 import './Dashboard.css';
 
@@ -42,6 +43,7 @@ const todayTip = TIPS[now.getDate() % TIPS.length];
 export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   const { state, navigate } = useApp();
   const { transactions, budgets, settings } = state;
+  const { paidDueAlerts, dismissedDueAlerts, todayKey, markPaid, markDismissed } = useDueAlertState();
 
   const [showNW, setShowNW] = useState(false); // privacy: hidden by default
   const [chartView, setChartView] = useState('networth'); // 'networth' or 'overview'
@@ -209,6 +211,8 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
     const alerts = [];
     for (const a of (state.accounts || [])) {
       if (!isCreditCard(a) || !a.settlementDate || !a.paymentDueDays) continue;
+      if (paidDueAlerts.has(a.name)) continue;
+      if (dismissedDueAlerts[a.name] === todayKey) continue;
       const days = ccDaysUntilDue(a, today);
       if (days === null) continue;
       if (days <= 7) {
@@ -219,7 +223,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
       }
     }
     return alerts;
-  }, [state.accounts, transactions]);
+  }, [state.accounts, transactions, paidDueAlerts, dismissedDueAlerts, todayKey]);
 
   // ── Investment calculations ──
   const investmentStats = useMemo(() => {
@@ -637,12 +641,36 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           <div className="dash-alerts-container">
             {dueAlerts.map(alert => (
               <div key={alert.acct.name} className="dash-alert-banner" onClick={() => navigate('accounts')}>
-                <span className="dash-alert-icon">💳</span>
-                <div className="dash-alert-body">
-                  <div className="dash-alert-title">{alert.acct.name} due in {alert.days}d</div>
-                  <div className="dash-alert-subtitle">₹{alert.balancePayable.toLocaleString('en-IN')} payable · due {alert.due.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</div>
+                <div className="dash-alert-left">
+                  <span className="dash-alert-icon">💳</span>
+                  <div className="dash-alert-body">
+                    <div className="dash-alert-title">{alert.acct.name} due in {alert.days}d</div>
+                    <div className="dash-alert-subtitle">₹{alert.balancePayable.toLocaleString('en-IN')} payable · due {alert.due.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</div>
+                  </div>
                 </div>
-                <span className="dash-alert-arrow">→</span>
+                <div className="dash-alert-right">
+                  <button
+                    type="button"
+                    className="dash-alert-action-btn dash-alert-btn-paid"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      markPaid(alert.acct.name);
+                    }}
+                  >
+                    Mark as Paid
+                  </button>
+                  <button
+                    type="button"
+                    className="dash-alert-action-btn dash-alert-btn-dismiss"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      markDismissed(alert.acct.name);
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                  <span className="dash-alert-arrow" aria-hidden="true">→</span>
+                </div>
               </div>
             ))}
           </div>
