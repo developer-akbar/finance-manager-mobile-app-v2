@@ -67,7 +67,11 @@ export const addInventoryPurchase = async (fromAccount, date, items, noteText = 
   const formattedDate = date.includes('/') ? date : date.split('-').reverse().join('/');
   const formattedTime = timeText || new Date().toLocaleTimeString('en-IN', { hour12: false }).slice(0, 5);
 
-  for (const item of items) {
+  const txnId = uuid();
+  const isoDate = date.includes('/') ? date.split('/').reverse().join('-') : date;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     const packQty = parseFloat(item.pack_qty) || 1; // Items/Packs bought
     const subQty = parseFloat(item.sub_qty) || 1;   // Pack Size (e.g. 200)
     const subUnit = item.sub_unit || 'pcs';         // Pack Unit (e.g. g)
@@ -91,14 +95,14 @@ export const addInventoryPurchase = async (fromAccount, date, items, noteText = 
     itemDetails.push(`${cleanedName} ${statusWord} ${sizePart}: ${originalPrice}: @${discountedPrice}${suffix}`);
 
     const status = remainingParts > 0 ? 'available' : 'unavailable';
-    const id = uuid();
+    const batchId = `${isoDate}_${txnId}_${i}`;
     
     // Calculate unit price per part
     const unitPrice = partsVal > 0 ? (discountedPrice / partsVal) : discountedPrice;
 
     await db.run(
       'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value, category, brand) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, cleanedName, remainingParts, item.unit || 'pcs', originalPrice, unitPrice, status, date, item.notes || '', now, subQty, subUnit, partsVal, packQty, item.discountType || 'final_price', parseFloat(item.discountValue) || 0, item.category || '', item.brand || '']
+      [batchId, cleanedName, remainingParts, item.unit || 'pcs', originalPrice, unitPrice, status, isoDate, item.notes || '', now, subQty, subUnit, partsVal, packQty, item.discountType || 'final_price', parseFloat(item.discountValue) || 0, item.category || '', item.brand || '']
     );
   }
 
@@ -106,6 +110,9 @@ export const addInventoryPurchase = async (fromAccount, date, items, noteText = 
   const roundedTotal = Math.round(totalAmount);
   const description = itemDetails.join('\n');
   const txn = {
+    id: txnId,
+    _id: txnId,
+    ID: txnId,
     Date: formattedDate,
     Time: formattedTime,
     Account: fromAccount,
@@ -373,10 +380,23 @@ export const updateInventoryItem = async (id, data) => {
   const pack_qty = parseFloat(data.pack_qty) || 1;
   const cleanedName = cleanItemName(data.name);
 
+  let targetId = id;
+  const existingRes = await db.query('SELECT * FROM inventory WHERE id = ?', [id]);
+  if (!existingRes.values || existingRes.values.length === 0) {
+    // If no record exists with this batch id, insert a new record with this exact batch ID
+    targetId = id;
+    await db.run(
+      'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value, category, brand) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [targetId, cleanedName, qty, data.unit || 'pcs', price, discPrice, status, data.purchased_date || '', data.notes || '', now, parseFloat(data.sub_qty) || 1, data.sub_unit || '', original_qty, pack_qty, data.discount_type || 'percentage', parseFloat(data.discount_value) || 0, data.category || '', data.brand || '']
+    );
+    return targetId;
+  }
+
   await db.run(
     'UPDATE inventory SET name = ?, qty = ?, unit = ?, price = ?, discounted_price = ?, status = ?, purchased_date = ?, notes = ?, updated_at = ?, sub_qty = ?, sub_unit = ?, original_qty = ?, pack_qty = ?, discount_type = ?, discount_value = ?, category = ?, brand = ? WHERE id = ?',
-    [cleanedName, qty, data.unit || '', price, discPrice, status, data.purchased_date || '', data.notes || '', now, parseFloat(data.sub_qty) || 1, data.sub_unit || '', original_qty, pack_qty, data.discount_type || 'percentage', parseFloat(data.discount_value) || 0, data.category || '', data.brand || '', id]
+    [cleanedName, qty, data.unit || '', price, discPrice, status, data.purchased_date || '', data.notes || '', now, parseFloat(data.sub_qty) || 1, data.sub_unit || '', original_qty, pack_qty, data.discount_type || 'percentage', parseFloat(data.discount_value) || 0, data.category || '', data.brand || '', targetId]
   );
+  return targetId;
 };
 
 export const deleteInventoryItem = async (itemId) => {
@@ -432,7 +452,7 @@ export const syncStockFromPastTransactions = async () => {
       const parsed = parseStockLine(line, r, lIdx);
       if (!parsed) continue;
 
-      const id = uuid();
+      const batchId = parsed.id || parsed.batchId || `${parsed.purchasedDate}_${r.id}_${lIdx}`;
       let discountType = 'percentage';
       let discountValue = 0;
       if (parsed.mrp > 0 && parsed.paid < parsed.mrp) {
@@ -443,7 +463,7 @@ export const syncStockFromPastTransactions = async () => {
       await db.run(
         'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value, category, brand) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
-          id,
+          batchId,
           parsed.canonicalProduct || parsed.cleanedName,
           parsed.remainingQty,
           parsed.unit || 'pcs',

@@ -6,6 +6,7 @@ import {
   extractNormalizedBatchesFromTransactions,
   groupBatchesByProduct,
   getCanonicalProductName,
+  parseStockLine,
   DEFAULT_STOCK_CATEGORIES
 } from '../../utils/stockInventoryNormalization.js';
 import { aggregateProductPhysicalQuantities } from '../../utils/stockPhysicalQuantity.js';
@@ -109,7 +110,7 @@ import { createEmptyPurchaseItem, getItemCalculations } from '../../utils/stockC
 export { createEmptyPurchaseItem, getItemCalculations };
 
 export default function StockManager({ onBack, backInterceptRef }) {
-  const { state, load } = useApp();
+  const { state, load, updateTransaction } = useApp();
   const { accounts, categories, transactions } = state;
 
   const [items, setItems] = useState([]);
@@ -242,6 +243,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
     if (selectedVariant === 'all') return activeProductData.batches;
     return activeProductData.batches.filter(b => b.variant === selectedVariant);
   }, [activeProductData, selectedVariant]);
+
 
   const handleExportExcel = async (mode = 'history') => {
     try {
@@ -397,30 +399,200 @@ export default function StockManager({ onBack, backInterceptRef }) {
     const map = new Map();
     (items || []).forEach(it => {
       const key = (it.name || '').toLowerCase().trim();
-      if (key && !map.has(key)) {
-        map.set(key, {
-          name: it.name,
-          category: it.category || '',
-          brand: it.brand || '',
-          sub_qty: String(it.sub_qty || 1),
-          sub_unit: it.sub_unit || 'pcs'
-        });
+      if (key) {
+        const existing = map.get(key);
+        if (!existing || (!existing.brand && it.brand) || (!existing.category && it.category)) {
+          map.set(key, {
+            name: it.name,
+            category: it.category || existing?.category || '',
+            brand: it.brand || existing?.brand || '',
+            sub_qty: String(it.sub_qty || existing?.sub_qty || 1),
+            sub_unit: it.sub_unit || existing?.sub_unit || 'pcs'
+          });
+        }
       }
     });
     (allNormalizedBatches || []).forEach(b => {
       const key = (b.canonicalProduct || b.cleanedName || b.name || '').toLowerCase().trim();
-      if (key && !map.has(key)) {
-        map.set(key, {
-          name: b.canonicalProduct || b.cleanedName || b.name,
-          category: b.category || '',
-          brand: b.brand || '',
-          sub_qty: String(b.sub_qty || 1),
-          sub_unit: b.sub_unit || 'pcs'
-        });
+      if (key) {
+        const existing = map.get(key);
+        if (!existing || (!existing.brand && b.brand) || (!existing.category && b.category)) {
+          map.set(key, {
+            name: b.canonicalProduct || b.cleanedName || b.name,
+            category: b.category || existing?.category || '',
+            brand: b.brand || existing?.brand || '',
+            sub_qty: String(b.sub_qty || existing?.sub_qty || 1),
+            sub_unit: b.sub_unit || existing?.sub_unit || 'pcs'
+          });
+        }
       }
     });
     return map;
   }, [allNormalizedBatches, items]);
+
+  // Helper to resolve an individual batch's brand
+  const getBatchBrand = (batch) => {
+    if (batch.brand && batch.brand.trim()) return batch.brand.trim();
+    const targetName = (batch.cleanedName || batch.name || batch.canonicalProduct || '').toLowerCase().trim();
+
+    // Direct ID match
+    const directMatch = (items || []).find(i => i.id === batch.id || i.id === batch.batchId);
+    if (directMatch && directMatch.brand && directMatch.brand.trim()) return directMatch.brand.trim();
+
+    // Match by name, date, pack quantity / parts, sub_qty, sub_unit, and store/notes
+    const exactMatch = (items || []).find(i =>
+      (i.name || '').toLowerCase().trim() === targetName &&
+      i.purchased_date === batch.purchasedDate &&
+      Number(i.original_qty || i.pack_qty || 1) === Number(batch.purchasedQty || batch.original_qty || 1) &&
+      String(i.sub_qty || 1) === String(batch.sub_qty || 1) &&
+      (i.sub_unit || '').toLowerCase().trim() === (batch.sub_unit || '').toLowerCase().trim() &&
+      (i.notes || '').trim() === (batch.source || '').trim()
+    );
+    if (exactMatch && exactMatch.brand && exactMatch.brand.trim()) return exactMatch.brand.trim();
+
+    // Secondary match without notes if store is empty
+    const partialMatch = (items || []).find(i =>
+      (i.name || '').toLowerCase().trim() === targetName &&
+      i.purchased_date === batch.purchasedDate &&
+      Number(i.original_qty || i.pack_qty || 1) === Number(batch.purchasedQty || batch.original_qty || 1) &&
+      String(i.sub_qty || 1) === String(batch.sub_qty || 1) &&
+      (i.sub_unit || '').toLowerCase().trim() === (batch.sub_unit || '').toLowerCase().trim()
+    );
+    if (partialMatch && partialMatch.brand && partialMatch.brand.trim()) return partialMatch.brand.trim();
+
+    return '';
+  };
+
+  // Resolved metadata for active product in Product History
+  const activeProductMetadata = useMemo(() => {
+    if (!activeProductData) return null;
+    const lookup = existingProductLookup.get((activeProductData.productName || '').toLowerCase().trim());
+    const category = (activeProductData.category || lookup?.category || '').trim();
+
+    // Calculate unique non-empty brands across the currently active batches (product or filtered variant)
+    const activeBatches = activeProductBatches || [];
+    const uniqueBrands = [...new Set(activeBatches.map(b => getBatchBrand(b)).filter(Boolean))];
+
+    let brandDisplay = '—';
+    if (uniqueBrands.length === 1) {
+      brandDisplay = uniqueBrands[0];
+    } else if (uniqueBrands.length > 1) {
+      brandDisplay = `${uniqueBrands.length} brands`;
+    }
+
+    let variantDisplay = '—';
+    if (selectedVariant !== 'all') {
+      variantDisplay = selectedVariant;
+    } else {
+      const vList = activeProductData.variantList || [];
+      if (vList.length === 1) {
+        variantDisplay = vList[0].variant;
+      } else if (vList.length > 1) {
+        variantDisplay = `All (${vList.length} variants)`;
+      }
+    }
+
+    return {
+      brand: brandDisplay,
+      category: category || '—',
+      variantDisplay
+    };
+  }, [activeProductData, activeProductBatches, existingProductLookup, selectedVariant, items]);
+
+  // Product History Column Sorting state
+  const [historySortField, setHistorySortField] = useState('date');
+  const [historySortDir, setHistorySortDir] = useState('desc'); // default: newest first
+
+  const handleSortClick = (field) => {
+    if (historySortField === field) {
+      setHistorySortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setHistorySortField(field);
+      setHistorySortDir('asc');
+    }
+  };
+
+  const sortedProductBatches = useMemo(() => {
+    if (!activeProductBatches || activeProductBatches.length === 0) return [];
+
+    const indexed = activeProductBatches.map((b, idx) => ({ ...b, _origIdx: idx }));
+
+    return indexed.sort((a, b) => {
+      let comp = 0;
+      switch (historySortField) {
+        case 'date': {
+          const dA = a.purchasedDate || '';
+          const dB = b.purchasedDate || '';
+          comp = dA.localeCompare(dB);
+          break;
+        }
+        case 'brand': {
+          const bA = getBatchBrand(a) || '';
+          const bB = getBatchBrand(b) || '';
+          if (!bA && bB) return 1;
+          if (bA && !bB) return -1;
+          comp = bA.localeCompare(bB, undefined, { sensitivity: 'base' });
+          break;
+        }
+        case 'variant': {
+          const vA = a.variant || '';
+          const vB = b.variant || '';
+          comp = vA.localeCompare(vB, undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'source': {
+          const sA = a.source || '';
+          const sB = b.source || '';
+          if (!sA && sB) return 1;
+          if (sA && !sB) return -1;
+          comp = sA.localeCompare(sB, undefined, { sensitivity: 'base' });
+          break;
+        }
+        case 'purchased': {
+          comp = (parseFloat(a.purchasedQty) || 0) - (parseFloat(b.purchasedQty) || 0);
+          break;
+        }
+        case 'mrp': {
+          comp = (parseFloat(a.mrp) || 0) - (parseFloat(b.mrp) || 0);
+          break;
+        }
+        case 'paid': {
+          comp = (parseFloat(a.paid) || 0) - (parseFloat(b.paid) || 0);
+          break;
+        }
+        case 'saved': {
+          comp = (parseFloat(a.savings) || 0) - (parseFloat(b.savings) || 0);
+          break;
+        }
+        case 'consumed': {
+          comp = (parseFloat(a.consumedQty) || 0) - (parseFloat(b.consumedQty) || 0);
+          break;
+        }
+        case 'remaining': {
+          comp = (parseFloat(a.remainingQty) || 0) - (parseFloat(b.remainingQty) || 0);
+          break;
+        }
+        case 'status': {
+          const isAvailA = a.remainingQty > 0 ? 'In Stock' : 'Out';
+          const isAvailB = b.remainingQty > 0 ? 'In Stock' : 'Out';
+          comp = isAvailA.localeCompare(isAvailB);
+          break;
+        }
+        default:
+          comp = 0;
+      }
+
+      if (historySortDir === 'desc') {
+        comp = -comp;
+      }
+
+      // Stable tie-breaker using original index
+      if (comp === 0) {
+        return a._origIdx - b._origIdx;
+      }
+      return comp;
+    });
+  }, [activeProductBatches, historySortField, historySortDir, items]);
 
   const updatePurchaseItem = (itemId, field, value) => {
     setPurchaseItems(prev => prev.map(it => {
@@ -599,28 +771,34 @@ export default function StockManager({ onBack, backInterceptRef }) {
     const unitPrice = parseFloat(batch.unitPrice || batch.discounted_price || 0);
     const finalPrice = totalParts * unitPrice;
 
-    let discountType = 'percentage';
-    let discountValue = '0';
-    if (originalPrice > 0 && finalPrice < originalPrice) {
-      discountValue = String(Number((((originalPrice - finalPrice) / originalPrice) * 100).toFixed(2)));
-    }
+    const targetName = (batch.cleanedName || batch.name || batch.canonicalProduct || '').toLowerCase().trim();
+    const batchBrand = getBatchBrand(batch);
+    const dbItem = (items || []).find(i => i.id === batch.id || i.id === batch.batchId);
+    const lookup = existingProductLookup.get(targetName);
+
+    const initialCat = batch.category || dbItem?.category || lookup?.category || '';
+    const initialBrand = batchBrand || '';
+
+    let discountType = 'final_price';
+    let discountValue = String(finalPrice > 0 ? finalPrice : originalPrice);
 
     setEditingBatchId(batch.id || batch.txnId);
     setEditFormData({
       id: batch.id || batch.txnId,
-      name: batch.cleanedName || batch.name,
-      category: DEFAULT_STOCK_CATEGORIES.includes(batch.category) ? batch.category : (batch.category ? 'Other' : 'Groceries'),
-      customCategory: !DEFAULT_STOCK_CATEGORIES.includes(batch.category) && batch.category ? batch.category : '',
-      brand: batch.brand || '',
-      sub_qty: String(batch.sub_qty || 1),
-      sub_unit: batch.sub_unit || 'pcs',
-      pack_qty: String(batch.pack_qty || 1),
+      batchObj: batch,
+      name: batch.cleanedName || batch.name || batch.canonicalProduct || '',
+      category: DEFAULT_STOCK_CATEGORIES.includes(initialCat) ? initialCat : (initialCat ? 'Other' : 'Groceries'),
+      customCategory: !DEFAULT_STOCK_CATEGORIES.includes(initialCat) && initialCat ? initialCat : '',
+      brand: initialBrand || '',
+      sub_qty: String(batch.sub_qty || dbItem?.sub_qty || 1),
+      sub_unit: batch.sub_unit || dbItem?.sub_unit || 'pcs',
+      pack_qty: String(batch.pack_qty || dbItem?.pack_qty || totalParts),
       original_qty: String(totalParts),
-      qty: String(batch.remainingQty !== undefined ? batch.remainingQty : batch.qty),
+      qty: String(batch.remainingQty !== undefined ? batch.remainingQty : (batch.qty !== undefined ? batch.qty : totalParts)),
       price: String(originalPrice),
       discountType,
       discountValue,
-      notes: batch.source || batch.notes || '',
+      notes: batch.source || batch.notes || dbItem?.notes || '',
       purchased_date: batch.purchasedDate || batch.purchased_date || ''
     });
   };
@@ -660,30 +838,93 @@ export default function StockManager({ onBack, backInterceptRef }) {
       let finalPrice = price;
       if (editFormData.discountType === 'percentage') {
         finalPrice = price * (1 - discVal / 100);
+      } else if (editFormData.discountType === 'fixed') {
+        finalPrice = Math.max(0, price - discVal);
       } else {
-        finalPrice = discVal || price;
+        finalPrice = editFormData.discountValue !== '' && !isNaN(parseFloat(editFormData.discountValue))
+          ? parseFloat(editFormData.discountValue)
+          : price;
       }
       const totalParts = parseFloat(editFormData.original_qty) || 1;
+      const availableParts = editFormData.qty !== '' && !isNaN(parseFloat(editFormData.qty))
+        ? parseFloat(editFormData.qty)
+        : totalParts;
       const unitPrice = totalParts > 0 ? (finalPrice / totalParts) : finalPrice;
+      const subQty = parseFloat(editFormData.sub_qty) || 1;
+      const subUnit = editFormData.sub_unit || 'pcs';
+      const packQty = parseFloat(editFormData.pack_qty) || 1;
       const finalCat = editFormData.category === 'Other' ? (editFormData.customCategory || 'Other').trim() : (editFormData.category || '').trim();
+      const finalBrand = (editFormData.brand || '').trim();
+      const cleanedName = cleanItemName(editFormData.name.trim());
 
+      // 1. Update SQLite inventory table
       await updateInventoryItem(batchId, {
-        name: editFormData.name.trim(),
+        name: cleanedName,
         category: finalCat,
-        brand: (editFormData.brand || '').trim(),
-        qty: parseFloat(editFormData.qty) || 0,
+        brand: finalBrand,
+        qty: availableParts,
         unit: 'pcs',
         price: price,
         discounted_price: unitPrice,
         purchased_date: editFormData.purchased_date,
-        notes: editFormData.notes.trim(),
-        sub_qty: parseFloat(editFormData.sub_qty) || 1,
-        sub_unit: editFormData.sub_unit,
+        notes: (editFormData.notes || '').trim(),
+        sub_qty: subQty,
+        sub_unit: subUnit,
         original_qty: totalParts,
-        pack_qty: parseFloat(editFormData.pack_qty) || 1,
+        pack_qty: packQty,
         discount_type: editFormData.discountType,
-        discount_value: parseFloat(editFormData.discountValue) || 0
+        discount_value: discVal
       });
+
+      // 2. Update underlying transaction in transactions table & state
+      const batch = editFormData.batchObj || allNormalizedBatches.find(b => b.id === batchId || b.batchId === batchId || b.txnId === batchId);
+      if (batch) {
+        const txnUniqueId = batch.txnUniqueId || batch.txnId || batch.originalTxn?.ID || batch.originalTxn?._id || batch.originalTxn?.id;
+        const targetTxn = (transactions || []).find(t => t.ID === txnUniqueId || t._id === txnUniqueId || t.id === txnUniqueId) || batch.originalTxn;
+
+        if (targetTxn && updateTransaction) {
+          const desc = targetTxn.Description || targetTxn.description || '';
+          const lines = desc.split('\n');
+
+          let targetLineIdx = batch.lineIdx !== undefined ? batch.lineIdx : -1;
+          if (targetLineIdx < 0 || targetLineIdx >= lines.length) {
+            targetLineIdx = lines.findIndex(l => l.trim() === (batch.rawLine || '').trim());
+          }
+          if (targetLineIdx < 0) {
+            targetLineIdx = lines.findIndex(l => l.toLowerCase().includes(cleanedName.toLowerCase()) || (batch.rawName && l.toLowerCase().includes(batch.rawName.toLowerCase())));
+          }
+
+          if (targetLineIdx >= 0) {
+            const sizePart = totalParts > 1 ? `${subQty}${subUnit}*${totalParts}` : `${subQty}${subUnit}`;
+            const suffix = availableParts < totalParts ? `, ${availableParts}` : '';
+            const statusWord = availableParts > 0 ? 'stock available' : 'stock unavailable';
+            lines[targetLineIdx] = `${cleanedName} ${statusWord} ${sizePart}: ${price}: @${finalPrice}${suffix}`;
+
+            const newDescription = lines.join('\n');
+
+            let newTotalAmount = 0;
+            lines.forEach((l, lIdx) => {
+              const p = parseStockLine(l, targetTxn, lIdx);
+              if (p) {
+                newTotalAmount += (typeof p.paid === 'number' ? p.paid : 0);
+              }
+            });
+            const roundedTotal = Math.round(newTotalAmount);
+
+            const updatedTxnData = {
+              ...targetTxn,
+              Date: editFormData.purchased_date ? (editFormData.purchased_date.includes('-') ? editFormData.purchased_date.split('-').reverse().join('/') : editFormData.purchased_date) : targetTxn.Date,
+              Description: newDescription,
+              description: newDescription,
+              INR: roundedTotal > 0 ? roundedTotal : (targetTxn.INR || targetTxn.Amount || 0),
+              Amount: String(roundedTotal > 0 ? roundedTotal : (targetTxn.INR || targetTxn.Amount || 0))
+            };
+
+            await updateTransaction(txnUniqueId, updatedTxnData);
+          }
+        }
+      }
+
       setEditingBatchId(null);
       await fetchItems();
       await load();
@@ -797,6 +1038,28 @@ export default function StockManager({ onBack, backInterceptRef }) {
           {/* If a product is selected, show Product Detail View (Summary Cards -> Variants -> History) */}
           {activeProductData ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Product Metadata Bar */}
+              <div className="stock-prod-meta-bar">
+                <div className="stock-prod-meta-chip">
+                  <span className="stock-prod-meta-label">Brand:</span>
+                  <span className={`stock-prod-meta-val ${activeProductMetadata?.brand === '—' ? 'empty' : ''}`}>
+                    {activeProductMetadata?.brand || '—'}
+                  </span>
+                </div>
+                <div className="stock-prod-meta-chip">
+                  <span className="stock-prod-meta-label">Category:</span>
+                  <span className={`stock-prod-meta-val ${activeProductMetadata?.category === '—' ? 'empty' : ''}`}>
+                    {activeProductMetadata?.category || '—'}
+                  </span>
+                </div>
+                <div className="stock-prod-meta-chip">
+                  <span className="stock-prod-meta-label">Variant:</span>
+                  <span className="stock-prod-meta-val variant">
+                    {activeProductMetadata?.variantDisplay || '—'}
+                  </span>
+                </div>
+              </div>
+
               {/* Lifetime Product Summary Card */}
               <div className="stock-prod-summary-grid">
                 <div className="stock-prod-stat-item">
@@ -862,26 +1125,86 @@ export default function StockManager({ onBack, backInterceptRef }) {
                 <table className="stock-history-table">
                   <thead>
                     <tr>
-                      <th>Date</th>
-                      <th>Variant</th>
-                      <th>Source</th>
-                      <th>Purchased</th>
-                      <th>MRP</th>
-                      <th>Paid</th>
-                      <th>Saved</th>
-                      <th>Consumed</th>
-                      <th>Remaining</th>
-                      <th>Status</th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('date')} title="Click to sort by Date">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Date</span>
+                          {historySortField === 'date' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('brand')} title="Click to sort by Brand">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Brand</span>
+                          {historySortField === 'brand' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('variant')} title="Click to sort by Variant">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Variant</span>
+                          {historySortField === 'variant' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('source')} title="Click to sort by Source / Store">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Source</span>
+                          {historySortField === 'source' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('purchased')} title="Click to sort by Purchased Quantity">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Purchased</span>
+                          {historySortField === 'purchased' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('mrp')} title="Click to sort by MRP">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>MRP</span>
+                          {historySortField === 'mrp' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('paid')} title="Click to sort by Paid Amount">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Paid</span>
+                          {historySortField === 'paid' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('saved')} title="Click to sort by Saved Amount">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Saved</span>
+                          {historySortField === 'saved' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('consumed')} title="Click to sort by Consumed Quantity">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Consumed</span>
+                          {historySortField === 'consumed' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('remaining')} title="Click to sort by Remaining Quantity">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Remaining</span>
+                          {historySortField === 'remaining' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('status')} title="Click to sort by Status">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Status</span>
+                          {historySortField === 'status' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {activeProductBatches.map((batch, bIdx) => {
+                    {sortedProductBatches.map((batch, bIdx) => {
                       const isAvail = batch.remainingQty > 0;
+                      const batchBrand = getBatchBrand(batch);
                       return (
                         <tr key={batch.id || `${batch.purchasedDate}_${bIdx}`}>
                           <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
                             📅 {batch.purchasedDate || 'Unknown'}
+                          </td>
+                          <td>
+                            {batchBrand ? <span className="stock-badge brand">{batchBrand}</span> : '—'}
                           </td>
                           <td>
                             <span className="stock-badge variant">{batch.variant}</span>
@@ -935,8 +1258,47 @@ export default function StockManager({ onBack, backInterceptRef }) {
 
               {/* Purchase History Cards (Mobile) */}
               <div className="stock-mobile-history-cards">
-                {activeProductBatches.map((batch, bIdx) => {
+                {/* Mobile Sort Toolbar */}
+                <div className="stock-mobile-sort-bar">
+                  <span className="stock-mobile-sort-label">Sort:</span>
+                  <select
+                    className="stock-mobile-sort-select"
+                    value={historySortField}
+                    onChange={(e) => {
+                      const newField = e.target.value;
+                      if (newField === historySortField) {
+                        setHistorySortDir(d => d === 'asc' ? 'desc' : 'asc');
+                      } else {
+                        setHistorySortField(newField);
+                        setHistorySortDir(newField === 'date' ? 'desc' : 'asc');
+                      }
+                    }}
+                  >
+                    <option value="date">Date</option>
+                    <option value="brand">Brand</option>
+                    <option value="variant">Variant</option>
+                    <option value="source">Source</option>
+                    <option value="purchased">Purchased</option>
+                    <option value="mrp">MRP</option>
+                    <option value="paid">Paid</option>
+                    <option value="saved">Saved</option>
+                    <option value="consumed">Consumed</option>
+                    <option value="remaining">Remaining</option>
+                    <option value="status">Status</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="stock-mobile-sort-dir-btn"
+                    onClick={() => setHistorySortDir(d => d === 'asc' ? 'desc' : 'asc')}
+                    title={`Current: ${historySortDir === 'asc' ? 'Ascending' : 'Descending'}. Click to toggle.`}
+                  >
+                    {historySortDir === 'asc' ? '↑ Asc' : '↓ Desc'}
+                  </button>
+                </div>
+
+                {sortedProductBatches.map((batch, bIdx) => {
                   const isAvail = batch.remainingQty > 0;
+                  const batchBrand = getBatchBrand(batch);
                   return (
                     <div key={batch.id || `${batch.purchasedDate}_${bIdx}`} className="stock-batch-row">
                       <div className="stock-batch-meta">
@@ -949,7 +1311,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
                         </span>
                       </div>
                       <div className="stock-batch-meta">
-                        <span className="stock-badge variant">{batch.variant}</span>
+                        <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {batchBrand && <span className="stock-badge brand">{batchBrand}</span>}
+                          <span className="stock-badge variant">{batch.variant}</span>
+                        </div>
                         <span>Paid: <strong>₹{batch.paid}</strong> <span style={{ color: 'var(--text-muted)', fontSize: '0.62rem' }}>(MRP ₹{batch.mrp})</span></span>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
@@ -1253,6 +1618,38 @@ export default function StockManager({ onBack, backInterceptRef }) {
                   className="form-input"
                   value={editFormData.price}
                   onChange={e => setEditFormData({ ...editFormData, price: e.target.value })}
+                />
+              </div>
+            </div>
+
+            {/* Pricing Model: Discount Type & Final / Discount Price */}
+            <div className="stock-row-grid-2">
+              <div className="mgr-edit-field">
+                <label className="stock-builder-lbl">Discount Type</label>
+                <select
+                  className="form-input"
+                  value={editFormData.discountType || 'final_price'}
+                  onChange={e => setEditFormData({ ...editFormData, discountType: e.target.value })}
+                >
+                  <option value="final_price">Final Price</option>
+                  <option value="percentage">%</option>
+                  <option value="fixed">₹ Discount</option>
+                </select>
+              </div>
+              <div className="mgr-edit-field">
+                <label className="stock-builder-lbl">
+                  {editFormData.discountType === 'percentage'
+                    ? 'Discount (%)'
+                    : editFormData.discountType === 'fixed'
+                    ? 'Discount (₹)'
+                    : 'Final Price (₹)'}
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  className="form-input"
+                  value={editFormData.discountValue || ''}
+                  onChange={e => setEditFormData({ ...editFormData, discountValue: e.target.value })}
                 />
               </div>
             </div>

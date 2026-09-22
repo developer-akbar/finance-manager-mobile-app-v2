@@ -604,6 +604,50 @@
   color: var(--text-primary);
 }
 
+.stock-prod-meta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.stock-prod-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.72rem;
+}
+
+.stock-prod-meta-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stock-prod-meta-val {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.stock-prod-meta-val.empty {
+  color: var(--text-muted);
+}
+
+.stock-prod-meta-val.variant {
+  color: var(--blue, #4d9fff);
+}
+
 .stock-prod-summary-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -759,10 +803,82 @@
   border-color: rgba(255, 179, 0, 0.2);
 }
 
+.stock-badge.brand {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border-color: rgba(168, 85, 247, 0.25);
+}
+
+.stock-sortable-th {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.stock-sortable-th:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+.stock-sort-indicator {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 900;
+  color: var(--green, #00e5a0);
+}
+
+.stock-mobile-sort-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 2px;
+}
+
+.stock-mobile-sort-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stock-mobile-sort-select {
+  flex: 1;
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.stock-mobile-sort-dir-btn {
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--green, #00e5a0);
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 4px 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* Responsive Table / Card switch */
 @media (max-width: 768px) {
   .stock-desktop-history-table {
     display: none !important;
+  }
+  .stock-mobile-sort-bar {
+    display: flex !important;
   }
   .stock-mobile-history-cards {
     display: flex !important;
@@ -774,6 +890,9 @@
 @media (min-width: 769px) {
   .stock-desktop-history-table {
     display: block !important;
+  }
+  .stock-mobile-sort-bar {
+    display: none !important;
   }
   .stock-mobile-history-cards {
     display: none !important;
