@@ -3,6 +3,7 @@ import { v4 as uuid } from 'uuid';
 import { addTransaction } from './transactions.js';
 import { saveRecurringRule, buildInstalmentSchedule, buildInstalmentNote } from './recurring.js';
 import { parseStockLine, getCanonicalProductName } from '../utils/stockInventoryNormalization.js';
+import { recordTombstone } from './tombstones.js';
 
 const formatFraction = (val) => {
   if (val === 0 || !val) return '0';
@@ -402,6 +403,7 @@ export const updateInventoryItem = async (id, data) => {
 export const deleteInventoryItem = async (itemId) => {
   const db = getDB();
   await db.run('DELETE FROM inventory WHERE id = ?', [itemId]);
+  await recordTombstone(itemId, 'inventory');
 };
 
 export const restoreInventoryItem = async (itemId, qtyToRestore, unitMode) => {

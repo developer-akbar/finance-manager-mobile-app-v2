@@ -10,6 +10,7 @@ import { v4 as uuid } from 'uuid';
 import { parseTradebook, parseLedger, parseHoldings, parseDividends } from '../../utils/brokerageAdapters.js';
 import { parseCASText } from '../../utils/casParser.js';
 import { generateCASTransactions } from '../../utils/casAdapter.js';
+import CloudSyncManager from './CloudSyncManager.jsx';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -1333,7 +1334,7 @@ function TagsManager({ onBack }) {
 // ─────────────────────────────────────────────
 // Data Manager
 // ─────────────────────────────────────────────
-function DataManager({ onBack }) {
+function DataManager({ onBack, onOpenCloudSync }) {
   const { state, importData, cancelImport, clearAllData, cleanupAccounts, analyseImport, updateSettings, modifyRecurringRule, removeRecurringRule } = useApp();
   const { transactions, accounts, accountGroups, accountMapping, categories, budgets, importProgress, recurringRules } = state;
   const fileRef = useRef(null);
@@ -2117,12 +2118,13 @@ function DataManager({ onBack }) {
               <div className="dm-row-sub">Save full backup to device storage</div>
             </div>
           </div>
-          <div className="dm-row" style={{ opacity: 0.5, cursor: 'default' }}>
-            <div className="dm-row-icon">🔵</div>
+          <div className="dm-row" onClick={() => onOpenCloudSync?.()}>
+            <div className="dm-row-icon">☁️</div>
             <div className="dm-row-content">
-              <div className="dm-row-title">Google Drive <span style={{ fontSize: '0.62rem', fontWeight: 700, background: 'rgba(255,180,0,0.15)', color: 'var(--gold)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>Coming Soon</span></div>
-              <div className="dm-row-sub">Requires Google Cloud OAuth setup · auto-sync to Drive app folder</div>
+              <div className="dm-row-title">Cloud Sync (Google Drive) <span style={{ fontSize: '0.62rem', fontWeight: 700, background: 'rgba(0,229,160,0.15)', color: 'var(--green)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>Encrypted v2</span></div>
+              <div className="dm-row-sub">End-to-End Encrypted 3-Way Sync · Sandboxed AppData</div>
             </div>
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
           </div>
           <div className="dm-row" onClick={() => setShowBackupSheet(true)}>
             <div className="dm-row-icon">⏰</div>
@@ -3204,7 +3206,8 @@ export default function Settings({ backInterceptRef } = {}) {
 
 
   if (screen === 'recurring') return <RecurringManager onBack={() => setScreen(null)} />;
-  if (screen === 'data') return <DataManager onBack={() => setScreen(null)} />;
+  if (screen === 'cloud_sync') return <CloudSyncManager onBack={() => setScreen(null)} />;
+  if (screen === 'data') return <DataManager onBack={() => setScreen(null)} onOpenCloudSync={() => setScreen('cloud_sync')} />;
   if (screen === 'tags') return <TagsManager onBack={() => setScreen(null)} />;
   if (screen === 'groups') return <GroupSplitManager onBack={() => setScreen(null)} backInterceptRef={backInterceptRef} />;
   if (screen === 'warranty') return <WarrantyLocker onBack={() => setScreen(null)} backInterceptRef={backInterceptRef} />;
@@ -3266,6 +3269,11 @@ export default function Settings({ backInterceptRef } = {}) {
         <div className="settings-hub-group">
           <div className="settings-group-label">Data &amp; Automation</div>
           <div className="settings-card">
+            <div className="settings-row" onClick={() => setScreen('cloud_sync')}>
+              <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>☁️</div>
+              <div className="settings-row-content"><div className="settings-row-title">Cloud Sync (Google Drive)</div><div className="settings-row-sub">End-to-end encrypted multi-device 3-way sync</div></div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
+            </div>
             <div className="settings-row" onClick={() => setScreen('data')}>
               <div className="settings-row-icon" style={{ background: 'rgba(77,159,255,0.15)' }}>📊</div>
               <div className="settings-row-content"><div className="settings-row-title">Data Management</div><div className="settings-row-sub">{txnCount.toLocaleString()} transactions · Encrypted Backups</div></div>

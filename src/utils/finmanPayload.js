@@ -369,7 +369,7 @@ export function bundleRelatedTransactions(selectedTransactions, allTransactionsP
 /**
  * Phase 4 — Determine differences between incoming and existing transaction
  */
-function findTransactionDifferences(incoming, existing) {
+export function findTransactionDifferences(incoming, existing) {
   const diffs = [];
   const fieldsToCheck = [
     { key: 'Date', altKey: 'date', label: 'Date' },

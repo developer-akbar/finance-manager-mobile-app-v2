@@ -1,9 +1,10 @@
 import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
+import { recordTombstone, recordTombstonesBatch } from './tombstones.js';
 
 export const rowToTxn = (r) => {
   const base = {
-    _id: r.id, ID: r.id,
+    id: r.id, _id: r.id, ID: r.id,
     Date: r.date, Time: r.time || '',
     Account: r.account || '', FromAccount: r.from_account || '', ToAccount: r.to_account || '',
     Category: r.category || '', Subcategory: r.subcategory || '',
@@ -173,7 +174,7 @@ export const getTransactions = async (filters = {}) => {
 
 export const addTransaction = async (data) => {
   const db  = getDB();
-  const id  = data.ID || data._id || uuid();
+  const id  = data.id || data.ID || data._id || uuid();
   const now = new Date().toISOString();
   
   const isInv = !!(data.InvestmentTransactionType || data.Brokerage);
@@ -452,12 +453,27 @@ export const deleteTransaction = async (id) => {
   } catch (err) {
     console.error('Failed to restore stock on transaction delete:', err);
   }
+  // Fetch linked charge IDs before deleting to record companion tombstones
+  let chargeIds = [];
+  try {
+    const [res1, res2] = await Promise.all([
+      db.query('SELECT id FROM transactions WHERE split_group_id=?', [`inv_charge_${id}`]),
+      db.query('SELECT id FROM investment_transactions WHERE split_group_id=?', [`inv_charge_${id}`])
+    ]);
+    chargeIds = [...(res1.values || []).map(r => r.id), ...(res2.values || []).map(r => r.id)];
+  } catch {}
+
   await Promise.all([
     db.run('DELETE FROM transactions WHERE id=?', [id]),
     db.run('DELETE FROM investment_transactions WHERE id=?', [id]),
     db.run('DELETE FROM transactions WHERE split_group_id=?', [`inv_charge_${id}`]),
     db.run('DELETE FROM investment_transactions WHERE split_group_id=?', [`inv_charge_${id}`])
   ]);
+
+  await recordTombstone(id, 'transaction');
+  if (chargeIds.length > 0) {
+    await recordTombstonesBatch(chargeIds, 'transaction');
+  }
 };
 export const deleteAllTransactions = async ()  => {
   const db = getDB();

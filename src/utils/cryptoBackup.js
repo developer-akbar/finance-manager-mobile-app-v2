@@ -38,15 +38,30 @@ function base64ToBytes(base64) {
   return bytes;
 }
 
-// Derive AES-256 key from PIN/password + salt using PBKDF2
-async function deriveKey(password, salt) {
-  const keyMaterial = await crypto.subtle.importKey(
+// Derive non-extractable PBKDF2 key material from raw string PIN
+export async function deriveKeyMaterial(password) {
+  if (!password || typeof password !== 'string' || !password.trim()) {
+    throw new Error('Please provide a password or PIN');
+  }
+  return crypto.subtle.importKey(
     'raw',
-    str2ab(password),
+    str2ab(password.trim()),
     { name: 'PBKDF2' },
     false,
     ['deriveKey']
   );
+}
+
+// Derive AES-256 key from PIN/password (or pre-derived key material) + salt using PBKDF2
+export async function deriveKey(keyMaterialOrPassword, salt) {
+  let keyMaterial;
+  if (keyMaterialOrPassword && typeof keyMaterialOrPassword === 'object' && keyMaterialOrPassword.algorithm?.name === 'PBKDF2') {
+    keyMaterial = keyMaterialOrPassword;
+  } else if (typeof keyMaterialOrPassword === 'string' && keyMaterialOrPassword.trim()) {
+    keyMaterial = await deriveKeyMaterial(keyMaterialOrPassword.trim());
+  } else {
+    throw new Error('Invalid key material or PIN provided');
+  }
 
   return crypto.subtle.deriveKey(
     {
@@ -63,17 +78,17 @@ async function deriveKey(password, salt) {
 }
 
 /**
- * Encrypt entire application payload with password/PIN
+ * Encrypt entire application payload with password/PIN or pre-derived PBKDF2 CryptoKey
  * Returns a JSON string containing base64 encoded salt, IV, ciphertext, and metadata.
  */
-export async function encryptBackupData(dataObj, password) {
-  if (!password || !password.trim()) {
-    throw new Error('Please provide a password or PIN for encryption');
+export async function encryptBackupData(dataObj, keyMaterialOrPassword) {
+  if (!keyMaterialOrPassword) {
+    throw new Error('Please provide a password, PIN, or session key for encryption');
   }
 
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveKey(password.trim(), salt);
+  const key = await deriveKey(keyMaterialOrPassword, salt);
 
   const jsonStr = JSON.stringify({
     version: '2.3.0',
@@ -102,11 +117,11 @@ export async function encryptBackupData(dataObj, password) {
 }
 
 /**
- * Decrypt application payload with password/PIN
+ * Decrypt application payload with password/PIN or pre-derived PBKDF2 CryptoKey
  */
-export async function decryptBackupData(backupJsonString, password) {
-  if (!password || !password.trim()) {
-    throw new Error('Please enter the password or PIN to decrypt');
+export async function decryptBackupData(backupJsonString, keyMaterialOrPassword) {
+  if (!keyMaterialOrPassword) {
+    throw new Error('Please enter the password, PIN, or session key to decrypt');
   }
 
   let pkg;
@@ -124,7 +139,7 @@ export async function decryptBackupData(backupJsonString, password) {
   const iv = base64ToBytes(pkg.iv);
   const ciphertext = base64ToBytes(pkg.data);
 
-  const key = await deriveKey(password.trim(), salt);
+  const key = await deriveKey(keyMaterialOrPassword, salt);
 
   try {
     const decryptedBuf = await crypto.subtle.decrypt(

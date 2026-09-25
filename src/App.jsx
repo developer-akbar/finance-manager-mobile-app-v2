@@ -9,7 +9,7 @@ import Analytics from './components/Analytics/Analytics.jsx';
 import Settings from './components/Settings/Settings.jsx';
 import PinLock from './components/Common/PinLock.jsx';
 import AddTransaction from './components/Transactions/AddTransaction.jsx';
-import { initDB } from './database/index.js';
+import { initDB, closeDB } from './database/index.js';
 import './styles/globals.css';
 import './SplashScreen.css';
 
@@ -109,7 +109,7 @@ const SplashScreen = () => (
 );
 
 function AppInner() {
-  const { state, navigate, processDueRepeat } = useApp();
+  const { state, navigate, processDueRepeat, load } = useApp();
   const { currentView } = state;
 
   // ALL hooks must be called unconditionally before any early return
@@ -261,6 +261,34 @@ function AppInner() {
     };
   }, [currentView, showAdd, navigate, showToast]);
 
+  // Fail-closed DB state: Never show empty dashboard if DB failed to load
+  if (state.dbError) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        minHeight: '100vh', padding: '24px', background: 'var(--bg-primary, #0a0f1e)', color: 'var(--text-primary, #fff)',
+        textAlign: 'center', fontFamily: 'var(--font, sans-serif)'
+      }}>
+        <div style={{ fontSize: '3rem', marginBottom: '16px' }}>⚠️</div>
+        <div style={{ fontSize: '1.2rem', fontWeight: 800, marginBottom: '8px', color: 'var(--expense, #ff4d6a)' }}>
+          Database Unavailable
+        </div>
+        <div style={{ fontSize: '0.82rem', color: 'var(--text-muted, #8b9bb4)', maxWidth: '360px', marginBottom: '24px', lineHeight: 1.5 }}>
+          {state.dbError}
+        </div>
+        <button
+          onClick={() => { closeDB(); load(); }}
+          style={{
+            padding: '12px 24px', borderRadius: '12px', background: 'var(--accent, #00e5a0)',
+            color: '#000', fontWeight: 700, fontSize: '0.9rem', border: 'none', cursor: 'pointer'
+          }}
+        >
+          Retry Connection
+        </button>
+      </div>
+    );
+  }
+
   // Safe to return early here — all hooks have already been called above
   if (state.loading) return <SplashScreen />;
 
@@ -325,8 +353,50 @@ function AppInner() {
 }
 
 export default function App() {
-  const [ready, setReady] = React.useState(false);
-  useEffect(() => { initDB().then(() => setReady(true)).catch(console.error); }, []);
-  if (!ready) return <SplashScreen />;
+  const [dbState, setDbState] = React.useState({ ready: false, error: null });
+
+  const init = useCallback(async () => {
+    setDbState({ ready: false, error: null });
+    try {
+      await initDB();
+      setDbState({ ready: true, error: null });
+    } catch (err) {
+      console.error('[App] Database initialization failed:', err);
+      setDbState({ ready: false, error: err.message || 'Database initialization failed.' });
+    }
+  }, []);
+
+  useEffect(() => {
+    init();
+  }, [init]);
+
+  if (dbState.error) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        minHeight: '100vh', padding: '24px', background: 'var(--bg-primary, #0a0f1e)', color: 'var(--text-primary, #fff)',
+        textAlign: 'center', fontFamily: 'var(--font, sans-serif)'
+      }}>
+        <div style={{ fontSize: '3rem', marginBottom: '16px' }}>⚠️</div>
+        <div style={{ fontSize: '1.2rem', fontWeight: 800, marginBottom: '8px', color: 'var(--expense, #ff4d6a)' }}>
+          Database Unavailable
+        </div>
+        <div style={{ fontSize: '0.82rem', color: 'var(--text-muted, #8b9bb4)', maxWidth: '360px', marginBottom: '24px', lineHeight: 1.5 }}>
+          {dbState.error}
+        </div>
+        <button
+          onClick={() => { closeDB(); init(); }}
+          style={{
+            padding: '12px 24px', borderRadius: '12px', background: 'var(--accent, #00e5a0)',
+            color: '#000', fontWeight: 700, fontSize: '0.9rem', border: 'none', cursor: 'pointer'
+          }}
+        >
+          Retry Database Connection
+        </button>
+      </div>
+    );
+  }
+
+  if (!dbState.ready) return <SplashScreen />;
   return <AppProvider><AppInner/></AppProvider>;
 }

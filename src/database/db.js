@@ -5,7 +5,7 @@
 import { Capacitor } from '@capacitor/core';
 
 const IDB_NAME    = 'finman_v2';
-const IDB_VERSION = 12; // v12 — investment_plans table and store
+const IDB_VERSION = 13; // v13 — sync_tombstones table and store for cloud sync
 
 // Each store and its primary key field
 const STORE_DEFS = [
@@ -23,14 +23,41 @@ const STORE_DEFS = [
   { name:'investment_transactions', key:'id'  },
   { name:'brokerages',              key:'id'  },
   { name:'investment_plans',         key:'id'  },
+  { name:'sync_tombstones',         key:'id'  },
 ];
 
 const storeKey = (store) => STORE_DEFS.find(s => s.name === store)?.key ?? 'id';
 
 let _idb = null;
+
+export const closeDB = () => {
+  if (_idb) {
+    try { _idb.close(); } catch {}
+    _idb = null;
+  }
+  _db = null;
+  _initPromise = null;
+};
+
 const openIDB = () => new Promise((res, rej) => {
   if (_idb) { res(_idb); return; }
+  let settled = false;
+  let blockTimeout = null;
+
   const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+
+  req.onblocked = () => {
+    console.warn('[DB] IndexedDB open/upgrade blocked by active connection in another tab or instance.');
+    if (!blockTimeout) {
+      blockTimeout = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          rej(new Error('IndexedDB upgrade blocked. Please close other open FinMan tabs and reload.'));
+        }
+      }, 5000);
+    }
+  };
+
   req.onupgradeneeded = e => {
     const db = e.target.result;
     STORE_DEFS.forEach(({ name, key }) => {
@@ -48,8 +75,30 @@ const openIDB = () => new Promise((res, rej) => {
       }
     });
   };
-  req.onsuccess = e => { _idb = e.target.result; res(_idb); };
-  req.onerror   = e => rej(e.target.error);
+
+  req.onsuccess = e => {
+    if (blockTimeout) clearTimeout(blockTimeout);
+    if (settled) return;
+    settled = true;
+    _idb = e.target.result;
+
+    // Register versionchange listener to immediately close stale connection when another tab upgrades
+    _idb.onversionchange = () => {
+      console.warn('[DB] Database version change detected. Closing stale connection.');
+      try { _idb.close(); } catch {}
+      _idb = null;
+      _db = null;
+    };
+
+    res(_idb);
+  };
+
+  req.onerror = e => {
+    if (blockTimeout) clearTimeout(blockTimeout);
+    if (settled) return;
+    settled = true;
+    rej(e.target.error || new Error('Failed to open IndexedDB'));
+  };
 });
 
 // Low-level IDB helpers
@@ -424,32 +473,53 @@ const applySchema = async (db) => {
     created_at TEXT DEFAULT '',
     updated_at TEXT DEFAULT ''
   );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS sync_tombstones (
+    id TEXT PRIMARY KEY,
+    entity_type TEXT DEFAULT 'transaction',
+    deleted_at TEXT NOT NULL
+  );`);
 };
 
 let _db = null;
+let _initPromise = null;
+
 export const initDB = async () => {
   if (_db) return _db;
-  if (Capacitor.getPlatform() === 'web') {
-    const idb = await openIDB();
-    _db = makeWebDB(idb);
-  } else {
-    _db = await openSQLite();
-  }
-  await applySchema(_db);
+  if (_initPromise) return _initPromise;
 
-  // Seed default brokerages config if empty
-  try {
-    const res = await _db.query('SELECT COUNT(*) as count FROM brokerages');
-    const count = res.values?.[0]?.count ?? 0;
-    if (count === 0) {
-      const { v4: uuid } = await import('uuid');
-      await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, [uuid(), 'Zerodha', 'HDFC', 'Akbar']);
-      await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, [uuid(), 'Groww', 'Canara', 'Fareeda']);
+  _initPromise = (async () => {
+    try {
+      if (Capacitor.getPlatform() === 'web') {
+        const idb = await openIDB();
+        _db = makeWebDB(idb);
+      } else {
+        _db = await openSQLite();
+      }
+      await applySchema(_db);
+
+      // Seed default brokerages config if empty
+      try {
+        const res = await _db.query('SELECT COUNT(*) as count FROM brokerages');
+        const count = res.values?.[0]?.count ?? 0;
+        if (count === 0) {
+          const { v4: uuid } = await import('uuid');
+          await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, [uuid(), 'Zerodha', 'HDFC', 'Akbar']);
+          await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, [uuid(), 'Groww', 'Canara', 'Fareeda']);
+        }
+      } catch (err) {
+        console.error('Failed to seed brokerages:', err);
+      }
+
+      return _db;
+    } catch (err) {
+      // Clear incomplete state so subsequent calls can retry cleanly
+      closeDB();
+      throw err;
+    } finally {
+      _initPromise = null;
     }
-  } catch (err) {
-    console.error('Failed to seed brokerages:', err);
-  }
+  })();
 
-  return _db;
+  return _initPromise;
 };
 export const getDB = () => { if (!_db) throw new Error('DB not initialised'); return _db; };

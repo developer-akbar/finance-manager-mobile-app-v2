@@ -6,3 +6,5 @@ export * from './categories.js';
 export * from './budgets.js';
 export * from './recurring.js';
 export * from './investmentPlans.js';
+export * from './inventory.js';
+export * from './tombstones.js';

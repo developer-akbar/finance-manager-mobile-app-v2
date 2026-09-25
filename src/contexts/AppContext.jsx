@@ -19,11 +19,14 @@ import {
   deleteInvestmentPlan as dbDeletePlan,
   advancePlanDueDate as dbAdvancePlanDate,
   getDB,
+  initDB,
+  closeDB,
 } from '../database/index.js';
 import { DEFAULT_ACCOUNT_GROUPS, DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES } from '../database/defaults.js';
 import { v4 as uuid } from 'uuid';
 import { parseDate } from '../utils/format.js';
 import { reconcileHistoricalCharges } from '../utils/brokerageAccounting.js';
+import { txnObjectToDBRow, invTxnObjectToDBRow } from '../services/cloudSyncEngine.js';
 
 const Ctx = createContext(null);
 export const useApp = () => { const c = useContext(Ctx); if (!c) throw new Error('useApp outside AppProvider'); return c; };
@@ -141,13 +144,15 @@ const INIT = {
   recurringRules: [],
   investmentPlans: [],
   loading: true, error: null, importProgress: null,
+  dbReady: false, dbError: null,
   currentView: 'dashboard',
   brokerages: [],
 };
 
 function reducer(s, a) {
   switch (a.type) {
-    case 'INIT':         return { ...s, ...a.payload, transactions: sortTransactions(a.payload.transactions), loading: false };
+    case 'INIT':         return { ...s, ...a.payload, transactions: sortTransactions(a.payload.transactions || []), loading: false, dbReady: true, dbError: null };
+    case 'DB_ERROR':     return { ...s, loading: false, dbReady: false, dbError: a.payload };
     case 'ADD_TXN':      return { ...s, transactions: sortTransactions([a.payload, ...s.transactions]) };
     case 'UPD_TXN':      return { ...s, transactions: sortTransactions(s.transactions.map(t => t._id === a.payload._id ? a.payload : t)) };
     case 'DEL_TXN':      return { ...s, transactions: s.transactions.filter(t => t._id !== a.payload) };
@@ -181,8 +186,9 @@ export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, INIT);
   const cancelRef = useRef(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (retries = 1) => {
     try {
+      await initDB();
       const [txns, accts, catsArr, aGroups, aMapping, budgets, settings, recurringRules, investmentPlans] = await Promise.all([
         getTransactions(), getAccounts(), getCategories(),
         getAccountGroups(), getAccountMapping(), getBudgets(), getAllSettings(),
@@ -242,344 +248,332 @@ export function AppProvider({ children }) {
         return;
       }
 
-      // One-time migration for sub-accounts v2
-      // Reset migration if accounts exist but sub-accounts are empty (self-healing fallback)
-      // One-time migration for sub-accounts v2
-      // Reset migration if accounts exist but canonical sub-accounts are missing (self-healing fallback)
-      const checkMissingSub = (acct, neededNames) => {
-        if (!acct) return true;
-        const subs = Array.isArray(acct.subAccounts) ? acct.subAccounts : [];
-        if (subs.length === 0) return true;
-        const existing = new Set(subs.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
-        return neededNames.some(n => !existing.has(n.toLowerCase()));
-      };
+      // One-time migration for legacy sub-accounts v2
+      // Only executed if the database has not yet been migrated (sub_accounts_migrated_v2 is absent or false).
+      // A completed migration (sub_accounts_migrated_v2 === 'true') is authoritative and MUST NOT be re-run.
+      if (settings.sub_accounts_migrated_v2 !== 'true') {
+        const checkMissingSub = (acct, neededNames) => {
+          if (!acct) return false;
+          const subs = Array.isArray(acct.subAccounts) ? acct.subAccounts : [];
+          if (subs.length === 0) return true;
+          const existing = new Set(subs.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
+          return neededNames.some(n => !existing.has(n.toLowerCase()));
+        };
 
-      const sm = accts.find(a => (a.name || '').toLowerCase() === 'share market');
-      const lmf = accts.find(a => (a.name || '').toLowerCase() === 'liquid mutual funds');
-      const amzn = accts.find(a => (a.name || '').toLowerCase() === 'amazon');
-      const mfts = accts.find(a => (a.name || '').toLowerCase() === 'mutual funds tax saver');
+        const sm = accts.find(a => (a.name || '').toLowerCase() === 'share market');
+        const lmf = accts.find(a => (a.name || '').toLowerCase() === 'liquid mutual funds');
+        const amzn = accts.find(a => (a.name || '').toLowerCase() === 'amazon');
+        const mfts = accts.find(a => (a.name || '').toLowerCase() === 'mutual funds tax saver');
 
-      let needsSelfHealing = false;
-      if (
-        checkMissingSub(sm, ['Zerodha', 'Fareeda Groww']) ||
-        checkMissingSub(lmf, ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney']) ||
-        checkMissingSub(mfts, ['Ak ETMoney']) ||
-        checkMissingSub(amzn, ['My Amazon'])
-      ) {
-        console.log('Detected missing sub-accounts on main parent accounts, forcing self-healing migration...');
-        needsSelfHealing = true;
-      }
-
-      if (settings.sub_accounts_migrated_v2 !== 'true' || needsSelfHealing) {
-        console.log('Running database migration for sub-accounts v2...');
-        
-        // 1. Migrate accounts configuration
-        const nextAccts = accts.filter(a => !['zerodha', 'groww', 'fareeda groww', 'ammi groww'].includes((a.name || '').toLowerCase()));
-        let lmfAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'liquid mutual funds');
-        if (lmfAcct) {
-          if (!lmfAcct.subAccounts) lmfAcct.subAccounts = [];
-          const existing = new Set(lmfAcct.subAccounts.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
-          const needed = ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney'];
-          for (const n of needed) {
-            if (!existing.has(n.toLowerCase())) {
-              lmfAcct.subAccounts.push({ id: uuid(), name: n });
-            }
-          }
-        } else {
-          nextAccts.push({ id: uuid(), name: 'Liquid Mutual Funds', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Fareeda Groww' }, { id: uuid(), name: 'Ammi Groww' }, { id: uuid(), name: 'Ak ETMoney' } ] });
+        let needsLegacyMigration = false;
+        if (
+          checkMissingSub(sm, ['Zerodha', 'Fareeda Groww']) ||
+          checkMissingSub(lmf, ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney']) ||
+          checkMissingSub(mfts, ['Ak ETMoney']) ||
+          checkMissingSub(amzn, ['My Amazon'])
+        ) {
+          needsLegacyMigration = true;
         }
 
-        let mftsAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'mutual funds tax saver');
-        if (mftsAcct) {
-          if (!mftsAcct.subAccounts) mftsAcct.subAccounts = [];
-          const existing = new Set(mftsAcct.subAccounts.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
-          if (!existing.has('ak etmoney')) {
-            mftsAcct.subAccounts.push({ id: uuid(), name: 'Ak ETMoney' });
-          }
-        } else {
-          nextAccts.push({ id: uuid(), name: 'Mutual Funds Tax Saver', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Ak ETMoney' } ] });
-        }
-        
-        let smAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'share market');
-        if (smAcct) {
-          if (!smAcct.subAccounts) smAcct.subAccounts = [];
-          const existing = new Set(smAcct.subAccounts.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
-          const needed = ['Zerodha', 'Fareeda Groww'];
-          for (const n of needed) {
-            if (!existing.has(n.toLowerCase())) {
-              smAcct.subAccounts.push({ id: uuid(), name: n });
-            }
-          }
-        } else {
-          nextAccts.push({ id: uuid(), name: 'Share Market', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Zerodha' }, { id: uuid(), name: 'Fareeda Groww' } ] });
-        }
-        
-        let amazonAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'amazon');
-        if (amazonAcct) {
-          if (!amazonAcct.subAccounts) amazonAcct.subAccounts = [];
-          if (!amazonAcct.subAccounts.some(s => s.name.toLowerCase() === 'my amazon')) {
-            amazonAcct.subAccounts.push({ id: uuid(), name: 'My Amazon' });
-          }
-        } else {
-          nextAccts.push({
-            id: uuid(),
-            name: 'Amazon',
-            group: 'Digital Wallets',
-            subAccounts: [
-              { id: uuid(), name: 'My Amazon' }
-            ]
-          });
-        }
-        await replaceAccounts(nextAccts);
-
-        // 2. Map and identify transactions to migrate
-        const changedTxns = [];
-        for (const t of txns) {
-          let changed = false;
-          let acct = t.Account || '';
-          let fromAcct = t.FromAccount || '';
-          let toAcct = t.ToAccount || '';
-          let sub = t.SubAccount || '';
-          let fromSub = t.FromSubAccount || '';
-          let toSub = t.ToSubAccount || '';
-
-          // Force correct Amazon sub-accounts for reconciliation transfers
-          if (t.Note === 'Reconciliation adjustment' && (acct === 'Amazon' || fromAcct === 'Amazon' || toAcct === 'Amazon')) {
-            const match = (t.Description || '').match(/Reconcile\s+([\w\s]+?)\s+balance/i);
-            if (match) {
-              const targetSub = match[1].trim();
-              let resolvedFrom = '';
-              let resolvedTo = '';
-              const toSubAccounts = new Set([
-                'amzad amazon', 'arshad amazon', 'aslam amazon', 
-                'mami amazon', 'mamu amazon', 'haseena amazon', 'khaleel amazon'
-              ]);
-              if (toSubAccounts.has(targetSub.toLowerCase())) {
-                resolvedFrom = 'My Amazon';
-                resolvedTo = targetSub;
-              } else {
-                resolvedFrom = targetSub;
-                resolvedTo = 'My Amazon';
-              }
-              if (sub !== '' || fromSub !== resolvedFrom || toSub !== resolvedTo) {
-                sub = '';
-                fromSub = resolvedFrom;
-                toSub = resolvedTo;
-                changed = true;
+        if (needsLegacyMigration) {
+          console.log('Running database migration for sub-accounts v2 on unmigrated legacy dataset...');
+          
+          // 1. Migrate accounts configuration
+          const nextAccts = accts.filter(a => !['zerodha', 'groww', 'fareeda groww', 'ammi groww'].includes((a.name || '').toLowerCase()));
+          let lmfAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'liquid mutual funds');
+          if (lmfAcct) {
+            if (!lmfAcct.subAccounts) lmfAcct.subAccounts = [];
+            const existing = new Set(lmfAcct.subAccounts.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
+            const needed = ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney'];
+            for (const n of needed) {
+              if (!existing.has(n.toLowerCase())) {
+                lmfAcct.subAccounts.push({ id: uuid(), name: n });
               }
             }
-          }
-
-          const isShareMarketTransfer = t.Note === 'FnO Investment' || 
-                                      t.Note === 'Share Market Investment' ||
-                                      String(t.Description || '').toLowerCase().includes('equity investment') || 
-                                      String(t.Description || '').toLowerCase().includes('fno investment');
-
-
-          if (t.Note !== 'Reconciliation adjustment') {
-            // Account
-            if (acct === 'Zerodha') {
-              acct = 'Share Market'; sub = 'Zerodha'; changed = true;
-            } else if (acct === 'Ammi Groww') {
-              acct = 'Liquid Mutual Funds'; sub = 'Ammi Groww'; changed = true;
-            } else if (acct === 'Fareeda Groww') {
-              if (isShareMarketTransfer) {
-                acct = 'Share Market'; sub = 'Fareeda Groww';
-              } else {
-                acct = 'Liquid Mutual Funds'; sub = 'Fareeda Groww';
-              }
-              changed = true;
-            } else if (acct === 'Amazon') {
-              if (!sub) {
-                const txt = ((t.Note || '') + ' ' + (t.Description || '')).toLowerCase();
-                if (/\bfather\b/i.test(txt)) {
-                  sub = 'Father Amazon';
-                } else if (/\bfareeda\b/i.test(txt)) {
-                  sub = 'Fareeda Amazon';
-                } else if (/\bammi\b/i.test(txt)) {
-                  sub = 'Ammi Amazon';
-                } else if (/\bap\b/i.test(txt)) {
-                  sub = 'AP Amazon';
-                } else if (/\bamzad\b/i.test(txt)) {
-                  sub = 'Amzad Amazon';
-                } else if (/\bjanu\b/i.test(txt)) {
-                  sub = 'Janu Amazon';
-                } else if (/\bgulzar\b/i.test(txt)) {
-                  sub = 'Gulzar Amazon';
-                } else if (/\bfahim\b/i.test(txt)) {
-                  sub = 'Fahim Amazon';
-                } else {
-                  sub = 'My Amazon';
-                }
-                changed = true;
-              }
-            }
-
-            // FromAccount
-            if (fromAcct === 'Zerodha') {
-              fromAcct = 'Share Market'; fromSub = 'Zerodha'; changed = true;
-            } else if (fromAcct === 'Ammi Groww') {
-              fromAcct = 'Liquid Mutual Funds'; fromSub = 'Ammi Groww'; changed = true;
-            } else if (fromAcct === 'Fareeda Groww') {
-              if (isShareMarketTransfer) {
-                fromAcct = 'Share Market'; fromSub = 'Fareeda Groww';
-              } else {
-                fromAcct = 'Liquid Mutual Funds'; fromSub = 'Fareeda Groww';
-              }
-              changed = true;
-            } else if (fromAcct === 'Amazon') {
-              if (!fromSub) {
-                const txt = ((t.Note || '') + ' ' + (t.Description || '')).toLowerCase();
-                if (/\bfather\b/i.test(txt)) {
-                  fromSub = 'Father Amazon';
-                } else if (/\bfareeda\b/i.test(txt)) {
-                  fromSub = 'Fareeda Amazon';
-                } else if (/\bammi\b/i.test(txt)) {
-                  fromSub = 'Ammi Amazon';
-                } else if (/\bap\b/i.test(txt)) {
-                  fromSub = 'AP Amazon';
-                } else if (/\bamzad\b/i.test(txt)) {
-                  fromSub = 'Amzad Amazon';
-                } else if (/\bjanu\b/i.test(txt)) {
-                  fromSub = 'Janu Amazon';
-                } else if (/\bgulzar\b/i.test(txt)) {
-                  fromSub = 'Gulzar Amazon';
-                } else if (/\bfahim\b/i.test(txt)) {
-                  fromSub = 'Fahim Amazon';
-                } else {
-                  fromSub = 'My Amazon';
-                }
-                changed = true;
-              }
-            }
-
-            // ToAccount
-            if (toAcct === 'Zerodha') {
-              toAcct = 'Share Market'; toSub = 'Zerodha'; changed = true;
-            } else if (toAcct === 'Ammi Groww') {
-              toAcct = 'Liquid Mutual Funds'; toSub = 'Ammi Groww'; changed = true;
-            } else if (toAcct === 'Fareeda Groww') {
-              if (isShareMarketTransfer) {
-                toAcct = 'Share Market'; toSub = 'Fareeda Groww';
-              } else {
-                toAcct = 'Liquid Mutual Funds'; toSub = 'Fareeda Groww';
-              }
-              changed = true;
-            } else if (toAcct === 'Amazon') {
-              if (!toSub) {
-                const txt = ((t.Note || '') + ' ' + (t.Description || '')).toLowerCase();
-                if (/\bfather\b/i.test(txt)) {
-                  toSub = 'Father Amazon';
-                } else if (/\bfareeda\b/i.test(txt)) {
-                  toSub = 'Fareeda Amazon';
-                } else if (/\bammi\b/i.test(txt)) {
-                  toSub = 'Ammi Amazon';
-                } else if (/\bap\b/i.test(txt)) {
-                  toSub = 'AP Amazon';
-                } else if (/\bamzad\b/i.test(txt)) {
-                  toSub = 'Amzad Amazon';
-                } else if (/\bjanu\b/i.test(txt)) {
-                  toSub = 'Janu Amazon';
-                } else if (/\bgulzar\b/i.test(txt)) {
-                  toSub = 'Gulzar Amazon';
-                } else if (/\bfahim\b/i.test(txt)) {
-                  toSub = 'Fahim Amazon';
-                } else {
-                  toSub = 'My Amazon';
-                }
-                changed = true;
-              }
-            }
-          }
-
-
-          if (changed) {
-            const dbTxn = {
-              id: t.id || t._id,
-              date: t.Date || '',
-              time: t.Time || '',
-              account: acct,
-              from_account: fromAcct,
-              to_account: toAcct,
-              category: t.Category || '',
-              subcategory: t.Subcategory || '',
-              note: t.Note || '',
-              description: t.Description || '',
-              inr: parseFloat(t.INR || t.Amount || 0),
-              amount: String(t.Amount || t.INR || '0'),
-              currency: t.Currency || 'INR',
-              type: t['Income/Expense'] || 'Expense',
-              created_at: t.created_at || new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              recurring_rule_id: t.recurring_rule_id || '',
-              tags: t.Tags || t.tags || '',
-              split_group_id: t.split_group_id || '',
-              receipt_image: t.receipt_image || '',
-              warranty_expiry: t.warranty_expiry || '',
-              serial_no: t.serial_no || '',
-              sub_account: sub,
-              from_sub_account: fromSub,
-              to_sub_account: toSub
-            };
-            changedTxns.push(dbTxn);
-          }
-        }
-
-        // 3. Perform optimized batch update
-        if (changedTxns.length > 0) {
-          const { Capacitor } = await import('@capacitor/core');
-          if (Capacitor.getPlatform() === 'web') {
-            console.log(`IndexedDB batch migrating ${changedTxns.length} transactions...`);
-            const openIDB = () => new Promise((res, rej) => {
-              const req = indexedDB.open('finman_v2');
-              req.onsuccess = e => res(e.target.result);
-              req.onerror = e => rej(e.target.error);
-            });
-            const idb = await openIDB();
-            const tx = idb.transaction('transactions', 'readwrite');
-            const store = tx.objectStore('transactions');
-            changedTxns.forEach(row => store.put(row));
-            await new Promise((res, rej) => {
-              tx.oncomplete = () => res();
-              tx.onerror = () => rej(tx.error);
-            });
           } else {
-            console.log(`SQLite transaction migrating ${changedTxns.length} transactions...`);
-            const sdb = getDB();
-            try { await sdb.run('BEGIN TRANSACTION;'); } catch {}
-            for (const row of changedTxns) {
-              await sdb.run(
-                `UPDATE transactions SET account=?,from_account=?,to_account=?,sub_account=?,from_sub_account=?,to_sub_account=?,updated_at=? WHERE id=?`,
-                [row.account, row.from_account, row.to_account, row.sub_account, row.from_sub_account, row.to_sub_account, row.updated_at, row.id]
-              );
+            nextAccts.push({ id: uuid(), name: 'Liquid Mutual Funds', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Fareeda Groww' }, { id: uuid(), name: 'Ammi Groww' }, { id: uuid(), name: 'Ak ETMoney' } ] });
+          }
+
+          let mftsAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'mutual funds tax saver');
+          if (mftsAcct) {
+            if (!mftsAcct.subAccounts) mftsAcct.subAccounts = [];
+            const existing = new Set(mftsAcct.subAccounts.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
+            if (!existing.has('ak etmoney')) {
+              mftsAcct.subAccounts.push({ id: uuid(), name: 'Ak ETMoney' });
             }
-            try { await sdb.run('COMMIT;'); } catch {}
+          } else {
+            nextAccts.push({ id: uuid(), name: 'Mutual Funds Tax Saver', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Ak ETMoney' } ] });
+          }
+          
+          let smAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'share market');
+          if (smAcct) {
+            if (!smAcct.subAccounts) smAcct.subAccounts = [];
+            const existing = new Set(smAcct.subAccounts.map(s => (typeof s === 'string' ? s : (s?.name || '')).toLowerCase()));
+            const needed = ['Zerodha', 'Fareeda Groww'];
+            for (const n of needed) {
+              if (!existing.has(n.toLowerCase())) {
+                smAcct.subAccounts.push({ id: uuid(), name: n });
+              }
+            }
+          } else {
+            nextAccts.push({ id: uuid(), name: 'Share Market', group: 'Investments', subAccounts: [ { id: uuid(), name: 'Zerodha' }, { id: uuid(), name: 'Fareeda Groww' } ] });
+          }
+          
+          let amazonAcct = nextAccts.find(a => (a.name || '').toLowerCase() === 'amazon');
+          if (amazonAcct) {
+            if (!amazonAcct.subAccounts) amazonAcct.subAccounts = [];
+            if (!amazonAcct.subAccounts.some(s => s.name.toLowerCase() === 'my amazon')) {
+              amazonAcct.subAccounts.push({ id: uuid(), name: 'My Amazon' });
+            }
+          } else {
+            nextAccts.push({
+              id: uuid(),
+              name: 'Amazon',
+              group: 'Digital Wallets',
+              subAccounts: [
+                { id: uuid(), name: 'My Amazon' }
+              ]
+            });
+          }
+          await replaceAccounts(nextAccts);
+
+          // 2. Map and identify transactions to migrate
+          const changedTxns = [];
+          for (const t of txns) {
+            let changed = false;
+            let acct = t.Account || t.account || '';
+            let fromAcct = t.FromAccount || t.from_account || '';
+            let toAcct = t.ToAccount || t.to_account || '';
+            let sub = t.SubAccount || t.sub_account || '';
+            let fromSub = t.FromSubAccount || t.from_sub_account || '';
+            let toSub = t.ToSubAccount || t.to_sub_account || '';
+
+            // Force correct Amazon sub-accounts for reconciliation transfers
+            if (t.Note === 'Reconciliation adjustment' && (acct === 'Amazon' || fromAcct === 'Amazon' || toAcct === 'Amazon')) {
+              const match = (t.Description || '').match(/Reconcile\s+([\w\s]+?)\s+balance/i);
+              if (match) {
+                const targetSub = match[1].trim();
+                let resolvedFrom = '';
+                let resolvedTo = '';
+                const toSubAccounts = new Set([
+                  'amzad amazon', 'arshad amazon', 'aslam amazon', 
+                  'mami amazon', 'mamu amazon', 'haseena amazon', 'khaleel amazon'
+                ]);
+                if (toSubAccounts.has(targetSub.toLowerCase())) {
+                  resolvedFrom = 'My Amazon';
+                  resolvedTo = targetSub;
+                } else {
+                  resolvedFrom = targetSub;
+                  resolvedTo = 'My Amazon';
+                }
+                if (sub !== '' || fromSub !== resolvedFrom || toSub !== resolvedTo) {
+                  sub = '';
+                  fromSub = resolvedFrom;
+                  toSub = resolvedTo;
+                  changed = true;
+                }
+              }
+            }
+
+            const isShareMarketTransfer = t.Note === 'FnO Investment' || 
+                                        t.Note === 'Share Market Investment' ||
+                                        String(t.Description || '').toLowerCase().includes('equity investment') || 
+                                        String(t.Description || '').toLowerCase().includes('fno investment');
+
+            if (t.Note !== 'Reconciliation adjustment') {
+              // Account
+              if (acct === 'Zerodha') {
+                acct = 'Share Market'; sub = 'Zerodha'; changed = true;
+              } else if (acct === 'Ammi Groww') {
+                acct = 'Liquid Mutual Funds'; sub = 'Ammi Groww'; changed = true;
+              } else if (acct === 'Fareeda Groww') {
+                if (isShareMarketTransfer) {
+                  acct = 'Share Market'; sub = 'Fareeda Groww';
+                } else {
+                  acct = 'Liquid Mutual Funds'; sub = 'Fareeda Groww';
+                }
+                changed = true;
+              } else if (acct === 'Amazon') {
+                if (!sub) {
+                  const txt = ((t.Note || '') + ' ' + (t.Description || '')).toLowerCase();
+                  if (/\bfather\b/i.test(txt)) {
+                    sub = 'Father Amazon';
+                  } else if (/\bfareeda\b/i.test(txt)) {
+                    sub = 'Fareeda Amazon';
+                  } else if (/\bammi\b/i.test(txt)) {
+                    sub = 'Ammi Amazon';
+                  } else if (/\bap\b/i.test(txt)) {
+                    sub = 'AP Amazon';
+                  } else if (/\bamzad\b/i.test(txt)) {
+                    sub = 'Amzad Amazon';
+                  } else if (/\bjanu\b/i.test(txt)) {
+                    sub = 'Janu Amazon';
+                  } else if (/\bgulzar\b/i.test(txt)) {
+                    sub = 'Gulzar Amazon';
+                  } else if (/\bfahim\b/i.test(txt)) {
+                    sub = 'Fahim Amazon';
+                  } else {
+                    sub = 'My Amazon';
+                  }
+                  changed = true;
+                }
+              }
+
+              // FromAccount
+              if (fromAcct === 'Zerodha') {
+                fromAcct = 'Share Market'; fromSub = 'Zerodha'; changed = true;
+              } else if (fromAcct === 'Ammi Groww') {
+                fromAcct = 'Liquid Mutual Funds'; fromSub = 'Ammi Groww'; changed = true;
+              } else if (fromAcct === 'Fareeda Groww') {
+                if (isShareMarketTransfer) {
+                  fromAcct = 'Share Market'; fromSub = 'Fareeda Groww';
+                } else {
+                  fromAcct = 'Liquid Mutual Funds'; fromSub = 'Fareeda Groww';
+                }
+                changed = true;
+              } else if (fromAcct === 'Amazon') {
+                if (!fromSub) {
+                  const txt = ((t.Note || '') + ' ' + (t.Description || '')).toLowerCase();
+                  if (/\bfather\b/i.test(txt)) {
+                    fromSub = 'Father Amazon';
+                  } else if (/\bfareeda\b/i.test(txt)) {
+                    fromSub = 'Fareeda Amazon';
+                  } else if (/\bammi\b/i.test(txt)) {
+                    fromSub = 'Ammi Amazon';
+                  } else if (/\bap\b/i.test(txt)) {
+                    fromSub = 'AP Amazon';
+                  } else if (/\bamzad\b/i.test(txt)) {
+                    fromSub = 'Amzad Amazon';
+                  } else if (/\bjanu\b/i.test(txt)) {
+                    fromSub = 'Janu Amazon';
+                  } else if (/\bgulzar\b/i.test(txt)) {
+                    fromSub = 'Gulzar Amazon';
+                  } else if (/\bfahim\b/i.test(txt)) {
+                    fromSub = 'Fahim Amazon';
+                  } else {
+                    fromSub = 'My Amazon';
+                  }
+                  changed = true;
+                }
+              }
+
+              // ToAccount
+              if (toAcct === 'Zerodha') {
+                toAcct = 'Share Market'; toSub = 'Zerodha'; changed = true;
+              } else if (toAcct === 'Ammi Groww') {
+                toAcct = 'Liquid Mutual Funds'; toSub = 'Ammi Groww'; changed = true;
+              } else if (toAcct === 'Fareeda Groww') {
+                if (isShareMarketTransfer) {
+                  toAcct = 'Share Market'; toSub = 'Fareeda Groww';
+                } else {
+                  toAcct = 'Liquid Mutual Funds'; toSub = 'Fareeda Groww';
+                }
+                changed = true;
+              } else if (toAcct === 'Amazon') {
+                if (!toSub) {
+                  const txt = ((t.Note || '') + ' ' + (t.Description || '')).toLowerCase();
+                  if (/\bfather\b/i.test(txt)) {
+                    toSub = 'Father Amazon';
+                  } else if (/\bfareeda\b/i.test(txt)) {
+                    toSub = 'Fareeda Amazon';
+                  } else if (/\bammi\b/i.test(txt)) {
+                    toSub = 'Ammi Amazon';
+                  } else if (/\bap\b/i.test(txt)) {
+                    toSub = 'AP Amazon';
+                  } else if (/\bamzad\b/i.test(txt)) {
+                    toSub = 'Amzad Amazon';
+                  } else if (/\bjanu\b/i.test(txt)) {
+                    toSub = 'Janu Amazon';
+                  } else if (/\bgulzar\b/i.test(txt)) {
+                    toSub = 'Gulzar Amazon';
+                  } else if (/\bfahim\b/i.test(txt)) {
+                    toSub = 'Fahim Amazon';
+                  } else {
+                    toSub = 'My Amazon';
+                  }
+                  changed = true;
+                }
+              }
+            }
+
+            if (changed) {
+              const row = (t.InvestmentTransactionType || t.investment_transaction_type) ? invTxnObjectToDBRow(t) : txnObjectToDBRow(t);
+              const dbTxn = {
+                ...row,
+                id: row.id || t.id || t._id,
+                account: acct,
+                from_account: fromAcct,
+                to_account: toAcct,
+                sub_account: sub,
+                from_sub_account: fromSub,
+                to_sub_account: toSub,
+                updated_at: new Date().toISOString()
+              };
+              changedTxns.push(dbTxn);
+            }
+          }
+
+          // 3. Perform optimized batch update
+          if (changedTxns.length > 0) {
+            const { Capacitor } = await import('@capacitor/core');
+            if (Capacitor.getPlatform() === 'web') {
+              console.log(`IndexedDB batch migrating ${changedTxns.length} transactions...`);
+              const openIDB = () => new Promise((res, rej) => {
+                const req = indexedDB.open('finman_v2');
+                req.onsuccess = e => res(e.target.result);
+                req.onerror = e => rej(e.target.error);
+              });
+              const idb = await openIDB();
+              const tx = idb.transaction('transactions', 'readwrite');
+              const store = tx.objectStore('transactions');
+              changedTxns.forEach(row => store.put(row));
+              await new Promise((res, rej) => {
+                tx.oncomplete = () => res();
+                tx.onerror = () => rej(tx.error);
+              });
+            } else {
+              console.log(`SQLite transaction migrating ${changedTxns.length} transactions...`);
+              const sdb = getDB();
+              try { await sdb.run('BEGIN TRANSACTION;'); } catch {}
+              for (const row of changedTxns) {
+                await sdb.run(
+                  `UPDATE transactions SET account=?,from_account=?,to_account=?,sub_account=?,from_sub_account=?,to_sub_account=?,updated_at=? WHERE id=?`,
+                  [row.account, row.from_account, row.to_account, row.sub_account, row.from_sub_account, row.to_sub_account, row.updated_at, row.id]
+                );
+              }
+              try { await sdb.run('COMMIT;'); } catch {}
+            }
           }
         }
 
         await setSetting('sub_accounts_migrated_v2', 'true');
-        // Trigger load again to refresh context state
-        await load();
-        return;
+        if (needsLegacyMigration) {
+          // Trigger load again to refresh context state
+          await load();
+          return;
+        }
       }
 
-      // Safe Historical Charge Reconciliation
+      // Safe Historical Charge Reconciliation (One-time migration for legacy DBs)
       const normAccounts = normalizeAccounts(accts);
-      try {
-        const { updatedCharges, count } = reconcileHistoricalCharges(txns, normAccounts);
-        if (count > 0) {
-          console.log(`[Reconciliation] Auto-reconciling ${count} historical charge(s)...`);
-          for (const uc of updatedCharges) {
-            const id = uc._id || uc.id || uc.ID;
-            await dbUpdate(id, uc);
-            const idx = txns.findIndex(t => (t._id || t.id || t.ID) === id);
-            if (idx !== -1) {
-              txns[idx] = { ...txns[idx], ...uc };
+      if (settings.historical_charges_reconciled !== 'true') {
+        try {
+          const { updatedCharges, count } = reconcileHistoricalCharges(txns, normAccounts);
+          if (count > 0) {
+            console.log(`[Reconciliation] Auto-reconciling ${count} historical charge(s)...`);
+            for (const uc of updatedCharges) {
+              const id = uc._id || uc.id || uc.ID;
+              await dbUpdate(id, uc);
+              const idx = txns.findIndex(t => (t._id || t.id || t.ID) === id);
+              if (idx !== -1) {
+                txns[idx] = { ...txns[idx], ...uc };
+              }
             }
           }
+          await setSetting('historical_charges_reconciled', 'true');
+        } catch (err) {
+          console.error('Failed to auto-reconcile historical charges:', err);
         }
-      } catch (err) {
-        console.error('Failed to auto-reconcile historical charges:', err);
       }
 
       const theme     = settings.theme     || 'dark';
@@ -612,7 +606,16 @@ export function AppProvider({ children }) {
         },
       });
     } catch (e) {
-      dispatch({ type:'INIT', payload:{ transactions:[], accounts:[], categories:{}, accountGroups:[], budgets:[], settings:{}, theme:'dark', headerColor:'default', fontSize:1.0, fontFamily:'Sora', fontDataWeight:'regular', recurringRules:[], investmentPlans:[], brokerages:[] } });
+      console.error('[AppContext] Failed to load data from database:', e);
+      if (retries > 0) {
+        console.warn('[AppContext] Retrying DB load after brief pause...');
+        await new Promise(r => setTimeout(r, 400));
+        return load(retries - 1);
+      }
+      dispatch({
+        type: 'DB_ERROR',
+        payload: e?.message || 'Database unavailable or failed to initialize.'
+      });
     }
   }, []);
 
