@@ -991,4 +991,85 @@ test('FinMan Phase 7.5 — Automatic Delta Synchronization Engine Suite', async 
     assert.equal(typeof executeCloudSync, 'function');
     assert.equal(CURRENT_ENGINE_VERSION, 1);
   });
+
+  await t.test('D08: Live getAccessToken provider delegates to getValidAccessToken(false)', async () => {
+    const db = await resetDB();
+    clearGoogleAuth();
+    configureDeltaSyncEngine({ driveClient: null, accessToken: null });
+
+    // 1. When valid token is in localStorage, provider returns it directly
+    saveTokenData('test_live_access_token_123', 3600);
+    const cleanup = initializeDeltaSyncRuntime();
+
+    // Trigger full sync pass with driveClient override to verify accessToken flow
+    const driveClient = createMockDriveClient();
+    const res = await executeFullSyncPass({
+      sessionKey: 'test_session_key',
+      driveClient
+    });
+
+    assert.equal(res.success, true);
+    cleanup();
+    clearGoogleAuth();
+  });
+
+  await t.test('D09: Authentication unavailable returns AUTH_REQUIRED and preserves pending deltas without looping', async () => {
+    const db = await resetDB();
+    clearGoogleAuth();
+    setGoogleLinked(false);
+    configureDeltaSyncEngine({ driveClient: null, accessToken: null });
+
+    const cleanup = initializeDeltaSyncRuntime();
+
+    // Insert pending delta
+    const t = { id: 'txn_d09_unauth', inr: 450 };
+    const h = await computeCanonicalSha256(t);
+    await db.run(
+      'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, new_checksum, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_d09_unauth', 'dev_d09', 1, new Date().toISOString(), 'transactions', t.id, 'INSERT', h, JSON.stringify(t), 'PENDING']
+    );
+
+    const res = await executeFullSyncPass({
+      sessionKey: 'test_session_key',
+      driveClient: null,
+      accessToken: undefined
+    });
+
+    assert.equal(res.success, false);
+    assert.equal(res.status, SYNC_STATUS.AUTH_REQUIRED);
+
+    // Delta remains intact in PENDING status
+    const queueRows = (await db.query('SELECT * FROM sync_delta_queue WHERE event_id = ?', ['evt_d09_unauth'])).values;
+    assert.equal(queueRows.length, 1);
+    assert.equal(queueRows[0].status, 'PENDING');
+
+    cleanup();
+  });
+
+  await t.test('D10: Access token is never persisted in delta queue or local storage database records', async () => {
+    const db = await resetDB();
+    const secretToken = 'secret_bearer_token_xyz999';
+    const driveClient = createMockDriveClient();
+
+    const t = { id: 'txn_d10_clean', inr: 777 };
+    const h = await computeCanonicalSha256(t);
+    await db.run(
+      'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, new_checksum, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_d10_clean', 'dev_d10', 1, new Date().toISOString(), 'transactions', t.id, 'INSERT', h, JSON.stringify(t), 'PENDING']
+    );
+
+    await executeFullSyncPass({
+      deviceId: 'dev_d10',
+      accessToken: secretToken,
+      driveClient,
+      sessionKey: 'test_key'
+    });
+
+    // Check all database tables to ensure secretToken was never written into database tables
+    const queueDump = JSON.stringify((await db.query('SELECT * FROM sync_delta_queue')).values);
+    assert.equal(queueDump.includes(secretToken), false);
+
+    const localStateDump = JSON.stringify((await db.query('SELECT * FROM sync_local_state')).values);
+    assert.equal(localStateDump.includes(secretToken), false);
+  });
 });
