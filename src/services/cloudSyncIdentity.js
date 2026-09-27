@@ -62,19 +62,12 @@ export function getTransactionBusinessKey(t) {
   const date = normalizeDateForIdentity(t.Date || t.date || '');
   const inr = parseFloat(t.INR ?? t.inr ?? t.Amount ?? t.amount ?? 0).toFixed(2);
   const type = normalizeTypeForIdentity(t['Income/Expense'] || t.type || '');
-  const acct = String(t.Account || t.account || '').trim().toLowerCase();
-  const fromAcct = String(t.FromAccount || t.from_account || '').trim().toLowerCase();
-  const toAcct = String(t.ToAccount || t.to_account || '').trim().toLowerCase();
-  const cat = String(t.Category || t.category || '').trim().toLowerCase();
-  const subcat = String(t.Subcategory || t.subcategory || '').trim().toLowerCase();
-  const note = String(t.Note || t.note || '').trim().toLowerCase();
-  const desc = String(t.Description || t.description || '').trim().toLowerCase();
-  const tags = String(t.Tags || t.tags || '').trim().toLowerCase();
-  const subAcct = String(t.SubAccount || t.sub_account || '').trim().toLowerCase();
-  const fromSub = String(t.FromSubAccount || t.from_sub_account || '').trim().toLowerCase();
-  const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim().toLowerCase();
+  const acct = String(t.Account || t.account || t.FromAccount || t.from_account || '').replace(/\r\n/g, '\n').trim().toLowerCase();
+  const cat = String(t.Category || t.category || '').replace(/\r\n/g, '\n').trim().toLowerCase();
+  const subcat = String(t.Subcategory || t.subcategory || '').replace(/\r\n/g, '\n').trim().toLowerCase();
+  const note = String(t.Note || t.note || '').replace(/\r\n/g, '\n').trim().toLowerCase();
 
-  return `txn_biz:${date}|${inr}|${type}|${acct}|${fromAcct}|${toAcct}|${cat}|${subcat}|${note}|${desc}|${tags}|${subAcct}|${fromSub}|${toSub}`;
+  return `txn_biz:${date}|${inr}|${type}|${acct}|${cat}|${subcat}|${note}`;
 }
 
 /**
@@ -84,21 +77,14 @@ export function getInvestmentTransactionBusinessKey(t) {
   if (!t || typeof t !== 'object') return '';
 
   const date = normalizeDateForIdentity(t.Date || t.date || '');
-  const symbol = String(t.SecuritySymbol || t.security_symbol || '').trim().toUpperCase();
-  const isin = String(t.SecurityISIN || t.security_isin || '').trim().toUpperCase();
+  // Deterministic ISIN precedence with clean symbol fallback
+  const sec = String(t.SecurityISIN || t.security_isin || t.SecuritySymbol || t.security_symbol || '').trim().toUpperCase();
   const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || t['Income/Expense'] || t.type || '').trim().toUpperCase();
   const qty = parseFloat(t.Quantity ?? t.quantity ?? 0).toFixed(4);
   const unitPrice = parseFloat(t.UnitPrice ?? t.unit_price ?? 0).toFixed(4);
   const tradeVal = parseFloat(t.TradeValue ?? t.trade_value ?? t.INR ?? t.inr ?? t.Amount ?? t.amount ?? 0).toFixed(2);
-  const costBasis = parseFloat(t.CostBasis ?? t.cost_basis ?? 0).toFixed(2);
-  const cashImpact = parseFloat(t.CashImpact ?? t.cash_impact ?? 0).toFixed(2);
-  const tradeId = String(t.TradeId || t.trade_id || '').trim();
-  const orderId = String(t.OrderId || t.order_id || '').trim();
-  const source = String(t.Source || t.source || '').trim().toLowerCase();
-  const brokerage = String(t.Brokerage || t.brokerage || '').trim().toLowerCase();
-  const subAcct = String(t.SubAccount || t.sub_account || '').trim().toLowerCase();
 
-  return `inv_biz:${date}|${symbol}|${isin}|${invType}|${qty}|${unitPrice}|${tradeVal}|${costBasis}|${cashImpact}|${tradeId}|${orderId}|${source}|${brokerage}|${subAcct}`;
+  return `inv_biz:${date}|${sec}|${invType}|${qty}|${unitPrice}|${tradeVal}`;
 }
 
 /**
@@ -106,16 +92,13 @@ export function getInvestmentTransactionBusinessKey(t) {
  */
 export function getEntityBusinessKey(entity, entityType) {
   if (!entity || typeof entity !== 'object') return null;
-  const isInv = entityType === 'investment_transaction' ||
-                entityType === 'investment_transactions' ||
-                Boolean(entity.InvestmentTransactionType || entity.investment_transaction_type || entity.Brokerage || entity.brokerage || entity.SecuritySymbol || entity.security_symbol);
-
-  if (isInv) {
-    return getInvestmentTransactionBusinessKey(entity);
-  }
 
   if (entityType === 'transaction' || entityType === 'transactions') {
     return getTransactionBusinessKey(entity);
+  }
+
+  if (entityType === 'investment_transaction' || entityType === 'investment_transactions') {
+    return getInvestmentTransactionBusinessKey(entity);
   }
 
   // Non-financial entities do NOT use business-key matching

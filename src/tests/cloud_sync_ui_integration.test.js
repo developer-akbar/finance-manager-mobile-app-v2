@@ -43,6 +43,11 @@ import {
   GOOGLE_DRIVE_APPDATA_SCOPE
 } from '../services/googleAuth.js';
 import { encryptBackupData, decryptBackupData } from '../utils/cryptoBackup.js';
+import {
+  isNoOpPreview,
+  getFriendlyActionName,
+  getModalConfirmConfig
+} from '../utils/cloudSyncModalHelper.js';
 
 // Global mock for localStorage
 const mockStorage = {};
@@ -369,5 +374,101 @@ describe('FinMan Cloud Sync v2 — Step 5B UI/Integration Tests', () => {
     const savedSyncPin = await getSetting('sync_pin').catch(() => null);
     assert.strictEqual(savedPin, null, 'PIN must not exist in settings');
     assert.strictEqual(savedSyncPin, null, 'Sync PIN must not exist in settings');
+  });
+
+  it('12. No-Op UI Detection — isNoOpPreview correctly distinguishes no-op from active syncs', () => {
+    const noOpPreview = {
+      action: 'MERGE_CLEAN',
+      isFirstSync: false,
+      plannedLocalChanges: { inserts: 0, updates: 0, deletes: 0, settingsUpdates: 0 },
+      plannedCloudChanges: { inserts: 0, updates: 0, deletes: 0, settingsUpdates: 0 },
+      conflicts: []
+    };
+    assert.strictEqual(isNoOpPreview(noOpPreview), true, 'Zero changes and no conflicts must evaluate to true');
+
+    // Local changes present
+    assert.strictEqual(isNoOpPreview({
+      ...noOpPreview,
+      plannedLocalChanges: { inserts: 1, updates: 0, deletes: 0 }
+    }), false, 'Local inserts must not be no-op');
+
+    // Cloud changes present
+    assert.strictEqual(isNoOpPreview({
+      ...noOpPreview,
+      plannedCloudChanges: { inserts: 1, updates: 0, deletes: 0 }
+    }), false, 'Cloud inserts must not be no-op');
+
+    // Conflicts present
+    assert.strictEqual(isNoOpPreview({
+      ...noOpPreview,
+      conflicts: [{ id: 'c1' }]
+    }), false, 'Conflicts must not be no-op');
+
+    // Bootstrap action
+    assert.strictEqual(isNoOpPreview({
+      ...noOpPreview,
+      action: 'BOOTSTRAP_FROM_CLOUD'
+    }), false, 'Bootstrap must not be no-op');
+
+    // First sync
+    assert.strictEqual(isNoOpPreview({
+      ...noOpPreview,
+      isFirstSync: true
+    }), false, 'First sync must not be no-op');
+  });
+
+  it('13. No-Op Confirmation UI Copy — Displays "In Sync — No Changes" and "✓ Confirm — No Upload"', () => {
+    const noOpPreview = {
+      action: 'MERGE_CLEAN',
+      isFirstSync: false,
+      plannedLocalChanges: { inserts: 0, updates: 0, deletes: 0 },
+      plannedCloudChanges: { inserts: 0, updates: 0, deletes: 0 },
+      conflicts: []
+    };
+
+    const config = getModalConfirmConfig(noOpPreview, 29032, false);
+    assert.strictEqual(config.isNoOp, true);
+    assert.strictEqual(config.title, 'In Sync — No Changes');
+    assert.strictEqual(config.badge, 'In Sync — No Changes');
+    assert.strictEqual(config.descriptionText, 'Your local database and cloud snapshot are already in sync. Confirming will verify the current state without uploading data.');
+    assert.strictEqual(config.buttonLabel, '✓ Confirm — No Upload');
+
+    const syncingConfig = getModalConfirmConfig(noOpPreview, 29032, true);
+    assert.strictEqual(syncingConfig.buttonLabel, 'Verifying sync...');
+  });
+
+  it('14. Normal Sync Confirmation UI Copy — Preserves "Confirm Cloud Sync" and "🚀 Confirm & Upload"', () => {
+    const activePreview = {
+      action: 'MERGE_CLEAN',
+      isFirstSync: false,
+      plannedLocalChanges: { inserts: 0, updates: 0, deletes: 0 },
+      plannedCloudChanges: { inserts: 2, updates: 0, deletes: 0 },
+      conflicts: []
+    };
+
+    const config = getModalConfirmConfig(activePreview, 29032, false);
+    assert.strictEqual(config.isNoOp, false);
+    assert.strictEqual(config.title, 'Confirm Cloud Sync');
+    assert.strictEqual(config.badge, 'Reconcile & Synchronize');
+    assert.ok(config.descriptionText.includes('synchronized to your private Google Drive'));
+    assert.strictEqual(config.buttonLabel, '🚀 Confirm & Upload');
+  });
+
+  it('15. Bootstrap Confirmation UI Copy — Preserves "Confirm Device Bootstrap" and "📥 Confirm & Bootstrap"', () => {
+    const bootstrapPreview = {
+      action: 'BOOTSTRAP_FROM_CLOUD',
+      isFirstSync: false,
+      cloudTxnCount: 29032,
+      plannedLocalChanges: { inserts: 29032, updates: 0, deletes: 0 },
+      plannedCloudChanges: { inserts: 0, updates: 0, deletes: 0 },
+      conflicts: []
+    };
+
+    const config = getModalConfirmConfig(bootstrapPreview, 0, false);
+    assert.strictEqual(config.isBootstrap, true);
+    assert.strictEqual(config.title, 'Confirm Device Bootstrap');
+    assert.strictEqual(config.badge, 'Bootstrap From Cloud Snapshot');
+    assert.ok(config.descriptionText.includes('decrypted from cloud and loaded into your local database'));
+    assert.strictEqual(config.buttonLabel, '📥 Confirm & Bootstrap');
   });
 });

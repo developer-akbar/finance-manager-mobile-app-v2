@@ -129,6 +129,36 @@ export async function listAppDataFiles(accessToken) {
 }
 
 /**
+ * List all revisions of a file in Google Drive (READ-ONLY)
+ */
+export async function listFileRevisions(fileId, accessToken) {
+  if (!accessToken || !fileId) return [];
+  const url = `${DRIVE_API_BASE}/files/${fileId}/revisions?fields=revisions(id,mimeType,modifiedTime,keepForever,size)`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.revisions || [];
+}
+
+/**
+ * Read the content of a specific file revision from Google Drive (READ-ONLY)
+ */
+export async function readRevisionContent(fileId, revisionId, accessToken) {
+  if (!accessToken || !fileId || !revisionId) throw new Error('Missing parameters for reading revision.');
+  const url = `${DRIVE_API_BASE}/files/${fileId}/revisions/${revisionId}?alt=media`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Failed to read revision ${revisionId} from Drive (${res.status}): ${errText}`);
+  }
+  return await res.text();
+}
+
+/**
  * Perform an end-to-end transport verification test using a synthetic, encrypted payload.
  * NEVER uploads real financial records.
  * Tests: Upload -> Read -> Decrypt verify -> Update -> Read verify -> Delete -> Confirm Deleted.
