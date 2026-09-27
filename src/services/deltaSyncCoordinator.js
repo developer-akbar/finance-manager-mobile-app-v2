@@ -133,6 +133,105 @@ export function configureDeltaSyncEngine(options = {}) {
   };
 }
 
+export async function getLocalDeviceId() {
+  try {
+    const db = getDB();
+    const res = await db.query('SELECT device_id FROM sync_local_state WHERE key = ?', ['device_state']);
+    if (res.values?.[0]?.device_id) {
+      return res.values[0].device_id;
+    }
+  } catch {}
+  return 'local_device';
+}
+
+let _isRuntimeInitialized = false;
+let _cleanupRuntimeListeners = null;
+
+/**
+ * Initializes the automatic delta sync runtime, wires auth/session providers,
+ * registers background/foreground listeners, and triggers startup sync checks.
+ */
+export function initializeDeltaSyncRuntime() {
+  if (_isRuntimeInitialized && _cleanupRuntimeListeners) {
+    return _cleanupRuntimeListeners;
+  }
+
+  // 1. Configure runtime dependencies with live providers
+  configureDeltaSyncEngine({
+    getAccessToken: async () => {
+      try {
+        const { getStoredToken } = await import('./googleAuth.js');
+        return getStoredToken();
+      } catch {
+        return null;
+      }
+    },
+    getSessionKey: async () => {
+      try {
+        const { getSyncSessionKey } = await import('./syncSession.js');
+        return getSyncSessionKey();
+      } catch {
+        return null;
+      }
+    },
+    getDeviceId: getLocalDeviceId
+  });
+
+  // 2. Subscribe to session unlock events (wakes and flushes pending queue on unlock)
+  let unsubscribeSession = null;
+  import('./syncSession.js').then(({ subscribeSyncSession }) => {
+    unsubscribeSession = subscribeSyncSession((isUnlocked, key) => {
+      if (isUnlocked && key) {
+        scheduleSync(SYNC_TRIGGER.STARTUP);
+      }
+    });
+  }).catch(() => {});
+
+  // 3. Register visibilitychange & focus listeners once (foreground wake)
+  const handleVisibilityChange = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      scheduleSync(SYNC_TRIGGER.FOREGROUND);
+    }
+  };
+
+  const handleFocus = () => {
+    scheduleSync(SYNC_TRIGGER.FOREGROUND);
+  };
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+  }
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('focus', handleFocus);
+  }
+
+  // 4. Trigger startup sync check
+  scheduleSync(SYNC_TRIGGER.STARTUP);
+
+  _isRuntimeInitialized = true;
+
+  _cleanupRuntimeListeners = () => {
+    if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('focus', handleFocus);
+    }
+    if (unsubscribeSession) {
+      try { unsubscribeSession(); } catch {}
+    }
+    cancelScheduledSync();
+    _isRuntimeInitialized = false;
+    _cleanupRuntimeListeners = null;
+  };
+
+  return _cleanupRuntimeListeners;
+}
+
+export function isDeltaSyncRuntimeInitialized() {
+  return _isRuntimeInitialized;
+}
+
 /**
  * Acquires the master sync lock across browser tabs.
  */
@@ -259,17 +358,28 @@ export async function triggerAutomaticSync(trigger = SYNC_TRIGGER.MANUAL) {
 export async function executeFullSyncPass(options = {}) {
   const trigger = options.trigger || SYNC_TRIGGER.MANUAL;
   const driveClient = options.driveClient || _syncConfig.driveClient;
-  const getAccessToken = options.getAccessToken || _syncConfig.getAccessToken;
-  const getSessionKey = options.getSessionKey || _syncConfig.getSessionKey;
-  const getDeviceId = options.getDeviceId || _syncConfig.getDeviceId;
+  const getAccessToken = _syncConfig.getAccessToken;
+  const getSessionKey = _syncConfig.getSessionKey;
+  const getDeviceId = _syncConfig.getDeviceId;
 
-  const accessToken = getAccessToken ? await getAccessToken() : options.accessToken;
-  const sessionKey = getSessionKey ? await getSessionKey() : options.sessionKey;
-  const deviceId = getDeviceId ? await getDeviceId() : (options.deviceId || 'local_device');
+  const accessToken = options.accessToken !== undefined
+    ? options.accessToken
+    : (getAccessToken ? await getAccessToken() : (_syncConfig.accessToken || null));
+
+  const sessionKey = options.sessionKey !== undefined
+    ? options.sessionKey
+    : (getSessionKey ? await getSessionKey() : (_syncConfig.sessionKey || null));
+
+  const deviceId = options.deviceId || (getDeviceId ? (typeof getDeviceId === 'function' ? await getDeviceId() : getDeviceId) : (_syncConfig.deviceId || 'local_device'));
 
   if (!driveClient && !accessToken) {
     broadcastSyncStatus(SYNC_STATUS.AUTH_REQUIRED, { reason: 'No Google Drive credentials' });
-    return { success: false, status: SYNC_STATUS.AUTH_REQUIRED };
+    return { success: false, status: SYNC_STATUS.AUTH_REQUIRED, reason: 'No Google Drive credentials' };
+  }
+
+  if (!sessionKey) {
+    broadcastSyncStatus(SYNC_STATUS.AUTH_REQUIRED, { reason: 'Sync session is locked (no encryption key)' });
+    return { success: false, status: SYNC_STATUS.AUTH_REQUIRED, reason: 'Sync session is locked' };
   }
 
   broadcastSyncStatus(SYNC_STATUS.SYNCING, { trigger });
@@ -289,7 +399,7 @@ export async function executeFullSyncPass(options = {}) {
         deviceId,
         accessToken,
         driveClient,
-        sessionKey: sessionKey || 'test_session_key'
+        sessionKey
       });
 
       // 3. Inbound Pull: Discover peer manifests -> download new packages -> stage contiguously
@@ -297,7 +407,7 @@ export async function executeFullSyncPass(options = {}) {
         localDeviceId: deviceId,
         accessToken,
         driveClient,
-        sessionKey: sessionKey || 'test_session_key'
+        sessionKey
       });
 
       // 4. Reconciliation: Apply staged events deterministically to canonical store

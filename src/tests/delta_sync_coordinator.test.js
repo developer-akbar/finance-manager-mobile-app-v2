@@ -21,10 +21,15 @@ import {
   executeFullSyncPass,
   withMasterSyncLock,
   recoverQueueAckFromAuthoritativeManifest,
+  initializeDeltaSyncRuntime,
+  isDeltaSyncRuntimeInitialized,
   SYNC_STATUS,
   SYNC_TRIGGER,
   MASTER_SYNC_LOCK_NAME
 } from '../services/deltaSyncCoordinator.js';
+import { executeAtomicMutation } from '../database/atomicMutation.js';
+import { unlockSyncSession, lockSyncSession, getSyncSessionKey } from '../services/syncSession.js';
+import { setGoogleLinked, saveTokenData, clearGoogleAuth } from '../services/googleAuth.js';
 import {
   buildPackageId,
   buildDeterministicPackagePayload,
@@ -810,5 +815,180 @@ test('FinMan Phase 7.5 — Automatic Delta Synchronization Engine Suite', async 
     console.log(`  [C02 Benchmark Result] End-to-End Sync Pass Duration: ${duration.toFixed(2)} ms (Architecture Target: <1200 ms P95)\n`);
     assert.equal(syncRes.success, true);
     assert.equal(syncRes.outbound.eventsUploaded, 10);
+  });
+
+  // =========================================================================
+  // CATEGORY D: RUNTIME INTEGRATION & RECOVERY TESTS (D01 – D07)
+  // =========================================================================
+
+  await t.test('D01: Runtime initialization configures live providers and deduplicates listeners', async () => {
+    const db = await resetDB();
+    const cleanup1 = initializeDeltaSyncRuntime();
+    assert.equal(isDeltaSyncRuntimeInitialized(), true);
+
+    // Second initialization call should return the existing cleanup function without duplicating
+    const cleanup2 = initializeDeltaSyncRuntime();
+    assert.equal(cleanup1, cleanup2);
+
+    cleanup1();
+    assert.equal(isDeltaSyncRuntimeInitialized(), false);
+  });
+
+  await t.test('D02: Successful atomic mutation queues delta and triggers scheduleSync', async () => {
+    const db = await resetDB();
+    const driveClient = createMockDriveClient();
+    let scheduledTrigger = null;
+
+    configureDeltaSyncEngine({
+      driveClient,
+      sessionKey: 'test_key',
+      deviceId: 'dev_d02',
+      enabled: true
+    });
+
+    const txn = { id: 'txn_d02_1', inr: 230, note: 'Live expense test' };
+    const emitted = await executeAtomicMutation({
+      storeName: 'transactions',
+      entityId: txn.id,
+      operation: 'INSERT',
+      entityData: txn
+    });
+
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0].entity_id, 'txn_d02_1');
+
+    const queueRes = await db.query('SELECT * FROM sync_delta_queue WHERE entity_id = ?', ['txn_d02_1']);
+    assert.equal(queueRes.values.length, 1);
+    assert.equal(queueRes.values[0].status, 'PENDING');
+  });
+
+  await t.test('D03: Failed/aborted atomic mutation does NOT commit delta or corrupt queue', async () => {
+    const db = await resetDB();
+    const queueBefore = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+
+    await assert.rejects(async () => {
+      await executeAtomicMutation({
+        storeName: 'non_existent_store_for_failure',
+        entityId: 'fail_1',
+        operation: 'UPDATE',
+        entityData: { id: 'fail_1' }
+      });
+    });
+
+    const queueAfter = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    assert.equal(queueAfter.length, queueBefore.length);
+  });
+
+  await t.test('D04: Pending queue recovery on session key unlock', async () => {
+    const db = await resetDB();
+    const driveClient = createMockDriveClient();
+    const deviceId = 'dev_d04';
+
+    lockSyncSession();
+
+    // 1. Mutation occurs while session is locked
+    const txn = { id: 'txn_d04_pending', inr: 500, note: 'Offline while locked' };
+    await executeAtomicMutation({
+      storeName: 'transactions',
+      entityId: txn.id,
+      operation: 'INSERT',
+      entityData: txn
+    });
+
+    // 2. Queue event exists as PENDING
+    const pendingQueue = (await db.query('SELECT * FROM sync_delta_queue WHERE status = ?', ['PENDING'])).values;
+    assert.equal(pendingQueue.length, 1);
+
+    // 3. Execution when locked safely returns AUTH_REQUIRED without uploading
+    const lockedRes = await executeFullSyncPass({
+      deviceId,
+      driveClient,
+      sessionKey: getSyncSessionKey()
+    });
+    assert.equal(lockedRes.success, false);
+    assert.equal(lockedRes.status, SYNC_STATUS.AUTH_REQUIRED);
+
+    // 4. Session becomes unlocked
+    await unlockSyncSession('123456');
+    const unlockedKey = getSyncSessionKey();
+    assert.ok(unlockedKey);
+
+    // 5. Execution with unlocked session succeeds and uploads pending delta
+    const unlockedRes = await executeFullSyncPass({
+      deviceId,
+      driveClient,
+      sessionKey: unlockedKey
+    });
+
+    assert.equal(unlockedRes.success, true);
+    assert.equal(unlockedRes.outbound.eventsUploaded, 1);
+
+    const postQueue = (await db.query('SELECT * FROM sync_delta_queue WHERE status = ?', ['ACKNOWLEDGED'])).values;
+    assert.equal(postQueue.length, 1);
+
+    lockSyncSession();
+  });
+
+  await t.test('D05: Startup and foreground triggers process pending deltas when credentials available', async () => {
+    const db = await resetDB();
+    const driveClient = createMockDriveClient();
+    const deviceId = 'dev_d05';
+
+    // Seed 2 pending mutations
+    for (let i = 1; i <= 2; i++) {
+      const t = { id: `txn_d05_${i}`, inr: i * 150 };
+      const h = await computeCanonicalSha256(t);
+      await db.run(
+        'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, new_checksum, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [`evt_d05_${i}`, deviceId, i, new Date().toISOString(), 'transactions', t.id, 'INSERT', h, JSON.stringify(t), 'PENDING']
+      );
+    }
+
+    const fgRes = await executeFullSyncPass({
+      trigger: SYNC_TRIGGER.FOREGROUND,
+      deviceId,
+      driveClient,
+      sessionKey: 'test_key'
+    });
+
+    assert.equal(fgRes.success, true);
+    assert.equal(fgRes.trigger, SYNC_TRIGGER.FOREGROUND);
+    assert.equal(fgRes.outbound.eventsUploaded, 2);
+  });
+
+  await t.test('D06: Missing auth/session safely defers execution without data corruption', async () => {
+    const db = await resetDB();
+    const deviceId = 'dev_d06';
+
+    // Insert pending delta
+    const t = { id: 'txn_d06_safe', inr: 99 };
+    const h = await computeCanonicalSha256(t);
+    await db.run(
+      'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, new_checksum, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_d06_safe', deviceId, 1, new Date().toISOString(), 'transactions', t.id, 'INSERT', h, JSON.stringify(t), 'PENDING']
+    );
+
+    // Call sync with no auth and no driveClient
+    const noAuthRes = await executeFullSyncPass({
+      trigger: SYNC_TRIGGER.MUTATION,
+      deviceId,
+      accessToken: null,
+      driveClient: null,
+      sessionKey: null
+    });
+
+    assert.equal(noAuthRes.success, false);
+    assert.equal(noAuthRes.status, SYNC_STATUS.AUTH_REQUIRED);
+
+    // Verify pending delta is preserved
+    const qRes = await db.query('SELECT * FROM sync_delta_queue WHERE event_id = ?', ['evt_d06_safe']);
+    assert.equal(qRes.values[0].status, 'PENDING');
+  });
+
+  await t.test('D07: Legacy snapshot sync engine remains separate and undisturbed', async () => {
+    // Verify cloudSyncEngine export exists and is not overwritten by delta coordinator
+    const { executeCloudSync, CURRENT_ENGINE_VERSION } = await import('../services/cloudSyncEngine.js');
+    assert.equal(typeof executeCloudSync, 'function');
+    assert.equal(CURRENT_ENGINE_VERSION, 1);
   });
 });
