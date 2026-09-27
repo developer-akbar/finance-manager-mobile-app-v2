@@ -187,7 +187,17 @@ export function initializeDeltaSyncRuntime() {
     });
   }).catch(() => {});
 
-  // 3. Register visibilitychange & focus listeners once (foreground wake)
+  // 3. Subscribe to Google OAuth state restoration events (wakes and flushes pending queue on connect/reconnect)
+  let unsubscribeAuth = null;
+  import('./googleAuth.js').then(({ subscribeGoogleAuth }) => {
+    unsubscribeAuth = subscribeGoogleAuth((isAuthenticated, token) => {
+      if (isAuthenticated && token) {
+        scheduleSync(SYNC_TRIGGER.STARTUP);
+      }
+    });
+  }).catch(() => {});
+
+  // 4. Register visibilitychange & focus listeners once (foreground wake)
   const handleVisibilityChange = () => {
     if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
       scheduleSync(SYNC_TRIGGER.FOREGROUND);
@@ -205,7 +215,7 @@ export function initializeDeltaSyncRuntime() {
     window.addEventListener('focus', handleFocus);
   }
 
-  // 4. Trigger startup sync check
+  // 5. Trigger startup sync check
   scheduleSync(SYNC_TRIGGER.STARTUP);
 
   _isRuntimeInitialized = true;
@@ -219,6 +229,9 @@ export function initializeDeltaSyncRuntime() {
     }
     if (unsubscribeSession) {
       try { unsubscribeSession(); } catch {}
+    }
+    if (unsubscribeAuth) {
+      try { unsubscribeAuth(); } catch {}
     }
     cancelScheduledSync();
     _isRuntimeInitialized = false;

@@ -120,6 +120,29 @@ export function getStoredToken() {
   }
 }
 
+const _authListeners = new Set();
+
+function notifyAuthListeners(isAuthenticated, token) {
+  _authListeners.forEach(fn => {
+    try {
+      fn(isAuthenticated, token);
+    } catch (e) {
+      console.warn('[GoogleAuth] Listener error:', e);
+    }
+  });
+}
+
+/**
+ * Subscribe to Google OAuth state changes (connect, reconnect, token refresh, disconnect)
+ */
+export function subscribeGoogleAuth(listener) {
+  if (typeof listener !== 'function') return () => {};
+  _authListeners.add(listener);
+  return () => {
+    _authListeners.delete(listener);
+  };
+}
+
 /**
  * Store access token, expiry timestamp, and mark account as linked
  */
@@ -130,6 +153,7 @@ export function saveTokenData(accessToken, expiresInSeconds) {
     const expiryTimestamp = Date.now() + (expiresInSeconds || 3500) * 1000;
     localStorage.setItem(STORAGE_KEY_EXPIRY, String(expiryTimestamp));
     setGoogleLinked(true);
+    notifyAuthListeners(true, accessToken);
   } catch (err) {
     console.error('Failed to save Google token data:', err);
   }
@@ -146,6 +170,7 @@ export function clearGoogleAuth() {
       localStorage.removeItem(STORAGE_KEY_EXPIRY);
     }
     setGoogleLinked(false);
+    notifyAuthListeners(false, null);
     if (typeof window !== 'undefined' && window.google?.accounts?.oauth2?.revoke && token) {
       window.google.accounts.oauth2.revoke(token, () => {});
     }

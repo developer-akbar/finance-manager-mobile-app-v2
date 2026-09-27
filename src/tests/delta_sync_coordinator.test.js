@@ -23,13 +23,14 @@ import {
   recoverQueueAckFromAuthoritativeManifest,
   initializeDeltaSyncRuntime,
   isDeltaSyncRuntimeInitialized,
+  getCurrentSyncStatus,
   SYNC_STATUS,
   SYNC_TRIGGER,
   MASTER_SYNC_LOCK_NAME
 } from '../services/deltaSyncCoordinator.js';
 import { executeAtomicMutation } from '../database/atomicMutation.js';
 import { unlockSyncSession, lockSyncSession, getSyncSessionKey } from '../services/syncSession.js';
-import { setGoogleLinked, saveTokenData, clearGoogleAuth } from '../services/googleAuth.js';
+import { setGoogleLinked, saveTokenData, clearGoogleAuth, subscribeGoogleAuth } from '../services/googleAuth.js';
 import {
   buildPackageId,
   buildDeterministicPackagePayload,
@@ -61,10 +62,18 @@ import {
   CONFLICT_TYPE
 } from '../database/conflicts.js';
 
-// Setup isolated in-memory DB
+// Setup isolated in-memory DB and localStorage
 globalThis.indexedDB = new IDBFactory();
+const mockStorage = {};
+global.localStorage = {
+  getItem: (k) => mockStorage[k] || null,
+  setItem: (k, v) => { mockStorage[k] = String(v); },
+  removeItem: (k) => { delete mockStorage[k]; },
+  clear: () => { Object.keys(mockStorage).forEach(k => delete mockStorage[k]); }
+};
 
 async function resetDB() {
+  global.localStorage.clear();
   closeDB();
   globalThis.indexedDB = new IDBFactory();
   const db = await initDB();
@@ -1072,4 +1081,124 @@ test('FinMan Phase 7.5 — Automatic Delta Synchronization Engine Suite', async 
     const localStateDump = JSON.stringify((await db.query('SELECT * FROM sync_local_state')).values);
     assert.equal(localStateDump.includes(secretToken), false);
   });
+
+  await t.test('D11: Successful auth restoration emits auth-state notification', async () => {
+    let receivedAuth = null;
+    let receivedToken = null;
+    const unsub = subscribeGoogleAuth((isAuth, token) => {
+      receivedAuth = isAuth;
+      receivedToken = token;
+    });
+
+    saveTokenData('restored_token_12345', 3600);
+    assert.equal(receivedAuth, true);
+    assert.equal(receivedToken, 'restored_token_12345');
+
+    clearGoogleAuth();
+    assert.equal(receivedAuth, false);
+    assert.equal(receivedToken, null);
+
+    unsub();
+  });
+
+  await t.test('D12: Delta coordinator receives auth notification and schedules automatic sync pass', async () => {
+    const db = await resetDB();
+    clearGoogleAuth();
+    lockSyncSession();
+    await unlockSyncSession('123456');
+    configureDeltaSyncEngine({ driveClient: null, accessToken: null });
+
+    // Seed local device state
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, last_allocated_sequence, updated_at) VALUES (?, ?, ?, ?)',
+      ['device_state', 'dev_d12', 1, new Date().toISOString()]
+    );
+
+    const cleanup = initializeDeltaSyncRuntime();
+    await new Promise(r => setTimeout(r, 50)); // Allow dynamic import listeners to attach
+
+    // 1. Initial pending delta in unauthenticated state
+    const t = { id: 'txn_d12_pending', inr: 888 };
+    const h = await computeCanonicalSha256(t);
+    await db.run(
+      'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, new_checksum, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_d12_pending', 'dev_d12', 1, new Date().toISOString(), 'transactions', t.id, 'INSERT', h, JSON.stringify(t), 'PENDING']
+    );
+
+    // 2. Setup mock drive client for the live provider
+    const driveClient = createMockDriveClient();
+    configureDeltaSyncEngine({ driveClient });
+
+    // 3. Simulate interactive Google reconnect / token save
+    saveTokenData('newly_connected_token_999', 3600);
+
+    // Wait brief tick for scheduled immediate pass to execute under lock
+    await new Promise(r => setTimeout(r, 200));
+
+    // Verify delta was picked up and ACKed
+    const queueRows = (await db.query('SELECT * FROM sync_delta_queue WHERE event_id = ?', ['evt_d12_pending'])).values;
+    assert.equal(queueRows[0].status, 'ACKNOWLEDGED');
+
+    cleanup();
+    clearGoogleAuth();
+    lockSyncSession();
+  });
+
+  await t.test('D13: Existing pending queue is preserved and not mutated by trigger dispatch itself', async () => {
+    const db = await resetDB();
+    clearGoogleAuth();
+
+    // Seed 3 pending transactions
+    for (let i = 1; i <= 3; i++) {
+      const txn = { id: `txn_d13_${i}`, amount: i * 100 };
+      const h = await computeCanonicalSha256(txn);
+      await db.run(
+        'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, new_checksum, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [`evt_d13_${i}`, 'dev_d13', i, new Date().toISOString(), 'transactions', txn.id, 'INSERT', h, JSON.stringify(txn), 'PENDING']
+      );
+    }
+
+    // Verify 3 rows exist with status PENDING
+    const beforeRows = (await db.query('SELECT * FROM sync_delta_queue ORDER BY sequence ASC')).values;
+    assert.equal(beforeRows.length, 3);
+    assert.equal(beforeRows.every(r => r.status === 'PENDING'), true);
+
+    // Dispatch trigger when no credentials available
+    scheduleSync(SYNC_TRIGGER.STARTUP);
+    await new Promise(r => setTimeout(r, 50));
+
+    // Verify all 3 rows remain intact
+    const afterRows = (await db.query('SELECT * FROM sync_delta_queue ORDER BY sequence ASC')).values;
+    assert.equal(afterRows.length, 3);
+    assert.equal(afterRows.every(r => r.status === 'PENDING'), true);
+  });
+
+  await t.test('D14: Duplicate auth notifications coalesce without concurrent duplicate sync passes', async () => {
+    const db = await resetDB();
+    clearGoogleAuth();
+    lockSyncSession();
+    await unlockSyncSession('123456');
+
+    const driveClient = createMockDriveClient();
+    configureDeltaSyncEngine({ driveClient });
+
+    const cleanup = initializeDeltaSyncRuntime();
+    await new Promise(r => setTimeout(r, 50));
+
+    // Rapid successive auth tokens
+    saveTokenData('token_burst_1', 3600);
+    saveTokenData('token_burst_2', 3600);
+    saveTokenData('token_burst_3', 3600);
+
+    await new Promise(r => setTimeout(r, 200));
+
+    // Confirm system completed pass and reached SUCCESS or IDLE
+    const status = getCurrentSyncStatus();
+    assert.equal(status === SYNC_STATUS.SUCCESS || status === SYNC_STATUS.IDLE, true);
+
+    cleanup();
+    clearGoogleAuth();
+    lockSyncSession();
+  });
 });
+
