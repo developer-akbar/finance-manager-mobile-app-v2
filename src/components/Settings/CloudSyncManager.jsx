@@ -26,15 +26,13 @@ import {
   subscribeSyncSession
 } from '../../services/syncSession.js';
 import { getSetting } from '../../database/settings.js';
+import {
+  getFriendlyActionName,
+  isNoOpPreview,
+  getModalConfirmConfig
+} from '../../utils/cloudSyncModalHelper.js';
 
-function getFriendlyActionName(action) {
-  if (action === 'CREATE_INITIAL_SNAPSHOT') return 'Create Initial Cloud Snapshot';
-  if (action === 'BOOTSTRAP_FROM_CLOUD') return 'Bootstrap From Cloud Snapshot';
-  if (action === 'MERGE_CLEAN') return 'Reconcile & Synchronize';
-  if (action === 'MERGE_WITH_CONFLICTS') return 'Reconcile (Review Conflicts)';
-  if (action === 'NO_CHANGES') return 'Already Up to Date';
-  return action || 'Reconcile';
-}
+export { getFriendlyActionName, isNoOpPreview, getModalConfirmConfig };
 
 export default function CloudSyncManager({ onBack }) {
   const { state, load } = useApp();
@@ -294,7 +292,12 @@ export default function CloudSyncManager({ onBack }) {
         });
       }
 
-      if (syncResult.status === SYNC_STATUS.SUCCESS || syncResult.status === SYNC_STATUS.NO_CHANGES || syncResult.status === BOOTSTRAP_STATUS.SUCCESS) {
+      const isSuccess = syncResult.status === SYNC_STATUS.SUCCESS || 
+                        syncResult.status === SYNC_STATUS.NO_CHANGES || 
+                        syncResult.status === BOOTSTRAP_STATUS.SUCCESS ||
+                        syncResult.status === 'BOOTSTRAP_SUCCESS';
+
+      if (isSuccess) {
         if (typeof load === 'function') {
           try {
             await load();
@@ -307,13 +310,17 @@ export default function CloudSyncManager({ onBack }) {
           lastSyncedAt: nowIso,
           lastSnapshotId: syncResult.snapshotId
         });
-        setSuccessMsg(
-          syncResult.status === BOOTSTRAP_STATUS.SUCCESS
-            ? '✓ Successfully bootstrapped database from cloud snapshot!'
-            : syncResult.isFirstSync
-            ? '✓ Initial cloud snapshot created and verified successfully!'
-            : '✓ Sync completed successfully.'
-        );
+
+        let successText = '✓ Sync completed successfully.';
+        if (syncResult.operation === 'BOOTSTRAP' || syncResult.status === 'BOOTSTRAP_SUCCESS') {
+          successText = '✓ Successfully bootstrapped database from cloud snapshot!';
+        } else if (syncResult.operation === 'NO_OP' || syncResult.status === SYNC_STATUS.NO_CHANGES) {
+          successText = '✓ Already up to date — No changes to sync.';
+        } else if (syncResult.isFirstSync) {
+          successText = '✓ Initial cloud snapshot created and verified successfully!';
+        }
+
+        setSuccessMsg(successText);
         setPreviewResult(null);
         setShowConfirmModal(false);
       } else if (syncResult.status === SYNC_STATUS.SAFETY_ABORT_MASS_DELETION) {
@@ -777,71 +784,66 @@ export default function CloudSyncManager({ onBack }) {
       </div>
 
       {/* Confirmation Bottom-Sheet Modal */}
-      {showConfirmModal && previewResult && (
-        <>
-          <div className="dash-popup-overlay" onClick={() => !isSyncing && setShowConfirmModal(false)} style={{ zIndex: 10000 }} />
-          <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px calc(var(--safe-bottom) + 20px)' }}>
-            <div className="dash-popup-sheet-handle" />
-            <div style={{ fontSize: '2.5rem', marginBottom: 8, textAlign: 'center' }}>
-              {previewResult.action === 'BOOTSTRAP_FROM_CLOUD' ? '📥' : '⚡'}
-            </div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6, textAlign: 'center' }}>
-              {previewResult.action === 'BOOTSTRAP_FROM_CLOUD' ? 'Confirm Device Bootstrap' : 'Confirm Cloud Sync'}
-            </div>
+      {showConfirmModal && previewResult && (() => {
+        const modalConfig = getModalConfirmConfig(previewResult, state.transactions?.length || 0, isSyncing);
+        if (!modalConfig) return null;
 
-            <div style={{
-              background: 'rgba(0, 229, 160, 0.08)',
-              border: '1px solid rgba(0, 229, 160, 0.25)',
-              borderRadius: 8,
-              padding: '12px 14px',
-              fontSize: '0.75rem',
-              color: 'var(--text-primary)',
-              marginBottom: 16,
-              lineHeight: 1.5,
-              textAlign: 'center'
-            }}>
-              <div style={{ fontWeight: 800, color: 'var(--green)', marginBottom: 6, fontSize: '0.82rem' }}>
-                {getFriendlyActionName(previewResult.action)}
+        return (
+          <>
+            <div className="dash-popup-overlay" onClick={() => !isSyncing && setShowConfirmModal(false)} style={{ zIndex: 10000 }} />
+            <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px calc(var(--safe-bottom) + 20px)' }}>
+              <div className="dash-popup-sheet-handle" />
+              <div style={{ fontSize: '2.5rem', marginBottom: 8, textAlign: 'center' }}>
+                {modalConfig.icon}
               </div>
-              <div style={{ color: 'var(--text-primary)', marginBottom: 6 }}>
-                {previewResult.action === 'BOOTSTRAP_FROM_CLOUD' ? (
-                  <>
-                    <strong>{(previewResult.cloudTxnCount || 0).toLocaleString()}</strong> transactions and all financial records will be decrypted from cloud and loaded into your local database.
-                  </>
-                ) : (
-                  <>
-                    <strong>{(state.transactions?.length || 0).toLocaleString()}</strong> transactions will be encrypted with your session key and synchronized to your private Google Drive AppData folder.
-                  </>
-                )}
+              <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6, textAlign: 'center' }}>
+                {modalConfig.title}
               </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                Local changes: {previewResult.plannedLocalChanges?.inserts || 0} inserts, {previewResult.plannedLocalChanges?.updates || 0} updates, {previewResult.plannedLocalChanges?.deletes || 0} deletes.
-              </div>
-            </div>
 
-            <div style={{ display: 'flex', gap: 12, width: '100%' }}>
-              <button
-                className="btn btn-secondary"
-                style={{ flex: 1 }}
-                onClick={() => setShowConfirmModal(false)}
-                disabled={isSyncing}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary"
-                style={{ flex: 1.5, fontWeight: 800 }}
-                onClick={handleExecuteLiveSync}
-                disabled={isSyncing}
-              >
-                {isSyncing
-                  ? (previewResult.action === 'BOOTSTRAP_FROM_CLOUD' ? 'Bootstrapping...' : 'Syncing snapshot...')
-                  : (previewResult.action === 'BOOTSTRAP_FROM_CLOUD' ? '📥 Confirm & Bootstrap' : '🚀 Confirm & Upload')}
-              </button>
+              <div style={{
+                background: 'rgba(0, 229, 160, 0.08)',
+                border: '1px solid rgba(0, 229, 160, 0.25)',
+                borderRadius: 8,
+                padding: '12px 14px',
+                fontSize: '0.75rem',
+                color: 'var(--text-primary)',
+                marginBottom: 16,
+                lineHeight: 1.5,
+                textAlign: 'center'
+              }}>
+                <div style={{ fontWeight: 800, color: 'var(--green)', marginBottom: 6, fontSize: '0.82rem' }}>
+                  {modalConfig.badge}
+                </div>
+                <div style={{ color: 'var(--text-primary)', marginBottom: 6 }}>
+                  {modalConfig.descriptionText}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  Local changes: {previewResult.plannedLocalChanges?.inserts || 0} inserts, {previewResult.plannedLocalChanges?.updates || 0} updates, {previewResult.plannedLocalChanges?.deletes || 0} deletes.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+                <button
+                  className="btn btn-secondary"
+                  style={{ flex: 1 }}
+                  onClick={() => setShowConfirmModal(false)}
+                  disabled={isSyncing}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  style={{ flex: 1.5, fontWeight: 800 }}
+                  onClick={handleExecuteLiveSync}
+                  disabled={isSyncing}
+                >
+                  {modalConfig.buttonLabel}
+                </button>
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        );
+      })()}
     </div>
   );
 }

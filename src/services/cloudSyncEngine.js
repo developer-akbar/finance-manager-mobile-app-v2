@@ -18,7 +18,7 @@ import { getTransactions, rowToTxn, bulkImport } from '../database/transactions.
 import { getTombstones, recordTombstonesBatch } from '../database/tombstones.js';
 import { getSetting, setSetting } from '../database/settings.js';
 import { encryptBackupData, decryptBackupData } from '../utils/cryptoBackup.js';
-import { findAppDataFile, readAppDataFile, uploadAppDataFile } from './googleDriveSync.js';
+import { findAppDataFile, readAppDataFile, uploadAppDataFile, listFileRevisions, readRevisionContent, listAppDataFiles } from './googleDriveSync.js';
 import { bundleRelatedTransactions, findTransactionDifferences } from '../utils/finmanPayload.js';
 import { getSyncSessionKey } from './syncSession.js';
 
@@ -40,14 +40,19 @@ export const SYNC_STATUS = {
 };
 
 export const BOOTSTRAP_STATUS = {
-  SUCCESS: 'SUCCESS',
+  SUCCESS: 'BOOTSTRAP_SUCCESS',
+  BOOTSTRAP_SUCCESS: 'BOOTSTRAP_SUCCESS',
   EXISTING_LOCAL_DATA_REQUIRES_MERGE: 'EXISTING_LOCAL_DATA_REQUIRES_MERGE',
   VALIDATION_ERROR: 'VALIDATION_ERROR',
   AUTH_ERROR: 'AUTH_ERROR',
   VERIFICATION_FAILED: 'VERIFICATION_FAILED'
 };
 
-import { getEntityBusinessKey } from './cloudSyncIdentity.js';
+import {
+  getEntityBusinessKey,
+  getTransactionBusinessKey,
+  getInvestmentTransactionBusinessKey
+} from './cloudSyncIdentity.js';
 
 export const CONFLICT_TYPES = {
   FINANCIAL_CONFLICT: 'FINANCIAL_CONFLICT',
@@ -289,6 +294,9 @@ export async function createCanonicalSnapshotPayload({
       sortedEntities[key] = list;
     }
   }
+
+  if (!sortedEntities.transactions) sortedEntities.transactions = [];
+  if (!sortedEntities.investment_transactions) sortedEntities.investment_transactions = [];
 
   const payload = {
     schema_version: 13,
@@ -579,40 +587,274 @@ export async function reconcile3Way({
   const identityConflictIds = new Set();
   const identityAliases = new Map(); // cloudId -> localId
 
-  const localBizMap = new Map();
-  const cloudBizMap = new Map();
+  const localTxnBizMap = new Map();
+  const cloudTxnBizMap = new Map();
+  const localInvBizMap = new Map();
+  const cloudInvBizMap = new Map();
+
+  // Phase 6C.12 Diagnostic Counters
+  let localTxTotal = 0;
+  let localTxExactMatched = 0;
+  let localTxUnmatched = 0;
+  let localTxExcludedTombstone = 0;
+  let localTxExcludedType = 0;
+  let localTxPassedIdentity = 0;
+
+  let localInvTotal = 0;
+  let localInvExactMatched = 0;
+  let localInvUnmatched = 0;
+  let localInvExcludedTombstone = 0;
+  let localInvExcludedType = 0;
+  let localInvPassedIdentity = 0;
+
+  let localOnlyTxnInBaseManifest = 0;
+  let localOnlyInvInBaseManifest = 0;
 
   for (const [id, entry] of localMap.entries()) {
+    const isTxn = entry.type === 'transaction' || entry.type === 'transactions';
+    const isInv = entry.type === 'investment_transaction' || entry.type === 'investment_transactions';
+
+    if (isTxn) localTxTotal++;
+    if (isInv) localInvTotal++;
+
     const isCloud = cloudMap.has(id);
+    if (isCloud) {
+      if (isTxn) localTxExactMatched++;
+      if (isInv) localInvExactMatched++;
+    } else {
+      if (isTxn) {
+        localTxUnmatched++;
+        if (baseManifest && baseManifest[id]) localOnlyTxnInBaseManifest++;
+      }
+      if (isInv) {
+        localInvUnmatched++;
+        if (baseManifest && baseManifest[id]) localOnlyInvInBaseManifest++;
+      }
+    }
+
     const isDeleted = localTombstoneMap.has(id);
-    if (!isCloud && !isDeleted) {
-      const bizKey = getEntityBusinessKey(entry.item, entry.type);
-      if (bizKey) {
-        if (!localBizMap.has(bizKey)) localBizMap.set(bizKey, []);
-        localBizMap.get(bizKey).push({ id, item: entry.item, type: entry.type });
+
+    if (!isCloud) {
+      if (isDeleted) {
+        if (isTxn) localTxExcludedTombstone++;
+        if (isInv) localInvExcludedTombstone++;
+      } else {
+        if (isTxn) {
+          const bizKey = getTransactionBusinessKey(entry.item);
+          if (bizKey) {
+            if (!localTxnBizMap.has(bizKey)) localTxnBizMap.set(bizKey, []);
+            localTxnBizMap.get(bizKey).push({ id, item: entry.item, type: 'transactions' });
+            localTxPassedIdentity++;
+          }
+        } else if (isInv) {
+          const bizKey = getInvestmentTransactionBusinessKey(entry.item);
+          if (bizKey) {
+            if (!localInvBizMap.has(bizKey)) localInvBizMap.set(bizKey, []);
+            localInvBizMap.get(bizKey).push({ id, item: entry.item, type: 'investment_transactions' });
+            localInvPassedIdentity++;
+          }
+        } else {
+          localTxExcludedType++;
+        }
       }
     }
   }
 
+  let cloudTxTotal = 0;
+  let cloudTxExactMatched = 0;
+  let cloudTxUnmatched = 0;
+  let cloudTxExcludedTombstone = 0;
+  let cloudTxExcludedType = 0;
+  let cloudTxPassedIdentity = 0;
+
+  let cloudInvTotal = 0;
+  let cloudInvExactMatched = 0;
+  let cloudInvUnmatched = 0;
+  let cloudInvExcludedTombstone = 0;
+  let cloudInvExcludedType = 0;
+  let cloudInvPassedIdentity = 0;
+
+  let cloudOnlyTxnInBaseManifest = 0;
+  let cloudOnlyInvInBaseManifest = 0;
+
   for (const [id, entry] of cloudMap.entries()) {
+    const isTxn = entry.type === 'transaction' || entry.type === 'transactions';
+    const isInv = entry.type === 'investment_transaction' || entry.type === 'investment_transactions';
+
+    if (isTxn) cloudTxTotal++;
+    if (isInv) cloudInvTotal++;
+
     const isLocal = localMap.has(id);
+    if (isLocal) {
+      if (isTxn) cloudTxExactMatched++;
+      if (isInv) cloudInvExactMatched++;
+    } else {
+      if (isTxn) {
+        cloudTxUnmatched++;
+        if (baseManifest && baseManifest[id]) cloudOnlyTxnInBaseManifest++;
+      }
+      if (isInv) {
+        cloudInvUnmatched++;
+        if (baseManifest && baseManifest[id]) cloudOnlyInvInBaseManifest++;
+      }
+    }
+
     const isDeleted = cloudTombstoneMap.has(id);
-    if (!isLocal && !isDeleted) {
-      const bizKey = getEntityBusinessKey(entry.item, entry.type);
-      if (bizKey) {
-        if (!cloudBizMap.has(bizKey)) cloudBizMap.set(bizKey, []);
-        cloudBizMap.get(bizKey).push({ id, item: entry.item, type: entry.type });
+
+    if (!isLocal) {
+      if (isDeleted) {
+        if (isTxn) cloudTxExcludedTombstone++;
+        if (isInv) cloudInvExcludedTombstone++;
+      } else {
+        if (isTxn) {
+          const bizKey = getTransactionBusinessKey(entry.item);
+          if (bizKey) {
+            if (!cloudTxnBizMap.has(bizKey)) cloudTxnBizMap.set(bizKey, []);
+            cloudTxnBizMap.get(bizKey).push({ id, item: entry.item, type: 'transactions' });
+            cloudTxPassedIdentity++;
+          }
+        } else if (isInv) {
+          const bizKey = getInvestmentTransactionBusinessKey(entry.item);
+          if (bizKey) {
+            if (!cloudInvBizMap.has(bizKey)) cloudInvBizMap.set(bizKey, []);
+            cloudInvBizMap.get(bizKey).push({ id, item: entry.item, type: 'investment_transactions' });
+            cloudInvPassedIdentity++;
+          }
+        } else {
+          cloudTxExcludedType++;
+        }
       }
     }
   }
+
+  // Trace Specific Known Entities
+  const knownTxnLocalId = '652866ae-d1bd-435a-88e0-1e8813f65c10';
+  const knownTxnCloudId = 'txn_1704067200000_000000';
+  const knownInvLocalId = '48db2ea6-629b-47bd-a6ea-de54140c9ace';
+  const knownInvCloudId = 'inv_cloud_hist_0000';
+
+  const traceKnownEntity = (targetId, isLocalSide) => {
+    const rawEntities = isLocalSide ? localEntities : cloudEntities;
+    const targetMap = isLocalSide ? localMap : cloudMap;
+    const counterpartMap = isLocalSide ? cloudMap : localMap;
+    const tombstoneMap = isLocalSide ? localTombstoneMap : cloudTombstoneMap;
+
+    let foundInRaw = false;
+    let rawCollection = null;
+    for (const [col, arr] of Object.entries(rawEntities || {})) {
+      if (Array.isArray(arr) && arr.some(x => String(x.id || x.ID || x._id || x.key || '') === targetId)) {
+        foundInRaw = true;
+        rawCollection = col;
+        break;
+      }
+    }
+
+    const entry = targetMap.get(targetId);
+    const foundInMap = !!entry;
+    const exactIdMatched = counterpartMap.has(targetId);
+    const excludedByTombstone = tombstoneMap.has(targetId);
+    const isTxn = entry?.type === 'transaction' || entry?.type === 'transactions';
+    const isInv = entry?.type === 'investment_transaction' || entry?.type === 'investment_transactions';
+    const excludedByType = entry ? (!isTxn && !isInv) : null;
+    
+    let businessKey = null;
+    if (entry) {
+      if (isTxn) businessKey = getTransactionBusinessKey(entry.item);
+      else if (isInv) businessKey = getInvestmentTransactionBusinessKey(entry.item);
+    }
+
+    const passedToIdentity = foundInMap && !exactIdMatched && !excludedByTombstone && (isTxn || isInv) && !!businessKey;
+
+    return {
+      targetId,
+      foundInRawEntities: foundInRaw,
+      rawCollection,
+      foundInMap,
+      exactIdMatched,
+      excludedByTombstone,
+      excludedByType,
+      entryType: entry?.type,
+      entryTypeTypeof: typeof entry?.type,
+      entryTypeJSON: JSON.stringify(entry?.type),
+      businessKey,
+      passedToIdentity
+    };
+  };
+
+  const knownPairsDiagnostic = {
+    localKnownTxn: traceKnownEntity(knownTxnLocalId, true),
+    cloudKnownTxn: traceKnownEntity(knownTxnCloudId, false),
+    localKnownInv: traceKnownEntity(knownInvLocalId, true),
+    cloudKnownInv: traceKnownEntity(knownInvCloudId, false)
+  };
+
+  const identityPipelineDiagnostic = {
+    localTransactionsTotal: localTxTotal,
+    cloudTransactionsTotal: cloudTxTotal,
+
+    localTransactionsExactIdMatched: localTxExactMatched,
+    cloudTransactionsExactIdMatched: cloudTxExactMatched,
+
+    localTransactionsUnmatchedAfterId: localTxUnmatched,
+    cloudTransactionsUnmatchedAfterId: cloudTxUnmatched,
+
+    localTransactionsExcludedByTombstone: localTxExcludedTombstone,
+    cloudTransactionsExcludedByTombstone: cloudTxExcludedTombstone,
+
+    localTransactionsExcludedByType: localTxExcludedType,
+    cloudTransactionsExcludedByType: cloudTxExcludedType,
+
+    localTransactionsPassedToIdentity: localTxPassedIdentity,
+    cloudTransactionsPassedToIdentity: cloudTxPassedIdentity,
+
+    localInvestmentsTotal: localInvTotal,
+    cloudInvestmentsTotal: cloudInvTotal,
+
+    localInvestmentsExactIdMatched: localInvExactMatched,
+    cloudInvestmentsExactIdMatched: cloudInvExactMatched,
+
+    localInvestmentsUnmatchedAfterId: localInvUnmatched,
+    cloudInvestmentsUnmatchedAfterId: cloudInvUnmatched,
+
+    localInvestmentsExcludedByTombstone: localInvExcludedTombstone,
+    cloudInvestmentsExcludedByTombstone: cloudInvExcludedTombstone,
+
+    localInvestmentsExcludedByType: localInvExcludedType,
+    cloudInvestmentsExcludedByType: cloudInvExcludedType,
+
+    localInvestmentsPassedToIdentity: localInvPassedIdentity,
+    cloudInvestmentsPassedToIdentity: cloudInvPassedIdentity
+  };
+
+  const tombstoneDiagnostic = {
+    localTombstonesTotal: localTombstoneMap.size,
+    cloudTombstonesTotal: cloudTombstoneMap.size,
+    localOnlyTransactionTombstoneCount: localTxExcludedTombstone,
+    cloudOnlyTransactionTombstoneCount: cloudTxExcludedTombstone,
+    localOnlyInvestmentTombstoneCount: localInvExcludedTombstone,
+    cloudOnlyInvestmentTombstoneCount: cloudInvExcludedTombstone,
+    sampleLocalTombstones: Array.from(localTombstoneMap.values()).slice(0, 5).map(t => ({ id: t.id, deleted_at: t.deleted_at, reason: t.reason || t.type })),
+    sampleCloudTombstones: Array.from(cloudTombstoneMap.values()).slice(0, 5).map(t => ({ id: t.id, deleted_at: t.deleted_at, reason: t.reason || t.type }))
+  };
+
+  const baseManifestDiagnostic = {
+    baseManifestTotal: Object.keys(baseManifest || {}).length,
+    localOnlyTransactionExcludedByBaseManifest: 0,
+    cloudOnlyTransactionExcludedByBaseManifest: 0,
+    localOnlyTxnPresentInBaseManifest: localOnlyTxnInBaseManifest,
+    cloudOnlyTxnPresentInBaseManifest: cloudOnlyTxnInBaseManifest,
+    localOnlyInvPresentInBaseManifest: localOnlyInvInBaseManifest,
+    cloudOnlyInvPresentInBaseManifest: cloudOnlyInvInBaseManifest
+  };
 
   let identityMatchedTransactions = 0;
   let identityMatchedInvestments = 0;
-  const allBizKeys = new Set([...localBizMap.keys(), ...cloudBizMap.keys()]);
 
-  for (const bizKey of allBizKeys) {
-    const localCandidates = localBizMap.get(bizKey) || [];
-    const cloudCandidates = cloudBizMap.get(bizKey) || [];
+  // 1. Match Transactions
+  const allTxnBizKeys = new Set([...localTxnBizMap.keys(), ...cloudTxnBizMap.keys()]);
+  for (const bizKey of allTxnBizKeys) {
+    const localCandidates = localTxnBizMap.get(bizKey) || [];
+    const cloudCandidates = cloudTxnBizMap.get(bizKey) || [];
 
     if (localCandidates.length === 0 || cloudCandidates.length === 0) {
       continue;
@@ -627,18 +869,12 @@ export async function reconcile3Way({
       const isCldDeleted = cloudTombstoneMap.has(cldCand.id) || cloudTombstoneMap.has(locCand.id);
 
       if (!isLocDeleted && !isCldDeleted) {
-        // Deterministic 1:1 business match
         identityMatchedIds.add(locCand.id);
         identityMatchedIds.add(cldCand.id);
         identityAliases.set(cldCand.id, locCand.id);
-        if (locCand.type === 'investment_transaction' || locCand.type === 'investment_transactions') {
-          identityMatchedInvestments++;
-        } else {
-          identityMatchedTransactions++;
-        }
+        identityMatchedTransactions++;
       }
     } else {
-      // Ambiguous matches (1:N, N:1, N:N) -> Explicit IDENTITY_CONFLICT
       localCandidates.forEach(c => identityConflictIds.add(c.id));
       cloudCandidates.forEach(c => identityConflictIds.add(c.id));
 
@@ -652,6 +888,132 @@ export async function reconcile3Way({
       });
     }
   }
+
+  // 2. Match Investment Transactions
+  const allInvBizKeys = new Set([...localInvBizMap.keys(), ...cloudInvBizMap.keys()]);
+  for (const bizKey of allInvBizKeys) {
+    const localCandidates = localInvBizMap.get(bizKey) || [];
+    const cloudCandidates = cloudInvBizMap.get(bizKey) || [];
+
+    if (localCandidates.length === 0 || cloudCandidates.length === 0) {
+      continue;
+    }
+
+    if (localCandidates.length === 1 && cloudCandidates.length === 1) {
+      const locCand = localCandidates[0];
+      const cldCand = cloudCandidates[0];
+
+      const isLocDeleted = localTombstoneMap.has(locCand.id) || localTombstoneMap.has(cldCand.id);
+      const isCldDeleted = cloudTombstoneMap.has(cldCand.id) || cloudTombstoneMap.has(locCand.id);
+
+      if (!isLocDeleted && !isCldDeleted) {
+        identityMatchedIds.add(locCand.id);
+        identityMatchedIds.add(cldCand.id);
+        identityAliases.set(cldCand.id, locCand.id);
+        identityMatchedInvestments++;
+      }
+    } else {
+      localCandidates.forEach(c => identityConflictIds.add(c.id));
+      cloudCandidates.forEach(c => identityConflictIds.add(c.id));
+
+      conflicts.push({
+        id: `conflict_identity_${bizKey.substring(0, 32)}`,
+        entityId: localCandidates[0]?.id || cloudCandidates[0]?.id,
+        type: CONFLICT_TYPES.IDENTITY_CONFLICT,
+        reason: 'Multiple investment transaction candidates share the same business fingerprint across devices.',
+        local: localCandidates.map(x => x.item),
+        cloud: cloudCandidates.map(x => x.item)
+      });
+    }
+  }
+
+  // Build surgical identity diagnostic telemetry
+  let txnLocalCandCount = 0;
+  let txnLocalCollisions = 0;
+  const sampleTxnLocalOnly = [];
+  for (const [k, list] of localTxnBizMap.entries()) {
+    txnLocalCandCount += list.length;
+    if (list.length > 1) txnLocalCollisions++;
+    if (sampleTxnLocalOnly.length < 5) {
+      sampleTxnLocalOnly.push({ id: list[0].id, businessKey: k });
+    }
+  }
+
+  let txnCloudCandCount = 0;
+  let txnCloudCollisions = 0;
+  const sampleTxnCloudOnly = [];
+  for (const [k, list] of cloudTxnBizMap.entries()) {
+    txnCloudCandCount += list.length;
+    if (list.length > 1) txnCloudCollisions++;
+    if (sampleTxnCloudOnly.length < 5) {
+      sampleTxnCloudOnly.push({ id: list[0].id, businessKey: k });
+    }
+  }
+
+  let invLocalCandCount = 0;
+  let invLocalCollisions = 0;
+  const sampleInvLocalOnly = [];
+  for (const [k, list] of localInvBizMap.entries()) {
+    invLocalCandCount += list.length;
+    if (list.length > 1) invLocalCollisions++;
+    if (sampleInvLocalOnly.length < 5) {
+      sampleInvLocalOnly.push({ id: list[0].id, businessKey: k });
+    }
+  }
+
+  let invCloudCandCount = 0;
+  let invCloudCollisions = 0;
+  const sampleInvCloudOnly = [];
+  for (const [k, list] of cloudInvBizMap.entries()) {
+    invCloudCandCount += list.length;
+    if (list.length > 1) invCloudCollisions++;
+    if (sampleInvCloudOnly.length < 5) {
+      sampleInvCloudOnly.push({ id: list[0].id, businessKey: k });
+    }
+  }
+
+  let txnCommonKeys = 0;
+  for (const k of localTxnBizMap.keys()) {
+    if (cloudTxnBizMap.has(k)) txnCommonKeys++;
+  }
+
+  let invCommonKeys = 0;
+  for (const k of localInvBizMap.keys()) {
+    if (cloudInvBizMap.has(k)) invCommonKeys++;
+  }
+
+  const identityDiagnostic = {
+    transactionLocalCandidates: txnLocalCandCount,
+    transactionCloudCandidates: txnCloudCandCount,
+    transactionLocalUniqueKeys: localTxnBizMap.size,
+    transactionCloudUniqueKeys: cloudTxnBizMap.size,
+    transactionCommonKeys: txnCommonKeys,
+    transactionLocalCollisionKeys: txnLocalCollisions,
+    transactionCloudCollisionKeys: txnCloudCollisions,
+
+    investmentLocalCandidates: invLocalCandCount,
+    investmentCloudCandidates: invCloudCandCount,
+    investmentLocalUniqueKeys: localInvBizMap.size,
+    investmentCloudUniqueKeys: cloudInvBizMap.size,
+    investmentCommonKeys: invCommonKeys,
+    investmentLocalCollisionKeys: invLocalCollisions,
+    investmentCloudCollisionKeys: invCloudCollisions,
+
+    runtimeTransactionBusinessKeyIntersection: txnCommonKeys,
+    runtimeInvestmentBusinessKeyIntersection: invCommonKeys,
+    runtimeTransactionExpectedIdentityPairs: 1549,
+    runtimeInvestmentExpectedIdentityPairs: 67,
+
+    sampleTransactionLocalOnly: sampleTxnLocalOnly,
+    sampleTransactionCloudOnly: sampleTxnCloudOnly,
+    sampleInvestmentLocalOnly: sampleInvLocalOnly,
+    sampleInvestmentCloudOnly: sampleInvCloudOnly,
+
+    identityPipelineDiagnostic,
+    knownPairsDiagnostic,
+    tombstoneDiagnostic,
+    baseManifestDiagnostic
+  };
 
   for (const id of allIds) {
     if (identityMatchedIds.has(id)) {
@@ -671,13 +1033,13 @@ export async function reconcile3Way({
 
     // CASE 1: Brand new on Local only (not in Base, not in Cloud, not deleted)
     if (!baseEntry && localEntry && !cloudEntry && !cloudDeleted) {
-      plannedCloudInserts.push(localEntry.item);
+      plannedCloudInserts.push({ ...localEntry.item, _collection: localEntry.type });
       continue;
     }
 
     // CASE 2: Brand new on Cloud only (not in Base, not in Local, not deleted)
     if (!baseEntry && !localEntry && cloudEntry && !localDeleted) {
-      plannedLocalInserts.push(cloudEntry.item);
+      plannedLocalInserts.push({ ...cloudEntry.item, _collection: cloudEntry.type });
       continue;
     }
 
@@ -756,12 +1118,12 @@ export async function reconcile3Way({
         }
         if (localChanged && !cloudChanged) {
           // Local-only edit -> propagate to Cloud
-          plannedCloudUpdates.push(localEntry.item);
+          plannedCloudUpdates.push({ ...localEntry.item, _collection: localEntry.type });
           continue;
         }
         if (!localChanged && cloudChanged) {
           // Cloud-only edit -> propagate to Local
-          plannedLocalUpdates.push(cloudEntry.item);
+          plannedLocalUpdates.push({ ...cloudEntry.item, _collection: cloudEntry.type });
           continue;
         }
         if (localChanged && cloudChanged) {
@@ -797,7 +1159,7 @@ export async function reconcile3Way({
     if (cat && !activeCategories.has(cat) && mergedTombstones.has(cat)) {
       // Revoke category tombstone to repair dependency
       mergedTombstones.delete(cat);
-      plannedLocalInserts.push({ id: cat, name: cat, type: 'Expense' });
+      plannedLocalInserts.push({ id: cat, name: cat, type: 'Expense', _collection: 'categories' });
     }
   }
 
@@ -839,7 +1201,8 @@ export async function reconcile3Way({
     duplicateInsertsPrevented: identityMatchedIds.size / 2,
     identityMatcherReached: true,
     identityMatchedTransactions,
-    identityMatchedInvestments
+    identityMatchedInvestments,
+    identityDiagnostic
   };
 }
 
@@ -920,6 +1283,211 @@ export async function previewCloudSync({
   const tDecryptStart = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   const cloudPayload = await decryptBackupData(ciphertext, effectiveKey);
   const tDecryptEnd = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
+  // Phase 6C.13 Direct Cloud Payload Verification (Before any reconciliation or transformations)
+  const rawCloudTxns = Array.isArray(cloudPayload?.entities?.transactions) ? cloudPayload.entities.transactions : [];
+  const rawCloudInvs = Array.isArray(cloudPayload?.entities?.investment_transactions) ? cloudPayload.entities.investment_transactions : [];
+  const rawLocalTxns = Array.isArray(localEntities?.transactions) ? localEntities.transactions : [];
+  const rawLocalInvs = Array.isArray(localEntities?.investment_transactions) ? localEntities.investment_transactions : [];
+
+  const rawLocalTxnIdSet = new Set(rawLocalTxns.map(t => String(t.id || t.ID || t._id || t.key || '')));
+  const rawCloudTxnIdSet = new Set(rawCloudTxns.map(t => String(t.id || t.ID || t._id || t.key || '')));
+  let rawTxnCommonIdCount = 0;
+  for (const id of rawLocalTxnIdSet) {
+    if (rawCloudTxnIdSet.has(id)) rawTxnCommonIdCount++;
+  }
+
+  const rawLocalInvIdSet = new Set(rawLocalInvs.map(t => String(t.id || t.ID || t._id || t.key || '')));
+  const rawCloudInvIdSet = new Set(rawCloudInvs.map(t => String(t.id || t.ID || t._id || t.key || '')));
+  let rawInvCommonIdCount = 0;
+  for (const id of rawLocalInvIdSet) {
+    if (rawCloudInvIdSet.has(id)) rawInvCommonIdCount++;
+  }
+
+  const cloudPayloadDiagnostic = {
+    snapshotId: cloudPayload?.snapshot_id || null,
+    cloudFileId: cloudFile?.id || null,
+    cloudFileName: cloudFile?.name || null,
+    cloudFileModifiedTime: cloudFile?.modifiedTime || null,
+
+    cloudTransactionCountRaw: rawCloudTxns.length,
+    cloudInvestmentCountRaw: rawCloudInvs.length,
+
+    localTransactionCountAtSamePoint: rawLocalTxns.length,
+    localInvestmentCountAtSamePoint: rawLocalInvs.length,
+
+    rawTxnCommonIdCount,
+    rawTxnLocalOnlyIdCount: rawLocalTxns.length - rawTxnCommonIdCount,
+    rawTxnCloudOnlyIdCount: rawCloudTxns.length - rawTxnCommonIdCount,
+
+    rawInvCommonIdCount,
+    rawInvLocalOnlyIdCount: rawLocalInvs.length - rawInvCommonIdCount,
+    rawInvCloudOnlyIdCount: rawCloudInvs.length - rawInvCommonIdCount,
+
+    firstFiveTransactionIdsRaw: rawCloudTxns.slice(0, 5).map(t => String(t.id || t.ID || t._id || t.key || '')),
+    firstFiveInvestmentIdsRaw: rawCloudInvs.slice(0, 5).map(t => String(t.id || t.ID || t._id || t.key || '')),
+
+    firstFiveLocalTransactionIdsRaw: rawLocalTxns.slice(0, 5).map(t => String(t.id || t.ID || t._id || t.key || '')),
+    firstFiveLocalInvestmentIdsRaw: rawLocalInvs.slice(0, 5).map(t => String(t.id || t.ID || t._id || t.key || '')),
+
+    containsKnownCloudTxnId: rawCloudTxnIdSet.has('txn_1704067200000_000000'),
+    containsKnownCloudInvId: rawCloudInvIdSet.has('inv_cloud_hist_0000'),
+
+    containsKnownLocalTxnIdInLocal: rawLocalTxnIdSet.has('652866ae-d1bd-435a-88e0-1e8813f65c10'),
+    containsKnownLocalTxnIdInCloud: rawCloudTxnIdSet.has('652866ae-d1bd-435a-88e0-1e8813f65c10'),
+
+    containsKnownLocalInvIdInLocal: rawLocalInvIdSet.has('48db2ea6-629b-47bd-a6ea-de54140c9ace'),
+    containsKnownLocalInvIdInCloud: rawCloudInvIdSet.has('48db2ea6-629b-47bd-a6ea-de54140c9ace'),
+
+    containsKnownCloudTxnIdInLocal: rawLocalTxnIdSet.has('txn_1704067200000_000000'),
+    containsKnownCloudInvIdInLocal: rawLocalInvIdSet.has('inv_cloud_hist_0000'),
+
+    argumentsCheck: {
+      isLocalEntitiesSameAsCloudPayloadEntities: localEntities === cloudPayload?.entities,
+      isLocalTxnsSameAsCloudTxns: localEntities?.transactions === cloudPayload?.entities?.transactions,
+      isLocalInvsSameAsCloudInvs: localEntities?.investment_transactions === cloudPayload?.entities?.investment_transactions
+    },
+
+    cloudMetadata: {
+      snapshot_id: cloudPayload?.snapshot_id,
+      created_at: cloudPayload?.created_at || cloudPayload?.timestamp,
+      device_id: cloudPayload?.device_id,
+      schema_version: cloudPayload?.schema_version,
+      cloud_version: cloudPayload?.cloud_version,
+      storedChecksum: cloudPayload?.checksum || cloudPayload?.manifest_checksum || null
+    },
+
+    cloudTransactionIdSample: rawCloudTxns.slice(0, 10).map(t => String(t.id || t.ID || t._id || t.key || '')),
+    cloudInvestmentIdSample: rawCloudInvs.slice(0, 10).map(t => String(t.id || t.ID || t._id || t.key || '')),
+    localTransactionIdSample: rawLocalTxns.slice(0, 10).map(t => String(t.id || t.ID || t._id || t.key || '')),
+    localInvestmentIdSample: rawLocalInvs.slice(0, 10).map(t => String(t.id || t.ID || t._id || t.key || ''))
+  };
+
+  console.log('[CloudPayloadDiagnostic]', JSON.stringify(cloudPayloadDiagnostic, null, 2));
+
+  // Phase 6C.15 Forensic Drive Revision & Original v1 Verification (READ-ONLY)
+  let v1RevisionDiagnostic = {
+    revisionsQueried: false,
+    revisionsCount: 0,
+    allRevisions: [],
+    v1RevisionFound: false,
+    v1RevisionId: null,
+    v1ModifiedTime: null,
+    v1SnapshotId: null,
+    v1CreatedAt: null,
+    v1CloudVersion: null,
+    v1ParentSnapshotId: null,
+    v1TransactionCount: 0,
+    v1InvestmentCount: 0,
+    v1AccountsCount: 0,
+    v1CategoriesCount: 0,
+    v1RawTxnComparisonWithLocal: {
+      localCount: rawLocalTxns.length,
+      v1Count: 0,
+      commonCount: 0,
+      localOnlyCount: 0,
+      v1OnlyCount: 0
+    },
+    v1RawInvComparisonWithLocal: {
+      localCount: rawLocalInvs.length,
+      v1Count: 0,
+      commonCount: 0,
+      localOnlyCount: 0,
+      v1OnlyCount: 0
+    },
+    v1ContainsKnownCloudTxnId: false, // txn_1704067200000_000000
+    v1ContainsKnownCloudInvId: false, // inv_cloud_hist_0000
+    v1ContainsLocalTxnId: false,      // 652866ae-d1bd-435a-88e0-1e8813f65c10
+    v1ContainsLocalInvId: false,      // 48db2ea6-629b-47bd-a6ea-de54140c9ace
+    v1IntegrityChecksumMatch: null,
+    error: null
+  };
+
+  try {
+    const revisions = typeof transport.listFileRevisions === 'function'
+      ? await transport.listFileRevisions(cloudFile.id, accessToken)
+      : await listFileRevisions(cloudFile.id, accessToken);
+    
+    v1RevisionDiagnostic.revisionsQueried = true;
+    v1RevisionDiagnostic.revisionsCount = revisions.length;
+    v1RevisionDiagnostic.allRevisions = revisions.map(r => ({ id: r.id, modifiedTime: r.modifiedTime, size: r.size, mimeType: r.mimeType }));
+
+    for (const rev of revisions) {
+      try {
+        const revCipher = typeof transport.readRevisionContent === 'function'
+          ? await transport.readRevisionContent(cloudFile.id, rev.id, accessToken)
+          : await readRevisionContent(cloudFile.id, rev.id, accessToken);
+        const revPayload = await decryptBackupData(revCipher, effectiveKey);
+
+        if (revPayload && (revPayload.snapshot_id === 'snap_1790234303785_wiv4d1' || revPayload.cloud_version === 1)) {
+          v1RevisionDiagnostic.v1RevisionFound = true;
+          v1RevisionDiagnostic.v1RevisionId = rev.id;
+          v1RevisionDiagnostic.v1ModifiedTime = rev.modifiedTime;
+          v1RevisionDiagnostic.v1SnapshotId = revPayload.snapshot_id;
+          v1RevisionDiagnostic.v1CreatedAt = revPayload.created_at || revPayload.timestamp;
+          v1RevisionDiagnostic.v1CloudVersion = revPayload.cloud_version || 1;
+          v1RevisionDiagnostic.v1ParentSnapshotId = revPayload.parent_snapshot_id || null;
+
+          const v1Txns = Array.isArray(revPayload.entities?.transactions) ? revPayload.entities.transactions : [];
+          const v1Invs = Array.isArray(revPayload.entities?.investment_transactions) ? revPayload.entities.investment_transactions : [];
+          const v1Accs = Array.isArray(revPayload.entities?.accounts) ? revPayload.entities.accounts : [];
+          const v1Cats = Array.isArray(revPayload.entities?.categories) ? revPayload.entities.categories : [];
+
+          v1RevisionDiagnostic.v1TransactionCount = v1Txns.length;
+          v1RevisionDiagnostic.v1InvestmentCount = v1Invs.length;
+          v1RevisionDiagnostic.v1AccountsCount = v1Accs.length;
+          v1RevisionDiagnostic.v1CategoriesCount = v1Cats.length;
+
+          // Transaction ID reconciliation
+          const v1TxnIdSet = new Set(v1Txns.map(t => String(t.id || t.ID || t._id || t.key || '')));
+          let commonTxns = 0;
+          for (const id of rawLocalTxnIdSet) {
+            if (v1TxnIdSet.has(id)) commonTxns++;
+          }
+          v1RevisionDiagnostic.v1RawTxnComparisonWithLocal = {
+            localCount: rawLocalTxns.length,
+            v1Count: v1Txns.length,
+            commonCount: commonTxns,
+            localOnlyCount: rawLocalTxns.length - commonTxns,
+            v1OnlyCount: v1Txns.length - commonTxns
+          };
+
+          // Investment ID reconciliation
+          const v1InvIdSet = new Set(v1Invs.map(t => String(t.id || t.ID || t._id || t.key || '')));
+          let commonInvs = 0;
+          for (const id of rawLocalInvIdSet) {
+            if (v1InvIdSet.has(id)) commonInvs++;
+          }
+          v1RevisionDiagnostic.v1RawInvComparisonWithLocal = {
+            localCount: rawLocalInvs.length,
+            v1Count: v1Invs.length,
+            commonCount: commonInvs,
+            localOnlyCount: rawLocalInvs.length - commonInvs,
+            v1OnlyCount: v1Invs.length - commonInvs
+          };
+
+          // Known IDs verification
+          v1RevisionDiagnostic.v1ContainsKnownCloudTxnId = v1TxnIdSet.has('txn_1704067200000_000000');
+          v1RevisionDiagnostic.v1ContainsKnownCloudInvId = v1InvIdSet.has('inv_cloud_hist_0000');
+          v1RevisionDiagnostic.v1ContainsLocalTxnId = v1TxnIdSet.has('652866ae-d1bd-435a-88e0-1e8813f65c10');
+          v1RevisionDiagnostic.v1ContainsLocalInvId = v1InvIdSet.has('48db2ea6-629b-47bd-a6ea-de54140c9ace');
+
+          // Checksum / Integrity calculation
+          if (revPayload.checksum || revPayload.manifest_checksum) {
+            const calculatedChecksum = await sha256Hex(JSON.stringify(revPayload.entities || {}));
+            v1RevisionDiagnostic.v1IntegrityChecksumMatch = (calculatedChecksum === (revPayload.checksum || revPayload.manifest_checksum));
+          }
+          break;
+        }
+      } catch (revErr) {
+        console.warn('[V1RevisionDiagnostic] Error reading revision', rev.id, revErr);
+      }
+    }
+  } catch (err) {
+    v1RevisionDiagnostic.error = err.message;
+  }
+
+  console.log('[V1RevisionDiagnostic]', JSON.stringify(v1RevisionDiagnostic, null, 2));
 
   // Check if Local Database qualifies for Clean Bootstrap
   const isBootstrapEligible = isDatabaseBootstrapEmpty(localEntities);
@@ -1028,12 +1596,22 @@ export async function previewCloudSync({
     plannedLocalChanges: {
       inserts: plan.plannedLocalInserts.length,
       updates: plan.plannedLocalUpdates.length,
-      deletes: plan.plannedLocalDeletes.length
+      deletes: plan.plannedLocalDeletes.length,
+      settingsUpdates: Object.keys(plan.plannedLocalSettingsUpdates || {}).length,
+      total: plan.plannedLocalInserts.length + plan.plannedLocalUpdates.length + plan.plannedLocalDeletes.length + Object.keys(plan.plannedLocalSettingsUpdates || {}).length
     },
     plannedCloudChanges: {
       inserts: plan.plannedCloudInserts.length,
       updates: plan.plannedCloudUpdates.length,
-      deletes: plan.plannedCloudDeletes.length
+      deletes: plan.plannedCloudDeletes.length,
+      settingsUpdates: Object.keys(plan.plannedCloudSettingsUpdates || {}).length,
+      total: plan.plannedCloudInserts.length + plan.plannedCloudUpdates.length + plan.plannedCloudDeletes.length + Object.keys(plan.plannedCloudSettingsUpdates || {}).length
+    },
+    settingsChanges: {
+      localSettingsUpdates: plan.plannedLocalSettingsUpdates || {},
+      cloudSettingsUpdates: plan.plannedCloudSettingsUpdates || {},
+      localSettingsCount: Object.keys(plan.plannedLocalSettingsUpdates || {}).length,
+      cloudSettingsCount: Object.keys(plan.plannedCloudSettingsUpdates || {}).length
     },
     conflicts: plan.conflicts,
     safetyStatus,
@@ -1045,6 +1623,13 @@ export async function previewCloudSync({
       identityMatcherReached: plan.identityMatcherReached ?? true,
       identityMatchedTransactions: plan.identityMatchedTransactions ?? 0,
       identityMatchedInvestments: plan.identityMatchedInvestments ?? 0,
+      identityDiagnostic: plan.identityDiagnostic,
+      identityPipelineDiagnostic: plan.identityDiagnostic?.identityPipelineDiagnostic,
+      knownPairsDiagnostic: plan.identityDiagnostic?.knownPairsDiagnostic,
+      tombstoneDiagnostic: plan.identityDiagnostic?.tombstoneDiagnostic,
+      baseManifestDiagnostic: plan.identityDiagnostic?.baseManifestDiagnostic,
+      cloudPayloadDiagnostic,
+      v1RevisionDiagnostic,
       baseManifestCount: Object.keys(baseManifest || {}).length,
       plannedLocalInsertsBeforeUI: plan.plannedLocalInserts.length,
       plannedLocalInsertsDisplayed: plan.plannedLocalInserts.length,
@@ -1085,21 +1670,40 @@ export async function executeCloudSync({
     uploadAppDataFile
   };
 
+  const tStart = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  let tLocalReadMs = 0;
+  let tDriveLookupMs = 0;
+  let tDriveDownloadMs = 0;
+  let tDecryptMs = 0;
+  let tReconciliationMs = 0;
+  let tLocalDbApplyMs = 0;
+  let tSnapshotCreationMs = 0;
+  let tEncryptionMs = 0;
+  let tStaleCheckMs = 0;
+  let tUploadMs = 0;
+  let tPostVerifyMs = 0;
+  let tManifestSaveMs = 0;
+
   let retryCount = 0;
 
   while (retryCount <= maxRetries) {
     // 1. Read Local Entities
+    const tRead0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const localEntities = await readLocalEntities(db);
+    tLocalReadMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tRead0);
     const totalLocalTxns = localEntities.transactions.length + localEntities.investment_transactions.length;
 
     // 2. Read Cloud Snapshot
+    const tLookup0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const cloudFile = await transport.findAppDataFile(SNAPSHOT_FILENAME, accessToken);
+    tDriveLookupMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tLookup0);
 
     // ─────────────────────────────────────────────────────────────
     // SCENARIO A: Initial First Sync (Cloud Empty)
     // ─────────────────────────────────────────────────────────────
     if (!cloudFile) {
       const snapshotId = `snap_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const tSnap0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
       const { payload, checksum } = await createCanonicalSnapshotPayload({
         entities: localEntities,
         snapshotId,
@@ -1107,42 +1711,77 @@ export async function executeCloudSync({
         cloudVersion: 1,
         deviceId
       });
+      tSnapshotCreationMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSnap0);
 
       // Encrypt & Upload
+      const tEnc0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
       const encrypted = await encryptBackupData(payload, effectiveKey);
+      tEncryptionMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tEnc0);
+
+      const tUp0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
       const uploadRes = await transport.uploadAppDataFile(SNAPSHOT_FILENAME, encrypted, 'application/octet-stream', accessToken);
+      tUploadMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tUp0);
 
       // Post-Upload Verification
+      const tPost0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
       const readBackCipher = await transport.readAppDataFile(uploadRes.id, accessToken);
       const readBackDecrypted = await decryptBackupData(readBackCipher, effectiveKey);
       const readBackChecksum = await sha256Hex(JSON.stringify(readBackDecrypted));
+      tPostVerifyMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tPost0);
 
       if (readBackChecksum !== checksum) {
         throw new Error('Initial sync failed: Cloud verification checksum mismatch.');
       }
 
       // Save initial Base Manifest
+      const tSave0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
       const initialManifest = await buildEntityManifest(localEntities);
       await setSetting('sync_base_manifest', JSON.stringify(initialManifest));
       await setSetting('last_synced_at', new Date().toISOString());
       await setSetting('last_snapshot_id', snapshotId);
+      tManifestSaveMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSave0);
+
+      const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
 
       return {
         status: SYNC_STATUS.SUCCESS,
+        operation: 'SYNC',
         isFirstSync: true,
+        cloudWritePerformed: true,
         snapshotId,
         cloudVersion: 1,
         localChangesApplied: 0,
         cloudChangesUploaded: totalLocalTxns,
-        conflicts: []
+        conflicts: [],
+        diagnostics: {
+          localDbReadMs: tLocalReadMs,
+          driveLookupMs: tDriveLookupMs,
+          driveDownloadMs: 0,
+          decryptionMs: 0,
+          reconciliationMs: 0,
+          localDbApplyMs: 0,
+          snapshotCreationMs: tSnapshotCreationMs,
+          encryptionMs: tEncryptionMs,
+          staleCheckMs: 0,
+          uploadMs: tUploadMs,
+          postVerifyMs: tPostVerifyMs,
+          manifestSaveMs: tManifestSaveMs,
+          totalMs: Math.round(tTotal)
+        }
       };
     }
 
     // ─────────────────────────────────────────────────────────────
     // SCENARIO B: Existing Cloud Snapshot (3-Way Merge)
     // ─────────────────────────────────────────────────────────────
+    const tDown0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const readSnapshotCipher = await transport.readAppDataFile(cloudFile.id, accessToken);
+    tDriveDownloadMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tDown0);
+
+    const tDec0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const cloudPayload = await decryptBackupData(readSnapshotCipher, effectiveKey);
+    tDecryptMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tDec0);
+
     const readSnapshotId = cloudPayload.snapshot_id;
     const readCloudVersion = cloudPayload.cloud_version || 1;
 
@@ -1175,22 +1814,42 @@ export async function executeCloudSync({
     const cloudCanonicalChecksum = await sha256Hex(JSON.stringify(cloudPayload.entities));
 
     if (localCanonicalChecksum === cloudCanonicalChecksum && planIsNoOp(baseManifest, localEntities)) {
+      const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
       return {
         status: SYNC_STATUS.NO_CHANGES,
+        operation: 'NO_OP',
+        cloudWritePerformed: false,
         snapshotId: readSnapshotId,
         cloudVersion: readCloudVersion,
         localChangesApplied: 0,
         cloudChangesUploaded: 0,
-        conflicts: []
+        conflicts: [],
+        diagnostics: {
+          localDbReadMs: tLocalReadMs,
+          driveLookupMs: tDriveLookupMs,
+          driveDownloadMs: tDriveDownloadMs,
+          decryptionMs: tDecryptMs,
+          reconciliationMs: 0,
+          localDbApplyMs: 0,
+          snapshotCreationMs: 0,
+          encryptionMs: 0,
+          staleCheckMs: 0,
+          uploadMs: 0,
+          postVerifyMs: 0,
+          manifestSaveMs: 0,
+          totalMs: Math.round(tTotal)
+        }
       };
     }
 
     // Compute 3-Way Reconciliation Plan
+    const tRec0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const plan = await reconcile3Way({
       baseManifest,
       localEntities,
       cloudEntities: cloudPayload.entities || {}
     });
+    tReconciliationMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tRec0);
 
     // Mass-Deletion Guardrail Check
     const proposedDeletesCount = plan.plannedLocalDeletes.length;
@@ -1198,45 +1857,80 @@ export async function executeCloudSync({
        (totalLocalTxns > 50 && proposedDeletesCount > totalLocalTxns * DELETION_SAFETY_LIMIT_PERCENT)) {
       return {
         status: SYNC_STATUS.SAFETY_ABORT_MASS_DELETION,
+        operation: 'SAFETY_ABORT',
+        cloudWritePerformed: false,
         error: `Safety guardrail triggered: Proposed deletion of ${proposedDeletesCount} records exceeds safety threshold. Aborted.`,
         plannedDeletes: plan.plannedLocalDeletes
       };
     }
 
-    // Apply Staged Local Changes Atomically
+    const localChangesCount = plan.plannedLocalInserts.length + plan.plannedLocalUpdates.length + plan.plannedLocalDeletes.length;
+    const localSettingsChangesCount = (plan.plannedLocalSettingsUpdates && Object.keys(plan.plannedLocalSettingsUpdates).length > 0) ? Object.keys(plan.plannedLocalSettingsUpdates).length : 0;
+    const totalLocalChanges = localChangesCount + localSettingsChangesCount;
+
+    const cloudChangesCount = plan.plannedCloudInserts.length + plan.plannedCloudUpdates.length + plan.plannedCloudDeletes.length;
+    const cloudSettingsChangesCount = (plan.plannedCloudSettingsUpdates && Object.keys(plan.plannedCloudSettingsUpdates).length > 0) ? Object.keys(plan.plannedCloudSettingsUpdates).length : 0;
+    const totalCloudChanges = cloudChangesCount + cloudSettingsChangesCount;
+
+    // ─────────────────────────────────────────────────────────────
+    // CASE 1: TRUE NO-OP (0 Local Changes, 0 Cloud Changes, 0 Conflicts)
+    // ─────────────────────────────────────────────────────────────
+    if (totalLocalChanges === 0 && totalCloudChanges === 0 && plan.conflicts.length === 0) {
+      const tSave0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      const currentManifest = await buildEntityManifest(localEntities);
+      await setSetting('sync_base_manifest', JSON.stringify(currentManifest));
+      await setSetting('last_synced_at', new Date().toISOString());
+      await setSetting('last_snapshot_id', readSnapshotId);
+      tManifestSaveMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSave0);
+
+      const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
+
+      return {
+        status: SYNC_STATUS.NO_CHANGES,
+        operation: 'NO_OP',
+        cloudWritePerformed: false,
+        snapshotId: readSnapshotId,
+        cloudVersion: readCloudVersion,
+        localChangesApplied: 0,
+        cloudChangesUploaded: 0,
+        conflicts: [],
+        diagnostics: {
+          localDbReadMs: tLocalReadMs,
+          driveLookupMs: tDriveLookupMs,
+          driveDownloadMs: tDriveDownloadMs,
+          decryptionMs: tDecryptMs,
+          reconciliationMs: tReconciliationMs,
+          localDbApplyMs: 0,
+          snapshotCreationMs: 0,
+          encryptionMs: 0,
+          staleCheckMs: 0,
+          uploadMs: 0,
+          postVerifyMs: 0,
+          manifestSaveMs: tManifestSaveMs,
+          totalMs: Math.round(tTotal)
+        }
+      };
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Apply Staged Local Changes Generic & Atomically
+    // ─────────────────────────────────────────────────────────────
+    const tApply0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
     if (plan.plannedLocalInserts.length > 0 || plan.plannedLocalUpdates.length > 0 || plan.plannedLocalDeletes.length > 0) {
-      // Inserts
-      const txnsToInsert = plan.plannedLocalInserts.filter(x => x.Date || x.date);
-      if (txnsToInsert.length > 0) {
-        await bulkImport(txnsToInsert, { firstImport: false });
+      // 1. Apply Inserts across all collections
+      for (const ins of plan.plannedLocalInserts) {
+        await applyLocalEntityInsertOrUpdate(db, ins, ins._collection || ins.type);
       }
 
-      // Updates
+      // 2. Apply Updates across all collections
       for (const upd of plan.plannedLocalUpdates) {
-        const id = upd.id || upd.ID || upd._id;
-        if (id) {
-          await db.run('DELETE FROM transactions WHERE id=?', [id]).catch(() => {});
-          await db.run('DELETE FROM investment_transactions WHERE id=?', [id]).catch(() => {});
-          if (upd.Date || upd.date) {
-            await bulkImport([upd], { firstImport: false });
-          }
-        }
+        await applyLocalEntityInsertOrUpdate(db, upd, upd._collection || upd.type);
       }
 
-      // Deletes
+      // 3. Apply Deletes across all collections
       for (const del of plan.plannedLocalDeletes) {
-        if (del.type === 'transaction' || del.type === 'transactions' || del.type === 'investment_transaction' || del.type === 'investment_transactions') {
-          await db.run('DELETE FROM transactions WHERE id=?', [del.id]).catch(() => {});
-          await db.run('DELETE FROM investment_transactions WHERE id=?', [del.id]).catch(() => {});
-        } else if (del.type === 'inventory') {
-          await db.run('DELETE FROM inventory WHERE id=?', [del.id]).catch(() => {});
-        } else if (del.type === 'investment_plans') {
-          await db.run('DELETE FROM investment_plans WHERE id=?', [del.id]).catch(() => {});
-        } else if (del.type === 'accounts') {
-          await db.run('DELETE FROM accounts WHERE id=?', [del.id]).catch(() => {});
-        } else if (del.type === 'categories') {
-          await db.run('DELETE FROM categories WHERE id=?', [del.id]).catch(() => {});
-        }
+        await applyLocalEntityDelete(db, del);
       }
     }
 
@@ -1252,11 +1946,57 @@ export async function executeCloudSync({
       }
     }
 
-    // Prepare Merged Cloud Snapshot Payload
+    tLocalDbApplyMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tApply0);
+
+    // ─────────────────────────────────────────────────────────────
+    // CASE 2: PULL ONLY (Local changes applied, 0 Cloud Changes to upload)
+    // ─────────────────────────────────────────────────────────────
+    if (totalCloudChanges === 0) {
+      const tSave0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      const updatedLocalEntities = await readLocalEntities(db);
+      const updatedBaseManifest = await buildEntityManifest(updatedLocalEntities);
+      await setSetting('sync_base_manifest', JSON.stringify(updatedBaseManifest));
+      await setSetting('last_synced_at', new Date().toISOString());
+      await setSetting('last_snapshot_id', readSnapshotId);
+      tManifestSaveMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSave0);
+
+      const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
+
+      return {
+        status: plan.conflicts.length > 0 ? SYNC_STATUS.CONFLICTS_DETECTED : SYNC_STATUS.SUCCESS,
+        operation: 'SYNC',
+        cloudWritePerformed: false,
+        snapshotId: readSnapshotId,
+        cloudVersion: readCloudVersion,
+        localChangesApplied: totalLocalChanges,
+        cloudChangesUploaded: 0,
+        conflicts: plan.conflicts,
+        diagnostics: {
+          localDbReadMs: tLocalReadMs,
+          driveLookupMs: tDriveLookupMs,
+          driveDownloadMs: tDriveDownloadMs,
+          decryptionMs: tDecryptMs,
+          reconciliationMs: tReconciliationMs,
+          localDbApplyMs: tLocalDbApplyMs,
+          snapshotCreationMs: 0,
+          encryptionMs: 0,
+          staleCheckMs: 0,
+          uploadMs: 0,
+          postVerifyMs: 0,
+          manifestSaveMs: tManifestSaveMs,
+          totalMs: Math.round(tTotal)
+        }
+      };
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // CASE 3: PUSH / BIDIRECTIONAL (Cloud changes to upload > 0)
+    // ─────────────────────────────────────────────────────────────
     const updatedLocalEntities = await readLocalEntities(db);
     const newSnapshotId = `snap_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const newCloudVersion = readCloudVersion + 1;
 
+    const tSnap0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const { payload: mergedCloudPayload, checksum: mergedChecksum } = await createCanonicalSnapshotPayload({
       entities: updatedLocalEntities,
       snapshotId: newSnapshotId,
@@ -1264,26 +2004,41 @@ export async function executeCloudSync({
       cloudVersion: newCloudVersion,
       deviceId
     });
+    tSnapshotCreationMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSnap0);
 
     // ─────────────────────────────────────────────────────────────
-    // CONCURRENCY CHECK BEFORE UPLOAD
+    // CONCURRENCY CHECK BEFORE UPLOAD (Stale Cloud Head Guard)
     // ─────────────────────────────────────────────────────────────
+    const tStale0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const currentCloudCheck = await transport.findAppDataFile(SNAPSHOT_FILENAME, accessToken);
-    if (currentCloudCheck && currentCloudCheck.version && cloudFile.version && currentCloudCheck.version !== cloudFile.version) {
-      // Cloud changed in interim -> Retry
+    tStaleCheckMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tStale0);
+
+    if (currentCloudCheck && (
+      (currentCloudCheck.version && cloudFile.version && currentCloudCheck.version !== cloudFile.version) ||
+      (currentCloudCheck.modifiedTime && cloudFile.modifiedTime && currentCloudCheck.modifiedTime !== cloudFile.modifiedTime) ||
+      (currentCloudCheck.id && cloudFile.id && currentCloudCheck.id !== cloudFile.id)
+    )) {
+      // Cloud head changed concurrently -> Retry re-reconciliation against fresh head
       retryCount++;
       continue;
     }
 
     // Upload New Snapshot
+    const tEnc0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const encryptedMerged = await encryptBackupData(mergedCloudPayload, effectiveKey);
+    tEncryptionMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tEnc0);
+
+    const tUp0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const uploadedFileRes = await transport.uploadAppDataFile(SNAPSHOT_FILENAME, encryptedMerged, 'application/octet-stream', accessToken);
+    tUploadMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tUp0);
 
     // ─────────────────────────────────────────────────────────────
     // POST-UPLOAD VERIFICATION (Detect race overwrites)
     // ─────────────────────────────────────────────────────────────
+    const tPost0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const postVerifyCipher = await transport.readAppDataFile(uploadedFileRes.id, accessToken);
     const postVerifyDecrypted = await decryptBackupData(postVerifyCipher, effectiveKey);
+    tPostVerifyMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tPost0);
 
     if (postVerifyDecrypted.snapshot_id !== newSnapshotId) {
       // Another client raced in and overwrote -> Retry re-merge
@@ -1292,18 +2047,39 @@ export async function executeCloudSync({
     }
 
     // Save Updated Base Manifest
+    const tSave0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const newBaseManifest = await buildEntityManifest(updatedLocalEntities);
     await setSetting('sync_base_manifest', JSON.stringify(newBaseManifest));
     await setSetting('last_synced_at', new Date().toISOString());
     await setSetting('last_snapshot_id', newSnapshotId);
+    tManifestSaveMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSave0);
+
+    const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
 
     return {
       status: plan.conflicts.length > 0 ? SYNC_STATUS.CONFLICTS_DETECTED : SYNC_STATUS.SUCCESS,
+      operation: 'SYNC',
+      cloudWritePerformed: true,
       snapshotId: newSnapshotId,
       cloudVersion: newCloudVersion,
-      localChangesApplied: plan.plannedLocalInserts.length + plan.plannedLocalUpdates.length + plan.plannedLocalDeletes.length,
-      cloudChangesUploaded: plan.plannedCloudInserts.length + plan.plannedCloudUpdates.length + plan.plannedCloudDeletes.length,
-      conflicts: plan.conflicts
+      localChangesApplied: totalLocalChanges,
+      cloudChangesUploaded: totalCloudChanges,
+      conflicts: plan.conflicts,
+      diagnostics: {
+        localDbReadMs: tLocalReadMs,
+        driveLookupMs: tDriveLookupMs,
+        driveDownloadMs: tDriveDownloadMs,
+        decryptionMs: tDecryptMs,
+        reconciliationMs: tReconciliationMs,
+        localDbApplyMs: tLocalDbApplyMs,
+        snapshotCreationMs: tSnapshotCreationMs,
+        encryptionMs: tEncryptionMs,
+        staleCheckMs: tStaleCheckMs,
+        uploadMs: tUploadMs,
+        postVerifyMs: tPostVerifyMs,
+        manifestSaveMs: tManifestSaveMs,
+        totalMs: Math.round(tTotal)
+      }
     };
   }
 
@@ -1453,6 +2229,201 @@ export function invTxnObjectToDBRow(t) {
     segment: String(t.Segment || t.segment || ''),
     source: String(t.Source || t.source || '')
   };
+}
+
+/**
+ * Apply insert or update for any entity into the local database
+ */
+export async function applyLocalEntityInsertOrUpdate(db, item, collectionType = null) {
+  if (!item || typeof item !== 'object') return;
+  const collection = collectionType || item._collection || item.collection || item.type;
+
+  if (collection === 'transactions' || collection === 'transaction') {
+    const row = txnObjectToDBRow(item);
+    await db.run(
+      `INSERT OR REPLACE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [row.id, row.date, row.time, row.account, row.from_account, row.to_account,
+       row.category, row.subcategory, row.note, row.description,
+       row.inr, row.amount, row.currency, row.type,
+       row.created_at, row.updated_at, row.recurring_rule_id,
+       row.tags, row.split_group_id, row.receipt_image, row.warranty_expiry, row.serial_no,
+       row.sub_account, row.from_sub_account, row.to_sub_account,
+       row.investment_account, row.actual_amount, row.total_charges,
+       row.brokerage_charges, row.exchange_charges, row.stt_charges, row.sebi_charges,
+       row.stamp_duty_charges, row.gst_charges, row.dp_charges, row.other_charges,
+       row.security_display_name, row.settlement_mode]
+    );
+    return;
+  }
+
+  if (collection === 'investment_transactions' || collection === 'investment_transaction') {
+    const row = invTxnObjectToDBRow(item);
+    await db.run(
+      `INSERT OR REPLACE INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [row.id, row.date, row.time, row.account, row.from_account, row.to_account,
+       row.category, row.subcategory, row.note, row.description,
+       row.inr, row.amount, row.currency, row.type,
+       row.created_at, row.updated_at, row.recurring_rule_id,
+       row.tags, row.split_group_id, row.receipt_image, row.warranty_expiry, row.serial_no,
+       row.sub_account, row.from_sub_account, row.to_sub_account,
+       row.investment_account, row.actual_amount, row.total_charges,
+       row.brokerage_charges, row.exchange_charges, row.stt_charges, row.sebi_charges,
+       row.stamp_duty_charges, row.gst_charges, row.dp_charges, row.other_charges,
+       row.security_display_name, row.settlement_mode,
+       row.investment_transaction_type, row.brokerage, row.security_symbol, row.security_isin,
+       row.quantity, row.unit_price, row.trade_value, row.cost_basis, row.cash_impact,
+       row.position_qty_change, row.realized_pnl, row.trade_id, row.order_id,
+       row.exchange, row.segment, row.source]
+    );
+    return;
+  }
+
+  if (collection === 'accounts' || collection === 'account') {
+    const a = item;
+    await db.run(
+      `INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days,is_asset,card_last4) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [a.id || a.name, a.name, a.group_name || a.group || '', a.sort_order || a.sortOrder || 0, a.created_at || new Date().toISOString(), a.acct_type || a.acctType || '', a.settlement_date || a.settlementDate || 0, a.payment_due_days || a.paymentDueDays || 0, a.is_asset !== undefined ? (a.is_asset ? 1 : 0) : (a.isAsset !== undefined ? (a.isAsset ? 1 : 0) : 1), a.card_last4 || a.cardLast4 || '']
+    );
+    return;
+  }
+
+  if (collection === 'account_groups' || collection === 'account_group') {
+    const g = item;
+    await db.run(`INSERT OR REPLACE INTO account_groups (id,name,sort_order) VALUES (?,?,?)`, [g.id || g.name, g.name, g.sort_order || g.sortOrder || 0]);
+    return;
+  }
+
+  if (collection === 'categories' || collection === 'category') {
+    const c = item;
+    await db.run(`INSERT OR REPLACE INTO categories (id,name,type,sort_order) VALUES (?,?,?,?)`, [c.id || c.name, c.name, c.type || 'Expense', c.sort_order || c.sortOrder || 0]);
+    return;
+  }
+
+  if (collection === 'subcategories' || collection === 'subcategory') {
+    const sc = item;
+    await db.run(`INSERT OR REPLACE INTO subcategories (id,name,category_id,sort_order) VALUES (?,?,?,?)`, [sc.id || sc.name, sc.name, sc.category_id || sc.categoryId || '', sc.sort_order || sc.sortOrder || 0]);
+    return;
+  }
+
+  if (collection === 'sub_accounts' || collection === 'sub_account') {
+    const sa = item;
+    await db.run(`INSERT OR REPLACE INTO sub_accounts (id,name,account_id,sort_order) VALUES (?,?,?,?)`, [sa.id || sa.name, sa.name, sa.account_id || sa.accountId || '', sa.sort_order || sa.sortOrder || 0]);
+    return;
+  }
+
+  if (collection === 'budgets' || collection === 'budget') {
+    const b = item;
+    await db.run(`INSERT OR REPLACE INTO budgets (id,category,amount,period,created_at) VALUES (?,?,?,?,?)`, [b.id, b.category, b.amount, b.period || 'Monthly', b.created_at || new Date().toISOString()]);
+    return;
+  }
+
+  if (collection === 'recurring_rules' || collection === 'recurring_rule') {
+    const r = item;
+    await db.run(
+      `INSERT OR REPLACE INTO recurring_rules (id,rule_type,status,txn_type,account,from_account,to_account,category,subcategory,base_note,description,currency,total_amount,amount_per_part,total_days,total_parts,completed_parts,start_date,next_date,end_date,schedule_mode,frequency,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [r.id, r.rule_type || 'regular', r.status || 'active', r.txn_type || 'Expense', r.account || '', r.from_account || '', r.to_account || '', r.category || '', r.subcategory || '', r.base_note || '', r.description || '', r.currency || 'INR', r.total_amount || 0, r.amount_per_part || 0, r.total_days || 0, r.total_parts || 0, r.completed_parts || 0, r.start_date || '', r.next_date || '', r.end_date || '', r.schedule_mode || 'on_date', r.frequency || '', r.created_at || new Date().toISOString()]
+    );
+    return;
+  }
+
+  if (collection === 'inventory') {
+    const inv = item;
+    await db.run(
+      `INSERT OR REPLACE INTO inventory (id,name,qty,unit,price,discounted_price,status,purchased_date,notes,updated_at,sub_qty,sub_unit,original_qty,pack_qty,discount_type,discount_value,category,brand) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [inv.id, inv.name, inv.qty || 0, inv.unit || '', inv.price || 0, inv.discounted_price || 0, inv.status || 'available', inv.purchased_date || '', inv.notes || '', inv.updated_at || new Date().toISOString(), inv.sub_qty || 1, inv.sub_unit || '', inv.original_qty || 0, inv.pack_qty || 1, inv.discount_type || 'percentage', inv.discount_value || 0, inv.category || '', inv.brand || '']
+    );
+    return;
+  }
+
+  if (collection === 'investment_plans' || collection === 'investment_plan') {
+    const p = item;
+    await db.run(`INSERT OR REPLACE INTO investment_plans (id,name,target_amount,current_value,frequency) VALUES (?,?,?,?,?)`, [p.id, p.name, p.target_amount || 0, p.current_value || 0, p.frequency || 'Monthly']);
+    return;
+  }
+
+  if (collection === 'account_mapping') {
+    const am = item;
+    await db.run(`INSERT OR REPLACE INTO account_mapping (id,source_name,account_name) VALUES (?,?,?)`, [am.id, am.source_name, am.account_name]);
+    return;
+  }
+
+  if (collection === 'brokerages' || collection === 'brokerage') {
+    const brk = item;
+    await db.run(`INSERT OR REPLACE INTO brokerages (id,name,bank_account,owner) VALUES (?,?,?,?)`, [brk.id || brk.name, brk.name, brk.bank_account || '', brk.owner || '']);
+    return;
+  }
+
+  // Fallback if collection was not explicitly set: Infer from shape
+  if (item.InvestmentTransactionType || item.investment_transaction_type || item.SecuritySymbol) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'investment_transactions');
+  } else if (item.Date || item.date || item.Amount !== undefined || item.inr !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'transactions');
+  } else if (item.acct_type !== undefined || item.is_asset !== undefined || item.settlement_date !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'accounts');
+  } else if (item.group_name !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'account_groups');
+  } else if (item.subcategories !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'categories');
+  } else if (item.category_id !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'subcategories');
+  } else if (item.account_id !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'sub_accounts');
+  } else if (item.rule_type !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'recurring_rules');
+  } else if (item.target_amount !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'investment_plans');
+  } else if (item.source_name !== undefined && item.account_name !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'account_mapping');
+  } else if (item.bank_account !== undefined || item.owner !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'brokerages');
+  } else if (item.unit !== undefined || item.discounted_price !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'inventory');
+  } else if (item.period !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'budgets');
+  } else {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'transactions');
+  }
+}
+
+/**
+ * Apply deletion for any entity from the local database
+ */
+export async function applyLocalEntityDelete(db, del) {
+  if (!del) return;
+  const id = typeof del === 'string' ? del : del.id;
+  const collection = typeof del === 'object' ? (del.type || del._collection) : null;
+
+  if (collection === 'transactions' || collection === 'transaction') {
+    await db.run('DELETE FROM transactions WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'investment_transactions' || collection === 'investment_transaction') {
+    await db.run('DELETE FROM investment_transactions WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'accounts' || collection === 'account') {
+    await db.run('DELETE FROM accounts WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'account_groups' || collection === 'account_group') {
+    await db.run('DELETE FROM account_groups WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'categories' || collection === 'category') {
+    await db.run('DELETE FROM categories WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'subcategories' || collection === 'subcategory') {
+    await db.run('DELETE FROM subcategories WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'sub_accounts' || collection === 'sub_account') {
+    await db.run('DELETE FROM sub_accounts WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'budgets' || collection === 'budget') {
+    await db.run('DELETE FROM budgets WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'recurring_rules' || collection === 'recurring_rule') {
+    await db.run('DELETE FROM recurring_rules WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'inventory') {
+    await db.run('DELETE FROM inventory WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'investment_plans' || collection === 'investment_plan') {
+    await db.run('DELETE FROM investment_plans WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'account_mapping') {
+    await db.run('DELETE FROM account_mapping WHERE id=?', [id]).catch(() => {});
+  } else if (collection === 'brokerages' || collection === 'brokerage') {
+    await db.run('DELETE FROM brokerages WHERE id=?', [id]).catch(() => {});
+  } else {
+    // Delete fallback
+    await db.run('DELETE FROM transactions WHERE id=?', [id]).catch(() => {});
+    await db.run('DELETE FROM investment_transactions WHERE id=?', [id]).catch(() => {});
+  }
 }
 
 /**
@@ -1650,6 +2621,7 @@ export async function executeBootstrap({
   if (!isDatabaseBootstrapEmpty(localEntities)) {
     return {
       status: BOOTSTRAP_STATUS.EXISTING_LOCAL_DATA_REQUIRES_MERGE,
+      operation: 'BOOTSTRAP',
       error: 'Local database contains existing financial records and cannot be bootstrapped over. Please use standard 3-way sync merge.'
     };
   }
@@ -1705,6 +2677,7 @@ export async function executeBootstrap({
 
   return {
     status: BOOTSTRAP_STATUS.SUCCESS,
+    operation: 'BOOTSTRAP',
     snapshotId: cloudPayload.snapshot_id,
     cloudVersion: cloudPayload.cloud_version || 1,
     recordsBootstrapped: {
