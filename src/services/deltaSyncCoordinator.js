@@ -160,8 +160,8 @@ export function initializeDeltaSyncRuntime() {
   configureDeltaSyncEngine({
     getAccessToken: async () => {
       try {
-        const { getStoredToken } = await import('./googleAuth.js');
-        return getStoredToken();
+        const { getValidAccessToken } = await import('./googleAuth.js');
+        return getValidAccessToken(false);
       } catch {
         return null;
       }
