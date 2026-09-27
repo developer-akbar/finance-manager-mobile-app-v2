@@ -191,7 +191,7 @@ async function runTestSuite() {
 
   // Open another higher version connection — conn1 should auto-close via its onversionchange handler
   await new Promise((resolve, reject) => {
-    const req = globalThis.indexedDB.open('finman_v2', 14);
+    const req = globalThis.indexedDB.open('finman_v2', 99);
     req.onsuccess = (e) => {
       e.target.result.close();
       resolve();

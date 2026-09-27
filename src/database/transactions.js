@@ -1,6 +1,7 @@
 import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
 import { recordTombstone, recordTombstonesBatch } from './tombstones.js';
+import { executeAtomicMutation, executeAtomicBatch } from './atomicMutation.js';
 
 export const rowToTxn = (r) => {
   const base = {
@@ -173,12 +174,13 @@ export const getTransactions = async (filters = {}) => {
 };
 
 export const addTransaction = async (data) => {
-  const db  = getDB();
   const id  = data.id || data.ID || data._id || uuid();
   const now = new Date().toISOString();
   
   const isInv = !!(data.InvestmentTransactionType || data.Brokerage);
+  const storeName = isInv ? 'investment_transactions' : 'transactions';
   
+  let rowObj;
   if (isInv) {
     const invAcct = data.InvestmentAccount || data.investment_account || data.Category || '';
     const actualAmt = parseFloat(data.ActualAmount !== undefined && data.ActualAmount !== '' ? data.ActualAmount : (data.actual_amount !== undefined && data.actual_amount !== '' ? data.actual_amount : 0)) || 0;
@@ -194,68 +196,114 @@ export const addTransaction = async (data) => {
     const secDispName = String(data.SecurityDisplayName || data.security_display_name || data.Note || data.note || '');
     const setMode = String(data.SettlementMode || data.settlement_mode || 'ACTUAL').toUpperCase();
 
-    await db.run(
-      `INSERT OR IGNORE INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, data.Date||'', data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
-       data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
-       parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
-       data.Currency||'INR', data['Income/Expense']||'Expense', now, now,
-       data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'',
-       data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'',
-       data.SubAccount||data.sub_account||'',
-       data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
-       data.ToSubAccount||data.to_sub_account||'',
-       data.InvestmentTransactionType||'', data.Brokerage||'', data.SecuritySymbol||'', data.SecurityISIN||'',
-       parseFloat(data.Quantity||0), parseFloat(data.UnitPrice||0), parseFloat(data.TradeValue||0),
-       parseFloat(data.CostBasis||0), parseFloat(data.CashImpact||0), parseFloat(data.PositionQuantityChange||0),
-       parseFloat(data.RealizedPnl||0), data.TradeId||'', data.OrderId||'', data.Exchange||'', data.Segment||'', data.Source||'',
-       invAcct, actualAmt, totCharges, brokCharges, exCharges, sttCh, sebiCh, stampCh, gstCh, dpCh, otherCh, secDispName, setMode]
-    );
-    return rowToTxn({
-      id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'',
-      category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'',
-      inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR',
-      type:data['Income/Expense']||'Expense', created_at:now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'',
+    const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : 0)))) || 0;
+    const amtStr = String(data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : '0'))));
+    const typeVal = data['Income/Expense'] || data.type || (data.Type || 'Expense');
+
+    rowObj = {
+      id, date:data.Date||data.date||'', time:data.Time||data.time||'', account:data.Account||data.account||'', from_account:data.FromAccount||data.from_account||'', to_account:data.ToAccount||data.to_account||'',
+      category:data.Category||data.category||'', subcategory:data.Subcategory||data.subcategory||'', note:data.Note||data.note||'', description:data.Description||data.description||'',
+      inr:inrVal, amount:amtStr, currency:data.Currency||data.currency||'INR',
+      type:typeVal, created_at:data.created_at||now, updated_at:data.updated_at||now, recurring_rule_id:data.recurring_rule_id||'',
       tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'',
       receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||'',
       sub_account:data.SubAccount||data.sub_account||'',
       from_sub_account:data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
       to_sub_account:data.ToSubAccount||data.to_sub_account||'',
-      investment_transaction_type:data.InvestmentTransactionType||'', brokerage:data.Brokerage||'', security_symbol:data.SecuritySymbol||'', security_isin:data.SecurityISIN||'',
-      quantity:parseFloat(data.Quantity||0), unit_price:parseFloat(data.UnitPrice||0), trade_value:parseFloat(data.TradeValue||0),
-      cost_basis:parseFloat(data.CostBasis||0), cash_impact:parseFloat(data.CashImpact||0), position_qty_change:parseFloat(data.PositionQuantityChange||0),
-      realized_pnl:parseFloat(data.RealizedPnl||0), trade_id:data.TradeId||'', order_id:data.OrderId||'', exchange:data.Exchange||'', segment:data.Segment||'', source:data.Source||'',
+      investment_transaction_type:data.InvestmentTransactionType||data.investment_transaction_type||'', brokerage:data.Brokerage||data.brokerage||'', security_symbol:data.SecuritySymbol||data.security_symbol||'', security_isin:data.SecurityISIN||data.security_isin||'',
+      quantity:parseFloat(data.Quantity||data.quantity||0), unit_price:parseFloat(data.UnitPrice||data.unit_price||0), trade_value:parseFloat(data.TradeValue||data.trade_value||0),
+      cost_basis:parseFloat(data.CostBasis||data.cost_basis||0), cash_impact:parseFloat(data.CashImpact||data.cash_impact||0), position_qty_change:parseFloat(data.PositionQuantityChange||data.position_qty_change||0),
+      realized_pnl:parseFloat(data.RealizedPnl||data.realized_pnl||0), trade_id:data.TradeId||data.trade_id||'', order_id:data.OrderId||data.order_id||'', exchange:data.Exchange||data.exchange||'', segment:data.Segment||data.segment||'', source:data.Source||data.source||'',
       investment_account:invAcct,
       actual_amount:actualAmt, total_charges:totCharges, brokerage_charges:brokCharges, exchange_charges:exCharges,
       stt_charges:sttCh, sebi_charges:sebiCh, stamp_duty_charges:stampCh, gst_charges:gstCh, dp_charges:dpCh, other_charges:otherCh,
       security_display_name:secDispName,
       settlement_mode:setMode
-    });
+    };
   } else {
-    await db.run(
-      `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, data.Date||'', data.Time||'', data.Account||'', data.FromAccount||'', data.ToAccount||'',
-       data.Category||'', data.Subcategory||'', data.Note||'', data.Description||'',
-       parseFloat(data.INR||data.Amount||0), String(data.Amount||data.INR||'0'),
-       data.Currency||'INR', data['Income/Expense']||'Expense', now, now,
-       data.recurring_rule_id||'', data.Tags||data.tags||'', data.split_group_id||'',
-       data.receipt_image||'', data.warranty_expiry||'', data.serial_no||'',
-       data.SubAccount||data.sub_account||'',
-       data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
-       data.ToSubAccount||data.to_sub_account||'']
-    );
-    return rowToTxn({
-      id, date:data.Date||'', time:data.Time||'', account:data.Account||'', from_account:data.FromAccount||'', to_account:data.ToAccount||'',
-      category:data.Category||'', subcategory:data.Subcategory||'', note:data.Note||'', description:data.Description||'',
-      inr:parseFloat(data.INR||data.Amount||0), amount:String(data.Amount||data.INR||'0'), currency:data.Currency||'INR',
-      type:data['Income/Expense']||'Expense', created_at:now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'',
+    const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : 0)))) || 0;
+    const amtStr = String(data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : '0'))));
+    const typeVal = data['Income/Expense'] || data.type || (data.Type || 'Expense');
+
+    rowObj = {
+      id, date:data.Date||data.date||'', time:data.Time||data.time||'', account:data.Account||data.account||'', from_account:data.FromAccount||data.from_account||'', to_account:data.ToAccount||data.to_account||'',
+      category:data.Category||data.category||'', subcategory:data.Subcategory||data.subcategory||'', note:data.Note||data.note||'', description:data.Description||data.description||'',
+      inr:inrVal, amount:amtStr, currency:data.Currency||data.currency||'INR',
+      type:typeVal, created_at:data.created_at||now, updated_at:data.updated_at||now, recurring_rule_id:data.recurring_rule_id||'',
       tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'',
       receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||'',
       sub_account:data.SubAccount||data.sub_account||'',
       from_sub_account:data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
       to_sub_account:data.ToSubAccount||data.to_sub_account||''
+    };
+  }
+
+  const companionCharges = Array.isArray(data.companion_charges) ? data.companion_charges : (Array.isArray(data.charges) ? data.charges : []);
+  let stockOps = [];
+  if (rowObj.tags && rowObj.tags.includes('#stock_ref_')) {
+    stockOps = await computeStockOperationsOnTxnChange(null, rowObj);
+  }
+
+  const allOps = [
+    {
+      storeName,
+      id,
+      operation: 'INSERT',
+      entity: rowObj
+    }
+  ];
+
+  for (let i = 0; i < companionCharges.length; i++) {
+    const ch = companionCharges[i];
+    const chId = ch.id || ch.ID || `charge_${id}_${i + 1}`;
+    const chRow = {
+      id: chId,
+      date: ch.date || data.Date || data.date || '',
+      time: ch.time || data.Time || data.time || '',
+      account: ch.account || data.Account || data.account || '',
+      category: ch.category || 'Charges',
+      subcategory: ch.subcategory || '',
+      note: ch.note || ch.notes || `Companion charge for ${id}`,
+      description: ch.description || '',
+      inr: parseFloat(ch.inr || ch.amount || 0),
+      amount: String(ch.amount || ch.inr || '0'),
+      currency: ch.currency || 'INR',
+      type: 'Expense',
+      created_at: now,
+      updated_at: now,
+      split_group_id: `inv_charge_${id}`
+    };
+    allOps.push({
+      storeName: 'transactions',
+      id: chId,
+      operation: 'INSERT',
+      entity: chRow
     });
   }
+
+  for (const sOp of stockOps) {
+    allOps.push(sOp);
+  }
+
+  if (allOps.length > 1) {
+    const bundleId = id;
+    const bundleTotal = allOps.length;
+    for (let i = 0; i < allOps.length; i++) {
+      allOps[i].bundle_id = bundleId;
+      allOps[i].bundle_index = i;
+      allOps[i].bundle_total = bundleTotal;
+    }
+    await executeAtomicBatch({ operations: allOps, bundleId });
+  } else {
+    await executeAtomicMutation({
+      storeName,
+      entityId: id,
+      operation: 'INSERT',
+      entityData: rowObj
+    });
+  }
+
+  return rowToTxn(rowObj);
 };
 
 const parseDescriptionStockInfo = (description) => {
@@ -289,7 +337,7 @@ const parseDescriptionStockInfo = (description) => {
   return { type, qty, unit };
 };
 
-const syncStockOnTxnChange = async (oldTxn, newTxn) => {
+const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
   const parseStockRefs = (tagsStr) => {
     return (tagsStr || '').split(' ').filter(t => t.startsWith('#stock_ref_')).map(tag => {
       const content = tag.replace('#stock_ref_', '');
@@ -301,23 +349,43 @@ const syncStockOnTxnChange = async (oldTxn, newTxn) => {
     });
   };
 
-  const oldRefs = parseStockRefs(oldTxn.tags || oldTxn.Tags);
-  const newRefs = parseStockRefs(newTxn.tags || newTxn.Tags);
+  const oldRefs = parseStockRefs(oldTxn ? (oldTxn.tags || oldTxn.Tags) : '');
+  const newRefs = parseStockRefs(newTxn ? (newTxn.tags || newTxn.Tags) : '');
   const oldIds = oldRefs.map(r => r.id);
   const newIds = newRefs.map(r => r.id);
+  const ops = [];
+  const db = getDB();
+  const now = new Date().toISOString();
 
   // 1. Restore any old ref that is no longer present in newRefs
   const removedRefs = oldRefs.filter(r => !newIds.includes(r.id));
   if (removedRefs.length > 0) {
-    const { restoreInventoryItem } = await import('./inventory.js');
-    const oldInfo = parseDescriptionStockInfo(oldTxn.description);
+    const oldInfo = parseDescriptionStockInfo(oldTxn ? oldTxn.description : '');
     for (const r of removedRefs) {
       let restoreQty = r.qty;
       if (restoreQty === null) {
         restoreQty = oldInfo ? oldInfo.qty : 0;
       }
       if (restoreQty > 0) {
-        await restoreInventoryItem(r.id, restoreQty, oldInfo && oldInfo.unit === 'sub' ? 'sub' : 'pack');
+        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [r.id]);
+        const item = res.values?.[0];
+        if (item) {
+          const currQty = parseFloat(item.qty) || 0;
+          const subQtyVal = parseFloat(item.sub_qty) || 1;
+          let finalQtyToRestore = restoreQty;
+          if (item.sub_unit && oldInfo && oldInfo.unit === item.sub_unit && subQtyVal > 0) {
+            finalQtyToRestore = restoreQty / subQtyVal;
+          }
+          const newQty = currQty + finalQtyToRestore;
+          const status = newQty > 0 ? 'available' : 'unavailable';
+          ops.push({
+            storeName: 'inventory',
+            id: r.id,
+            operation: 'UPDATE',
+            entity: { ...item, qty: newQty, status, updated_at: now },
+            expectedBaseEntity: item
+          });
+        }
       }
     }
   }
@@ -330,8 +398,6 @@ const syncStockOnTxnChange = async (oldTxn, newTxn) => {
     if (oldInfo && newInfo) {
       const qtyDiff = newInfo.qty - oldInfo.qty;
       if (qtyDiff !== 0 || oldInfo.unit !== newInfo.unit) {
-        const { getDB } = await import('./db.js');
-        const db = getDB();
         const res = await db.query('SELECT * FROM inventory WHERE id = ?', [firstRef.id]);
         const item = res.values?.[0];
         if (item) {
@@ -348,10 +414,13 @@ const syncStockOnTxnChange = async (oldTxn, newTxn) => {
           const currQty = parseFloat(item.qty) || 0;
           const newQty = Math.max(0, currQty - packDiff);
           const status = newQty > 0.0001 ? 'available' : 'unavailable';
-          await db.run(
-            'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
-            [newQty, status, new Date().toISOString(), firstRef.id]
-          );
+          ops.push({
+            storeName: 'inventory',
+            id: firstRef.id,
+            operation: 'UPDATE',
+            entity: { ...item, qty: newQty, status, updated_at: now },
+            expectedBaseEntity: item
+          });
         }
       }
     }
@@ -360,8 +429,6 @@ const syncStockOnTxnChange = async (oldTxn, newTxn) => {
   // 3. Deduct any new ref that was added
   const addedRefs = newRefs.filter(r => !oldIds.includes(r.id));
   if (addedRefs.length > 0) {
-    const { getDB } = await import('./db.js');
-    const db = getDB();
     const newInfo = parseDescriptionStockInfo(newTxn.description);
     for (const r of addedRefs) {
       let deductQty = r.qty;
@@ -380,44 +447,135 @@ const syncStockOnTxnChange = async (oldTxn, newTxn) => {
           const currQty = parseFloat(item.qty) || 0;
           const newQty = Math.max(0, currQty - qtyInPacks);
           const status = newQty > 0.0001 ? 'available' : 'unavailable';
-          await db.run(
-            'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
-            [newQty, status, new Date().toISOString(), r.id]
-          );
+          ops.push({
+            storeName: 'inventory',
+            id: r.id,
+            operation: 'UPDATE',
+            entity: { ...item, qty: newQty, status, updated_at: now },
+            expectedBaseEntity: item
+          });
         }
       }
     }
   }
+
+  return ops;
 };
 
-export const updateTransaction = async (id, data) => {
+export const updateTransaction = async (idOrData, maybeData) => {
+  let id, data;
+  if (typeof idOrData === 'object' && idOrData !== null && !maybeData) {
+    id = idOrData.id || idOrData.ID;
+    data = idOrData;
+  } else {
+    id = idOrData;
+    data = maybeData || {};
+  }
   const db = getDB();
   const now = new Date().toISOString();
+  let stockOps = [];
   try {
     const res = await db.query('SELECT * FROM transactions WHERE id = ?', [id]);
     const oldTxn = res.values?.[0];
     if (oldTxn) {
       const newTxn = {
         tags: data.Tags || data.tags || '',
-        description: data.Description || ''
+        description: data.Description || data.description || ''
       };
-      await syncStockOnTxnChange(oldTxn, newTxn);
+      stockOps = await computeStockOperationsOnTxnChange(oldTxn, newTxn);
     }
   } catch (err) {
-    console.error('Failed to sync stock on transaction edit:', err);
+    console.error('Failed to compute stock on transaction edit:', err);
   }
 
-  await Promise.all([
-    db.run('DELETE FROM transactions WHERE id=?', [id]),
-    db.run('DELETE FROM investment_transactions WHERE id=?', [id])
-  ]);
+  const isInv = !!(data.InvestmentTransactionType || data.Brokerage);
+  const storeName = isInv ? 'investment_transactions' : 'transactions';
 
-  const result = await addTransaction({ ...data, ID: id });
-  return result;
+  let rowObj;
+  if (isInv) {
+    const invAcct = data.InvestmentAccount || data.investment_account || data.Category || '';
+    const actualAmt = parseFloat(data.ActualAmount !== undefined && data.ActualAmount !== '' ? data.ActualAmount : (data.actual_amount !== undefined && data.actual_amount !== '' ? data.actual_amount : 0)) || 0;
+    const totCharges = parseFloat(data.TotalCharges !== undefined && data.TotalCharges !== '' ? data.TotalCharges : (data.total_charges !== undefined && data.total_charges !== '' ? data.total_charges : 0)) || 0;
+    const brokCharges = parseFloat(data.BrokerageCharges !== undefined && data.BrokerageCharges !== '' ? data.BrokerageCharges : (data.brokerage_charges !== undefined && data.brokerage_charges !== '' ? data.brokerage_charges : 0)) || 0;
+    const exCharges = parseFloat(data.ExchangeCharges !== undefined && data.ExchangeCharges !== '' ? data.ExchangeCharges : (data.exchange_charges !== undefined && data.exchange_charges !== '' ? data.exchange_charges : 0)) || 0;
+    const sttCh = parseFloat(data.STTCharges !== undefined && data.STTCharges !== '' ? data.STTCharges : (data.stt_charges !== undefined && data.stt_charges !== '' ? data.stt_charges : 0)) || 0;
+    const sebiCh = parseFloat(data.SEBICharges !== undefined && data.SEBICharges !== '' ? data.SEBICharges : (data.sebi_charges !== undefined && data.sebi_charges !== '' ? data.sebi_charges : 0)) || 0;
+    const stampCh = parseFloat(data.StampDutyCharges !== undefined && data.StampDutyCharges !== '' ? data.StampDutyCharges : (data.stamp_duty_charges !== undefined && data.stamp_duty_charges !== '' ? data.stamp_duty_charges : 0)) || 0;
+    const gstCh = parseFloat(data.GSTCharges !== undefined && data.GSTCharges !== '' ? data.gst_charges : (data.gst_charges !== undefined && data.gst_charges !== '' ? data.gst_charges : 0)) || 0;
+    const dpCh = parseFloat(data.DPCharges !== undefined && data.DPCharges !== '' ? data.DPCharges : (data.dp_charges !== undefined && data.dp_charges !== '' ? data.dp_charges : 0)) || 0;
+    const otherCh = parseFloat(data.OtherCharges !== undefined && data.OtherCharges !== '' ? data.OtherCharges : (data.other_charges !== undefined && data.other_charges !== '' ? data.other_charges : 0)) || 0;
+    const secDispName = String(data.SecurityDisplayName || data.security_display_name || data.Note || data.note || '');
+    const setMode = String(data.SettlementMode || data.settlement_mode || 'ACTUAL').toUpperCase();
+
+    const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : 0)))) || 0;
+    const amtStr = String(data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : '0'))));
+    const typeVal = data['Income/Expense'] || data.type || (data.Type || 'Expense');
+
+    rowObj = {
+      id, date:data.Date||data.date||'', time:data.Time||data.time||'', account:data.Account||data.account||'', from_account:data.FromAccount||data.from_account||'', to_account:data.ToAccount||data.to_account||'',
+      category:data.Category||data.category||'', subcategory:data.Subcategory||data.subcategory||'', note:data.Note||data.note||'', description:data.Description||data.description||'',
+      inr:inrVal, amount:amtStr, currency:data.Currency||data.currency||'INR',
+      type:typeVal, created_at:data.created_at||now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'',
+      tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'',
+      receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||'',
+      sub_account:data.SubAccount||data.sub_account||'',
+      from_sub_account:data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
+      to_sub_account:data.ToSubAccount||data.to_sub_account||'',
+      investment_transaction_type:data.InvestmentTransactionType||data.investment_transaction_type||'', brokerage:data.Brokerage||data.brokerage||'', security_symbol:data.SecuritySymbol||data.security_symbol||'', security_isin:data.SecurityISIN||data.security_isin||'',
+      quantity:parseFloat(data.Quantity||data.quantity||0), unit_price:parseFloat(data.UnitPrice||data.unit_price||0), trade_value:parseFloat(data.TradeValue||data.trade_value||0),
+      cost_basis:parseFloat(data.CostBasis||data.cost_basis||0), cash_impact:parseFloat(data.CashImpact||data.cash_impact||0), position_qty_change:parseFloat(data.PositionQuantityChange||data.position_qty_change||0),
+      realized_pnl:parseFloat(data.RealizedPnl||data.realized_pnl||0), trade_id:data.TradeId||data.trade_id||'', order_id:data.OrderId||data.order_id||'', exchange:data.Exchange||data.exchange||'', segment:data.Segment||data.segment||'', source:data.Source||data.source||'',
+      investment_account:invAcct,
+      actual_amount:actualAmt, total_charges:totCharges, brokerage_charges:brokCharges, exchange_charges:exCharges,
+      stt_charges:sttCh, sebi_charges:sebiCh, stamp_duty_charges:stampCh, gst_charges:gstCh, dp_charges:dpCh, other_charges:otherCh,
+      security_display_name:secDispName,
+      settlement_mode:setMode
+    };
+  } else {
+    const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : 0)))) || 0;
+    const amtStr = String(data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : '0'))));
+    const typeVal = data['Income/Expense'] || data.type || (data.Type || 'Expense');
+
+    rowObj = {
+      id, date:data.Date||data.date||'', time:data.Time||data.time||'', account:data.Account||data.account||'', from_account:data.FromAccount||data.from_account||'', to_account:data.ToAccount||data.to_account||'',
+      category:data.Category||data.category||'', subcategory:data.Subcategory||data.subcategory||'', note:data.Note||data.note||'', description:data.Description||data.description||'',
+      inr:inrVal, amount:amtStr, currency:data.Currency||data.currency||'INR',
+      type:typeVal, created_at:data.created_at||now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'',
+      tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'',
+      receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||'',
+      sub_account:data.SubAccount||data.sub_account||'',
+      from_sub_account:data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
+      to_sub_account:data.ToSubAccount||data.to_sub_account||''
+    };
+  }
+
+  const mainOp = {
+    storeName,
+    id,
+    operation: 'UPDATE',
+    entity: rowObj
+  };
+
+  const allOps = [mainOp, ...stockOps];
+  if (allOps.length > 1) {
+    const bundleId = id;
+    const bundleTotal = allOps.length;
+    for (let i = 0; i < allOps.length; i++) {
+      allOps[i].bundle_id = bundleId;
+      allOps[i].bundle_index = i;
+      allOps[i].bundle_total = bundleTotal;
+    }
+    await executeAtomicBatch({ operations: allOps, bundleId });
+  } else {
+    await executeAtomicMutation(mainOp);
+  }
+
+  return rowToTxn(rowObj);
 };
 
 export const deleteTransaction = async (id) => {
   const db = getDB();
+  const stockOps = [];
   try {
     const res = await db.query('SELECT * FROM transactions WHERE id = ?', [id]);
     let txn = res.values?.[0];
@@ -428,31 +586,49 @@ export const deleteTransaction = async (id) => {
     if (txn) {
       const stockRefTags = (txn.tags || txn.Tags || '').split(' ').filter(t => t.startsWith('#stock_ref_'));
       if (stockRefTags.length > 0) {
-        const { restoreInventoryItem } = await import('./inventory.js');
         const info = parseDescriptionStockInfo(txn.description);
+        const now = new Date().toISOString();
         for (const tag of stockRefTags) {
           const content = tag.replace('#stock_ref_', '');
           let itemId = content;
           let qtyToRestore = 0;
+          let unitMode = 'pack';
           if (content.includes(':')) {
             const parts = content.split(':');
             itemId = parts[0];
             qtyToRestore = parseFloat(parts[1]) || 0;
-            if (qtyToRestore > 0) {
-              await restoreInventoryItem(itemId, qtyToRestore, 'pack');
-            }
           } else {
             qtyToRestore = info ? info.qty : 0;
-            if (qtyToRestore > 0) {
-              await restoreInventoryItem(itemId, qtyToRestore, info.unit);
+            unitMode = info?.unit || 'pack';
+          }
+          if (qtyToRestore > 0) {
+            const iRes = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
+            const item = iRes.values?.[0];
+            if (item) {
+              const currQty = parseFloat(item.qty) || 0;
+              const subQtyVal = parseFloat(item.sub_qty) || 1;
+              let finalQty = qtyToRestore;
+              if (item.sub_unit && unitMode === item.sub_unit && subQtyVal > 0) {
+                finalQty = qtyToRestore / subQtyVal;
+              }
+              const newQty = currQty + finalQty;
+              const status = newQty > 0 ? 'available' : 'unavailable';
+              stockOps.push({
+                storeName: 'inventory',
+                id: itemId,
+                operation: 'UPDATE',
+                entity: { ...item, qty: newQty, status, updated_at: now },
+                expectedBaseEntity: item
+              });
             }
           }
         }
       }
     }
   } catch (err) {
-    console.error('Failed to restore stock on transaction delete:', err);
+    console.error('Failed to compute stock restore on transaction delete:', err);
   }
+
   // Fetch linked charge IDs before deleting to record companion tombstones
   let chargeIds = [];
   try {
@@ -460,27 +636,79 @@ export const deleteTransaction = async (id) => {
       db.query('SELECT id FROM transactions WHERE split_group_id=?', [`inv_charge_${id}`]),
       db.query('SELECT id FROM investment_transactions WHERE split_group_id=?', [`inv_charge_${id}`])
     ]);
-    chargeIds = [...(res1.values || []).map(r => r.id), ...(res2.values || []).map(r => r.id)];
+    const allFound = [...(res1.values || []).map(r => r.id), ...(res2.values || []).map(r => r.id)];
+    chargeIds = Array.from(new Set(allFound));
   } catch {}
 
-  await Promise.all([
-    db.run('DELETE FROM transactions WHERE id=?', [id]),
-    db.run('DELETE FROM investment_transactions WHERE id=?', [id]),
-    db.run('DELETE FROM transactions WHERE split_group_id=?', [`inv_charge_${id}`]),
-    db.run('DELETE FROM investment_transactions WHERE split_group_id=?', [`inv_charge_${id}`])
-  ]);
+  const allIds = Array.from(new Set([id, ...chargeIds]));
+  const ops = [...stockOps];
 
-  await recordTombstone(id, 'transaction');
-  if (chargeIds.length > 0) {
-    await recordTombstonesBatch(chargeIds, 'transaction');
+  for (const targetId of allIds) {
+    const [hasTxn, hasInv] = await Promise.all([
+      db.query('SELECT id FROM transactions WHERE id = ?', [targetId]),
+      db.query('SELECT id FROM investment_transactions WHERE id = ?', [targetId])
+    ]);
+
+    if (hasTxn.values?.length > 0) {
+      ops.push({
+        storeName: 'transactions',
+        id: targetId,
+        operation: 'DELETE',
+        tombstoneType: 'transaction'
+      });
+    }
+    if (hasInv.values?.length > 0) {
+      ops.push({
+        storeName: 'investment_transactions',
+        id: targetId,
+        operation: 'DELETE',
+        tombstoneType: 'transaction'
+      });
+    }
   }
+
+  // Assign bundle metadata if multiple operations or companion charges exist
+  const isBundle = ops.length > 1;
+  const bundleId = isBundle ? id : null;
+  const bundleTotal = ops.length;
+
+  for (let i = 0; i < ops.length; i++) {
+    if (isBundle) {
+      ops[i].bundle_id = bundleId;
+      ops[i].bundle_index = i;
+      ops[i].bundle_total = bundleTotal;
+    }
+  }
+
+  await executeAtomicBatch({ operations: ops, bundleId });
 };
+
 export const deleteAllTransactions = async ()  => {
   const db = getDB();
-  await Promise.all([
-    db.run('DELETE FROM transactions'),
-    db.run('DELETE FROM investment_transactions')
+  const [tRes, invRes] = await Promise.all([
+    db.query('SELECT id FROM transactions'),
+    db.query('SELECT id FROM investment_transactions')
   ]);
+  const ops = [];
+  for (const r of (tRes.values || [])) {
+    ops.push({
+      storeName: 'transactions',
+      id: r.id,
+      operation: 'DELETE',
+      tombstoneType: 'transaction'
+    });
+  }
+  for (const r of (invRes.values || [])) {
+    ops.push({
+      storeName: 'investment_transactions',
+      id: r.id,
+      operation: 'DELETE',
+      tombstoneType: 'transaction'
+    });
+  }
+  if (ops.length > 0) {
+    await executeAtomicBatch({ operations: ops });
+  }
 };
 
 // Normalise any date value → dd/mm/yyyy string for storage.
@@ -811,81 +1039,46 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
     }
   }
 
+  const ops = [];
   if (genItems.length > 0) {
-    try {
-      const resInv = await db.query('SELECT id FROM investment_transactions', []);
-      const invIdSet = new Set((resInv.values || []).map(r => r.id));
-      const conflicts = genItems.filter(item => invIdSet.has(item.id));
-      if (conflicts.length > 0) {
-        for (const c of conflicts) {
-          try { await db.run('DELETE FROM investment_transactions WHERE id=?', [c.id]); } catch {}
-        }
+    const resGen = await db.query('SELECT id FROM transactions', []);
+    const genIdSet = new Set((resGen.values || []).map(r => r.id));
+    for (const obj of genItems) {
+      if (!genIdSet.has(obj.id)) {
+        ops.push({
+          storeName: 'transactions',
+          id: obj.id,
+          operation: 'INSERT',
+          entity: obj
+        });
+        imported++;
+      } else {
+        skipped++;
       }
-    } catch {}
-
-    if (typeof db.bulkInsertIgnore === 'function') {
-      const res = await db.bulkInsertIgnore('transactions', genItems);
-      imported += res.added;
-      skipped += res.skipped;
-    } else {
-      try { await db.run('BEGIN TRANSACTION;'); } catch {}
-      for (const obj of genItems) {
-        try {
-          const res = await db.run(
-            `INSERT OR IGNORE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
-             obj.category, obj.subcategory, obj.note, obj.description,
-             obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
-             obj.recurring_rule_id, obj.tags, obj.split_group_id,
-             obj.receipt_image, obj.warranty_expiry, obj.serial_no,
-             obj.sub_account, obj.from_sub_account, obj.to_sub_account]
-          );
-          if (res.changes?.changes > 0) imported++; else skipped++;
-        } catch { skipped++; }
-      }
-      try { await db.run('COMMIT;'); } catch {}
     }
   }
 
   if (invItems.length > 0) {
-    try {
-      const resGen = await db.query('SELECT id FROM transactions', []);
-      const genIdSet = new Set((resGen.values || []).map(r => r.id));
-      const conflicts = invItems.filter(item => genIdSet.has(item.id));
-      if (conflicts.length > 0) {
-        for (const c of conflicts) {
-          try { await db.run('DELETE FROM transactions WHERE id=?', [c.id]); } catch {}
-        }
+    const resInv = await db.query('SELECT id FROM investment_transactions', []);
+    const invIdSet = new Set((resInv.values || []).map(r => r.id));
+    for (const obj of invItems) {
+      if (!invIdSet.has(obj.id)) {
+        ops.push({
+          storeName: 'investment_transactions',
+          id: obj.id,
+          operation: 'INSERT',
+          entity: obj
+        });
+        imported++;
+      } else {
+        skipped++;
       }
-    } catch {}
-
-    if (typeof db.bulkInsertIgnore === 'function') {
-      const res = await db.bulkInsertIgnore('investment_transactions', invItems);
-      imported += res.added;
-      skipped += res.skipped;
-    } else {
-      try { await db.run('BEGIN TRANSACTION;'); } catch {}
-      for (const obj of invItems) {
-        try {
-          const res = await db.run(
-            `INSERT OR IGNORE INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [obj.id, obj.date, obj.time, obj.account, obj.from_account, obj.to_account,
-             obj.category, obj.subcategory, obj.note, obj.description,
-             obj.inr, obj.amount, obj.currency, obj.type, obj.created_at, obj.updated_at,
-             obj.recurring_rule_id, obj.tags, obj.split_group_id,
-             obj.receipt_image, obj.warranty_expiry, obj.serial_no,
-             obj.sub_account, obj.from_sub_account, obj.to_sub_account,
-             obj.investment_transaction_type, obj.brokerage, obj.security_symbol, obj.security_isin,
-             obj.quantity, obj.unit_price, obj.trade_value, obj.cost_basis, obj.cash_impact,
-             obj.position_qty_change, obj.realized_pnl, obj.trade_id, obj.order_id, obj.exchange, obj.segment, obj.source]
-          );
-          if (res.changes?.changes > 0) imported++; else skipped++;
-        } catch { skipped++; }
-      }
-      try { await db.run('COMMIT;'); } catch {}
     }
   }
 
+  if (ops.length > 0) {
+    await executeAtomicBatch({ operations: ops });
+  }
 
   return { imported, skipped, total: rows.length };
 };

@@ -1,5 +1,7 @@
 import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
+import { executeAtomicBatch } from './atomicMutation.js';
+import { computeEntityDiff } from '../utils/entityDiff.js';
 
 // Always return {id, name, group, icon, isAsset, subAccounts} — app expects "group" not "group_name"
 export const getAccounts = async () => {
@@ -53,10 +55,18 @@ export const replaceAccounts = async (list) => {
     return !duplicate;
   });
 
-  const set = [
-    { statement: 'DELETE FROM sub_accounts', values: [] },
-    { statement: 'DELETE FROM accounts', values: [] }
-  ];
+  // Fetch current accounts and sub_accounts
+  const [curAcctsRes, curSubsRes] = await Promise.all([
+    db.query('SELECT * FROM accounts'),
+    db.query('SELECT * FROM sub_accounts')
+  ]);
+  const curAccts = curAcctsRes.values || [];
+  const curSubs = curSubsRes.values || [];
+  const curAcctNameMap = new Map(curAccts.map(a => [a.name, a]));
+
+  const newAcctRows = [];
+  const newSubRows = [];
+
   for (let i = 0; i < uniqueList.length; i++) {
     const a    = typeof uniqueList[i] === 'string' ? { name: uniqueList[i] } : uniqueList[i];
     const name = a.name || '';
@@ -66,11 +76,20 @@ export const replaceAccounts = async (list) => {
     const paymentDueDays = (a.paymentDueDays !== undefined ? Number(a.paymentDueDays) : (a.payment_due_days !== undefined ? Number(a.payment_due_days) : 0)) || 0;
     const isAsset        = a.isAsset !== undefined ? (a.isAsset ? 1 : 0) : (a.is_asset !== undefined ? (Number(a.is_asset) === 1 ? 1 : 0) : (['credit card', 'credit', 'loan', 'emi', 'borrow', 'pay later', 'installments'].some(k => (grp || acctType || name).toLowerCase().includes(k)) ? 0 : 1));
     const cardLast4      = (a.cardLast4 || a.card_last4 || '').trim();
-    const parentId       = a.id || uuid();
+    const existing = curAcctNameMap.get(name);
+    const parentId = a.id || existing?.id || uuid();
 
-    set.push({
-      statement: 'INSERT OR REPLACE INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days,is_asset,card_last4) VALUES (?,?,?,?,?,?,?,?,?,?)',
-      values: [parentId, name, grp, i, now, acctType, settlementDate, paymentDueDays, isAsset, cardLast4]
+    newAcctRows.push({
+      id: parentId,
+      name,
+      group_name: grp,
+      sort_order: i,
+      created_at: existing?.created_at || now,
+      acct_type: acctType,
+      settlement_date: settlementDate,
+      payment_due_days: paymentDueDays,
+      is_asset: isAsset,
+      card_last4: cardLast4
     });
 
     const subs = a.subAccounts || [];
@@ -78,21 +97,49 @@ export const replaceAccounts = async (list) => {
       const s = subs[j];
       const sId = typeof s === 'object' ? (s.id || uuid()) : uuid();
       const sName = typeof s === 'object' ? s.name : s;
-      set.push({
-        statement: 'INSERT INTO sub_accounts (id,name,account_id,sort_order) VALUES (?,?,?,?)',
-        values: [sId, sName, parentId, j]
+      newSubRows.push({
+        id: sId,
+        name: sName,
+        account_id: parentId,
+        sort_order: j
       });
     }
   }
 
-  if (typeof db.executeSet === 'function') {
-    await db.executeSet(set);
-  } else {
-    await db.run('DELETE FROM sub_accounts');
-    await db.run('DELETE FROM accounts');
-    for (const stmt of set.slice(2)) {
-      await db.run(stmt.statement, stmt.values);
-    }
+  const [diffAccts, diffSubs] = await Promise.all([
+    computeEntityDiff(curAccts, newAcctRows, 'id'),
+    computeEntityDiff(curSubs, newSubRows, 'id')
+  ]);
+
+  const ops = [];
+  for (const op of diffAccts.operations) {
+    ops.push({
+      storeName: 'accounts',
+      id: op.id,
+      operation: op.operation,
+      entity: op.entity,
+      expectedBaseEntity: op.oldEntity || (op.operation === 'DELETE' ? op.entity : null),
+      base_checksum: op.base_checksum,
+      new_checksum: op.new_checksum,
+      tombstoneType: op.operation === 'DELETE' ? 'account' : null
+    });
+  }
+
+  for (const op of diffSubs.operations) {
+    ops.push({
+      storeName: 'sub_accounts',
+      id: op.id,
+      operation: op.operation,
+      entity: op.entity,
+      expectedBaseEntity: op.oldEntity || (op.operation === 'DELETE' ? op.entity : null),
+      base_checksum: op.base_checksum,
+      new_checksum: op.new_checksum,
+      tombstoneType: op.operation === 'DELETE' ? 'sub_account' : null
+    });
+  }
+
+  if (ops.length > 0) {
+    await executeAtomicBatch({ operations: ops });
   }
 };
 
@@ -106,42 +153,64 @@ export const replaceAccountGroups = async (list) => {
   const db = getDB();
   const uniqueList = [...new Set((list || []).map(item => (typeof item === 'string' ? item : (item?.name || '')).trim()).filter(Boolean))];
 
-  const set = [{ statement: 'DELETE FROM account_groups', values: [] }];
+  const curGroupsRes = await db.query('SELECT * FROM account_groups');
+  const curGroups = curGroupsRes.values || [];
+  const curNameMap = new Map(curGroups.map(g => [g.name, g]));
+
+  const newGroups = [];
   for (let i = 0; i < uniqueList.length; i++) {
     const name = uniqueList[i];
-    set.push({
-      statement: 'INSERT INTO account_groups (id,name,sort_order) VALUES (?,?,?)',
-      values: [uuid(), name, i]
+    const existing = curNameMap.get(name);
+    newGroups.push({
+      id: existing?.id || uuid(),
+      name,
+      sort_order: i
     });
   }
 
-  if (typeof db.executeSet === 'function') {
-    await db.executeSet(set);
-  } else {
-    await db.run('DELETE FROM account_groups');
-    for (const stmt of set.slice(1)) {
-      await db.run(stmt.statement, stmt.values);
-    }
+  const diff = await computeEntityDiff(curGroups, newGroups, 'id');
+  const ops = diff.operations.map(op => ({
+    storeName: 'account_groups',
+    id: op.id,
+    operation: op.operation,
+    entity: op.entity,
+    expectedBaseEntity: op.oldEntity || (op.operation === 'DELETE' ? op.entity : null),
+    base_checksum: op.base_checksum,
+    new_checksum: op.new_checksum,
+    tombstoneType: op.operation === 'DELETE' ? 'account_group' : null
+  }));
+
+  if (ops.length > 0) {
+    await executeAtomicBatch({ operations: ops });
   }
 };
 
 export const getAccountMapping = async () => (await getDB().query('SELECT * FROM account_mapping')).values || [];
+
 export const replaceAccountMapping = async (list) => {
   const db = getDB();
-  const set = [{ statement: 'DELETE FROM account_mapping', values: [] }];
-  for (const m of list) {
-    set.push({
-      statement: 'INSERT INTO account_mapping (id,source_name,account_name) VALUES (?,?,?)',
-      values: [m.id || uuid(), m.source_name||'', m.account_name||'']
-    });
-  }
+  const curMappingsRes = await db.query('SELECT * FROM account_mapping');
+  const curMappings = curMappingsRes.values || [];
 
-  if (typeof db.executeSet === 'function') {
-    await db.executeSet(set);
-  } else {
-    await db.run('DELETE FROM account_mapping');
-    for (const stmt of set.slice(1)) {
-      await db.run(stmt.statement, stmt.values);
-    }
+  const newMappings = (list || []).map(m => ({
+    id: m.id || uuid(),
+    source_name: m.source_name || '',
+    account_name: m.account_name || ''
+  }));
+
+  const diff = await computeEntityDiff(curMappings, newMappings, 'id');
+  const ops = diff.operations.map(op => ({
+    storeName: 'account_mapping',
+    id: op.id,
+    operation: op.operation,
+    entity: op.entity,
+    expectedBaseEntity: op.oldEntity || (op.operation === 'DELETE' ? op.entity : null),
+    base_checksum: op.base_checksum,
+    new_checksum: op.new_checksum,
+    tombstoneType: op.operation === 'DELETE' ? 'account_mapping' : null
+  }));
+
+  if (ops.length > 0) {
+    await executeAtomicBatch({ operations: ops });
   }
 };

@@ -20,6 +20,7 @@
  */
 import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
+import { executeAtomicMutation } from './atomicMutation.js';
 
 // ── Schema (called from applySchema in db.js via initDB) ──────────────────
 export const applyRecurringSchema = async (db) => {
@@ -65,20 +66,23 @@ export const getActiveRecurringRules = async () => {
 
 export const saveRecurringRule = async (rule) => {
   const db = getDB();
-  const obj = { ...rule, id: rule.id || uuid(), created_at: rule.created_at || new Date().toISOString() };
-  await db.run(
-    `INSERT OR REPLACE INTO recurring_rules
-     (id,rule_type,status,txn_type,account,from_account,to_account,category,subcategory,
-      base_note,description,currency,total_amount,amount_per_part,total_days,total_parts,
-      completed_parts,start_date,next_date,end_date,schedule_mode,frequency,created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [obj.id, obj.rule_type, obj.status||'active', obj.txn_type||'Expense',
-     obj.account||'', obj.from_account||'', obj.to_account||'', obj.category||'',
-     obj.subcategory||'', obj.base_note||'', obj.description||'', obj.currency||'INR',
-     obj.total_amount||0, obj.amount_per_part||0, obj.total_days||0, obj.total_parts||0,
-     obj.completed_parts||0, obj.start_date||'', obj.next_date||'', obj.end_date||'',
-     obj.schedule_mode||'on_date', obj.frequency||'', obj.created_at]
-  );
+  const id = rule.id || uuid();
+  const obj = {
+    ...rule,
+    id,
+    created_at: rule.created_at || new Date().toISOString()
+  };
+
+  const existingRes = await db.query('SELECT id FROM recurring_rules WHERE id = ?', [id]);
+  const isExisting = (existingRes.values || []).length > 0;
+
+  await executeAtomicMutation({
+    storeName: 'recurring_rules',
+    entityId: id,
+    operation: isExisting ? 'UPDATE' : 'INSERT',
+    entityData: obj
+  });
+
   return obj;
 };
 
@@ -86,11 +90,17 @@ export const updateRecurringRule = async (id, updates) => {
   const rules = await getAllRecurringRules();
   const rule = rules.find(r => r.id === id);
   if (!rule) return;
-  await saveRecurringRule({ ...rule, ...updates, id });
+  return await saveRecurringRule({ ...rule, ...updates, id });
 };
 
-export const deleteRecurringRule = async (id) => {
-  await getDB().run('DELETE FROM recurring_rules WHERE id = ?', [id]);
+export const deleteRecurringRule = async (idOrObj) => {
+  const id = typeof idOrObj === 'object' && idOrObj !== null ? (idOrObj.id || idOrObj.ID) : idOrObj;
+  await executeAtomicMutation({
+    storeName: 'recurring_rules',
+    entityId: id,
+    operation: 'DELETE',
+    tombstoneType: 'recurring_rule'
+  });
 };
 
 // ── Instalment math ───────────────────────────────────────────────────────

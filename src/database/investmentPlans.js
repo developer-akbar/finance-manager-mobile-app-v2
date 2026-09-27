@@ -7,6 +7,7 @@
  */
 import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
+import { executeAtomicMutation } from './atomicMutation.js';
 
 export const applyInvestmentPlansSchema = async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS investment_plans (
@@ -56,6 +57,7 @@ export const getActiveInvestmentPlans = async () => {
 };
 
 export const saveInvestmentPlan = async (plan) => {
+  const db = getDB();
   const now = new Date().toISOString();
   const id = plan.id || uuid();
   const cleanPlan = {
@@ -83,25 +85,22 @@ export const saveInvestmentPlan = async (plan) => {
     updated_at: now
   };
 
-  await getDB().run(
-    `INSERT INTO investment_plans (
-      id, name, frequency, planned_amount, investment_type, owner,
-      investment_account, funding_account, brokerage, sub_account,
-      security_symbol, security_isin, security_name, folio, holding_mode,
-      note, description, tags, next_due_date, active, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      cleanPlan.id, cleanPlan.name, cleanPlan.frequency, cleanPlan.planned_amount, cleanPlan.investment_type, cleanPlan.owner,
-      cleanPlan.investment_account, cleanPlan.funding_account, cleanPlan.brokerage, cleanPlan.sub_account,
-      cleanPlan.security_symbol, cleanPlan.security_isin, cleanPlan.security_name, cleanPlan.folio, cleanPlan.holding_mode,
-      cleanPlan.note, cleanPlan.description, cleanPlan.tags, cleanPlan.next_due_date, cleanPlan.active, cleanPlan.created_at, cleanPlan.updated_at
-    ]
-  );
+  const existingRes = await db.query('SELECT id FROM investment_plans WHERE id = ?', [id]);
+  const isExisting = (existingRes.values || []).length > 0;
+
+  await executeAtomicMutation({
+    storeName: 'investment_plans',
+    entityId: id,
+    operation: isExisting ? 'UPDATE' : 'INSERT',
+    entityData: cleanPlan
+  });
+
   return cleanPlan;
 };
 
 export const updateInvestmentPlan = async (id, updates) => {
-  const existingList = await getDB().query('SELECT * FROM investment_plans WHERE id = ?', [id]);
+  const db = getDB();
+  const existingList = await db.query('SELECT * FROM investment_plans WHERE id = ?', [id]);
   const existing = existingList.values?.[0];
   if (!existing) throw new Error(`Investment plan not found: ${id}`);
 
@@ -120,26 +119,24 @@ export const updateInvestmentPlan = async (id, updates) => {
     merged.planned_amount = parseFloat(merged.planned_amount) || 0;
   }
 
-  await getDB().run(
-    `UPDATE investment_plans SET
-      name = ?, frequency = ?, planned_amount = ?, investment_type = ?, owner = ?,
-      investment_account = ?, funding_account = ?, brokerage = ?, sub_account = ?,
-      security_symbol = ?, security_isin = ?, security_name = ?, folio = ?, holding_mode = ?,
-      note = ?, description = ?, tags = ?, next_due_date = ?, active = ?, updated_at = ?
-    WHERE id = ?`,
-    [
-      merged.name, merged.frequency, merged.planned_amount, merged.investment_type, merged.owner,
-      merged.investment_account, merged.funding_account, merged.brokerage, merged.sub_account,
-      merged.security_symbol, merged.security_isin, merged.security_name, merged.folio, merged.holding_mode,
-      merged.note, merged.description, merged.tags, merged.next_due_date, merged.active, merged.updated_at,
-      id
-    ]
-  );
+  await executeAtomicMutation({
+    storeName: 'investment_plans',
+    entityId: id,
+    operation: 'UPDATE',
+    entityData: merged
+  });
+
   return normalizePlan(merged);
 };
 
-export const deleteInvestmentPlan = async (id) => {
-  await getDB().run('DELETE FROM investment_plans WHERE id = ?', [id]);
+export const deleteInvestmentPlan = async (idOrObj) => {
+  const id = typeof idOrObj === 'object' && idOrObj !== null ? (idOrObj.id || idOrObj.ID) : idOrObj;
+  await executeAtomicMutation({
+    storeName: 'investment_plans',
+    entityId: id,
+    operation: 'DELETE',
+    tombstoneType: 'investment_plan'
+  });
   return id;
 };
 
