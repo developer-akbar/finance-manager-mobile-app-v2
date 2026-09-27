@@ -16,7 +16,7 @@ function ab2str(buf) {
 }
 
 // Safe chunked conversion from Uint8Array to base64 (avoids Maximum call stack size exceeded)
-function bytesToBase64(bytes) {
+export function bytesToBase64(bytes) {
   let binary = '';
   const len = bytes.byteLength;
   const chunkSize = 8192;
@@ -28,7 +28,7 @@ function bytesToBase64(bytes) {
 }
 
 // Safe conversion from base64 to Uint8Array
-function base64ToBytes(base64) {
+export function base64ToBytes(base64) {
   const binary = atob(base64);
   const len = binary.length;
   const bytes = new Uint8Array(len);

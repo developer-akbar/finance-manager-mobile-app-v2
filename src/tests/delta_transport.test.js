@@ -46,6 +46,7 @@ import {
   writeOwnDeviceManifest,
   listPeerManifests
 } from '../services/deviceManifest.js';
+import { bytesToBase64, base64ToBytes } from '../utils/cryptoBackup.js';
 
 const TEST_SESSION_KEY = 'test-secret-passphrase-finman-v3-delta-transport';
 const BASE_SNAPSHOT_ID = 'snap_1790493064581_jbhnf8';
@@ -1510,5 +1511,134 @@ test('FinMan Phase 7.3 — Delta Transport & Peer Staging Comprehensive Suite (T
     // Ensure staging tables received peer data without leaking into financial tables
     const stagedEvents = (await db.query('SELECT * FROM sync_staged_events')).values;
     assert.equal(stagedEvents.length, 10);
+  });
+
+  await t.test('T41: bytesToBase64 and base64ToBytes round-trip correctly with zero bytes and large buffers', async () => {
+    // 1. Zero bytes and special characters
+    const testCases = [
+      new Uint8Array([0, 0, 0, 0]),
+      new Uint8Array([0, 255, 128, 64, 32, 16, 8, 4, 2, 1]),
+      new Uint8Array(new TextEncoder().encode('Hello World! 🚀 Special characters: \0 \n \r \t € 日本語')),
+      new Uint8Array(65536).fill(42) // 64 KB large buffer
+    ];
+
+    for (const original of testCases) {
+      const b64 = bytesToBase64(original);
+      assert.equal(typeof b64, 'string');
+      const recovered = base64ToBytes(b64);
+      assert.deepEqual(recovered, original);
+    }
+  });
+
+  await t.test('T42: encryptDeltaPackage and decryptDeltaPackage succeed without global Buffer', async () => {
+    // Save original Buffer reference and delete from global
+    const originalBuffer = globalThis.Buffer;
+    delete globalThis.Buffer;
+
+    try {
+      const payload = buildDeterministicPackagePayload({
+        deviceId: 'dev_no_buffer_test',
+        startSequence: 1,
+        endSequence: 1,
+        baseSnapshotId: BASE_SNAPSHOT_ID,
+        baseCloudVersion: BASE_CLOUD_VERSION,
+        events: [{
+          event_id: 'evt_no_buf_1',
+          device_id: 'dev_no_buffer_test',
+          sequence: 1,
+          timestamp: new Date().toISOString(),
+          collection: 'transactions',
+          entity_id: 'txn_no_buf_1',
+          operation: 'INSERT',
+          base_checksum: null,
+          new_checksum: 'test_hash',
+          payload: { id: 'txn_no_buf_1', inr: 500, note: 'Tested without Buffer' }
+        }]
+      });
+
+      // 1. Encrypt without Buffer
+      const encryptedContainer = await encryptDeltaPackage(payload, TEST_SESSION_KEY);
+      assert.equal(encryptedContainer.schema_version, 1);
+      assert.equal(encryptedContainer.package_id, 'pkg_dev_no_buffer_test_000001_000001');
+      assert.ok(encryptedContainer.ciphertext);
+      assert.ok(encryptedContainer.salt);
+      assert.ok(encryptedContainer.iv);
+      assert.ok(encryptedContainer.auth_tag);
+
+      // 2. Decrypt without Buffer
+      const decrypted = await decryptDeltaPackage(encryptedContainer, TEST_SESSION_KEY);
+      assert.deepEqual(decrypted, payload);
+    } finally {
+      // Restore Buffer for subsequent test suite execution
+      globalThis.Buffer = originalBuffer;
+    }
+  });
+
+  await t.test('T43: Encrypt -> Decrypt preserves binary zero bytes in payloads without Buffer', async () => {
+    const originalBuffer = globalThis.Buffer;
+    delete globalThis.Buffer;
+
+    try {
+      const payload = buildDeterministicPackagePayload({
+        deviceId: 'dev_zero_bytes',
+        startSequence: 1,
+        endSequence: 2,
+        baseSnapshotId: BASE_SNAPSHOT_ID,
+        baseCloudVersion: BASE_CLOUD_VERSION,
+        events: [
+          {
+            event_id: 'evt_zb_1',
+            device_id: 'dev_zero_bytes',
+            sequence: 1,
+            timestamp: new Date().toISOString(),
+            collection: 'transactions',
+            entity_id: 'tx_zb_1',
+            operation: 'INSERT',
+            payload: { id: 'tx_zb_1', note: 'Text with zero \u0000 and unicode \u00FF' }
+          },
+          {
+            event_id: 'evt_zb_2',
+            device_id: 'dev_zero_bytes',
+            sequence: 2,
+            timestamp: new Date().toISOString(),
+            collection: 'transactions',
+            entity_id: 'tx_zb_2',
+            operation: 'UPDATE',
+            payload: { id: 'tx_zb_2', amount: 0 }
+          }
+        ]
+      });
+
+      const encrypted = await encryptDeltaPackage(payload, TEST_SESSION_KEY);
+      const decrypted = await decryptDeltaPackage(encrypted, TEST_SESSION_KEY);
+      assert.deepEqual(decrypted, payload);
+    } finally {
+      globalThis.Buffer = originalBuffer;
+    }
+  });
+
+  await t.test('T44: Package format validation — container properties strictly conform to Transport Schema v1', async () => {
+    const payload = buildDeterministicPackagePayload({
+      deviceId: 'dev_schema_v1',
+      startSequence: 1,
+      endSequence: 1,
+      events: [{
+        event_id: 'evt_s1',
+        device_id: 'dev_schema_v1',
+        sequence: 1,
+        timestamp: new Date().toISOString(),
+        collection: 'transactions',
+        entity_id: 'tx_s1',
+        operation: 'INSERT',
+        payload: { id: 'tx_s1' }
+      }]
+    });
+
+    const encrypted = await encryptDeltaPackage(payload, TEST_SESSION_KEY);
+    assert.equal(typeof encrypted.salt, 'string');
+    assert.equal(typeof encrypted.iv, 'string');
+    assert.equal(typeof encrypted.ciphertext, 'string');
+    assert.equal(typeof encrypted.auth_tag, 'string');
+    assert.equal(encrypted.schema_version, 1);
   });
 });

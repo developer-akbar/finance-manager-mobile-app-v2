@@ -7,7 +7,7 @@
 
 import { getDB, getRawIDB } from '../database/db.js';
 import { toCanonicalJson, computeCanonicalSha256 } from '../utils/canonicalEntity.js';
-import { deriveKey } from '../utils/cryptoBackup.js';
+import { deriveKey, bytesToBase64, base64ToBytes } from '../utils/cryptoBackup.js';
 import {
   withSameDeviceLock,
   readOwnDeviceManifest,
@@ -105,14 +105,6 @@ export async function computePackageChecksum(packagePayload) {
   return await computeCanonicalSha256(packagePayload);
 }
 
-function bytesToBase64(bytes) {
-  return Buffer.from(bytes).toString('base64');
-}
-
-function base64ToBytes(base64) {
-  return new Uint8Array(Buffer.from(base64, 'base64'));
-}
-
 /**
  * Encrypts a deterministic delta package into an AES-256-GCM container.
  */
@@ -164,10 +156,15 @@ export async function decryptDeltaPackage(container, keyMaterialOrPassword) {
     throw new Error('Invalid encrypted delta package container format.');
   }
 
-  const salt = base64ToBytes(container.salt);
-  const iv = base64ToBytes(container.iv);
-  const ciphertextBytes = base64ToBytes(container.ciphertext);
-  const tagBytes = container.auth_tag ? base64ToBytes(container.auth_tag) : new Uint8Array(0);
+  let salt, iv, ciphertextBytes, tagBytes;
+  try {
+    salt = base64ToBytes(container.salt);
+    iv = base64ToBytes(container.iv);
+    ciphertextBytes = base64ToBytes(container.ciphertext);
+    tagBytes = container.auth_tag ? base64ToBytes(container.auth_tag) : new Uint8Array(0);
+  } catch (err) {
+    throw new Error(`Failed to decrypt transport package: Invalid container encoding (${err.message})`);
+  }
 
   const combined = new Uint8Array(ciphertextBytes.length + tagBytes.length);
   combined.set(ciphertextBytes);
