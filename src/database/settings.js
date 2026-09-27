@@ -1,4 +1,19 @@
 import { getDB } from './db.js';
+import { executeAtomicMutation } from './atomicMutation.js';
+
+export const SYNCED_SETTINGS_WHITELIST = [
+  'customTags',
+  'theme',
+  'headerColor',
+  'fontSize',
+  'fontFamily',
+  'fontDataWeight',
+  'default_currency',
+  'budget_start_day',
+  'portfolio_benchmark',
+  'profileName',
+  'name'
+];
 
 export const getSetting = async (key, fallback = null) => {
   try {
@@ -8,11 +23,27 @@ export const getSetting = async (key, fallback = null) => {
 };
 
 export const setSetting = async (key, value) => {
-  // settings store uses keyPath:'key' — object must have {key, value}
-  await getDB().run(
-    'INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)',
-    [key, String(value)]
-  );
+  const strVal = String(value);
+  const isSynced = SYNCED_SETTINGS_WHITELIST.includes(key);
+
+  if (isSynced) {
+    const db = getDB();
+    const ex = await db.query('SELECT * FROM settings WHERE key = ?', [key]);
+    const isExisting = (ex.values || []).length > 0;
+
+    await executeAtomicMutation({
+      storeName: 'settings',
+      entityId: key,
+      operation: isExisting ? 'UPDATE' : 'INSERT',
+      entityData: { key, value: strVal }
+    });
+  } else {
+    // Local-only setting: write directly without creating delta event
+    await getDB().run(
+      'INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)',
+      [key, strVal]
+    );
+  }
 };
 
 export const getAllSettings = async () => {

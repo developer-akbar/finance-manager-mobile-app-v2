@@ -8,3 +8,6 @@ export * from './recurring.js';
 export * from './investmentPlans.js';
 export * from './inventory.js';
 export * from './tombstones.js';
+export * from './deltaQueue.js';
+export * from './atomicMutation.js';
+export * from './conflicts.js';

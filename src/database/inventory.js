@@ -3,7 +3,8 @@ import { v4 as uuid } from 'uuid';
 import { addTransaction } from './transactions.js';
 import { saveRecurringRule, buildInstalmentSchedule, buildInstalmentNote } from './recurring.js';
 import { parseStockLine, getCanonicalProductName } from '../utils/stockInventoryNormalization.js';
-import { recordTombstone } from './tombstones.js';
+import { executeAtomicMutation, executeAtomicBatch } from './atomicMutation.js';
+import { computeEntityDiff } from '../utils/entityDiff.js';
 
 const formatFraction = (val) => {
   if (val === 0 || !val) return '0';
@@ -59,8 +60,19 @@ export const getInventoryItems = async () => {
   return res.values || [];
 };
 
-export const addInventoryPurchase = async (fromAccount, date, items, noteText = 'in stock', timeText = '') => {
-  const db = getDB();
+export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeItems, noteText = 'in stock', timeText = '') => {
+  let fromAccount, date, items;
+  if (typeof fromAccountOrData === 'object' && fromAccountOrData !== null && !maybeDate) {
+    fromAccount = fromAccountOrData.fromAccount || fromAccountOrData.account || 'Cash';
+    date = fromAccountOrData.date || new Date().toISOString().slice(0, 10);
+    items = fromAccountOrData.items || [];
+    noteText = fromAccountOrData.noteText || fromAccountOrData.note || noteText;
+    timeText = fromAccountOrData.timeText || fromAccountOrData.time || timeText;
+  } else {
+    fromAccount = fromAccountOrData;
+    date = maybeDate || new Date().toISOString().slice(0, 10);
+    items = maybeItems || [];
+  }
   const now = new Date().toISOString();
   let totalAmount = 0;
   const itemDetails = [];
@@ -71,25 +83,27 @@ export const addInventoryPurchase = async (fromAccount, date, items, noteText = 
   const txnId = uuid();
   const isoDate = date.includes('/') ? date.split('/').reverse().join('-') : date;
 
+  const ops = [];
+  const inventoryRows = [];
+
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    const packQty = parseFloat(item.pack_qty) || 1; // Items/Packs bought
-    const subQty = parseFloat(item.sub_qty) || 1;   // Pack Size (e.g. 200)
-    const subUnit = item.sub_unit || 'pcs';         // Pack Unit (e.g. g)
-    const partsVal = parseFloat(item.original_qty) || 1; // Parts (e.g. 4)
+    const packQty = parseFloat(item.pack_qty) || 1;
+    const subQty = parseFloat(item.sub_qty) || 1;
+    const subUnit = item.sub_unit || 'pcs';
+    const partsVal = parseFloat(item.original_qty) || 1;
     const remainingParts = item.qty !== '' && item.qty !== undefined && !isNaN(parseFloat(item.qty))
       ? parseFloat(item.qty)
-      : partsVal; // Available Parts (e.g. 4)
-    const originalPrice = parseFloat(item.price) || 0; // Original Price of batch (e.g. 360)
+      : partsVal;
+    const originalPrice = parseFloat(item.price) || 0;
     const discountedPrice = item.discounted_price !== undefined && !isNaN(parseFloat(item.discounted_price))
       ? parseFloat(item.discounted_price)
-      : originalPrice; // Discounted Price of batch (e.g. 324)
+      : originalPrice;
 
     totalAmount += discountedPrice;
 
     const cleanedName = cleanItemName(item.name);
     
-    // Formatting description line
     const sizePart = partsVal > 1 ? `${subQty}${subUnit}*${partsVal}` : `${subQty}${subUnit}`;
     const suffix = remainingParts < partsVal ? `, ${remainingParts}` : '';
     const statusWord = remainingParts > 0 ? 'stock available' : 'stock unavailable';
@@ -97,17 +111,31 @@ export const addInventoryPurchase = async (fromAccount, date, items, noteText = 
 
     const status = remainingParts > 0 ? 'available' : 'unavailable';
     const batchId = `${isoDate}_${txnId}_${i}`;
-    
-    // Calculate unit price per part
     const unitPrice = partsVal > 0 ? (discountedPrice / partsVal) : discountedPrice;
 
-    await db.run(
-      'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value, category, brand) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [batchId, cleanedName, remainingParts, item.unit || 'pcs', originalPrice, unitPrice, status, isoDate, item.notes || '', now, subQty, subUnit, partsVal, packQty, item.discountType || 'final_price', parseFloat(item.discountValue) || 0, item.category || '', item.brand || '']
-    );
+    const row = {
+      id: batchId,
+      name: cleanedName,
+      qty: remainingParts,
+      unit: item.unit || 'pcs',
+      price: originalPrice,
+      discounted_price: unitPrice,
+      status,
+      purchased_date: isoDate,
+      notes: item.notes || '',
+      updated_at: now,
+      sub_qty: subQty,
+      sub_unit: subUnit,
+      original_qty: partsVal,
+      pack_qty: packQty,
+      discount_type: item.discountType || 'final_price',
+      discount_value: parseFloat(item.discountValue) || 0,
+      category: item.category || '',
+      brand: item.brand || ''
+    };
+    inventoryRows.push(row);
   }
 
-  // Always save rounded values for transactions
   const roundedTotal = Math.round(totalAmount);
   const description = itemDetails.join('\n');
   const txn = {
@@ -130,7 +158,60 @@ export const addInventoryPurchase = async (fromAccount, date, items, noteText = 
     tags: '#stock #inventory',
   };
 
-  await addTransaction(txn);
+  const totalBundleItems = inventoryRows.length + 1;
+  // Event 0: Transfer transaction
+  ops.push({
+    storeName: 'transactions',
+    id: txnId,
+    operation: 'INSERT',
+    entity: {
+      id: txnId,
+      date: formattedDate,
+      time: formattedTime,
+      account: fromAccount,
+      from_account: fromAccount,
+      to_account: 'Stock',
+      category: 'Transfer',
+      subcategory: '',
+      note: noteText,
+      description,
+      inr: roundedTotal,
+      amount: String(roundedTotal),
+      currency: 'INR',
+      type: 'Transfer-Out',
+      created_at: now,
+      updated_at: now,
+      recurring_rule_id: '',
+      tags: '#stock #inventory',
+      split_group_id: '',
+      receipt_image: '',
+      warranty_expiry: '',
+      serial_no: '',
+      sub_account: '',
+      from_sub_account: '',
+      to_sub_account: ''
+    },
+    bundle_id: txnId,
+    bundle_index: 0,
+    bundle_total: totalBundleItems
+  });
+
+  // Events 1..K: Inventory items
+  for (let i = 0; i < inventoryRows.length; i++) {
+    const invRow = inventoryRows[i];
+    ops.push({
+      storeName: 'inventory',
+      id: invRow.id,
+      operation: 'INSERT',
+      entity: invRow,
+      bundle_id: txnId,
+      bundle_index: i + 1,
+      bundle_total: totalBundleItems
+    });
+  }
+
+  await executeAtomicBatch({ operations: ops, bundleId: txnId });
+  return { txnId, totalAmount: roundedTotal, items: inventoryRows };
 };
 
 export const consumeInventoryItem = async (
@@ -199,6 +280,7 @@ export const consumeInventoryItem = async (
   let totalCost = 0;
   const detailsList = [];
   const deductions = [];
+  const ops = [];
 
   // Clicked item first
   const currQty = parseFloat(item.qty) || 0;
@@ -207,10 +289,19 @@ export const consumeInventoryItem = async (
   const status = newQty > 0.0001 ? 'available' : 'unavailable';
 
   if (res.values?.[0]) {
-    await db.run(
-      'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
-      [newQty, status, now, itemId]
-    );
+    const updatedClickedItem = {
+      ...item,
+      qty: newQty,
+      status,
+      updated_at: now
+    };
+    ops.push({
+      storeName: 'inventory',
+      id: itemId,
+      operation: 'UPDATE',
+      entity: updatedClickedItem,
+      expectedBaseEntity: item
+    });
   }
 
   const pricePaidPerPack = parseFloat(item.discounted_price) || parseFloat(item.price) || 0;
@@ -248,10 +339,19 @@ export const consumeInventoryItem = async (
       const newQtyOther = Math.max(0, otherQty - deductFromOther);
       const statusOther = newQtyOther > 0.0001 ? 'available' : 'unavailable';
 
-      await db.run(
-        'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
-        [newQtyOther, statusOther, now, other.id]
-      );
+      const updatedOtherItem = {
+        ...other,
+        qty: newQtyOther,
+        status: statusOther,
+        updated_at: now
+      };
+      ops.push({
+        storeName: 'inventory',
+        id: other.id,
+        operation: 'UPDATE',
+        entity: updatedOtherItem,
+        expectedBaseEntity: other
+      });
 
       const otherPrice = parseFloat(other.discounted_price) || parseFloat(other.price) || 0;
       totalCost += deductFromOther * otherPrice;
@@ -288,6 +388,8 @@ export const consumeInventoryItem = async (
   const description = `${labelPrefix} ${totalConsumedStr} of ${item.name} (${detailsList.join(', ')})`;
   const stockTags = deductions.map(d => `#stock_ref_${d.id}:${d.qty}`).join(' ');
 
+  const bundleId = uuid();
+
   if (usageType === 'instalment') {
     // Convert date format to YYYY-MM-DD for recurring engine
     let isoStartDate = date;
@@ -299,8 +401,10 @@ export const consumeInventoryItem = async (
     const months = parseInt(instalmentMonths) || 3;
     const totalDays = months * 30;
     const baseInstalmentNote = (userNote || '').trim() || 'consumed';
+    const ruleId = uuid();
 
     const rule = {
+      id: ruleId,
       rule_type: 'instalment',
       status: 'completed', // all parts created upfront
       txn_type: 'Expense',
@@ -316,6 +420,7 @@ export const consumeInventoryItem = async (
       total_days: totalDays,
       start_date: isoStartDate,
       schedule_mode: 'on_date',
+      created_at: now
     };
 
     const schedule = buildInstalmentSchedule(rule);
@@ -325,49 +430,97 @@ export const consumeInventoryItem = async (
     rule.end_date = schedule[schedule.length - 1]?.date || '';
     rule.amount_per_part = schedule[0]?.amount || 0;
 
-    const saved = await saveRecurringRule(rule);
+    ops.push({
+      storeName: 'recurring_rules',
+      id: ruleId,
+      operation: 'INSERT',
+      entity: rule
+    });
 
     for (const inst of schedule) {
       const [iy, im, id2] = inst.date.split('-');
       const instTxnDate = `${id2}/${im}/${iy}`;
-      await addTransaction({
-        Date: instTxnDate,
-        Time: finalTime,
-        Account: 'Stock',
-        FromAccount: 'Stock',
-        ToAccount: '',
-        Category: category,
-        Subcategory: subcategory || 'Default',
-        Note: buildInstalmentNote(baseInstalmentNote, inst.part, inst.total),
-        Description: description,
-        INR: inst.amount,
-        Amount: String(inst.amount),
-        Currency: 'INR',
-        'Income/Expense': 'Expense',
-        recurring_rule_id: saved.id,
-        Tags: `#stock #instalment ${stockTags}`,
+      const instTxnId = uuid();
+      ops.push({
+        storeName: 'transactions',
+        id: instTxnId,
+        operation: 'INSERT',
+        entity: {
+          id: instTxnId,
+          date: instTxnDate,
+          time: finalTime,
+          account: 'Stock',
+          from_account: 'Stock',
+          to_account: '',
+          category: category,
+          subcategory: subcategory || 'Default',
+          note: buildInstalmentNote(baseInstalmentNote, inst.part, inst.total),
+          description: description,
+          inr: inst.amount,
+          amount: String(inst.amount),
+          currency: 'INR',
+          type: 'Expense',
+          created_at: now,
+          updated_at: now,
+          recurring_rule_id: ruleId,
+          tags: `#stock #instalment ${stockTags}`,
+          split_group_id: '',
+          receipt_image: '',
+          warranty_expiry: '',
+          serial_no: '',
+          sub_account: '',
+          from_sub_account: '',
+          to_sub_account: ''
+        }
       });
     }
   } else {
     const finalNote = (userNote || '').trim() || (usageType === 'lend' ? `Lend to ${personName.trim()}` : '');
-    const txn = {
-      Date: formattedDate,
-      Time: finalTime,
-      Account: usageType === 'lend' ? 'Lend' : 'Stock',
-      FromAccount: usageType === 'lend' ? 'Lend' : 'Stock',
-      ToAccount: '',
-      Category: usageType === 'lend' ? 'Lend' : category,
-      Subcategory: usageType === 'lend' ? '' : subcategory,
-      Note: finalNote,
-      Description: description,
-      INR: roundedExpense,
-      Amount: String(roundedExpense),
-      Currency: 'INR',
-      'Income/Expense': 'Expense',
-      tags: `#stock #${usageType === 'lend' ? 'lent' : 'consumed'} ${stockTags}`,
-    };
-    await addTransaction(txn);
+    const txnId = uuid();
+    ops.push({
+      storeName: 'transactions',
+      id: txnId,
+      operation: 'INSERT',
+      entity: {
+        id: txnId,
+        date: formattedDate,
+        time: finalTime,
+        account: usageType === 'lend' ? 'Lend' : 'Stock',
+        from_account: usageType === 'lend' ? 'Lend' : 'Stock',
+        to_account: '',
+        category: usageType === 'lend' ? 'Lend' : category,
+        subcategory: usageType === 'lend' ? '' : subcategory,
+        note: finalNote,
+        description: description,
+        inr: roundedExpense,
+        amount: String(roundedExpense),
+        currency: 'INR',
+        type: 'Expense',
+        created_at: now,
+        updated_at: now,
+        recurring_rule_id: '',
+        tags: `#stock #${usageType === 'lend' ? 'lent' : 'consumed'} ${stockTags}`,
+        split_group_id: '',
+        receipt_image: '',
+        warranty_expiry: '',
+        serial_no: '',
+        sub_account: '',
+        from_sub_account: '',
+        to_sub_account: ''
+      }
+    });
   }
+
+  // Index bundle
+  const bundleTotal = ops.length;
+  for (let i = 0; i < ops.length; i++) {
+    ops[i].bundle_id = bundleId;
+    ops[i].bundle_index = i;
+    ops[i].bundle_total = bundleTotal;
+  }
+
+  await executeAtomicBatch({ operations: ops, bundleId });
+  return { bundleId, totalAmount: roundedExpense, deductions };
 };
 
 export const updateInventoryItem = async (id, data) => {
@@ -383,27 +536,46 @@ export const updateInventoryItem = async (id, data) => {
 
   let targetId = id;
   const existingRes = await db.query('SELECT * FROM inventory WHERE id = ?', [id]);
-  if (!existingRes.values || existingRes.values.length === 0) {
-    // If no record exists with this batch id, insert a new record with this exact batch ID
-    targetId = id;
-    await db.run(
-      'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value, category, brand) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [targetId, cleanedName, qty, data.unit || 'pcs', price, discPrice, status, data.purchased_date || '', data.notes || '', now, parseFloat(data.sub_qty) || 1, data.sub_unit || '', original_qty, pack_qty, data.discount_type || 'percentage', parseFloat(data.discount_value) || 0, data.category || '', data.brand || '']
-    );
-    return targetId;
-  }
+  const isExisting = existingRes.values && existingRes.values.length > 0;
 
-  await db.run(
-    'UPDATE inventory SET name = ?, qty = ?, unit = ?, price = ?, discounted_price = ?, status = ?, purchased_date = ?, notes = ?, updated_at = ?, sub_qty = ?, sub_unit = ?, original_qty = ?, pack_qty = ?, discount_type = ?, discount_value = ?, category = ?, brand = ? WHERE id = ?',
-    [cleanedName, qty, data.unit || '', price, discPrice, status, data.purchased_date || '', data.notes || '', now, parseFloat(data.sub_qty) || 1, data.sub_unit || '', original_qty, pack_qty, data.discount_type || 'percentage', parseFloat(data.discount_value) || 0, data.category || '', data.brand || '', targetId]
-  );
+  const entity = {
+    id: targetId,
+    name: cleanedName,
+    qty,
+    unit: data.unit || 'pcs',
+    price,
+    discounted_price: discPrice,
+    status,
+    purchased_date: data.purchased_date || '',
+    notes: data.notes || '',
+    updated_at: now,
+    sub_qty: parseFloat(data.sub_qty) || 1,
+    sub_unit: data.sub_unit || '',
+    original_qty,
+    pack_qty,
+    discount_type: data.discount_type || 'percentage',
+    discount_value: parseFloat(data.discount_value) || 0,
+    category: data.category || '',
+    brand: data.brand || ''
+  };
+
+  await executeAtomicMutation({
+    storeName: 'inventory',
+    entityId: targetId,
+    operation: isExisting ? 'UPDATE' : 'INSERT',
+    entityData: entity
+  });
+
   return targetId;
 };
 
 export const deleteInventoryItem = async (itemId) => {
-  const db = getDB();
-  await db.run('DELETE FROM inventory WHERE id = ?', [itemId]);
-  await recordTombstone(itemId, 'inventory');
+  await executeAtomicMutation({
+    storeName: 'inventory',
+    entityId: itemId,
+    operation: 'DELETE',
+    tombstoneType: 'inventory'
+  });
 };
 
 export const restoreInventoryItem = async (itemId, qtyToRestore, unitMode) => {
@@ -423,10 +595,19 @@ export const restoreInventoryItem = async (itemId, qtyToRestore, unitMode) => {
   const newQty = currQty + finalQtyToRestore;
   const status = newQty > 0 ? 'available' : 'unavailable';
 
-  await db.run(
-    'UPDATE inventory SET qty = ?, status = ?, updated_at = ? WHERE id = ?',
-    [newQty, status, new Date().toISOString(), itemId]
-  );
+  const updatedItem = {
+    ...item,
+    qty: newQty,
+    status,
+    updated_at: new Date().toISOString()
+  };
+
+  await executeAtomicMutation({
+    storeName: 'inventory',
+    entityId: itemId,
+    operation: 'UPDATE',
+    entityData: updatedItem
+  });
 };
 
 export const syncStockFromPastTransactions = async () => {
@@ -434,16 +615,17 @@ export const syncStockFromPastTransactions = async () => {
   const now = new Date().toISOString();
 
   // Query all past transactions matching To:Stock, Stock category, #stock tags, or stock descriptions
-  const res = await db.query(
-    "SELECT * FROM transactions WHERE to_account = 'Stock' OR category = 'Stock' OR tags LIKE '%stock%' OR description LIKE '%stock available%' OR description LIKE '%stock unavailable%'",
-    []
-  );
-  
-  const txns = res.values || [];
-  let parsedCount = 0;
+  const [res, curInvRes] = await Promise.all([
+    db.query(
+      "SELECT * FROM transactions WHERE to_account = 'Stock' OR category = 'Stock' OR tags LIKE '%stock%' OR description LIKE '%stock available%' OR description LIKE '%stock unavailable%'",
+      []
+    ),
+    db.query('SELECT * FROM inventory', [])
+  ]);
 
-  // Clear existing items to prevent duplicates
-  await db.run('DELETE FROM inventory', []);
+  const txns = res.values || [];
+  const curInventory = curInvRes.values || [];
+  const newInventoryRows = [];
 
   for (const r of txns) {
     const desc = r.description || '';
@@ -462,32 +644,44 @@ export const syncStockFromPastTransactions = async () => {
         discountValue = Number((((parsed.mrp - parsed.paid) / parsed.mrp) * 100).toFixed(2));
       }
 
-      await db.run(
-        'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes, updated_at, sub_qty, sub_unit, original_qty, pack_qty, discount_type, discount_value, category, brand) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-          batchId,
-          parsed.canonicalProduct || parsed.cleanedName,
-          parsed.remainingQty,
-          parsed.unit || 'pcs',
-          parsed.mrp,
-          parsed.unitPrice,
-          parsed.status,
-          parsed.purchasedDate,
-          parsed.source || '',
-          now,
-          parsed.sub_qty || 1,
-          parsed.sub_unit || '',
-          parsed.purchasedQty || 1,
-          parsed.purchasedQty || 1,
-          discountType,
-          discountValue,
-          parsed.category || '',
-          parsed.brand || ''
-        ]
-      );
-      parsedCount++;
+      newInventoryRows.push({
+        id: batchId,
+        name: parsed.canonicalProduct || parsed.cleanedName,
+        qty: parsed.remainingQty,
+        unit: parsed.unit || 'pcs',
+        price: parsed.mrp,
+        discounted_price: parsed.unitPrice,
+        status: parsed.status,
+        purchased_date: parsed.purchasedDate,
+        notes: parsed.source || '',
+        updated_at: now,
+        sub_qty: parsed.sub_qty || 1,
+        sub_unit: parsed.sub_unit || '',
+        original_qty: parsed.purchasedQty || 1,
+        pack_qty: parsed.purchasedQty || 1,
+        discount_type: discountType,
+        discount_value: discountValue,
+        category: parsed.category || '',
+        brand: parsed.brand || ''
+      });
     }
   }
-  
-  return parsedCount;
+
+  const diff = await computeEntityDiff(curInventory, newInventoryRows, 'id');
+  const ops = diff.operations.map(op => ({
+    storeName: 'inventory',
+    id: op.id,
+    operation: op.operation,
+    entity: op.entity,
+    expectedBaseEntity: op.oldEntity || (op.operation === 'DELETE' ? op.entity : null),
+    base_checksum: op.base_checksum,
+    new_checksum: op.new_checksum,
+    tombstoneType: op.operation === 'DELETE' ? 'inventory' : null
+  }));
+
+  if (ops.length > 0) {
+    await executeAtomicBatch({ operations: ops });
+  }
+
+  return newInventoryRows.length;
 };

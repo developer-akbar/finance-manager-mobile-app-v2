@@ -5,7 +5,7 @@
 import { Capacitor } from '@capacitor/core';
 
 const IDB_NAME    = 'finman_v2';
-const IDB_VERSION = 13; // v13 — sync_tombstones table and store for cloud sync
+const IDB_VERSION = 16; // v16 — sync_conflicts store
 
 // Each store and its primary key field
 const STORE_DEFS = [
@@ -24,6 +24,13 @@ const STORE_DEFS = [
   { name:'brokerages',              key:'id'  },
   { name:'investment_plans',         key:'id'  },
   { name:'sync_tombstones',         key:'id'  },
+  { name:'sync_delta_queue',        key:'event_id' },
+  { name:'sync_local_state',        key:'key' },
+  { name:'sync_staged_packages',    key:'package_id' },
+  { name:'sync_staged_events',      key:'event_id' },
+  { name:'sync_peer_state',         key:'peer_device_id' },
+  { name:'sync_process_locks',      key:'lock_name' },
+  { name:'sync_conflicts',          key:'conflict_id' },
 ];
 
 const storeKey = (store) => STORE_DEFS.find(s => s.name === store)?.key ?? 'id';
@@ -38,6 +45,9 @@ export const closeDB = () => {
   _db = null;
   _initPromise = null;
 };
+
+export const getRawIDB = () => _idb;
+export const openIDBInstance = () => openIDB();
 
 const openIDB = () => new Promise((res, rej) => {
   if (_idb) { res(_idb); return; }
@@ -126,11 +136,19 @@ const idbPutBatch = (db, store, items) => new Promise((res, rej) => {
 const parseWhere = (clause, vals) => {
   let vi = 0;
   return clause.split(/\s+AND\s+/i).map(p => {
-    const lm = p.trim().match(/^(\w+)\s+LIKE\s+\?/i);
-    const em = p.trim().match(/^(\w+)\s*=\s*\?/);
-    const om = p.trim().match(/^\((.+)\)/);  // OR groups like (a=? OR b=? OR c=?)
-    if (lm) return { col:lm[1], op:'LIKE', val:vals[vi++] };
-    if (em) return { col:em[1], op:'=',    val:vals[vi++] };
+    const lm  = p.trim().match(/^(\w+)\s+LIKE\s+\?/i);
+    const lte = p.trim().match(/^(\w+)\s*<=\s*\?/);
+    const gte = p.trim().match(/^(\w+)\s*>=\s*\?/);
+    const lt  = p.trim().match(/^(\w+)\s*<\s*\?/);
+    const gt  = p.trim().match(/^(\w+)\s*>\s*\?/);
+    const em  = p.trim().match(/^(\w+)\s*=\s*\?/);
+    const om  = p.trim().match(/^\((.+)\)/);  // OR groups like (a=? OR b=? OR c=?)
+    if (lm)  return { col:lm[1],  op:'LIKE', val:vals[vi++] };
+    if (lte) return { col:lte[1], op:'<=',   val:vals[vi++] };
+    if (gte) return { col:gte[1], op:'>=',   val:vals[vi++] };
+    if (lt)  return { col:lt[1],  op:'<',    val:vals[vi++] };
+    if (gt)  return { col:gt[1],  op:'>',    val:vals[vi++] };
+    if (em)  return { col:em[1],  op:'=',    val:vals[vi++] };
     if (om) {
       // parse OR sub-conditions
       const subs = om[1].split(/\s+OR\s+/i).map(sp => {
@@ -148,8 +166,29 @@ const parseWhere = (clause, vals) => {
 
 const matchCond = (row, c) => {
   if (c.op === 'OR')   return c.subs.some(s => matchCond(row, s));
-  const rv = String(row[c.col] ?? '');
+  const rawVal = row[c.col];
+  const rv = String(rawVal ?? '');
   if (c.op === '=')    return rv === String(c.val ?? '');
+  if (c.op === '<=') {
+    const n1 = Number(rawVal), n2 = Number(c.val);
+    if (!isNaN(n1) && !isNaN(n2) && typeof rawVal === 'number') return n1 <= n2;
+    return rv <= String(c.val ?? '');
+  }
+  if (c.op === '>=') {
+    const n1 = Number(rawVal), n2 = Number(c.val);
+    if (!isNaN(n1) && !isNaN(n2) && typeof rawVal === 'number') return n1 >= n2;
+    return rv >= String(c.val ?? '');
+  }
+  if (c.op === '<') {
+    const n1 = Number(rawVal), n2 = Number(c.val);
+    if (!isNaN(n1) && !isNaN(n2) && typeof rawVal === 'number') return n1 < n2;
+    return rv < String(c.val ?? '');
+  }
+  if (c.op === '>') {
+    const n1 = Number(rawVal), n2 = Number(c.val);
+    if (!isNaN(n1) && !isNaN(n2) && typeof rawVal === 'number') return n1 > n2;
+    return rv > String(c.val ?? '');
+  }
   if (c.op === 'LIKE') return new RegExp('^' + String(c.val ?? '').replace(/%/g,'.*').replace(/_/g,'.') + '$','i').test(rv);
   return true;
 };
@@ -477,6 +516,93 @@ const applySchema = async (db) => {
     id TEXT PRIMARY KEY,
     entity_type TEXT DEFAULT 'transaction',
     deleted_at TEXT NOT NULL
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS sync_delta_queue (
+    event_id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    collection TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    base_checksum TEXT,
+    new_checksum TEXT,
+    tombstone_generation INTEGER DEFAULT 0,
+    payload TEXT,
+    status TEXT DEFAULT 'PENDING',
+    bundle_id TEXT,
+    bundle_index INTEGER DEFAULT 0,
+    bundle_total INTEGER DEFAULT 1,
+    bundle_checksum TEXT,
+    parent_event_id TEXT
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS sync_local_state (
+    key TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    last_allocated_sequence INTEGER DEFAULT 0,
+    last_pushed_sequence INTEGER DEFAULT 0,
+    updated_at TEXT NOT NULL
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS sync_staged_packages (
+    package_id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    start_sequence INTEGER NOT NULL,
+    end_sequence INTEGER NOT NULL,
+    event_count INTEGER NOT NULL,
+    package_checksum TEXT NOT NULL,
+    drive_file_id TEXT,
+    staged_at TEXT NOT NULL,
+    status TEXT DEFAULT 'STAGED'
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS sync_staged_events (
+    event_id TEXT PRIMARY KEY,
+    package_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    collection TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    base_checksum TEXT,
+    new_checksum TEXT,
+    tombstone_generation INTEGER DEFAULT 0,
+    payload TEXT,
+    bundle_id TEXT,
+    bundle_index INTEGER DEFAULT 0,
+    bundle_total INTEGER DEFAULT 1,
+    bundle_checksum TEXT,
+    parent_event_id TEXT,
+    staged_at TEXT NOT NULL
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS sync_peer_state (
+    peer_device_id TEXT PRIMARY KEY,
+    last_staged_sequence INTEGER DEFAULT 0,
+    last_reconciled_sequence INTEGER DEFAULT 0,
+    updated_at TEXT NOT NULL
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS sync_process_locks (
+    lock_name TEXT PRIMARY KEY,
+    owner_token TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS sync_conflicts (
+    conflict_id TEXT PRIMARY KEY,
+    collection TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    conflict_type TEXT NOT NULL,
+    peer_device_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    package_id TEXT,
+    base_checksum TEXT,
+    local_checksum TEXT,
+    remote_checksum TEXT,
+    local_payload TEXT,
+    remote_payload TEXT,
+    status TEXT DEFAULT 'PENDING',
+    resolution TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
   );`);
 };
 
