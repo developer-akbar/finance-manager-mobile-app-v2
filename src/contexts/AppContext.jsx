@@ -621,6 +621,22 @@ export function AppProvider({ children }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // Phase 7.5: Initialize Automatic Delta Synchronization Runtime
+  useEffect(() => {
+    let cleanup = null;
+    import('../services/deltaSyncCoordinator.js').then(({ initializeDeltaSyncRuntime }) => {
+      cleanup = initializeDeltaSyncRuntime();
+    }).catch(err => {
+      console.warn('[AppContext] Failed to initialize delta sync runtime:', err);
+    });
+
+    return () => {
+      if (cleanup && typeof cleanup === 'function') {
+        cleanup();
+      }
+    };
+  }, []);
+
   const navigate = (view, params = null) => dispatch({ type: 'NAVIGATE', payload: { view, params } });
   const clearNavParams = () => dispatch({ type: 'CLEAR_NAV_PARAMS' });
 
