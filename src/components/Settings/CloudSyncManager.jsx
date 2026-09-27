@@ -25,6 +25,11 @@ import {
   lockSyncSession,
   subscribeSyncSession
 } from '../../services/syncSession.js';
+import {
+  getDeltaSyncMetrics,
+  subscribeSyncStatus,
+  SYNC_STATUS as DELTA_SYNC_STATUS
+} from '../../services/deltaSyncCoordinator.js';
 import { getSetting } from '../../database/settings.js';
 import {
   getFriendlyActionName,
@@ -60,10 +65,22 @@ export default function CloudSyncManager({ onBack }) {
   const [previewResult, setPreviewResult] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
-  // Persisted Sync Metadata (Read-Only)
+  // Persisted Legacy Snapshot Metadata (Read-Only)
   const [lastSyncInfo, setLastSyncInfo] = useState({
     lastSyncedAt: null,
     lastSnapshotId: null
+  });
+
+  // Live Phase 7.5 Delta Sync Observability State
+  const [deltaMetrics, setDeltaMetrics] = useState({
+    status: DELTA_SYNC_STATUS.IDLE,
+    pendingCount: 0,
+    lastAllocatedSequence: 0,
+    lastUploadedSequence: 0,
+    lastAckedSequence: 0,
+    deviceId: 'local_device',
+    lastDeltaSyncedAt: null,
+    latestError: null
   });
 
   // Subscribe to Session Key state changes
@@ -73,6 +90,33 @@ export default function CloudSyncManager({ onBack }) {
     });
     return unsubscribe;
   }, []);
+
+  // Subscribe to Phase 7.5 Delta Sync Coordinator State & Metrics
+  useEffect(() => {
+    let mounted = true;
+    async function refreshDeltaMetrics(details = {}) {
+      try {
+        const m = await getDeltaSyncMetrics();
+        if (mounted) {
+          setDeltaMetrics(prev => ({
+            ...m,
+            latestError: details?.error || (details?.reason ? details.reason : prev.latestError)
+          }));
+        }
+      } catch {}
+    }
+
+    refreshDeltaMetrics();
+
+    const unsubscribeDelta = subscribeSyncStatus((status, details) => {
+      refreshDeltaMetrics(details);
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribeDelta();
+    };
+  }, [isUnlocked, isAuthenticated]);
 
   // Load Client ID & Last Sync Info on mount
   useEffect(() => {
@@ -632,21 +676,93 @@ export default function CloudSyncManager({ onBack }) {
           )}
         </div>
 
-        {/* Section 4: Sync Status & History Metadata */}
-        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>4. Metadata &amp; State</div>
+        {/* Section 4: Delta Sync Status & Metrics */}
+        <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>4. Delta Sync (Automatic V3)</span>
+          {(() => {
+            const badge = (() => {
+              if (!isAuthenticated) return { text: 'Authentication Required', color: 'var(--expense)', bg: 'rgba(255, 77, 106, 0.15)' };
+              if (!isUnlocked) return { text: 'Session Locked', color: 'var(--warning)', bg: 'rgba(255, 179, 0, 0.15)' };
+              if (deltaMetrics.status === DELTA_SYNC_STATUS.SYNCING) return { text: 'Syncing...', color: 'var(--accent)', bg: 'rgba(74, 144, 226, 0.15)' };
+              if (deltaMetrics.status === DELTA_SYNC_STATUS.AUTH_REQUIRED) return { text: 'Authentication Required', color: 'var(--expense)', bg: 'rgba(255, 77, 106, 0.15)' };
+              if (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR) return { text: 'Sync Failed', color: 'var(--expense)', bg: 'rgba(255, 77, 106, 0.15)' };
+              if (deltaMetrics.pendingCount > 0) return { text: `${deltaMetrics.pendingCount} Pending`, color: 'var(--warning)', bg: 'rgba(255, 179, 0, 0.15)' };
+              if (deltaMetrics.lastDeltaSyncedAt || deltaMetrics.lastUploadedSequence > 0) return { text: 'Synced', color: 'var(--green)', bg: 'rgba(0, 229, 160, 0.15)' };
+              return { text: 'Idle', color: 'var(--text-muted)', bg: 'rgba(255, 255, 255, 0.05)' };
+            })();
+            return (
+              <span style={{
+                fontSize: '0.68rem',
+                fontWeight: 800,
+                padding: '2px 8px',
+                borderRadius: 4,
+                background: badge.bg,
+                color: badge.color
+              }}>
+                {badge.text}
+              </span>
+            );
+          })()}
+        </div>
+        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Status</span>
+            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+              {!isAuthenticated ? 'Authentication Required' : (!isUnlocked ? 'Session Locked' : (deltaMetrics.status === DELTA_SYNC_STATUS.SYNCING ? 'Syncing...' : (deltaMetrics.pendingCount > 0 ? 'Pending' : (deltaMetrics.lastDeltaSyncedAt ? 'Synced' : 'Idle'))))}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Pending Changes</span>
+            <span style={{ fontWeight: 700, color: deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)' }}>
+              {deltaMetrics.pendingCount} {deltaMetrics.pendingCount === 1 ? 'event' : 'events'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Last Delta Sync</span>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+              {deltaMetrics.lastDeltaSyncedAt ? new Date(deltaMetrics.lastDeltaSyncedAt).toLocaleString() : 'Never'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Uploaded Sequence</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
+              {deltaMetrics.lastUploadedSequence}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Acknowledged Sequence</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
+              {deltaMetrics.lastAckedSequence}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Device ID</span>
+            <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+              {deltaMetrics.deviceId}
+            </span>
+          </div>
+          {deltaMetrics.latestError && (
+            <div style={{ marginTop: 8, padding: '6px 8px', borderRadius: 4, background: 'rgba(255, 77, 106, 0.1)', color: 'var(--expense)', fontSize: '0.7rem' }}>
+              ⚠️ {deltaMetrics.latestError}
+            </div>
+          )}
+        </div>
+
+        {/* Section 5: Legacy Full Snapshot Metadata */}
+        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>5. Full Snapshot Baseline (Legacy / Disaster Recovery)</div>
         <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Local Transactions</span>
             <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{state.transactions.length.toLocaleString()}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last Successful Sync</span>
+            <span style={{ color: 'var(--text-muted)' }}>Last Full Snapshot</span>
             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
               {lastSyncInfo.lastSyncedAt ? new Date(lastSyncInfo.lastSyncedAt).toLocaleString() : 'Never'}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last Snapshot ID</span>
+            <span style={{ color: 'var(--text-muted)' }}>Snapshot ID</span>
             <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
               {lastSyncInfo.lastSnapshotId || 'None'}
             </span>

@@ -101,11 +101,27 @@ export function closeBroadcastChannel() {
   }
 }
 
+const _statusListeners = new Set();
+
 /**
- * Broadcasts sync status updates to other open tabs.
+ * Subscribe to sync status changes within the same window / process.
+ */
+export function subscribeSyncStatus(listener) {
+  if (typeof listener !== 'function') return () => {};
+  _statusListeners.add(listener);
+  return () => {
+    _statusListeners.delete(listener);
+  };
+}
+
+/**
+ * Broadcasts sync status updates to local subscribers and other open tabs.
  */
 export function broadcastSyncStatus(status, details = {}) {
   _currentSyncStatus = status;
+  _statusListeners.forEach(fn => {
+    try { fn(status, details); } catch {}
+  });
   const ch = getBroadcastChannel();
   if (ch) {
     try {
@@ -121,6 +137,46 @@ export function broadcastSyncStatus(status, details = {}) {
 
 export function getCurrentSyncStatus() {
   return _currentSyncStatus;
+}
+
+/**
+ * Queries current live delta queue counts and local sequence watermarks for UI display.
+ */
+export async function getDeltaSyncMetrics() {
+  try {
+    const db = getDB();
+    const qRes = await db.query('SELECT * FROM sync_delta_queue').catch(() => ({ values: [] }));
+    const pendingCount = (qRes?.values || []).filter(r => r.status !== 'ACKNOWLEDGED').length;
+
+    const sRes = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] }));
+    const localState = sRes?.values?.[0] || {};
+
+    let lastDeltaSyncedAt = null;
+    try {
+      const { getSetting } = await import('../database/settings.js');
+      lastDeltaSyncedAt = await getSetting('last_delta_synced_at').catch(() => null);
+    } catch {}
+
+    return {
+      status: getCurrentSyncStatus(),
+      pendingCount,
+      lastAllocatedSequence: Number(localState.last_allocated_sequence || 0),
+      lastUploadedSequence: Number(localState.last_uploaded_sequence ?? localState.last_pushed_sequence ?? 0),
+      lastAckedSequence: Number(localState.last_acked_sequence ?? localState.last_uploaded_sequence ?? localState.last_pushed_sequence ?? 0),
+      deviceId: localState.device_id || 'local_device',
+      lastDeltaSyncedAt
+    };
+  } catch {
+    return {
+      status: getCurrentSyncStatus(),
+      pendingCount: 0,
+      lastAllocatedSequence: 0,
+      lastUploadedSequence: 0,
+      lastAckedSequence: 0,
+      deviceId: 'local_device',
+      lastDeltaSyncedAt: null
+    };
+  }
 }
 
 /**
@@ -426,6 +482,12 @@ export async function executeFullSyncPass(options = {}) {
       // 4. Reconciliation: Apply staged events deterministically to canonical store
       const reconResult = await reconcileStagedEvents({});
 
+      const nowIso = new Date().toISOString();
+      try {
+        const { setSetting } = await import('../database/settings.js');
+        await setSetting('last_delta_synced_at', nowIso);
+      } catch {}
+
       const syncResult = {
         success: true,
         status: SYNC_STATUS.SUCCESS,
@@ -433,7 +495,7 @@ export async function executeFullSyncPass(options = {}) {
         outbound: pushResult,
         inbound: pullResult,
         reconciliation: reconResult,
-        timestamp: new Date().toISOString()
+        timestamp: nowIso
       };
 
       broadcastSyncStatus(SYNC_STATUS.SUCCESS, syncResult);
