@@ -38,16 +38,36 @@ export function isNoOpPreview(previewResult) {
   );
 }
 
+export function isPullOnlyPreview(previewResult) {
+  if (!previewResult) return false;
+  if (previewResult.action === 'BOOTSTRAP_FROM_CLOUD' || previewResult.isFirstSync) return false;
+  if (previewResult.conflicts && previewResult.conflicts.length > 0) return false;
+
+  const totalLocalChanges = (previewResult.plannedLocalChanges?.inserts || 0) +
+                            (previewResult.plannedLocalChanges?.updates || 0) +
+                            (previewResult.plannedLocalChanges?.deletes || 0) +
+                            (previewResult.plannedLocalChanges?.settingsUpdates || 0);
+
+  const totalCloudChanges = (previewResult.plannedCloudChanges?.inserts || 0) +
+                            (previewResult.plannedCloudChanges?.updates || 0) +
+                            (previewResult.plannedCloudChanges?.deletes || 0) +
+                            (previewResult.plannedCloudChanges?.settingsUpdates || 0);
+
+  return totalLocalChanges > 0 && totalCloudChanges === 0;
+}
+
 export function getModalConfirmConfig(previewResult, stateTransactionsCount = 0, isSyncing = false) {
   if (!previewResult) return null;
 
   const isBootstrap = previewResult.action === 'BOOTSTRAP_FROM_CLOUD';
   const isNoOp = isNoOpPreview(previewResult);
+  const isPullOnly = isPullOnlyPreview(previewResult);
 
   if (isBootstrap) {
     return {
       isNoOp: false,
       isBootstrap: true,
+      isPullOnly: false,
       icon: '📥',
       title: 'Confirm Device Bootstrap',
       badge: 'Bootstrap From Cloud Snapshot',
@@ -60,6 +80,7 @@ export function getModalConfirmConfig(previewResult, stateTransactionsCount = 0,
     return {
       isNoOp: true,
       isBootstrap: false,
+      isPullOnly: false,
       icon: '✨',
       title: 'In Sync — No Changes',
       badge: 'In Sync — No Changes',
@@ -68,9 +89,28 @@ export function getModalConfirmConfig(previewResult, stateTransactionsCount = 0,
     };
   }
 
+  if (isPullOnly) {
+    const totalLocalChanges = (previewResult.plannedLocalChanges?.inserts || 0) +
+                              (previewResult.plannedLocalChanges?.updates || 0) +
+                              (previewResult.plannedLocalChanges?.deletes || 0) +
+                              (previewResult.plannedLocalChanges?.settingsUpdates || 0);
+
+    return {
+      isNoOp: false,
+      isBootstrap: false,
+      isPullOnly: true,
+      icon: '📥',
+      title: 'Confirm Pull From Cloud',
+      badge: 'Incoming Changes from Cloud (No Upload)',
+      descriptionText: `${totalLocalChanges} incoming changes from cloud will be applied to your local database. Zero data will be uploaded to Google Drive.`,
+      buttonLabel: isSyncing ? 'Applying changes...' : '📥 Confirm & Pull (No Upload)'
+    };
+  }
+
   return {
     isNoOp: false,
     isBootstrap: false,
+    isPullOnly: false,
     icon: '⚡',
     title: 'Confirm Cloud Sync',
     badge: getFriendlyActionName(previewResult.action),

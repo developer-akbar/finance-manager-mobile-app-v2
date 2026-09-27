@@ -45,6 +45,7 @@ import {
 import { encryptBackupData, decryptBackupData } from '../utils/cryptoBackup.js';
 import {
   isNoOpPreview,
+  isPullOnlyPreview,
   getFriendlyActionName,
   getModalConfirmConfig
 } from '../utils/cloudSyncModalHelper.js';
@@ -470,5 +471,76 @@ describe('FinMan Cloud Sync v2 — Step 5B UI/Integration Tests', () => {
     assert.strictEqual(config.badge, 'Bootstrap From Cloud Snapshot');
     assert.ok(config.descriptionText.includes('decrypted from cloud and loaded into your local database'));
     assert.strictEqual(config.buttonLabel, '📥 Confirm & Bootstrap');
+  });
+
+  it('16. Pull-Only Confirmation UI Copy — Displays "Confirm Pull From Cloud" and "📥 Confirm & Pull (No Upload)"', () => {
+    const pullOnlyPreview = {
+      action: 'MERGE_CLEAN',
+      isFirstSync: false,
+      plannedLocalChanges: { inserts: 14, updates: 0, deletes: 0, settingsUpdates: 0 },
+      plannedCloudChanges: { inserts: 0, updates: 0, deletes: 0, settingsUpdates: 0 },
+      conflicts: []
+    };
+
+    assert.strictEqual(isPullOnlyPreview(pullOnlyPreview), true, '14 local inserts and 0 cloud changes must be pull-only');
+
+    const config = getModalConfirmConfig(pullOnlyPreview, 29040, false);
+    assert.strictEqual(config.isNoOp, false);
+    assert.strictEqual(config.isBootstrap, false);
+    assert.strictEqual(config.isPullOnly, true);
+    assert.strictEqual(config.icon, '📥');
+    assert.strictEqual(config.title, 'Confirm Pull From Cloud');
+    assert.strictEqual(config.badge, 'Incoming Changes from Cloud (No Upload)');
+    assert.ok(config.descriptionText.includes('Zero data will be uploaded'));
+    assert.ok(config.descriptionText.includes('14 incoming changes'));
+    assert.strictEqual(config.buttonLabel, '📥 Confirm & Pull (No Upload)');
+
+    const syncingConfig = getModalConfirmConfig(pullOnlyPreview, 29040, true);
+    assert.strictEqual(syncingConfig.buttonLabel, 'Applying changes...');
+  });
+
+  it('17. Pull-Only Predicate Exclusions — Normal Upload, No-Op, and Bootstrap do NOT become Pull-Only', () => {
+    // Normal upload with cloud changes > 0
+    const uploadPreview = {
+      action: 'MERGE_CLEAN',
+      isFirstSync: false,
+      plannedLocalChanges: { inserts: 14, updates: 0, deletes: 0, settingsUpdates: 0 },
+      plannedCloudChanges: { inserts: 2, updates: 0, deletes: 0, settingsUpdates: 0 },
+      conflicts: []
+    };
+    assert.strictEqual(isPullOnlyPreview(uploadPreview), false, 'Upload with cloud inserts > 0 is not pull-only');
+    const uploadConfig = getModalConfirmConfig(uploadPreview, 29040, false);
+    assert.strictEqual(uploadConfig.isPullOnly, false);
+    assert.strictEqual(uploadConfig.buttonLabel, '🚀 Confirm & Upload');
+
+    // No-op (0 local, 0 cloud)
+    const noOpPreview = {
+      action: 'MERGE_CLEAN',
+      isFirstSync: false,
+      plannedLocalChanges: { inserts: 0, updates: 0, deletes: 0, settingsUpdates: 0 },
+      plannedCloudChanges: { inserts: 0, updates: 0, deletes: 0, settingsUpdates: 0 },
+      conflicts: []
+    };
+    assert.strictEqual(isPullOnlyPreview(noOpPreview), false, 'No-op (0 local changes) is not pull-only');
+
+    // Bootstrap
+    const bootstrapPreview = {
+      action: 'BOOTSTRAP_FROM_CLOUD',
+      isFirstSync: false,
+      plannedLocalChanges: { inserts: 29040, updates: 0, deletes: 0, settingsUpdates: 0 },
+      plannedCloudChanges: { inserts: 0, updates: 0, deletes: 0, settingsUpdates: 0 },
+      conflicts: []
+    };
+    assert.strictEqual(isPullOnlyPreview(bootstrapPreview), false, 'Bootstrap action is not standard pull-only');
+
+    // Conflicts
+    const conflictPreview = {
+      action: 'MERGE_WITH_CONFLICTS',
+      isFirstSync: false,
+      plannedLocalChanges: { inserts: 14, updates: 0, deletes: 0, settingsUpdates: 0 },
+      plannedCloudChanges: { inserts: 0, updates: 0, deletes: 0, settingsUpdates: 0 },
+      conflicts: [{ id: 'c1' }]
+    };
+    assert.strictEqual(isPullOnlyPreview(conflictPreview), false, 'Preview with conflicts is not clean pull-only');
   });
 });
