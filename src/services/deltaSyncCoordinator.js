@@ -30,6 +30,12 @@ import {
   resolveConflict,
   RECONCILIATION_STATUS
 } from './deltaReconciliation.js';
+
+export {
+  reconcileStagedEvents,
+  resolveConflict,
+  RECONCILIATION_STATUS
+};
 import { computeCanonicalSha256 } from '../utils/canonicalEntity.js';
 
 export const MASTER_SYNC_LOCK_NAME = 'finman_sync_master_lock';

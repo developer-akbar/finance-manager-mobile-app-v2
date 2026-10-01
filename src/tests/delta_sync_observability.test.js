@@ -22,8 +22,16 @@ import {
   subscribeSyncStatus,
   broadcastSyncStatus,
   executeFullSyncPass,
-  SYNC_STATUS
+  SYNC_STATUS,
+  resolveConflict
 } from '../services/deltaSyncCoordinator.js';
+import {
+  saveConflictRecord,
+  getPendingConflicts,
+  CONFLICT_STATUS,
+  CONFLICT_RESOLUTION,
+  CONFLICT_TYPE
+} from '../database/conflicts.js';
 
 // Setup isolated in-memory DB and localStorage
 globalThis.indexedDB = new IDBFactory();
@@ -171,5 +179,168 @@ test('FinMan Phase 7.5 — Delta Sync Observability & Metrics Suite', async (t) 
     assert.equal(lastReceivedDetails.eventsUploaded, 3);
 
     unsubscribe();
+  });
+
+  await t.test('O05: Pending conflicts query accurately retrieves unresolved CONCURRENT_EDIT records', async () => {
+    const db = await resetDB();
+
+    // 1. Initial state has 0 conflicts
+    let conflicts = await getPendingConflicts();
+    assert.equal(conflicts.length, 0);
+
+    // 2. Insert 1 PENDING conflict
+    await saveConflictRecord({
+      conflict_id: 'conf_o05_1',
+      collection: 'transactions',
+      entity_id: 'txn_o05_1',
+      conflict_type: CONFLICT_TYPE.CONCURRENT_EDIT,
+      peer_device_id: 'dev_d',
+      event_id: 'evt_d_1',
+      base_checksum: 'base_h',
+      local_checksum: 'local_h',
+      remote_checksum: 'remote_h',
+      local_payload: { id: 'txn_o05_1', note: 'Conflict Test — Device C Version' },
+      remote_payload: { id: 'txn_o05_1', note: 'Conflict Test — Device D Version' },
+      status: CONFLICT_STATUS.PENDING
+    });
+
+    conflicts = await getPendingConflicts();
+    assert.equal(conflicts.length, 1);
+    assert.equal(conflicts[0].conflict_id, 'conf_o05_1');
+    assert.equal(conflicts[0].conflict_type, 'CONCURRENT_EDIT');
+    assert.equal(conflicts[0].local_payload.note, 'Conflict Test — Device C Version');
+    assert.equal(conflicts[0].remote_payload.note, 'Conflict Test — Device D Version');
+  });
+
+  await t.test('O06: resolveConflict KEEP_LOCAL resolves conflict, preserves local entity, queues outbound delta', async () => {
+    const db = await resetDB();
+
+    const localTxn = { id: 'txn_o06_1', note: 'Conflict Test — Device C Version', inr: 100 };
+    const localChecksum = await computeCanonicalSha256(localTxn);
+    await db.run(
+      'INSERT INTO transactions (id, note, inr) VALUES (?, ?, ?)',
+      [localTxn.id, localTxn.note, localTxn.inr]
+    );
+
+    const confId = 'conf_o06_1';
+    await saveConflictRecord({
+      conflict_id: confId,
+      collection: 'transactions',
+      entity_id: localTxn.id,
+      conflict_type: CONFLICT_TYPE.CONCURRENT_EDIT,
+      peer_device_id: 'dev_d',
+      event_id: 'evt_d_o06',
+      base_checksum: 'base_h_o06',
+      local_checksum: localChecksum,
+      remote_checksum: 'remote_h_o06',
+      local_payload: localTxn,
+      remote_payload: { id: localTxn.id, note: 'Conflict Test — Device D Version', inr: 100 },
+      status: CONFLICT_STATUS.PENDING
+    });
+
+    // Resolve as KEEP_LOCAL
+    await resolveConflict(confId, CONFLICT_RESOLUTION.KEEP_LOCAL);
+
+    // 1. Conflict status is now RESOLVED
+    const remaining = await getPendingConflicts();
+    assert.equal(remaining.length, 0);
+
+    // 2. Local transaction unchanged
+    const currentTxn = (await db.query('SELECT * FROM transactions WHERE id = ?', [localTxn.id])).values[0];
+    assert.equal(currentTxn.note, 'Conflict Test — Device C Version');
+
+    // 3. Outbound delta queue contains resolution delta
+    const queueRows = (await db.query('SELECT * FROM sync_delta_queue WHERE resolved_conflict_id = ?', [confId])).values;
+    assert.equal(queueRows.length, 1);
+    assert.equal(queueRows[0].resolution_type, 'KEEP_LOCAL');
+    assert.equal(queueRows[0].status, 'PENDING');
+  });
+
+  await t.test('O07: resolveConflict ACCEPT_REMOTE resolves conflict, updates local entity, queues outbound delta', async () => {
+    const db = await resetDB();
+
+    const localTxn = { id: 'txn_o07_1', note: 'Conflict Test — Device C Version', inr: 100 };
+    const remoteTxn = { id: 'txn_o07_1', note: 'Conflict Test — Device D Version', inr: 100 };
+    const localChecksum = await computeCanonicalSha256(localTxn);
+    const remoteChecksum = await computeCanonicalSha256(remoteTxn);
+
+    await db.run(
+      'INSERT INTO transactions (id, note, inr) VALUES (?, ?, ?)',
+      [localTxn.id, localTxn.note, localTxn.inr]
+    );
+
+    const confId = 'conf_o07_1';
+    await saveConflictRecord({
+      conflict_id: confId,
+      collection: 'transactions',
+      entity_id: localTxn.id,
+      conflict_type: CONFLICT_TYPE.CONCURRENT_EDIT,
+      peer_device_id: 'dev_d',
+      event_id: 'evt_d_o07',
+      base_checksum: 'base_h_o07',
+      local_checksum: localChecksum,
+      remote_checksum: remoteChecksum,
+      local_payload: localTxn,
+      remote_payload: remoteTxn,
+      status: CONFLICT_STATUS.PENDING
+    });
+
+    // Resolve as ACCEPT_REMOTE
+    await resolveConflict(confId, CONFLICT_RESOLUTION.ACCEPT_REMOTE);
+
+    // 1. Conflict status is now RESOLVED
+    const remaining = await getPendingConflicts();
+    assert.equal(remaining.length, 0);
+
+    // 2. Local transaction updated to remote version
+    const currentTxn = (await db.query('SELECT * FROM transactions WHERE id = ?', [localTxn.id])).values[0];
+    assert.equal(currentTxn.note, 'Conflict Test — Device D Version');
+
+    // 3. Outbound delta queue contains resolution delta
+    const queueRows = (await db.query('SELECT * FROM sync_delta_queue WHERE resolved_conflict_id = ?', [confId])).values;
+    assert.equal(queueRows.length, 1);
+    assert.equal(queueRows[0].resolution_type, 'ACCEPT_REMOTE');
+  });
+
+  await t.test('O08: Stale precondition check rejects resolution if entity was modified after conflict logged', async () => {
+    const db = await resetDB();
+
+    const initialTxn = { id: 'txn_o08_1', note: 'Original Local Note', inr: 100 };
+    const initialChecksum = await computeCanonicalSha256(initialTxn);
+
+    await db.run(
+      'INSERT INTO transactions (id, note, inr) VALUES (?, ?, ?)',
+      [initialTxn.id, initialTxn.note, initialTxn.inr]
+    );
+
+    const confId = 'conf_o08_1';
+    await saveConflictRecord({
+      conflict_id: confId,
+      collection: 'transactions',
+      entity_id: initialTxn.id,
+      conflict_type: CONFLICT_TYPE.CONCURRENT_EDIT,
+      peer_device_id: 'dev_d',
+      event_id: 'evt_d_o08',
+      base_checksum: 'base_h_o08',
+      local_checksum: initialChecksum,
+      remote_checksum: 'remote_h_o08',
+      local_payload: initialTxn,
+      remote_payload: { id: initialTxn.id, note: 'Remote Note', inr: 100 },
+      status: CONFLICT_STATUS.PENDING
+    });
+
+    // Local entity is modified unexpectedly before user resolves conflict
+    await db.run('UPDATE transactions SET note = ? WHERE id = ?', ['Intervening Edit', initialTxn.id]);
+
+    // Attempting resolution must fail closed with STALE_CONFLICT_ERROR
+    await assert.rejects(
+      async () => await resolveConflict(confId, CONFLICT_RESOLUTION.KEEP_LOCAL),
+      /STALE_CONFLICT_ERROR/
+    );
+
+    // Conflict remains PENDING without side effects
+    const pending = await getPendingConflicts();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].status, 'PENDING');
   });
 });

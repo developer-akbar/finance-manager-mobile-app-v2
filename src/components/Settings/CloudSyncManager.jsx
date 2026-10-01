@@ -28,8 +28,13 @@ import {
 import {
   getDeltaSyncMetrics,
   subscribeSyncStatus,
-  SYNC_STATUS as DELTA_SYNC_STATUS
+  SYNC_STATUS as DELTA_SYNC_STATUS,
+  resolveConflict
 } from '../../services/deltaSyncCoordinator.js';
+import {
+  getPendingConflicts,
+  CONFLICT_RESOLUTION
+} from '../../database/conflicts.js';
 import { getSetting } from '../../database/settings.js';
 import {
   getFriendlyActionName,
@@ -83,6 +88,12 @@ export default function CloudSyncManager({ onBack }) {
     latestError: null
   });
 
+  // Live Phase 7.5 Delta Sync Conflict State
+  const [pendingConflicts, setPendingConflicts] = useState([]);
+  const [resolvingId, setResolvingId] = useState(null);
+  const [resolutionMsg, setResolutionMsg] = useState(null);
+  const [confirmResolutionModal, setConfirmResolutionModal] = useState(null);
+
   // Subscribe to Session Key state changes
   useEffect(() => {
     const unsubscribe = subscribeSyncSession((unlocked) => {
@@ -91,7 +102,7 @@ export default function CloudSyncManager({ onBack }) {
     return unsubscribe;
   }, []);
 
-  // Subscribe to Phase 7.5 Delta Sync Coordinator State & Metrics
+  // Subscribe to Phase 7.5 Delta Sync Coordinator State, Metrics & Conflicts
   useEffect(() => {
     let mounted = true;
     async function refreshDeltaMetrics(details = {}) {
@@ -106,10 +117,24 @@ export default function CloudSyncManager({ onBack }) {
       } catch {}
     }
 
-    refreshDeltaMetrics();
+    async function refreshConflicts() {
+      try {
+        const list = await getPendingConflicts();
+        if (mounted) {
+          setPendingConflicts(list || []);
+        }
+      } catch {}
+    }
+
+    async function refreshAll(details = {}) {
+      await refreshDeltaMetrics(details);
+      await refreshConflicts();
+    }
+
+    refreshAll();
 
     const unsubscribeDelta = subscribeSyncStatus((status, details) => {
-      refreshDeltaMetrics(details);
+      refreshAll(details);
     });
 
     return () => {
@@ -219,6 +244,55 @@ export default function CloudSyncManager({ onBack }) {
     setPin('');
     setPreviewResult(null);
     setShowConfirmModal(false);
+    setConfirmResolutionModal(null);
+  };
+
+  // Open Conflict Resolution Confirmation Modal
+  const handleOpenResolveConfirm = (conflict, resolution) => {
+    setResolutionMsg(null);
+    setConfirmResolutionModal({
+      conflict,
+      resolution
+    });
+  };
+
+  // Execute Conflict Resolution
+  const handleExecuteConflictResolution = async () => {
+    if (!confirmResolutionModal || !confirmResolutionModal.conflict) return;
+    const { conflict, resolution } = confirmResolutionModal;
+
+    setResolvingId(conflict.conflict_id);
+    setResolutionMsg(null);
+    try {
+      await resolveConflict(conflict.conflict_id, resolution);
+
+      const successText = resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
+        ? 'Resolved: your version will be propagated to other devices.'
+        : 'Resolved: the remote version will be propagated to other devices.';
+
+      setResolutionMsg({
+        type: 'success',
+        text: successText
+      });
+
+      // Refresh conflicts, metrics, and in-memory React state
+      const updatedList = await getPendingConflicts();
+      setPendingConflicts(updatedList || []);
+      const updatedMetrics = await getDeltaSyncMetrics();
+      setDeltaMetrics(prev => ({ ...prev, ...updatedMetrics }));
+
+      if (typeof load === 'function') {
+        load().catch(() => {});
+      }
+    } catch (err) {
+      setResolutionMsg({
+        type: 'error',
+        text: `Resolution failed: ${err.message}`
+      });
+    } finally {
+      setResolvingId(null);
+      setConfirmResolutionModal(null);
+    }
   };
 
   // Run Preview / Dry-Run (Strictly Read-Only)
@@ -748,8 +822,170 @@ export default function CloudSyncManager({ onBack }) {
           )}
         </div>
 
-        {/* Section 5: Legacy Full Snapshot Metadata */}
-        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>5. Full Snapshot Baseline (Legacy / Disaster Recovery)</div>
+        {/* Section 5: Sync Conflicts (Automatic V3) */}
+        <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>5. Sync Conflicts</span>
+          <span style={{
+            fontSize: '0.68rem',
+            fontWeight: 800,
+            padding: '2px 8px',
+            borderRadius: 4,
+            background: pendingConflicts.length > 0 ? 'rgba(255, 179, 0, 0.15)' : 'rgba(0, 229, 160, 0.15)',
+            color: pendingConflicts.length > 0 ? 'var(--warning)' : 'var(--green)'
+          }}>
+            {pendingConflicts.length > 0 ? `⚠️ ${pendingConflicts.length} Pending` : '0 Pending'}
+          </span>
+        </div>
+
+        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
+          {resolutionMsg && (
+            <div style={{
+              marginBottom: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: resolutionMsg.type === 'success' ? 'rgba(0, 229, 160, 0.12)' : 'rgba(255, 77, 106, 0.12)',
+              color: resolutionMsg.type === 'success' ? 'var(--green)' : 'var(--expense)',
+              fontSize: '0.74rem',
+              fontWeight: 700
+            }}>
+              {resolutionMsg.type === 'success' ? '✅ ' : '🛑 '}{resolutionMsg.text}
+            </div>
+          )}
+
+          {pendingConflicts.length === 0 ? (
+            <div style={{ color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              No sync conflicts detected. All local and peer delta events have reconciled cleanly.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                background: 'rgba(255, 179, 0, 0.1)',
+                border: '1px solid rgba(255, 179, 0, 0.25)',
+                color: 'var(--text-primary)',
+                fontSize: '0.72rem',
+                lineHeight: 1.4
+              }}>
+                <strong>A conflict was detected.</strong> Both versions are preserved. Choose which version should become authoritative.
+              </div>
+
+              {pendingConflicts.map((c) => {
+                const isCurrentResolving = resolvingId === c.conflict_id;
+                const localNote = c.local_payload?.note || c.local_payload?.description || c.local_payload?.name || (typeof c.local_payload === 'object' ? JSON.stringify(c.local_payload) : String(c.local_payload));
+                const remoteNote = c.remote_payload?.note || c.remote_payload?.description || c.remote_payload?.name || (typeof c.remote_payload === 'object' ? JSON.stringify(c.remote_payload) : String(c.remote_payload));
+
+                return (
+                  <div
+                    key={c.conflict_id}
+                    style={{
+                      border: '1px solid var(--border-light)',
+                      borderRadius: 8,
+                      padding: 12,
+                      background: 'var(--bg-surface)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontWeight: 800, color: 'var(--text-primary)', fontSize: '0.8rem' }}>
+                        {c.conflict_type === 'CONCURRENT_EDIT' ? 'Concurrent Edit' : c.conflict_type}
+                      </span>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                        {c.collection} · {c.entity_id}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+                      {/* Local Version */}
+                      <div style={{
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        background: 'rgba(74, 144, 226, 0.08)',
+                        border: '1px solid rgba(74, 144, 226, 0.2)'
+                      }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent)', marginBottom: 4 }}>
+                          📱 Your Version (Local)
+                        </div>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
+                          {localNote}
+                        </div>
+                        {c.local_payload?.amount !== undefined && (
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                            Amount: ₹{Number(c.local_payload.amount).toLocaleString()}
+                          </div>
+                        )}
+                        {c.local_payload?.date && (
+                          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                            Date: {c.local_payload.date}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Remote Version */}
+                      <div style={{
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        background: 'rgba(255, 179, 0, 0.08)',
+                        border: '1px solid rgba(255, 179, 0, 0.2)'
+                      }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--warning)', marginBottom: 4 }}>
+                          ☁️ Remote Version ({c.peer_device_id || 'Peer'})
+                        </div>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
+                          {remoteNote}
+                        </div>
+                        {c.remote_payload?.amount !== undefined && (
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                            Amount: ₹{Number(c.remote_payload.amount).toLocaleString()}
+                          </div>
+                        )}
+                        {c.remote_payload?.date && (
+                          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                            Date: {c.remote_payload.date}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: 10, lineHeight: 1.3 }}>
+                      Neither version has been silently discarded. Both versions are preserved. Choose which version should become authoritative.
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => handleOpenResolveConfirm(c, CONFLICT_RESOLUTION.KEEP_LOCAL)}
+                        disabled={!isUnlocked || isCurrentResolving}
+                        style={{ flex: 1, fontSize: '0.75rem', padding: '8px 10px', fontWeight: 700 }}
+                      >
+                        {isCurrentResolving ? 'Resolving...' : 'Keep Your Version'}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => handleOpenResolveConfirm(c, CONFLICT_RESOLUTION.ACCEPT_REMOTE)}
+                        disabled={!isUnlocked || isCurrentResolving}
+                        style={{ flex: 1, fontSize: '0.75rem', padding: '8px 10px', fontWeight: 700 }}
+                      >
+                        {isCurrentResolving ? 'Resolving...' : 'Accept Remote Version'}
+                      </button>
+                    </div>
+
+                    {!isUnlocked && (
+                      <div style={{ fontSize: '0.68rem', color: 'var(--warning)', marginTop: 6, fontWeight: 600 }}>
+                        🔒 Unlock the sync session above to resolve this conflict.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Section 6: Legacy Full Snapshot Metadata */}
+        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>6. Full Snapshot Baseline (Legacy / Disaster Recovery)</div>
         <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Local Transactions</span>
@@ -960,6 +1196,79 @@ export default function CloudSyncManager({ onBack }) {
           </>
         );
       })()}
+
+      {/* Conflict Resolution Confirmation Bottom-Sheet Modal */}
+      {confirmResolutionModal && confirmResolutionModal.conflict && (
+        <>
+          <div
+            className="dash-popup-overlay"
+            onClick={() => !resolvingId && setConfirmResolutionModal(null)}
+            style={{ zIndex: 10000 }}
+          />
+          <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px calc(var(--safe-bottom) + 20px)' }}>
+            <div className="dash-popup-sheet-handle" />
+            <div style={{ fontSize: '2.5rem', marginBottom: 8, textAlign: 'center' }}>
+              ⚖️
+            </div>
+            <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6, textAlign: 'center' }}>
+              {confirmResolutionModal.resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
+                ? 'Confirm: Keep Your Version'
+                : 'Confirm: Accept Remote Version'}
+            </div>
+
+            <div style={{
+              background: 'rgba(255, 179, 0, 0.08)',
+              border: '1px solid rgba(255, 179, 0, 0.25)',
+              borderRadius: 8,
+              padding: '12px 14px',
+              fontSize: '0.75rem',
+              color: 'var(--text-primary)',
+              marginBottom: 16,
+              lineHeight: 1.5,
+              textAlign: 'center'
+            }}>
+              <div style={{ fontWeight: 800, color: 'var(--warning)', marginBottom: 6, fontSize: '0.82rem' }}>
+                {confirmResolutionModal.resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
+                  ? 'Authoritative Local Choice'
+                  : 'Authoritative Remote Choice'}
+              </div>
+              <div style={{ color: 'var(--text-primary)', marginBottom: 6 }}>
+                {confirmResolutionModal.resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
+                  ? 'You are choosing to keep your local version. This decision will be propagated to other devices on the next sync pass.'
+                  : 'You are choosing to accept the remote version. Your local record will be updated to match the remote version, and this decision will be propagated to other devices.'}
+              </div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                Target: {confirmResolutionModal.conflict.collection} ({confirmResolutionModal.conflict.entity_id})
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ flex: 1 }}
+                onClick={() => setConfirmResolutionModal(null)}
+                disabled={Boolean(resolvingId)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ flex: 1.5, fontWeight: 800 }}
+                onClick={handleExecuteConflictResolution}
+                disabled={Boolean(resolvingId)}
+              >
+                {resolvingId
+                  ? 'Resolving...'
+                  : (confirmResolutionModal.resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
+                    ? 'Yes, Keep My Version'
+                    : 'Yes, Accept Remote Version')}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
