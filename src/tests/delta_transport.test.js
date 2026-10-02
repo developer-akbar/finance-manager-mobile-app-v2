@@ -47,6 +47,7 @@ import {
   listPeerManifests
 } from '../services/deviceManifest.js';
 import { bytesToBase64, base64ToBytes } from '../utils/cryptoBackup.js';
+import { getDeltaSyncMetrics } from '../services/deltaSyncCoordinator.js';
 
 const TEST_SESSION_KEY = 'test-secret-passphrase-finman-v3-delta-transport';
 const BASE_SNAPSHOT_ID = 'snap_1790493064581_jbhnf8';
@@ -1640,5 +1641,327 @@ test('FinMan Phase 7.3 — Delta Transport & Peer Staging Comprehensive Suite (T
     assert.equal(typeof encrypted.ciphertext, 'string');
     assert.equal(typeof encrypted.auth_tag, 'string');
     assert.equal(encrypted.schema_version, 1);
+  });
+
+  // =========================================================================
+  // ACKNOWLEDGEMENT WATERMARK BOOKKEEPING TESTS (Tests A through H)
+  // =========================================================================
+
+  await t.test('T45: Watermark Test A — Successful single-package upload advances last_acked_sequence to 1 atomically', async () => {
+    await initDB();
+    const rawIdb = getRawIDB();
+    const deviceId = 'dev_watermark_a';
+    await initLocalSyncState(deviceId, BASE_SNAPSHOT_ID, BASE_CLOUD_VERSION);
+
+    // Initial state: last_uploaded_sequence = 0, last_pushed_sequence = 0, last_acked_sequence = 0
+    const initialState = await getLocalSyncState();
+    assert.equal(initialState.last_uploaded_sequence, 0);
+    assert.equal(initialState.last_pushed_sequence, 0);
+    assert.equal(initialState.last_acked_sequence, 0);
+
+    const events = createSampleEvents(deviceId, 1, 1);
+    const tx = rawIdb.transaction('sync_delta_queue', 'readwrite');
+    tx.objectStore('sync_delta_queue').add(events[0]);
+    await new Promise(r => tx.oncomplete = r);
+
+    const uploadRes = await uploadPendingDeltas({
+      deviceId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    assert.equal(uploadRes.packagesUploaded, 1);
+    assert.equal(uploadRes.lastUploadedSequence, 1);
+
+    // Verify sync_local_state in IDB
+    const stateTx = rawIdb.transaction('sync_local_state', 'readonly');
+    const stateRecord = await new Promise(r => {
+      stateTx.objectStore('sync_local_state').get('device_state').onsuccess = e => r(e.target.result);
+    });
+    assert.equal(stateRecord.last_uploaded_sequence, 1);
+    assert.equal(stateRecord.last_pushed_sequence, 1);
+    assert.equal(stateRecord.last_acked_sequence, 1);
+
+    // Verify queue event marked ACKNOWLEDGED
+    const queueTx = rawIdb.transaction('sync_delta_queue', 'readonly');
+    const queueRecord = await new Promise(r => {
+      queueTx.objectStore('sync_delta_queue').get(events[0].event_id).onsuccess = e => r(e.target.result);
+    });
+    assert.equal(queueRecord.status, DELTA_STATUS.ACKNOWLEDGED);
+  });
+
+  await t.test('T46: Watermark Test B — Multi-event package upload advances last_acked_sequence to N', async () => {
+    await initDB();
+    const rawIdb = getRawIDB();
+    const deviceId = 'dev_watermark_b';
+    await initLocalSyncState(deviceId, BASE_SNAPSHOT_ID, BASE_CLOUD_VERSION);
+
+    const N = 5;
+    const events = createSampleEvents(deviceId, 1, N);
+    const tx = rawIdb.transaction('sync_delta_queue', 'readwrite');
+    for (const ev of events) {
+      tx.objectStore('sync_delta_queue').add(ev);
+    }
+    await new Promise(r => tx.oncomplete = r);
+
+    const uploadRes = await uploadPendingDeltas({
+      deviceId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    assert.equal(uploadRes.packagesUploaded, 1);
+    assert.equal(uploadRes.lastUploadedSequence, N);
+
+    const stateTx = rawIdb.transaction('sync_local_state', 'readonly');
+    const stateRecord = await new Promise(r => {
+      stateTx.objectStore('sync_local_state').get('device_state').onsuccess = e => r(e.target.result);
+    });
+    assert.equal(stateRecord.last_uploaded_sequence, N);
+    assert.equal(stateRecord.last_acked_sequence, N);
+  });
+
+  await t.test('T47: Watermark Test C — Failed upload does NOT advance last_acked_sequence', async () => {
+    await initDB();
+    const rawIdb = getRawIDB();
+    const deviceId = 'dev_watermark_c';
+    await initLocalSyncState(deviceId, BASE_SNAPSHOT_ID, BASE_CLOUD_VERSION);
+
+    const events = createSampleEvents(deviceId, 1, 1);
+    const tx = rawIdb.transaction('sync_delta_queue', 'readwrite');
+    tx.objectStore('sync_delta_queue').add(events[0]);
+    await new Promise(r => tx.oncomplete = r);
+
+    // Mock drive client that throws on write
+    const failingDrive = {
+      ...mockDrive,
+      uploadFile: async () => { throw new Error('Simulated network failure'); },
+      findFiles: async () => []
+    };
+
+    await assert.rejects(
+      uploadPendingDeltas({
+        deviceId,
+        sessionKey: TEST_SESSION_KEY,
+        driveClient: failingDrive
+      }),
+      /Simulated network failure/
+    );
+
+    const stateTx = rawIdb.transaction('sync_local_state', 'readonly');
+    const stateRecord = await new Promise(r => {
+      stateTx.objectStore('sync_local_state').get('device_state').onsuccess = e => r(e.target.result);
+    });
+    assert.equal(stateRecord.last_uploaded_sequence, 0);
+    assert.equal(stateRecord.last_acked_sequence, 0);
+
+    const queueTx = rawIdb.transaction('sync_delta_queue', 'readonly');
+    const queueRecord = await new Promise(r => {
+      queueTx.objectStore('sync_delta_queue').get(events[0].event_id).onsuccess = e => r(e.target.result);
+    });
+    assert.equal(queueRecord.status, DELTA_STATUS.PENDING);
+  });
+
+  await t.test('T48: Watermark Test D — Existing already-acknowledged events are not regressed', async () => {
+    await initDB();
+    const rawIdb = getRawIDB();
+    const deviceId = 'dev_watermark_d';
+    await initLocalSyncState(deviceId, BASE_SNAPSHOT_ID, BASE_CLOUD_VERSION);
+
+    // Upload batch 1 (seq 1..2)
+    const events1 = createSampleEvents(deviceId, 1, 2);
+    const tx1 = rawIdb.transaction('sync_delta_queue', 'readwrite');
+    for (const ev of events1) tx1.objectStore('sync_delta_queue').add(ev);
+    await new Promise(r => tx1.oncomplete = r);
+
+    await uploadPendingDeltas({
+      deviceId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    let stateRecord = await getLocalSyncState();
+    assert.equal(stateRecord.last_acked_sequence, 2);
+
+    // Upload batch 2 (seq 3..4)
+    const events2 = createSampleEvents(deviceId, 3, 2);
+    const tx2 = rawIdb.transaction('sync_delta_queue', 'readwrite');
+    for (const ev of events2) tx2.objectStore('sync_delta_queue').add(ev);
+    await new Promise(r => tx2.oncomplete = r);
+
+    await uploadPendingDeltas({
+      deviceId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    stateRecord = await getLocalSyncState();
+    assert.equal(stateRecord.last_acked_sequence, 4);
+    assert.equal(stateRecord.last_uploaded_sequence, 4);
+
+    // Verify all 4 queue events remain ACKNOWLEDGED
+    const queueTx = rawIdb.transaction('sync_delta_queue', 'readonly');
+    for (let s = 1; s <= 4; s++) {
+      const qRec = await new Promise(r => {
+        queueTx.objectStore('sync_delta_queue').get(`evt_${deviceId}_${s}`).onsuccess = e => r(e.target.result);
+      });
+      assert.equal(qRec.status, DELTA_STATUS.ACKNOWLEDGED);
+    }
+  });
+
+  await t.test('T49: Watermark Test E — Existing bootstrap state correctly initializes watermark fields', async () => {
+    await initDB();
+    const deviceId = 'dev_watermark_e';
+    const state = await initLocalSyncState(deviceId, BASE_SNAPSHOT_ID, BASE_CLOUD_VERSION, 'ACTIVE');
+
+    assert.equal(state.last_allocated_sequence, 0);
+    assert.equal(state.last_uploaded_sequence, 0);
+    assert.equal(state.last_pushed_sequence, 0);
+    assert.equal(state.last_acked_sequence, 0);
+  });
+
+  await t.test('T50: Watermark Test F — getDeltaSyncMetrics reports actual acknowledged sequence and provides backward compatibility', async () => {
+    await initDB();
+    const db = getDB();
+    const rawIdb = getRawIDB();
+    const deviceId = 'dev_watermark_f';
+    await initLocalSyncState(deviceId, BASE_SNAPSHOT_ID, BASE_CLOUD_VERSION);
+
+    // Scenario 1: Upload sequence 1, check metrics
+    const events = createSampleEvents(deviceId, 1, 1);
+    const tx = rawIdb.transaction('sync_delta_queue', 'readwrite');
+    tx.objectStore('sync_delta_queue').add(events[0]);
+    await new Promise(r => tx.oncomplete = r);
+
+    await uploadPendingDeltas({
+      deviceId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    let metrics = await getDeltaSyncMetrics();
+    assert.equal(metrics.lastUploadedSequence, 1);
+    assert.equal(metrics.lastAckedSequence, 1);
+    assert.equal(metrics.pendingCount, 0);
+
+    // Scenario 2: Verify metrics strictly reflects persisted last_acked_sequence without inference
+    await db.run(
+      'UPDATE sync_local_state SET last_uploaded_sequence = ?, last_acked_sequence = ? WHERE key = ?',
+      [5, 3, 'device_state']
+    );
+
+    metrics = await getDeltaSyncMetrics();
+    assert.equal(metrics.lastUploadedSequence, 5);
+    assert.equal(metrics.lastAckedSequence, 3, 'Metrics strictly reflects persisted last_acked_sequence without inference');
+
+    // Scenario 3: Verify metrics does not infer lastAckedSequence when last_acked_sequence is 0
+    await db.run(
+      'UPDATE sync_local_state SET last_uploaded_sequence = ?, last_acked_sequence = ? WHERE key = ?',
+      [5, 0, 'device_state']
+    );
+
+    metrics = await getDeltaSyncMetrics();
+    assert.equal(metrics.lastUploadedSequence, 5);
+    assert.equal(metrics.lastAckedSequence, 0, 'Metrics does not infer lastAckedSequence when stored watermark is 0');
+  });
+
+  await t.test('T51: Watermark Test G — Existing conflicts remain untouched by watermark updates', async () => {
+    await initDB();
+    const db = getDB();
+    const rawIdb = getRawIDB();
+    const deviceId = 'dev_watermark_g';
+    await initLocalSyncState(deviceId, BASE_SNAPSHOT_ID, BASE_CLOUD_VERSION);
+
+    // Seed 2 existing conflicts
+    const c1 = {
+      conflict_id: 'cnf_001',
+      collection: 'transactions',
+      entity_id: 'tx_c1',
+      conflict_type: 'UPDATE_UPDATE',
+      peer_device_id: 'dev_peer_c',
+      event_id: 'evt_c1',
+      status: 'PENDING',
+      created_at: new Date().toISOString()
+    };
+    const c2 = {
+      conflict_id: 'cnf_002',
+      collection: 'transactions',
+      entity_id: 'tx_c2',
+      conflict_type: 'UPDATE_DELETE',
+      peer_device_id: 'dev_peer_c',
+      event_id: 'evt_c2',
+      status: 'PENDING',
+      created_at: new Date().toISOString()
+    };
+
+    const confTx = rawIdb.transaction('sync_conflicts', 'readwrite');
+    confTx.objectStore('sync_conflicts').add(c1);
+    confTx.objectStore('sync_conflicts').add(c2);
+    await new Promise(r => confTx.oncomplete = r);
+
+    // Perform delta upload
+    const events = createSampleEvents(deviceId, 1, 1);
+    const qTx = rawIdb.transaction('sync_delta_queue', 'readwrite');
+    qTx.objectStore('sync_delta_queue').add(events[0]);
+    await new Promise(r => qTx.oncomplete = r);
+
+    await uploadPendingDeltas({
+      deviceId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    // Verify conflicts remain exactly untouched
+    const confRes = (await db.query('SELECT * FROM sync_conflicts ORDER BY conflict_id ASC')).values || [];
+    assert.equal(confRes.length, 2);
+    assert.equal(confRes[0].conflict_id, 'cnf_001');
+    assert.equal(confRes[0].status, 'PENDING');
+    assert.equal(confRes[1].conflict_id, 'cnf_002');
+    assert.equal(confRes[1].status, 'PENDING');
+  });
+
+  await t.test('T52: Watermark Test H — Sequence allocation/upload/acknowledgement semantics remain unchanged apart from correcting last_acked_sequence', async () => {
+    await initDB();
+    const rawIdb = getRawIDB();
+    const deviceId = 'dev_watermark_h';
+    await initLocalSyncState(deviceId, BASE_SNAPSHOT_ID, BASE_CLOUD_VERSION);
+
+    // Allocate 3 sequences
+    const events = createSampleEvents(deviceId, 1, 3);
+    const tx = rawIdb.transaction(['sync_delta_queue', 'sync_local_state'], 'readwrite');
+    for (const ev of events) {
+      tx.objectStore('sync_delta_queue').add(ev);
+    }
+    tx.objectStore('sync_local_state').put({
+      key: 'device_state',
+      device_id: deviceId,
+      base_snapshot_id: BASE_SNAPSHOT_ID,
+      base_cloud_version: BASE_CLOUD_VERSION,
+      lifecycle_state: 'ACTIVE',
+      last_allocated_sequence: 3,
+      last_uploaded_sequence: 0,
+      last_pushed_sequence: 0,
+      last_acked_sequence: 0,
+      updated_at: new Date().toISOString()
+    });
+    await new Promise(r => tx.oncomplete = r);
+
+    let state = await getLocalSyncState();
+    assert.equal(state.last_allocated_sequence, 3);
+    assert.equal(state.last_uploaded_sequence, 0);
+    assert.equal(state.last_acked_sequence, 0);
+
+    // Upload
+    await uploadPendingDeltas({
+      deviceId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    state = await getLocalSyncState();
+    assert.equal(state.last_allocated_sequence, 3);
+    assert.equal(state.last_uploaded_sequence, 3);
+    assert.equal(state.last_pushed_sequence, 3);
+    assert.equal(state.last_acked_sequence, 3);
   });
 });

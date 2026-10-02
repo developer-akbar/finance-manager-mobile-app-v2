@@ -187,7 +187,7 @@ export async function getDeltaSyncMetrics() {
       pendingCount,
       lastAllocatedSequence: Number(localState.last_allocated_sequence || 0),
       lastUploadedSequence: Number(localState.last_uploaded_sequence ?? localState.last_pushed_sequence ?? 0),
-      lastAckedSequence: Number(localState.last_acked_sequence ?? localState.last_uploaded_sequence ?? localState.last_pushed_sequence ?? 0),
+      lastAckedSequence: Number(localState.last_acked_sequence || 0),
       deviceId: localState.device_id || 'local_device',
       lastDeltaSyncedAt
     };
@@ -995,6 +995,7 @@ export async function recoverQueueAckFromAuthoritativeManifest({
               device_id: deviceId,
               last_uploaded_sequence: Number(pkg.end_sequence),
               last_pushed_sequence: Number(pkg.end_sequence),
+              last_acked_sequence: Number(pkg.end_sequence),
               updated_at: new Date().toISOString()
             });
 
@@ -1007,8 +1008,8 @@ export async function recoverQueueAckFromAuthoritativeManifest({
             ['ACKNOWLEDGED', new Date().toISOString(), Number(pkg.start_sequence), Number(pkg.end_sequence)]
           );
           await db.run(
-            'UPDATE sync_local_state SET last_uploaded_sequence = ?, updated_at = ? WHERE device_id = ?',
-            [Number(pkg.end_sequence), new Date().toISOString(), deviceId]
+            'UPDATE sync_local_state SET last_uploaded_sequence = ?, last_pushed_sequence = ?, last_acked_sequence = ?, updated_at = ? WHERE device_id = ? OR key = ?',
+            [Number(pkg.end_sequence), Number(pkg.end_sequence), Number(pkg.end_sequence), new Date().toISOString(), deviceId, 'device_state']
           );
         }
       }

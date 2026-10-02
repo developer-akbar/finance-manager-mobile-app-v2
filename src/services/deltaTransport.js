@@ -460,6 +460,7 @@ export async function uploadPendingDeltas(opts) {
             device_id: deviceId,
             last_uploaded_sequence: payload.end_sequence,
             last_pushed_sequence: payload.end_sequence,
+            last_acked_sequence: payload.end_sequence,
             updated_at: new Date().toISOString()
           });
 
@@ -473,11 +474,14 @@ export async function uploadPendingDeltas(opts) {
           ['ACKNOWLEDGED', new Date().toISOString(), payload.start_sequence, payload.end_sequence]
         );
         await db.run(
-          'UPDATE sync_local_state SET last_uploaded_sequence = ?, updated_at = ? WHERE device_id = ?',
-          [payload.end_sequence, new Date().toISOString(), deviceId]
+          'UPDATE sync_local_state SET last_uploaded_sequence = ?, last_pushed_sequence = ?, last_acked_sequence = ?, updated_at = ? WHERE device_id = ? OR key = ?',
+          [payload.end_sequence, payload.end_sequence, payload.end_sequence, new Date().toISOString(), deviceId, 'device_state']
         );
       }
 
+      localState.last_uploaded_sequence = payload.end_sequence;
+      localState.last_pushed_sequence = payload.end_sequence;
+      localState.last_acked_sequence = payload.end_sequence;
       totalEventsUploaded += slice.events.length;
       packagesUploadedCount++;
       finalLastUploadedSequence = payload.end_sequence;

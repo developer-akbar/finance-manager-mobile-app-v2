@@ -93,13 +93,15 @@ export async function initLocalSyncState(deviceId = null, baseSnapshotId = null,
     base_cloud_version: baseCloudVersion || null,
     lifecycle_state: lifecycleState || (baseSnapshotId ? 'ACTIVE' : null),
     last_allocated_sequence: 0,
+    last_uploaded_sequence: 0,
     last_pushed_sequence: 0,
+    last_acked_sequence: 0,
     updated_at: now
   };
 
   await db.run(
-    'INSERT OR REPLACE INTO sync_local_state (key, device_id, base_snapshot_id, base_cloud_version, lifecycle_state, last_allocated_sequence, last_pushed_sequence, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [initialState.key, initialState.device_id, initialState.base_snapshot_id, initialState.base_cloud_version, initialState.lifecycle_state, initialState.last_allocated_sequence, initialState.last_pushed_sequence, initialState.updated_at]
+    'INSERT OR REPLACE INTO sync_local_state (key, device_id, base_snapshot_id, base_cloud_version, lifecycle_state, last_allocated_sequence, last_uploaded_sequence, last_pushed_sequence, last_acked_sequence, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [initialState.key, initialState.device_id, initialState.base_snapshot_id, initialState.base_cloud_version, initialState.lifecycle_state, initialState.last_allocated_sequence, initialState.last_uploaded_sequence, initialState.last_pushed_sequence, initialState.last_acked_sequence, initialState.updated_at]
   );
 
   return initialState;
@@ -121,7 +123,9 @@ export async function getLocalSyncState() {
       base_cloud_version: row.base_cloud_version || null,
       lifecycle_state: row.lifecycle_state || null,
       last_allocated_sequence: Number(row.last_allocated_sequence) || 0,
+      last_uploaded_sequence: Number(row.last_uploaded_sequence ?? row.last_pushed_sequence) || 0,
       last_pushed_sequence: Number(row.last_pushed_sequence) || 0,
+      last_acked_sequence: Number(row.last_acked_sequence || 0),
       updated_at: row.updated_at
     };
   } catch (err) {
