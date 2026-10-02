@@ -77,7 +77,7 @@ export function createDeltaEvent({
 /**
  * Initializes or reads the persistent device sync state in `sync_local_state`.
  */
-export async function initLocalSyncState(deviceId = null) {
+export async function initLocalSyncState(deviceId = null, baseSnapshotId = null, baseCloudVersion = null, lifecycleState = null) {
   const db = getDB();
   const existing = await getLocalSyncState();
   if (existing) {
@@ -89,14 +89,17 @@ export async function initLocalSyncState(deviceId = null) {
   const initialState = {
     key: 'device_state',
     device_id: generatedDeviceId,
+    base_snapshot_id: baseSnapshotId || null,
+    base_cloud_version: baseCloudVersion || null,
+    lifecycle_state: lifecycleState || (baseSnapshotId ? 'ACTIVE' : null),
     last_allocated_sequence: 0,
     last_pushed_sequence: 0,
     updated_at: now
   };
 
   await db.run(
-    'INSERT OR REPLACE INTO sync_local_state (key, device_id, last_allocated_sequence, last_pushed_sequence, updated_at) VALUES (?, ?, ?, ?, ?)',
-    [initialState.key, initialState.device_id, initialState.last_allocated_sequence, initialState.last_pushed_sequence, initialState.updated_at]
+    'INSERT OR REPLACE INTO sync_local_state (key, device_id, base_snapshot_id, base_cloud_version, lifecycle_state, last_allocated_sequence, last_pushed_sequence, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [initialState.key, initialState.device_id, initialState.base_snapshot_id, initialState.base_cloud_version, initialState.lifecycle_state, initialState.last_allocated_sequence, initialState.last_pushed_sequence, initialState.updated_at]
   );
 
   return initialState;
@@ -114,6 +117,9 @@ export async function getLocalSyncState() {
     return {
       key: row.key,
       device_id: row.device_id,
+      base_snapshot_id: row.base_snapshot_id || null,
+      base_cloud_version: row.base_cloud_version || null,
+      lifecycle_state: row.lifecycle_state || null,
       last_allocated_sequence: Number(row.last_allocated_sequence) || 0,
       last_pushed_sequence: Number(row.last_pushed_sequence) || 0,
       updated_at: row.updated_at

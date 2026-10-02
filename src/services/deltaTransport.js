@@ -301,23 +301,22 @@ export async function uploadPendingDeltas(opts) {
 
     let lifecycleState = localState.lifecycle_state;
     if (!lifecycleState) {
-      const hasSeq = Number(localState.last_pushed_sequence || localState.last_uploaded_sequence || localState.last_allocated_sequence || 0) > 0;
-      if (hasSeq) {
-        lifecycleState = 'ACTIVE';
-      } else {
-        let lastSnap = null;
+      const explicitBase = opts.baseSnapshotId || opts.base_snapshot_id;
+      let hasBaseline = Boolean((explicitBase || localState.base_snapshot_id) && String(explicitBase || localState.base_snapshot_id).trim().length > 0);
+      if (!hasBaseline) {
         try {
           const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
-          lastSnap = snapRes.values?.[0]?.value || null;
+          hasBaseline = Boolean(snapRes.values?.[0]?.value && String(snapRes.values[0].value).trim().length > 0);
         } catch {}
-        if (lastSnap) {
-          lifecycleState = 'ACTIVE';
-        } else if (rawEvents.length > 0) {
-          lifecycleState = 'ACTIVE';
-        } else {
-          lifecycleState = 'UNINITIALIZED';
-        }
       }
+      if (!hasBaseline) {
+        try {
+          const baseManRes = await db.query('SELECT value FROM settings WHERE key = ?', ['sync_base_manifest']);
+          hasBaseline = Boolean(baseManRes.values?.[0]?.value);
+        } catch {}
+      }
+
+      lifecycleState = hasBaseline ? 'ACTIVE' : 'UNINITIALIZED';
     }
 
     if (lifecycleState !== 'ACTIVE') {

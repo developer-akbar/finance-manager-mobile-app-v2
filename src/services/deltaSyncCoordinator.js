@@ -238,21 +238,23 @@ export async function getDeviceLifecycleState(deviceId = 'local_device') {
       return row.lifecycle_state;
     }
 
-    // Backward compatibility for existing active devices:
-    const seq = Number(row?.last_pushed_sequence || row?.last_uploaded_sequence || row?.last_allocated_sequence || 0);
-    if (seq > 0) {
+    // Backward compatibility for existing active replicas:
+    // A device is only considered ACTIVE through backward compatibility if there is evidence
+    // of an established snapshot baseline (base_snapshot_id in sync_local_state or settings).
+    // Historical sequence numbers alone (e.g. from failed/interrupted bootstraps) MUST NOT imply ACTIVE.
+    const hasRowBaseline = Boolean(row?.base_snapshot_id && String(row.base_snapshot_id).trim().length > 0);
+    if (hasRowBaseline) {
       return DEVICE_LIFECYCLE.ACTIVE;
     }
 
     const { getSetting } = await import('../database/settings.js');
     const lastSnap = await getSetting('last_snapshot_id').catch(() => null);
-    const baseManifest = await getSetting('sync_base_manifest').catch(() => null);
-    if (lastSnap || baseManifest) {
+    if (lastSnap && String(lastSnap).trim().length > 0) {
       return DEVICE_LIFECYCLE.ACTIVE;
     }
 
-    const rawEvents = (await db.query('SELECT * FROM sync_delta_queue').catch(() => ({ values: [] }))).values || [];
-    if (rawEvents.length > 0) {
+    const baseManifest = await getSetting('sync_base_manifest').catch(() => null);
+    if (baseManifest) {
       return DEVICE_LIFECYCLE.ACTIVE;
     }
 

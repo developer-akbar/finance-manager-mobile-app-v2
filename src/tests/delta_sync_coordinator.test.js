@@ -13,6 +13,8 @@ import { IDBFactory } from 'fake-indexeddb';
 import { v4 as uuid } from 'uuid';
 
 import { initDB, getDB, closeDB } from '../database/db.js';
+import { setSetting } from '../database/settings.js';
+import { initLocalSyncState } from '../database/deltaQueue.js';
 import { computeCanonicalSha256 } from '../utils/canonicalEntity.js';
 import {
   configureDeltaSyncEngine,
@@ -77,6 +79,8 @@ async function resetDB() {
   closeDB();
   globalThis.indexedDB = new IDBFactory();
   const db = await initDB();
+  await setSetting('last_snapshot_id', APPROVED_BASE_SNAPSHOT_ID);
+  await initLocalSyncState('local_device', APPROVED_BASE_SNAPSHOT_ID, 8, 'ACTIVE');
   return db;
 }
 

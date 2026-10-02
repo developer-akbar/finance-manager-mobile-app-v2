@@ -681,4 +681,219 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
     assert.strictEqual(categoriesAfter.length, 1, 'Transient seed categories replaced by authoritative category');
     assert.strictEqual(categoriesAfter[0].id, 'cat_authoritative_salary');
   });
+
+  await t.test('REGRESSION TEST A: Legacy failed-bootstrap device (Device E exact state) resolves UNINITIALIZED and selects bootstrap', async () => {
+    const db = getDB();
+    const legacyDevId = 'dev_6edc69e37943';
+
+    // Seed 4 local transactions as observed on Device E (0 pending delta events)
+    for (let i = 1; i <= 4; i++) {
+      await db.run(
+        'INSERT INTO transactions (id, date, inr, amount, account, category, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [`tx_e_local_${i}`, '2026-03-01', 100 * i, String(100 * i), 'Cash', 'Misc', 'Expense', new Date().toISOString(), new Date().toISOString()]
+      );
+    }
+
+    // Set legacy sync_local_state matching Device E
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, last_allocated_sequence, last_uploaded_sequence, last_pushed_sequence, last_acked_sequence, base_snapshot_id, base_cloud_version, lifecycle_state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['device_state', legacyDevId, 113, 113, 113, 113, null, null, null, new Date().toISOString()]
+    );
+
+    // Insert 2 pending conflicts on E
+    await db.run(
+      'INSERT OR REPLACE INTO sync_conflicts (conflict_id, collection, entity_id, conflict_type, peer_device_id, event_id, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ['conf_1', 'transactions', 'tx_c1', 'CONCURRENT_EDIT', 'device_c', 'evt_c1', 'PENDING']
+    );
+    await db.run(
+      'INSERT OR REPLACE INTO sync_conflicts (conflict_id, collection, entity_id, conflict_type, peer_device_id, event_id, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ['conf_2', 'transactions', 'tx_c2', 'CONCURRENT_EDIT', 'device_d', 'evt_d1', 'PENDING']
+    );
+
+    // Verify lifecycle resolution
+    const lifecycle = await getDeviceLifecycleState(legacyDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.UNINITIALIZED, 'Legacy E state MUST resolve to UNINITIALIZED');
+
+    // Create cloud snapshot to bootstrap from
+    const snapshotPayload = {
+      snapshot_id: 'snap_prod_master_123',
+      cloud_version: 1,
+      created_at: new Date().toISOString(),
+      device_id: 'device_primary',
+      entities: {
+        transactions: [
+          { id: 'tx_cloud_1', Date: '2026-03-01', INR: 999, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encryptedSnapshot = await encryptBackupData(snapshotPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({
+      name: SNAPSHOT_FILENAME,
+      content: encryptedSnapshot
+    });
+
+    // Execute full sync pass
+    const syncRes = await executeFullSyncPass({
+      deviceId: legacyDevId,
+      driveClient: mockDrive,
+      sessionKey: TEST_SESSION_KEY
+    });
+
+    assert.strictEqual(syncRes.success, true);
+    assert.strictEqual(syncRes.bootstrapped, true, 'Bootstrap was executed');
+    assert.strictEqual(syncRes.snapshotId, 'snap_prod_master_123');
+
+    // Verify device transitioned to ACTIVE after successful bootstrap
+    const lifecycleAfter = await getDeviceLifecycleState(legacyDevId);
+    assert.strictEqual(lifecycleAfter, DEVICE_LIFECYCLE.ACTIVE, 'Device E is ACTIVE after bootstrap');
+  });
+
+  await t.test('REGRESSION TEST B: Existing healthy active device (C/D backward-compatible pattern) remains ACTIVE', async () => {
+    const db = getDB();
+    const healthyDevId = 'dev_c_healthy';
+
+    // Legacy row with sequence > 0 and valid base_snapshot_id (or in settings), but lifecycle_state is null
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, last_allocated_sequence, last_uploaded_sequence, last_pushed_sequence, last_acked_sequence, base_snapshot_id, base_cloud_version, lifecycle_state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['device_state', healthyDevId, 50, 50, 50, 50, 'snap_prod_master_123', 1, null, new Date().toISOString()]
+    );
+    await setSetting('last_snapshot_id', 'snap_prod_master_123');
+
+    const lifecycle = await getDeviceLifecycleState(healthyDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE, 'Healthy device with baseline is ACTIVE');
+  });
+
+  await t.test('REGRESSION TEST C: Explicit ACTIVE device is classified as ACTIVE', async () => {
+    const db = getDB();
+    const devId = 'dev_explicit_active';
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?)',
+      ['device_state', devId, DEVICE_LIFECYCLE.ACTIVE, new Date().toISOString()]
+    );
+
+    const lifecycle = await getDeviceLifecycleState(devId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE);
+  });
+
+  await t.test('REGRESSION TEST D: Explicit JOINING device is classified as JOINING and blocks outbound upload', async () => {
+    const db = getDB();
+    const devId = 'dev_explicit_joining';
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?)',
+      ['device_state', devId, DEVICE_LIFECYCLE.JOINING, new Date().toISOString()]
+    );
+
+    const lifecycle = await getDeviceLifecycleState(devId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.JOINING);
+
+    await assert.rejects(
+      async () => {
+        await uploadPendingDeltas({
+          deviceId: devId,
+          sessionKey: TEST_SESSION_KEY,
+          driveClient: mockDrive
+        });
+      },
+      /DEVICE_NOT_INITIALIZED_FOR_SYNC/
+    );
+  });
+
+  await t.test('REGRESSION TEST E: Explicit UNINITIALIZED device is classified as UNINITIALIZED', async () => {
+    const db = getDB();
+    const devId = 'dev_explicit_uninit';
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?)',
+      ['device_state', devId, DEVICE_LIFECYCLE.UNINITIALIZED, new Date().toISOString()]
+    );
+
+    const lifecycle = await getDeviceLifecycleState(devId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.UNINITIALIZED);
+  });
+
+  await t.test('REGRESSION TEST F: Legacy sequence + valid initialized baseline resolves to ACTIVE', async () => {
+    const db = getDB();
+    const devId = 'dev_legacy_with_baseline';
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, last_allocated_sequence, last_uploaded_sequence, base_snapshot_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ['device_state', devId, 75, 75, 'snap_valid_456', null, new Date().toISOString()]
+    );
+
+    const lifecycle = await getDeviceLifecycleState(devId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE);
+  });
+
+  await t.test('REGRESSION TEST G: Legacy sequence + NO baseline resolves to UNINITIALIZED', async () => {
+    const db = getDB();
+    const devId = 'dev_legacy_no_baseline';
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, last_allocated_sequence, last_uploaded_sequence, base_snapshot_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ['device_state', devId, 75, 75, null, null, new Date().toISOString()]
+    );
+
+    const lifecycle = await getDeviceLifecycleState(devId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.UNINITIALIZED);
+  });
+
+  await t.test('REGRESSION TEST H: Session unlock startup path cannot upload deltas for legacy failed-bootstrap device before bootstrap', async () => {
+    const db = getDB();
+    const legacyDevId = 'dev_6edc69e37943_unlock_test';
+
+    // Simulate Device E state
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, last_allocated_sequence, last_uploaded_sequence, last_pushed_sequence, last_acked_sequence, base_snapshot_id, base_cloud_version, lifecycle_state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['device_state', legacyDevId, 113, 113, 113, 113, null, null, null, new Date().toISOString()]
+    );
+
+    // Add local transaction and attempt direct delta upload
+    await assert.rejects(
+      async () => {
+        await uploadPendingDeltas({
+          deviceId: legacyDevId,
+          sessionKey: TEST_SESSION_KEY,
+          driveClient: mockDrive
+        });
+      },
+      /DEVICE_NOT_INITIALIZED_FOR_SYNC/,
+      'Direct delta upload is blocked before bootstrap'
+    );
+
+    // Provide authoritative cloud snapshot
+    const snapshotPayload = {
+      snapshot_id: 'snap_authoritative_unlock_001',
+      cloud_version: 2,
+      created_at: new Date().toISOString(),
+      device_id: 'device_primary',
+      entities: {
+        transactions: [
+          { id: 'tx_cloud_auth_1', Date: '2026-03-01', INR: 1000, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_auth_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_auth_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encryptedSnapshot = await encryptBackupData(snapshotPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({
+      name: SNAPSHOT_FILENAME,
+      content: encryptedSnapshot
+    });
+
+    // Simulate STARTUP trigger from session unlock
+    const syncRes = await executeFullSyncPass({
+      trigger: 'STARTUP',
+      deviceId: legacyDevId,
+      driveClient: mockDrive,
+      sessionKey: TEST_SESSION_KEY
+    });
+
+    assert.strictEqual(syncRes.success, true);
+    assert.strictEqual(syncRes.bootstrapped, true, 'STARTUP trigger performed bootstrap');
+    assert.strictEqual(syncRes.snapshotId, 'snap_authoritative_unlock_001');
+
+    const txns = await getTransactions();
+    assert.ok(txns.some(t => t.id === 'tx_cloud_auth_1'), 'Authoritative baseline installed');
+  });
 });
