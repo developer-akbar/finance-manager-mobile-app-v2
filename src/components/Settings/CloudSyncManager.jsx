@@ -757,11 +757,13 @@ export default function CloudSyncManager({ onBack }) {
             const badge = (() => {
               if (!isAuthenticated) return { text: 'Authentication Required', color: 'var(--expense)', bg: 'rgba(255, 77, 106, 0.15)' };
               if (!isUnlocked) return { text: 'Session Locked', color: 'var(--warning)', bg: 'rgba(255, 179, 0, 0.15)' };
+              if (deltaMetrics.lifecycleState === 'JOINING') return { text: 'Setting Up Your Cloud Data…', color: 'var(--accent)', bg: 'rgba(74, 144, 226, 0.15)' };
               if (deltaMetrics.status === DELTA_SYNC_STATUS.SYNCING) return { text: 'Syncing...', color: 'var(--accent)', bg: 'rgba(74, 144, 226, 0.15)' };
               if (deltaMetrics.status === DELTA_SYNC_STATUS.AUTH_REQUIRED) return { text: 'Authentication Required', color: 'var(--expense)', bg: 'rgba(255, 77, 106, 0.15)' };
               if (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR) return { text: 'Sync Failed', color: 'var(--expense)', bg: 'rgba(255, 77, 106, 0.15)' };
+              if (deltaMetrics.lifecycleState === 'UNINITIALIZED') return { text: 'Set Up Cloud Data', color: 'var(--accent)', bg: 'rgba(74, 144, 226, 0.15)' };
               if (deltaMetrics.pendingCount > 0) return { text: `${deltaMetrics.pendingCount} Pending`, color: 'var(--warning)', bg: 'rgba(255, 179, 0, 0.15)' };
-              if (deltaMetrics.lastDeltaSyncedAt || deltaMetrics.lastUploadedSequence > 0) return { text: 'Synced', color: 'var(--green)', bg: 'rgba(0, 229, 160, 0.15)' };
+              if (deltaMetrics.lastDeltaSyncedAt || deltaMetrics.lastUploadedSequence > 0) return { text: 'Cloud Sync On', color: 'var(--green)', bg: 'rgba(0, 229, 160, 0.15)' };
               return { text: 'Idle', color: 'var(--text-muted)', bg: 'rgba(255, 255, 255, 0.05)' };
             })();
             return (
@@ -782,7 +784,19 @@ export default function CloudSyncManager({ onBack }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Status</span>
             <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-              {!isAuthenticated ? 'Authentication Required' : (!isUnlocked ? 'Session Locked' : (deltaMetrics.status === DELTA_SYNC_STATUS.SYNCING ? 'Syncing...' : (deltaMetrics.pendingCount > 0 ? 'Pending' : (deltaMetrics.lastDeltaSyncedAt ? 'Synced' : 'Idle'))))}
+              {!isAuthenticated
+                ? 'Authentication Required'
+                : (!isUnlocked
+                  ? 'Session Locked'
+                  : (deltaMetrics.lifecycleState === 'JOINING'
+                    ? 'Setting Up Your Cloud Data…'
+                    : (deltaMetrics.status === DELTA_SYNC_STATUS.SYNCING
+                      ? 'Syncing...'
+                      : (deltaMetrics.lifecycleState === 'UNINITIALIZED'
+                        ? 'Set Up Cloud Data'
+                        : (deltaMetrics.pendingCount > 0
+                          ? 'Pending Changes'
+                          : (deltaMetrics.lastDeltaSyncedAt ? 'Cloud Sync On' : 'Idle'))))))}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>

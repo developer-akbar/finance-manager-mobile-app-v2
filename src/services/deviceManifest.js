@@ -25,19 +25,21 @@ export function getDeviceManifestFilename(deviceId) {
  * Creates a valid, empty DeviceManifest data structure.
  */
 export function createEmptyDeviceManifest(arg1, arg2, arg3, arg4) {
-  let deviceId, deviceName, baseSnapshotId, baseCloudVersion, manifestRevision;
+  let deviceId, deviceName, baseSnapshotId, baseCloudVersion, manifestRevision, lifecycleState;
   if (arg1 && typeof arg1 === 'object') {
     deviceId = arg1.deviceId || arg1.device_id;
     deviceName = arg1.deviceName || arg1.device_name || 'FinMan Device';
     baseSnapshotId = arg1.baseSnapshotId || arg1.base_snapshot_id || 'snap_1790493064581_jbhnf8';
     baseCloudVersion = arg1.baseCloudVersion || arg1.base_cloud_version || 8;
     manifestRevision = arg1.manifestRevision || arg1.manifest_revision || 0;
+    lifecycleState = arg1.device_lifecycle_state || arg1.lifecycleState || 'ACTIVE';
   } else {
     deviceId = arg1;
     baseSnapshotId = arg2 || 'snap_1790493064581_jbhnf8';
     baseCloudVersion = arg3 || 8;
     manifestRevision = arg4 || 0;
     deviceName = 'FinMan Device';
+    lifecycleState = 'ACTIVE';
   }
 
   if (!deviceId) throw new Error('Device ID is required to create a device manifest.');
@@ -54,7 +56,7 @@ export function createEmptyDeviceManifest(arg1, arg2, arg3, arg4) {
     base_snapshot_id: String(baseSnapshotId),
     base_cloud_version: Number(baseCloudVersion) || 8,
     last_sequence: 0,
-    device_lifecycle_state: 'ACTIVE',
+    device_lifecycle_state: lifecycleState,
     watermarks: {
       last_allocated_sequence: 0,
       last_uploaded_sequence: 0,
@@ -243,6 +245,20 @@ export async function writeOwnDeviceManifest(arg1, arg2, arg3) {
 
   if (!manifest || !manifest.device_id) {
     throw new Error('Valid manifest object with device_id is required.');
+  }
+
+  // Safety guard: block publishing ACTIVE manifest if local lifecycle state is non-ACTIVE
+  if (manifest.device_lifecycle_state === 'ACTIVE') {
+    try {
+      const db = getDB();
+      const stRes = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']);
+      const stateRow = stRes.values?.[0];
+      if (stateRow?.lifecycle_state && stateRow.lifecycle_state !== 'ACTIVE') {
+        throw new Error(`DEVICE_NOT_INITIALIZED_FOR_SYNC: Cannot publish ACTIVE device manifest while lifecycle state is '${stateRow.lifecycle_state}'.`);
+      }
+    } catch (err) {
+      if (err.message && err.message.startsWith('DEVICE_NOT_INITIALIZED_FOR_SYNC')) throw err;
+    }
   }
 
   const filename = getDeviceManifestFilename(manifest.device_id);

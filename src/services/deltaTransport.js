@@ -292,16 +292,49 @@ export async function uploadPendingDeltas(opts) {
     const localState = localStateRes.values?.[0] || {
       last_allocated_sequence: 0,
       last_uploaded_sequence: 0,
-      base_snapshot_id: opts.baseSnapshotId || 'snap_1790493064581_jbhnf8',
+      base_snapshot_id: opts.baseSnapshotId || null,
       base_cloud_version: opts.baseCloudVersion || 8
     };
 
-    const baseSnapshotId = opts.baseSnapshotId || localState.base_snapshot_id || 'snap_1790493064581_jbhnf8';
-    const baseCloudVersion = opts.baseCloudVersion || localState.base_cloud_version || 8;
-    const lastUploadedSeq = Number(localState.last_uploaded_sequence ?? localState.last_pushed_sequence ?? 0);
-
     // 2. Fetch pending queue events
     const rawEvents = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+
+    let lifecycleState = localState.lifecycle_state;
+    if (!lifecycleState) {
+      const hasSeq = Number(localState.last_pushed_sequence || localState.last_uploaded_sequence || localState.last_allocated_sequence || 0) > 0;
+      if (hasSeq) {
+        lifecycleState = 'ACTIVE';
+      } else {
+        let lastSnap = null;
+        try {
+          const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
+          lastSnap = snapRes.values?.[0]?.value || null;
+        } catch {}
+        if (lastSnap) {
+          lifecycleState = 'ACTIVE';
+        } else if (rawEvents.length > 0) {
+          lifecycleState = 'ACTIVE';
+        } else {
+          lifecycleState = 'UNINITIALIZED';
+        }
+      }
+    }
+
+    if (lifecycleState !== 'ACTIVE') {
+      throw new Error(`DEVICE_NOT_INITIALIZED_FOR_SYNC: Device lifecycle state is '${lifecycleState}'. Outbound delta uploading is forbidden.`);
+    }
+
+    let dynamicBaseSnapshotId = opts.baseSnapshotId || localState.base_snapshot_id;
+    if (!dynamicBaseSnapshotId) {
+      try {
+        const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
+        dynamicBaseSnapshotId = snapRes.values?.[0]?.value || null;
+      } catch {}
+    }
+
+    const baseSnapshotId = dynamicBaseSnapshotId || 'snap_1790493064581_jbhnf8';
+    const baseCloudVersion = opts.baseCloudVersion || localState.base_cloud_version || 8;
+    const lastUploadedSeq = Number(localState.last_uploaded_sequence ?? localState.last_pushed_sequence ?? 0);
     const pendingEvents = rawEvents
       .filter(r => (r.status === 'PENDING' || r.status === 'QUEUED' || Number(r.sequence) > lastUploadedSeq) && r.status !== 'ACKNOWLEDGED')
       .sort((a, b) => Number(a.sequence) - Number(b.sequence))
@@ -465,9 +498,18 @@ export async function uploadPendingDeltas(opts) {
 export async function pullPeerDeltas(opts) {
   const ownDeviceId = opts.localDeviceId || opts.ownDeviceId || opts.deviceId;
   const encryptionKeyOrPin = opts.sessionKey || opts.encryptionKeyOrPin;
-  const baseSnapshotId = opts.baseSnapshotId || 'snap_1790493064581_jbhnf8';
   const accessToken = opts.accessToken;
   const driveClient = opts.driveClient;
+
+  let dynamicBaseSnapshotId = opts.baseSnapshotId;
+  if (!dynamicBaseSnapshotId) {
+    try {
+      const db = getDB();
+      const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
+      dynamicBaseSnapshotId = snapRes.values?.[0]?.value || null;
+    } catch {}
+  }
+  const baseSnapshotId = dynamicBaseSnapshotId || 'snap_1790493064581_jbhnf8';
 
   const peerManifests = await listPeerManifests(ownDeviceId, accessToken, baseSnapshotId, driveClient);
   const db = getDB();

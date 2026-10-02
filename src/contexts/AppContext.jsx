@@ -207,14 +207,14 @@ export function AppProvider({ children }) {
       // Seed defaults on fresh install or when accounts/categories are empty
       if (accts.length === 0 || catsArr.length === 0) {
         if (accts.length === 0) {
-          await replaceAccountGroups(DEFAULT_ACCOUNT_GROUPS);
-          await replaceAccounts(DEFAULT_ACCOUNTS.map((a,i) => ({ id: uuid(), ...a, sortOrder: i })));
+          await replaceAccountGroups(DEFAULT_ACCOUNT_GROUPS, { suppressDeltaQueue: true });
+          await replaceAccounts(DEFAULT_ACCOUNTS.map((a,i) => ({ id: uuid(), ...a, sortOrder: i })), { suppressDeltaQueue: true });
         }
         if (catsArr.length === 0) {
           await replaceCategories(DEFAULT_CATEGORIES.map((c,i) => ({
             id: uuid(), name: c.name, type: c.type, sortOrder: i,
             subcategories: c.subcategories.map((s,si) => ({ id: uuid(), name: s, sortOrder: si })),
-          })));
+          })), { suppressDeltaQueue: true });
         }
         await setSetting('sub_accounts_migrated_v2', 'true');
         const [seedAccts, seedCats, seedGroups] = await Promise.all([getAccounts(), getCategories(), getAccountGroups()]);

@@ -21,7 +21,7 @@ export const getCategories = async () => {
   }));
 };
 
-export const replaceCategories = async (list) => {
+export const replaceCategories = async (list, opts = {}) => {
   const db = getDB();
   const [curCatsRes, curSubsRes] = await Promise.all([
     db.query('SELECT * FROM categories'),
@@ -95,6 +95,6 @@ export const replaceCategories = async (list) => {
   }
 
   if (ops.length > 0) {
-    await executeAtomicBatch({ operations: ops });
+    await executeAtomicBatch({ operations: ops, suppressDeltaQueue: !!opts?.suppressDeltaQueue });
   }
 };

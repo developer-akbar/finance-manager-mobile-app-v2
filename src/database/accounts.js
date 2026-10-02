@@ -41,7 +41,7 @@ export const getAccounts = async () => {
   });
 };
 
-export const replaceAccounts = async (list) => {
+export const replaceAccounts = async (list, opts = {}) => {
   const db = getDB();
   const now = new Date().toISOString();
 
@@ -139,7 +139,7 @@ export const replaceAccounts = async (list) => {
   }
 
   if (ops.length > 0) {
-    await executeAtomicBatch({ operations: ops });
+    await executeAtomicBatch({ operations: ops, suppressDeltaQueue: !!opts?.suppressDeltaQueue });
   }
 };
 
@@ -149,7 +149,7 @@ export const getAccountGroups = async () => {
   return (r.values || []).map(g => g.name).filter(Boolean);
 };
 
-export const replaceAccountGroups = async (list) => {
+export const replaceAccountGroups = async (list, opts = {}) => {
   const db = getDB();
   const uniqueList = [...new Set((list || []).map(item => (typeof item === 'string' ? item : (item?.name || '')).trim()).filter(Boolean))];
 
@@ -181,7 +181,7 @@ export const replaceAccountGroups = async (list) => {
   }));
 
   if (ops.length > 0) {
-    await executeAtomicBatch({ operations: ops });
+    await executeAtomicBatch({ operations: ops, suppressDeltaQueue: !!opts?.suppressDeltaQueue });
   }
 };
 

@@ -1190,7 +1190,11 @@ test('FinMan Phase 7.5 — Automatic Delta Synchronization Engine Suite', async 
     saveTokenData('token_burst_2', 3600);
     saveTokenData('token_burst_3', 3600);
 
-    await new Promise(r => setTimeout(r, 200));
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 50));
+      const s = getCurrentSyncStatus();
+      if (s === SYNC_STATUS.SUCCESS || s === SYNC_STATUS.IDLE) break;
+    }
 
     // Confirm system completed pass and reached SUCCESS or IDLE
     const status = getCurrentSyncStatus();

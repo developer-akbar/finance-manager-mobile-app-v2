@@ -195,11 +195,20 @@ async function _reconcilePeerEvents(peerDeviceId, limit) {
   const peerStateRes = await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', [peerDeviceId]);
   const peerState = peerStateRes.values?.[0] || null;
   const currentWatermark = Number(peerState?.last_reconciled_sequence) || 0;
-  const baseSnapshotId = peerState?.base_snapshot_id || APPROVED_BASE_SNAPSHOT_ID;
+
+  let activeBaseSnapshotId = APPROVED_BASE_SNAPSHOT_ID;
+  try {
+    const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
+    if (snapRes.values?.[0]?.value) {
+      activeBaseSnapshotId = snapRes.values[0].value;
+    }
+  } catch {}
+
+  const baseSnapshotId = peerState?.base_snapshot_id || activeBaseSnapshotId;
 
   // 2. Validate Baseline Compatibility
-  if (baseSnapshotId !== APPROVED_BASE_SNAPSHOT_ID) {
-    const isOlder = baseSnapshotId < APPROVED_BASE_SNAPSHOT_ID;
+  if (baseSnapshotId !== activeBaseSnapshotId) {
+    const isOlder = baseSnapshotId < activeBaseSnapshotId;
     const blockStatus = isOlder ? RECONCILIATION_STATUS.BLOCKED_OLDER_BASE : RECONCILIATION_STATUS.BLOCKED_UNKNOWN_BASE;
     await db.run(
       'UPDATE sync_staged_events SET status = ? WHERE device_id = ? AND (status IS NULL OR status = ?)',

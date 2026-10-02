@@ -27,6 +27,7 @@ export async function executeAtomicMutation(options) {
   const bundleInfo = options.bundleInfo || null;
   const parentEventId = options.parentEventId || null;
   const buildEntityFn = options.buildEntityFn || null;
+  const suppressDeltaQueue = !!options.suppressDeltaQueue;
 
   let attempt = 0;
   while (attempt < MAX_PRECONDITION_RETRIES) {
@@ -40,7 +41,8 @@ export async function executeAtomicMutation(options) {
         tombstoneType,
         bundleInfo,
         parentEventId,
-        buildEntityFn
+        buildEntityFn,
+        suppressDeltaQueue
       });
     } catch (err) {
       if (err.message === 'PRECONDITION_FAILED' && attempt < MAX_PRECONDITION_RETRIES) {
@@ -60,7 +62,8 @@ async function _executeSingleMutationAttempt({
   tombstoneType,
   bundleInfo,
   parentEventId,
-  buildEntityFn
+  buildEntityFn,
+  suppressDeltaQueue = false
 }) {
   const db = getDB();
 
@@ -103,7 +106,8 @@ async function _executeSingleMutationAttempt({
         bundle_total: bundleInfo?.bundle_total || 1,
         bundle_checksum: bundleInfo?.bundle_checksum || null,
         parent_event_id: parentEventId || null
-      }]
+      }],
+      suppressDeltaQueue
     });
   } else {
     return await _executeAtomicSQLite({
@@ -121,7 +125,8 @@ async function _executeSingleMutationAttempt({
         bundle_total: bundleInfo?.bundle_total || 1,
         bundle_checksum: bundleInfo?.bundle_checksum || null,
         parent_event_id: parentEventId || null
-      }]
+      }],
+      suppressDeltaQueue
     });
   }
 }
@@ -131,7 +136,8 @@ async function _executeSingleMutationAttempt({
  */
 export async function executeAtomicBatch({
   operations = [], // Array of { storeName, id, operation, entity, expectedBaseEntity, tombstoneType, bundleInfo }
-  bundleId = null
+  bundleId = null,
+  suppressDeltaQueue = false
 }) {
   if (!operations || operations.length === 0) return [];
 
@@ -170,21 +176,24 @@ export async function executeAtomicBatch({
 
   const isWeb = Capacitor.getPlatform() === 'web';
   if (isWeb) {
-    return await _executeAtomicIDB({ operations: preparedOps });
+    return await _executeAtomicIDB({ operations: preparedOps, suppressDeltaQueue });
   } else {
-    return await _executeAtomicSQLite({ operations: preparedOps });
+    return await _executeAtomicSQLite({ operations: preparedOps, suppressDeltaQueue });
   }
 }
 
 /**
  * Native IndexedDB Atomic Multi-Store Transaction Executor
  */
-async function _executeAtomicIDB({ operations }) {
+async function _executeAtomicIDB({ operations, suppressDeltaQueue = false }) {
   const rawIdb = getRawIDB() || await openIDBInstance();
-  const targetStores = new Set(['sync_delta_queue', 'sync_local_state', 'sync_tombstones']);
+  const targetStores = new Set(suppressDeltaQueue ? [] : ['sync_delta_queue', 'sync_local_state', 'sync_tombstones']);
 
   for (const op of operations) {
     targetStores.add(op.storeName);
+    if (op.tombstoneType && suppressDeltaQueue) {
+      targetStores.add('sync_tombstones');
+    }
   }
 
   return new Promise((resolve, reject) => {
@@ -194,6 +203,39 @@ async function _executeAtomicIDB({ operations }) {
       tx = rawIdb.transaction(storeNames, 'readwrite');
     } catch (err) {
       return reject(new Error(`Failed to create IDB transaction across stores [${storeNames.join(', ')}]: ${err.message}`));
+    }
+
+    if (suppressDeltaQueue) {
+      try {
+        const tombstoneStore = targetStores.has('sync_tombstones') ? tx.objectStore('sync_tombstones') : null;
+        const now = new Date().toISOString();
+
+        for (let i = 0; i < operations.length; i++) {
+          const op = operations[i];
+          const currentStore = tx.objectStore(op.storeName);
+
+          if (op.operation === DELTA_OPERATION.DELETE) {
+            currentStore.delete(op.id);
+            if (op.tombstoneType && tombstoneStore) {
+              tombstoneStore.put({
+                id: String(op.id),
+                entity_type: String(op.tombstoneType),
+                deleted_at: now
+              });
+            }
+          } else if (op.entity) {
+            currentStore.put(op.entity);
+          }
+        }
+
+        tx.oncomplete = () => resolve([]);
+        tx.onerror = (e) => reject(tx.error || e.target?.error || new Error('Transaction error'));
+        tx.onabort = () => reject(new Error('Transaction aborted'));
+      } catch (err) {
+        try { tx.abort(); } catch {}
+        reject(err);
+      }
+      return;
     }
 
     const stateStore = tx.objectStore('sync_local_state');
@@ -311,9 +353,45 @@ async function _executeAtomicIDB({ operations }) {
 /**
  * Native SQLite Atomic Batch Transaction Executor
  */
-async function _executeAtomicSQLite({ operations }) {
+async function _executeAtomicSQLite({ operations, suppressDeltaQueue = false }) {
   const db = getDB();
   const now = new Date().toISOString();
+
+  if (suppressDeltaQueue) {
+    const statements = [];
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.operation === DELTA_OPERATION.DELETE) {
+        statements.push({
+          statement: `DELETE FROM ${op.storeName} WHERE id = ?`,
+          values: [op.id]
+        });
+        if (op.tombstoneType) {
+          statements.push({
+            statement: 'INSERT OR REPLACE INTO sync_tombstones (id, entity_type, deleted_at) VALUES (?, ?, ?)',
+            values: [String(op.id), String(op.tombstoneType), now]
+          });
+        }
+      } else if (op.entity) {
+        const keys = Object.keys(op.entity);
+        const cols = keys.join(', ');
+        const placeholders = keys.map(() => '?').join(', ');
+        statements.push({
+          statement: `INSERT OR REPLACE INTO ${op.storeName} (${cols}) VALUES (${placeholders})`,
+          values: keys.map(k => op.entity[k] ?? null)
+        });
+      }
+    }
+
+    if (typeof db.executeSet === 'function') {
+      await db.executeSet(statements);
+    } else {
+      for (const stmt of statements) {
+        await db.run(stmt.statement, stmt.values);
+      }
+    }
+    return [];
+  }
 
   // Read current sequence state
   const stateRes = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']);
