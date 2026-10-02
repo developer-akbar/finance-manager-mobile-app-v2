@@ -621,21 +621,31 @@ export function AppProvider({ children }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Phase 7.5: Initialize Automatic Delta Synchronization Runtime
+  // Phase 7.5: Initialize Automatic Delta Synchronization Runtime & Auto-Refresh State on Sync/Bootstrap Success
   useEffect(() => {
-    let cleanup = null;
-    import('../services/deltaSyncCoordinator.js').then(({ initializeDeltaSyncRuntime }) => {
-      cleanup = initializeDeltaSyncRuntime();
+    let cleanupRuntime = null;
+    let unsubscribeSync = null;
+
+    import('../services/deltaSyncCoordinator.js').then(({ initializeDeltaSyncRuntime, subscribeSyncStatus, SYNC_STATUS }) => {
+      cleanupRuntime = initializeDeltaSyncRuntime();
+      unsubscribeSync = subscribeSyncStatus((status, details) => {
+        if (status === SYNC_STATUS.SUCCESS || details?.bootstrapped || details?.status === 'BOOTSTRAP_SUCCESS' || details?.operation === 'BOOTSTRAP') {
+          load();
+        }
+      });
     }).catch(err => {
-      console.warn('[AppContext] Failed to initialize delta sync runtime:', err);
+      console.warn('[AppContext] Failed to initialize delta sync runtime or status subscription:', err);
     });
 
     return () => {
-      if (cleanup && typeof cleanup === 'function') {
-        cleanup();
+      if (cleanupRuntime && typeof cleanupRuntime === 'function') {
+        cleanupRuntime();
+      }
+      if (unsubscribeSync && typeof unsubscribeSync === 'function') {
+        unsubscribeSync();
       }
     };
-  }, []);
+  }, [load]);
 
   const navigate = (view, params = null) => dispatch({ type: 'NAVIGATE', payload: { view, params } });
   const clearNavParams = () => dispatch({ type: 'CLEAR_NAV_PARAMS' });

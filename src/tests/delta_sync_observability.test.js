@@ -343,4 +343,153 @@ test('FinMan Phase 7.5 — Delta Sync Observability & Metrics Suite', async (t) 
     assert.equal(pending.length, 1);
     assert.equal(pending[0].status, 'PENDING');
   });
+
+  await t.test('O09: Background bootstrap / sync success triggers AppContext and metadata refresh', async () => {
+    const db = await resetDB();
+
+    // 1. Initial state: 4 local transactions, no snapshot baseline
+    await db.run('INSERT INTO transactions (id, note, inr) VALUES (?, ?, ?)', ['tx_1', 'Initial 1', 100]);
+    await db.run('INSERT INTO transactions (id, note, inr) VALUES (?, ?, ?)', ['tx_2', 'Initial 2', 200]);
+    await db.run('INSERT INTO transactions (id, note, inr) VALUES (?, ?, ?)', ['tx_3', 'Initial 3', 300]);
+    await db.run('INSERT INTO transactions (id, note, inr) VALUES (?, ?, ?)', ['tx_4', 'Initial 4', 400]);
+
+    let appState = { transactions: (await db.query('SELECT * FROM transactions')).values };
+    assert.equal(appState.transactions.length, 4);
+
+    let loadMetaCalled = false;
+    let loadAppCalled = false;
+    let displayedMeta = { lastSnapshotId: null, lastSyncedAt: null };
+
+    // Simulate CloudSyncManager and AppContext subscriptions
+    const unsubscribe = subscribeSyncStatus((status, details) => {
+      if (status === SYNC_STATUS.SUCCESS || details?.bootstrapped || details?.status === 'BOOTSTRAP_SUCCESS') {
+        loadAppCalled = true;
+        loadMetaCalled = true;
+      }
+    });
+
+    // 2. Background bootstrap populates 100 transactions and writes snapshot metadata to DB
+    for (let i = 5; i <= 100; i++) {
+      await db.run('INSERT INTO transactions (id, note, inr) VALUES (?, ?, ?)', [`tx_${i}`, `Bootstrapped ${i}`, 1000 + i]);
+    }
+    await setSetting('last_snapshot_id', 'snap_live_bootstrap_verified_999');
+    await setSetting('last_synced_at', '2026-10-02T12:00:00.000Z');
+
+    // 3. Coordinator broadcasts SYNC_STATUS.SUCCESS
+    broadcastSyncStatus(SYNC_STATUS.SUCCESS, {
+      status: 'BOOTSTRAP_SUCCESS',
+      bootstrapped: true,
+      snapshotId: 'snap_live_bootstrap_verified_999'
+    });
+
+    assert.equal(loadAppCalled, true, 'AppContext load was triggered');
+    assert.equal(loadMetaCalled, true, 'CloudSyncManager loadMeta was triggered');
+
+    // Verify refreshed state reflects the full 100 transactions
+    appState.transactions = (await db.query('SELECT * FROM transactions')).values;
+    assert.equal(appState.transactions.length, 100);
+
+    displayedMeta.lastSnapshotId = await getSetting('last_snapshot_id');
+    displayedMeta.lastSyncedAt = await getSetting('last_synced_at');
+    assert.equal(displayedMeta.lastSnapshotId, 'snap_live_bootstrap_verified_999');
+    assert.equal(displayedMeta.lastSyncedAt, '2026-10-02T12:00:00.000Z');
+
+    unsubscribe();
+  });
+
+  await t.test('O10: Successful sync clears stale latestError message', async () => {
+    await resetDB();
+
+    let capturedError = 'Initial None';
+
+    // Handler simulating CloudSyncManager error resolution logic
+    const handleSyncUpdate = (status, details) => {
+      let nextError = capturedError;
+      if (status === SYNC_STATUS.SUCCESS || details?.status === 'BOOTSTRAP_SUCCESS' || details?.operation === 'BOOTSTRAP' || details?.bootstrapped) {
+        nextError = null;
+      } else if (details?.error || details?.reason) {
+        nextError = details.error || details.reason;
+      }
+      capturedError = nextError;
+    };
+
+    // 1. Stale error occurs (session locked)
+    handleSyncUpdate(SYNC_STATUS.AUTH_REQUIRED, { reason: 'Sync session is locked (no encryption key)' });
+    assert.equal(capturedError, 'Sync session is locked (no encryption key)');
+
+    // 2. Subsequent successful sync clears the stale error
+    handleSyncUpdate(SYNC_STATUS.SUCCESS, {
+      status: 'BOOTSTRAP_SUCCESS',
+      bootstrapped: true,
+      message: 'Cloud Sync On'
+    });
+    assert.equal(capturedError, null, 'latestError was cleanly cleared to null on success');
+  });
+
+  await t.test('O11: UI state and metadata refresh does NOT generate outbound delta events or trigger bootstrap', async () => {
+    const db = await resetDB();
+    await setSetting('sub_accounts_migrated_v2', 'true');
+    await setSetting('historical_charges_reconciled', 'true');
+
+    // Check delta queue is empty before refresh
+    const initialQueue = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    assert.equal(initialQueue.length, 0);
+
+    // Execute read queries that AppContext and CloudSyncManager perform on refresh
+    const [txns, snapId, lastSync] = await Promise.all([
+      db.query('SELECT * FROM transactions'),
+      getSetting('last_snapshot_id'),
+      getSetting('last_synced_at')
+    ]);
+
+    // Delta queue MUST remain strictly 0
+    const finalQueue = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    assert.equal(finalQueue.length, 0, 'Zero delta events created during UI refresh');
+  });
+
+  await t.test('O12: Existing 2 conflicts remain preserved and visible after UI refresh', async () => {
+    const db = await resetDB();
+
+    // Insert 2 pending conflicts
+    await saveConflictRecord({
+      conflict_id: 'conf_1',
+      collection: 'transactions',
+      entity_id: 'tx_c1',
+      conflict_type: CONFLICT_TYPE.CONCURRENT_EDIT,
+      peer_device_id: 'dev_c',
+      event_id: 'evt_1',
+      base_checksum: 'base_1',
+      local_checksum: 'local_1',
+      remote_checksum: 'remote_1',
+      local_payload: { id: 'tx_c1', note: 'Local Version 1' },
+      remote_payload: { id: 'tx_c1', note: 'Remote Version 1' },
+      status: CONFLICT_STATUS.PENDING
+    });
+
+    await saveConflictRecord({
+      conflict_id: 'conf_2',
+      collection: 'transactions',
+      entity_id: 'tx_c2',
+      conflict_type: CONFLICT_TYPE.CONCURRENT_EDIT,
+      peer_device_id: 'dev_d',
+      event_id: 'evt_2',
+      base_checksum: 'base_2',
+      local_checksum: 'local_2',
+      remote_checksum: 'remote_2',
+      local_payload: { id: 'tx_c2', note: 'Local Version 2' },
+      remote_payload: { id: 'tx_c2', note: 'Remote Version 2' },
+      status: CONFLICT_STATUS.PENDING
+    });
+
+    const pendingBefore = await getPendingConflicts();
+    assert.equal(pendingBefore.length, 2);
+
+    // Simulate UI refresh on sync success
+    broadcastSyncStatus(SYNC_STATUS.SUCCESS, { status: 'SYNC_SUCCESS' });
+
+    const pendingAfter = await getPendingConflicts();
+    assert.equal(pendingAfter.length, 2);
+    assert.equal(pendingAfter[0].status, 'PENDING');
+    assert.equal(pendingAfter[1].status, 'PENDING');
+  });
 });

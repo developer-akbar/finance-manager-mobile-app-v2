@@ -102,50 +102,10 @@ export default function CloudSyncManager({ onBack }) {
     return unsubscribe;
   }, []);
 
-  // Subscribe to Phase 7.5 Delta Sync Coordinator State, Metrics & Conflicts
+  // Subscribe to Phase 7.5 Delta Sync Coordinator State, Metrics & Conflicts & Sync Metadata
   useEffect(() => {
     let mounted = true;
-    async function refreshDeltaMetrics(details = {}) {
-      try {
-        const m = await getDeltaSyncMetrics();
-        if (mounted) {
-          setDeltaMetrics(prev => ({
-            ...m,
-            latestError: details?.error || (details?.reason ? details.reason : prev.latestError)
-          }));
-        }
-      } catch {}
-    }
 
-    async function refreshConflicts() {
-      try {
-        const list = await getPendingConflicts();
-        if (mounted) {
-          setPendingConflicts(list || []);
-        }
-      } catch {}
-    }
-
-    async function refreshAll(details = {}) {
-      await refreshDeltaMetrics(details);
-      await refreshConflicts();
-    }
-
-    refreshAll();
-
-    const unsubscribeDelta = subscribeSyncStatus((status, details) => {
-      refreshAll(details);
-    });
-
-    return () => {
-      mounted = false;
-      unsubscribeDelta();
-    };
-  }, [isUnlocked, isAuthenticated]);
-
-  // Load Client ID & Last Sync Info on mount
-  useEffect(() => {
-    let mounted = true;
     async function loadMeta() {
       try {
         const id = await getGoogleClientId();
@@ -170,9 +130,58 @@ export default function CloudSyncManager({ onBack }) {
         console.warn('Failed to load cloud sync metadata:', err);
       }
     }
-    loadMeta();
-    return () => { mounted = false; };
-  }, []);
+
+    async function refreshDeltaMetrics(details = {}, status = null) {
+      try {
+        const m = await getDeltaSyncMetrics();
+        if (mounted) {
+          setDeltaMetrics(prev => {
+            let nextError = prev.latestError;
+            if (status === DELTA_SYNC_STATUS.SUCCESS || details?.status === 'BOOTSTRAP_SUCCESS' || details?.operation === 'BOOTSTRAP' || details?.bootstrapped) {
+              nextError = null;
+            } else if (details?.error || details?.reason) {
+              nextError = details.error || details.reason;
+            }
+            return {
+              ...m,
+              latestError: nextError
+            };
+          });
+        }
+      } catch {}
+    }
+
+    async function refreshConflicts() {
+      try {
+        const list = await getPendingConflicts();
+        if (mounted) {
+          setPendingConflicts(list || []);
+        }
+      } catch {}
+    }
+
+    async function refreshAll(details = {}, status = null) {
+      await refreshDeltaMetrics(details, status);
+      await refreshConflicts();
+      await loadMeta();
+      if (status === DELTA_SYNC_STATUS.SUCCESS || details?.bootstrapped || details?.status === 'BOOTSTRAP_SUCCESS' || details?.operation === 'BOOTSTRAP') {
+        if (typeof load === 'function') {
+          try { await load(); } catch {}
+        }
+      }
+    }
+
+    refreshAll();
+
+    const unsubscribeDelta = subscribeSyncStatus((status, details) => {
+      refreshAll(details, status);
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribeDelta();
+    };
+  }, [isUnlocked, isAuthenticated, load]);
 
   // Handle Google Sign-In
   const handleConnect = async () => {
