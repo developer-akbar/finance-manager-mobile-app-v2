@@ -57,24 +57,38 @@ export function buildDeterministicPackagePayload({
 
   const packageId = buildPackageId(deviceId, startSequence, endSequence);
 
-  const cleanEvents = events.map(e => ({
-    event_id: String(e.event_id),
-    device_id: String(e.device_id),
-    sequence: Number(e.sequence),
-    timestamp: String(e.timestamp),
-    collection: String(e.collection),
-    entity_id: String(e.entity_id),
-    operation: String(e.operation),
-    base_checksum: e.base_checksum ? String(e.base_checksum) : null,
-    new_checksum: e.new_checksum ? String(e.new_checksum) : null,
-    tombstone_generation: Number(e.tombstone_generation) || 0,
-    payload: e.payload !== null && typeof e.payload === 'object' ? e.payload : null,
-    bundle_id: e.bundle_id ? String(e.bundle_id) : null,
-    bundle_index: Number(e.bundle_index) || 0,
-    bundle_total: Number(e.bundle_total) || 1,
-    bundle_checksum: e.bundle_checksum ? String(e.bundle_checksum) : null,
-    parent_event_id: e.parent_event_id ? String(e.parent_event_id) : null
-  }));
+  const cleanEvents = events.map(e => {
+    const clean = {
+      event_id: String(e.event_id),
+      device_id: String(e.device_id),
+      sequence: Number(e.sequence),
+      timestamp: String(e.timestamp),
+      collection: String(e.collection),
+      entity_id: String(e.entity_id),
+      operation: String(e.operation),
+      base_checksum: e.base_checksum ? String(e.base_checksum) : null,
+      new_checksum: e.new_checksum ? String(e.new_checksum) : null,
+      tombstone_generation: Number(e.tombstone_generation) || 0,
+      payload: e.payload !== null && typeof e.payload === 'object' ? e.payload : null,
+      bundle_id: e.bundle_id ? String(e.bundle_id) : null,
+      bundle_index: Number(e.bundle_index) || 0,
+      bundle_total: Number(e.bundle_total) || 1,
+      bundle_checksum: e.bundle_checksum ? String(e.bundle_checksum) : null,
+      parent_event_id: e.parent_event_id ? String(e.parent_event_id) : null
+    };
+
+    if (e.resolution_type) {
+      clean.resolution_type = String(e.resolution_type);
+    }
+    if (e.resolved_event_id) {
+      clean.resolved_event_id = String(e.resolved_event_id);
+    }
+    if (e.resolved_conflict_id) {
+      clean.resolved_conflict_id = String(e.resolved_conflict_id);
+    }
+
+    return clean;
+  });
 
   const payload = {
     schema_version: TRANSPORT_SCHEMA_VERSION,
@@ -653,7 +667,7 @@ export async function stagePeerPackageAtomically(arg1, arg2) {
 
       // 2. Insert all events
       for (const e of packagePayload.events) {
-        evtStore.put({
+        const stagedEvt = {
           event_id: e.event_id,
           package_id: packagePayload.package_id,
           device_id: packagePayload.device_id,
@@ -671,8 +685,14 @@ export async function stagePeerPackageAtomically(arg1, arg2) {
           bundle_total: e.bundle_total,
           bundle_checksum: e.bundle_checksum,
           parent_event_id: e.parent_event_id,
-          staged_at: now
-        });
+          staged_at: now,
+          status: 'STAGED'
+        };
+        if (e.resolution_type) stagedEvt.resolution_type = e.resolution_type;
+        if (e.resolved_event_id) stagedEvt.resolved_event_id = e.resolved_event_id;
+        if (e.resolved_conflict_id) stagedEvt.resolved_conflict_id = e.resolved_conflict_id;
+
+        evtStore.put(stagedEvt);
       }
 
       // 3. Update peer watermark
@@ -698,8 +718,8 @@ export async function stagePeerPackageAtomically(arg1, arg2) {
 
     for (const e of packagePayload.events) {
       await db.run(
-        'INSERT OR REPLACE INTO sync_staged_events (event_id, package_id, device_id, sequence, timestamp, collection, entity_id, operation, base_checksum, new_checksum, tombstone_generation, payload, bundle_id, bundle_index, bundle_total, bundle_checksum, parent_event_id, staged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [e.event_id, packagePayload.package_id, packagePayload.device_id, e.sequence, e.timestamp, e.collection, e.entity_id, e.operation, e.base_checksum, e.new_checksum, e.tombstone_generation || 0, typeof e.payload === 'object' ? JSON.stringify(e.payload) : e.payload, e.bundle_id, e.bundle_index, e.bundle_total, e.bundle_checksum, e.parent_event_id, now]
+        'INSERT OR REPLACE INTO sync_staged_events (event_id, package_id, device_id, sequence, timestamp, collection, entity_id, operation, base_checksum, new_checksum, tombstone_generation, payload, bundle_id, bundle_index, bundle_total, bundle_checksum, parent_event_id, resolution_type, resolved_event_id, resolved_conflict_id, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [e.event_id, packagePayload.package_id, packagePayload.device_id, e.sequence, e.timestamp, e.collection, e.entity_id, e.operation, e.base_checksum, e.new_checksum, e.tombstone_generation || 0, typeof e.payload === 'object' ? JSON.stringify(e.payload) : e.payload, e.bundle_id, e.bundle_index, e.bundle_total, e.bundle_checksum, e.parent_event_id, e.resolution_type || null, e.resolved_event_id || null, e.resolved_conflict_id || null, now, 'STAGED']
       );
     }
 

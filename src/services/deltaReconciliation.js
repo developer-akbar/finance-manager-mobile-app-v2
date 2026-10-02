@@ -354,7 +354,23 @@ async function _reconcilePeerEvents(peerDeviceId, limit) {
     expectedNextSeq = bundleEndSeq + 1;
   }
 
-  // 4. Update peer state with contiguous watermark
+  // 4. If any event was reconciled or superseded, recompute contiguous terminal watermark across all staged events
+  if (summary.reconciledCount > 0 || summary.idempotentCount > 0) {
+    const allPeerEvts = (await db.query('SELECT sequence, status FROM sync_staged_events WHERE device_id = ? ORDER BY sequence ASC', [peerDeviceId])).values || [];
+    let updatedWatermark = currentWatermark;
+    for (const row of allPeerEvts) {
+      if (TERMINAL_RECONCILIATION_STATUSES.has(row.status) && Number(row.sequence) === updatedWatermark + 1) {
+        updatedWatermark = Number(row.sequence);
+      } else if (Number(row.sequence) > updatedWatermark + 1) {
+        break;
+      }
+    }
+    if (updatedWatermark > contiguousWatermark) {
+      contiguousWatermark = updatedWatermark;
+    }
+  }
+
+  // 5. Update peer state with contiguous watermark
   if (contiguousWatermark !== currentWatermark) {
     await db.run(
       'UPDATE sync_peer_state SET last_reconciled_sequence = ?, updated_at = ? WHERE peer_device_id = ?',
@@ -434,7 +450,7 @@ async function _reconcileBundleAtomically(bundle) {
     }
 
     // B. Check if this incoming event is an explicit resolution event
-    if (event.resolved_event_id) {
+    if (event.resolved_event_id || event.resolution_type) {
       let activeConf = null;
       if (event.resolved_event_id) {
         const confByEvt = await db.query(
@@ -442,6 +458,13 @@ async function _reconcileBundleAtomically(bundle) {
           [event.resolved_event_id, CONFLICT_STATUS.PENDING]
         );
         activeConf = confByEvt.values?.[0] || null;
+      }
+      if (!activeConf && event.resolved_conflict_id) {
+        const confByConfId = await db.query(
+          'SELECT * FROM sync_conflicts WHERE conflict_id = ? AND status = ?',
+          [event.resolved_conflict_id, CONFLICT_STATUS.PENDING]
+        );
+        activeConf = confByConfId.values?.[0] || null;
       }
       if (!activeConf) {
         const confByEnt = await db.query(
@@ -643,15 +666,28 @@ async function _reconcileBundleAtomically(bundle) {
             resolution: item.event.resolution_type || 'REMOTE_RESOLUTION',
             resolved_at: now
           });
-        } else if (item.event.resolved_event_id) {
+          const supersededEventId = item.activeConflictToResolve.event_id || item.event.resolved_event_id;
+          if (supersededEventId) {
+            const reqSup = evtStore.get(supersededEventId);
+            reqSup.onsuccess = () => {
+              if (reqSup.result) {
+                evtStore.put({
+                  ...reqSup.result,
+                  status: RECONCILIATION_STATUS.RECONCILED_SUPERSEDED,
+                  updated_at: now
+                });
+              }
+            };
+          }
+        } else if (item.event.resolved_event_id || item.event.resolution_type) {
           // Resolution arrived before original conflict: persist durable resolution record in sync_conflicts
           confStore.put({
-            conflict_id: uuid(),
+            conflict_id: item.event.resolved_conflict_id || uuid(),
             collection: item.storeName,
             entity_id: item.entityId,
             conflict_type: CONFLICT_TYPE.CONCURRENT_EDIT,
             peer_device_id: item.event.device_id,
-            event_id: item.event.resolved_event_id,
+            event_id: item.event.resolved_event_id || item.event.event_id,
             package_id: item.event.package_id || null,
             base_checksum: item.event.base_checksum || null,
             local_checksum: item.localChecksum || null,
@@ -706,20 +742,21 @@ async function _reconcileBundleAtomically(bundle) {
           'UPDATE sync_conflicts SET status = ?, resolution = ?, resolved_at = ? WHERE conflict_id = ?',
           [CONFLICT_STATUS.RESOLVED, item.event.resolution_type || 'REMOTE_RESOLUTION', now, item.activeConflictToResolve.conflict_id]
         );
-        if (item.event.resolved_event_id) {
-          await _updateStagedEventStatus(item.event.resolved_event_id, RECONCILIATION_STATUS.RECONCILED_SUPERSEDED);
+        const supersededEventId = item.activeConflictToResolve.event_id || item.event.resolved_event_id;
+        if (supersededEventId) {
+          await _updateStagedEventStatus(supersededEventId, RECONCILIATION_STATUS.RECONCILED_SUPERSEDED);
         }
-      } else if (item.event.resolved_event_id) {
+      } else if (item.event.resolved_event_id || item.event.resolution_type) {
         // Resolution arrived before original conflict: persist durable resolution record in sync_conflicts
         await db.run(
           'INSERT OR REPLACE INTO sync_conflicts (conflict_id, collection, entity_id, conflict_type, peer_device_id, event_id, package_id, base_checksum, local_checksum, remote_checksum, local_payload, remote_payload, status, resolution, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
-            uuid(),
+            item.event.resolved_conflict_id || uuid(),
             item.storeName,
             item.entityId,
             CONFLICT_TYPE.CONCURRENT_EDIT,
             item.event.device_id,
-            item.event.resolved_event_id,
+            item.event.resolved_event_id || item.event.event_id,
             item.event.package_id || null,
             item.event.base_checksum || null,
             item.localChecksum || null,

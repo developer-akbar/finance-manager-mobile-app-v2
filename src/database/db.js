@@ -534,7 +534,10 @@ const applySchema = async (db) => {
     bundle_index INTEGER DEFAULT 0,
     bundle_total INTEGER DEFAULT 1,
     bundle_checksum TEXT,
-    parent_event_id TEXT
+    parent_event_id TEXT,
+    resolution_type TEXT,
+    resolved_event_id TEXT,
+    resolved_conflict_id TEXT
   );`);
   await db.execute(`CREATE TABLE IF NOT EXISTS sync_local_state (
     key TEXT PRIMARY KEY,
@@ -572,7 +575,11 @@ const applySchema = async (db) => {
     bundle_total INTEGER DEFAULT 1,
     bundle_checksum TEXT,
     parent_event_id TEXT,
-    staged_at TEXT NOT NULL
+    resolution_type TEXT,
+    resolved_event_id TEXT,
+    resolved_conflict_id TEXT,
+    staged_at TEXT NOT NULL,
+    status TEXT DEFAULT 'STAGED'
   );`);
   await db.execute(`CREATE TABLE IF NOT EXISTS sync_peer_state (
     peer_device_id TEXT PRIMARY KEY,
