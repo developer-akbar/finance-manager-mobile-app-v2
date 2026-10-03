@@ -47,6 +47,10 @@ import {
   translateSyncError,
   UNIFIED_SYNC_STATUS_KEYS
 } from '../../utils/cloudSyncStatusHelper.js';
+import {
+  formatConflictEntity,
+  calculateEntityDiff
+} from '../../utils/conflictFormatter.js';
 
 export { getFriendlyActionName, isNoOpPreview, getModalConfirmConfig };
 
@@ -1162,104 +1166,204 @@ export default function CloudSyncManager({ onBack }) {
               <div style={{
                 padding: '10px 12px',
                 borderRadius: 8,
-                background: 'rgba(255, 179, 0, 0.1)',
+                background: 'rgba(255, 179, 0, 0.08)',
                 border: '1px solid rgba(255, 179, 0, 0.25)',
                 color: 'var(--text-primary)',
                 fontSize: '0.72rem',
-                lineHeight: 1.4
+                lineHeight: 1.45
               }}>
-                <strong>A conflict was detected.</strong> Both versions are preserved. Choose which version should become authoritative.
+                <div style={{ fontWeight: 800, color: 'var(--warning)', marginBottom: 3 }}>
+                  🛡️ Both versions are safely preserved while you review.
+                </div>
+                <div>
+                  This conflict affects only this record. Other transactions and accounts continue syncing normally. Choose which version should become authoritative.
+                </div>
               </div>
 
               {pendingConflicts.map((c) => {
                 const isCurrentResolving = resolvingId === c.conflict_id;
-                const localNote = c.local_payload?.note || c.local_payload?.description || c.local_payload?.name || (typeof c.local_payload === 'object' ? JSON.stringify(c.local_payload) : String(c.local_payload));
-                const remoteNote = c.remote_payload?.note || c.remote_payload?.description || c.remote_payload?.name || (typeof c.remote_payload === 'object' ? JSON.stringify(c.remote_payload) : String(c.remote_payload));
+                const formatted = formatConflictEntity(c);
+                const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
 
                 return (
                   <div
                     key={c.conflict_id}
                     style={{
                       border: '1px solid var(--border-light)',
-                      borderRadius: 8,
-                      padding: 12,
-                      background: 'var(--bg-surface)'
+                      borderRadius: 10,
+                      padding: 14,
+                      background: 'var(--bg-surface)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <span style={{ fontWeight: 800, color: 'var(--text-primary)', fontSize: '0.8rem' }}>
-                        {c.conflict_type === 'CONCURRENT_EDIT' ? 'Concurrent Edit' : c.conflict_type}
-                      </span>
-                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                        {c.collection} · {c.entity_id}
-                      </span>
+                    {/* Conflict Header */}
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <span style={{
+                          fontSize: '0.68rem',
+                          fontWeight: 800,
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          background: 'rgba(255, 179, 0, 0.15)',
+                          color: 'var(--warning)'
+                        }}>
+                          ⚠️ {formatted.friendlyType}
+                        </span>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                          {formatted.collectionLabel}
+                        </span>
+                      </div>
+                      <div style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--text-primary)', wordBreak: 'break-word', marginTop: 4 }}>
+                        {formatted.primaryTitle}
+                      </div>
+                      {formatted.primarySubtitle && (
+                        <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--accent)', marginTop: 2 }}>
+                          {formatted.primarySubtitle}
+                        </div>
+                      )}
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+                    {/* What Changed (Field Diff Highlights) */}
+                    {diff.changedFields.length > 0 && (
+                      <div style={{
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        border: '1px solid var(--border-light)',
+                        borderRadius: 8,
+                        padding: '10px 12px'
+                      }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--warning)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span>⚡</span>
+                          <span>What Changed</span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {diff.changedFields.map((field) => (
+                            <div key={field.key} style={{
+                              padding: '6px 8px',
+                              borderRadius: 6,
+                              background: 'rgba(255, 179, 0, 0.06)',
+                              border: '1px solid rgba(255, 179, 0, 0.15)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 2
+                            }}>
+                              <div style={{ fontWeight: 700, fontSize: '0.72rem', color: 'var(--text-primary)' }}>
+                                {field.label}
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', flexWrap: 'wrap', gap: 4 }}>
+                                <span style={{ color: 'var(--accent)' }}>
+                                  This Device: <strong>{field.localValue}</strong>
+                                </span>
+                                <span style={{ color: 'var(--warning)' }}>
+                                  Other Device: <strong>{field.remoteValue}</strong>
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Unchanged Fields Collapsible */}
+                    {diff.unchangedFields.length > 0 && (
+                      <details style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        <summary style={{ cursor: 'pointer', fontWeight: 600, padding: '2px 0' }}>
+                          Show unchanged fields ({diff.unchangedFields.length})
+                        </summary>
+                        <div style={{ padding: '6px 8px', background: 'var(--bg-card)', borderRadius: 6, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {diff.unchangedFields.map((f) => (
+                            <div key={f.key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem' }}>
+                              <span>{f.label}:</span>
+                              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{f.localValue}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+
+                    {/* Side-by-Side Version Cards */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
                       {/* Local Version */}
                       <div style={{
-                        padding: '8px 10px',
-                        borderRadius: 6,
+                        padding: '10px 12px',
+                        borderRadius: 8,
                         background: 'rgba(74, 144, 226, 0.08)',
                         border: '1px solid rgba(74, 144, 226, 0.2)'
                       }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent)', marginBottom: 4 }}>
-                          📱 Your Version (Local)
+                        <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent)', marginBottom: 2 }}>
+                          📱 This Device
                         </div>
-                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
-                          {localNote}
+                        <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                          Current version on this device
                         </div>
-                        {c.local_payload?.amount !== undefined && (
+                        <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
+                          {formatted.localDescriptor.note || formatted.localDescriptor.title}
+                        </div>
+                        {formatted.localDescriptor.amount && (
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                            Amount: ₹{Number(c.local_payload.amount).toLocaleString()}
+                            Amount: {formatted.localDescriptor.amount}
                           </div>
                         )}
-                        {c.local_payload?.date && (
+                        {formatted.localDescriptor.date && (
                           <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                            Date: {c.local_payload.date}
+                            Date: {formatted.localDescriptor.date}
                           </div>
                         )}
                       </div>
 
                       {/* Remote Version */}
                       <div style={{
-                        padding: '8px 10px',
-                        borderRadius: 6,
+                        padding: '10px 12px',
+                        borderRadius: 8,
                         background: 'rgba(255, 179, 0, 0.08)',
                         border: '1px solid rgba(255, 179, 0, 0.2)'
                       }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--warning)', marginBottom: 4 }}>
-                          ☁️ Remote Version ({c.peer_device_id || 'Peer'})
+                        <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--warning)', marginBottom: 2 }}>
+                          ☁️ Other Device
                         </div>
-                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
-                          {remoteNote}
+                        <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                          Incoming version from cloud sync
                         </div>
-                        {c.remote_payload?.amount !== undefined && (
+                        <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
+                          {formatted.remoteDescriptor.note || formatted.remoteDescriptor.title}
+                        </div>
+                        {formatted.remoteDescriptor.amount && (
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                            Amount: ₹{Number(c.remote_payload.amount).toLocaleString()}
+                            Amount: {formatted.remoteDescriptor.amount}
                           </div>
                         )}
-                        {c.remote_payload?.date && (
+                        {formatted.remoteDescriptor.date && (
                           <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                            Date: {c.remote_payload.date}
+                            Date: {formatted.remoteDescriptor.date}
                           </div>
                         )}
                       </div>
                     </div>
 
-                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: 10, lineHeight: 1.3 }}>
-                      Neither version has been silently discarded. Both versions are preserved. Choose which version should become authoritative.
-                    </div>
-
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    {/* Action Buttons */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <button
                         type="button"
                         className="btn btn-secondary"
                         onClick={() => handleOpenResolveConfirm(c, CONFLICT_RESOLUTION.KEEP_LOCAL)}
                         disabled={!isUnlocked || isCurrentResolving}
-                        style={{ flex: 1, fontSize: '0.75rem', padding: '8px 10px', fontWeight: 700 }}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          textAlign: 'center'
+                        }}
                       >
-                        {isCurrentResolving ? 'Resolving...' : 'Keep Your Version'}
+                        <span style={{ fontWeight: 800, fontSize: '0.76rem' }}>
+                          {isCurrentResolving ? 'Resolving...' : "📱 Keep This Device's Version"}
+                        </span>
+                        <span style={{ fontSize: '0.64rem', fontWeight: 400, opacity: 0.85, marginTop: 2 }}>
+                          Keep local edits and sync this version to your other devices
+                        </span>
                       </button>
 
                       <button
@@ -1267,17 +1371,57 @@ export default function CloudSyncManager({ onBack }) {
                         className="btn btn-primary"
                         onClick={() => handleOpenResolveConfirm(c, CONFLICT_RESOLUTION.ACCEPT_REMOTE)}
                         disabled={!isUnlocked || isCurrentResolving}
-                        style={{ flex: 1, fontSize: '0.75rem', padding: '8px 10px', fontWeight: 700 }}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          textAlign: 'center'
+                        }}
                       >
-                        {isCurrentResolving ? 'Resolving...' : 'Accept Remote Version'}
+                        <span style={{ fontWeight: 800, fontSize: '0.76rem' }}>
+                          {isCurrentResolving ? 'Resolving...' : "☁️ Accept Other Device's Version"}
+                        </span>
+                        <span style={{ fontSize: '0.64rem', fontWeight: 400, opacity: 0.85, marginTop: 2 }}>
+                          Replace this device's version with incoming version and sync it
+                        </span>
                       </button>
                     </div>
 
                     {!isUnlocked && (
-                      <div style={{ fontSize: '0.68rem', color: 'var(--warning)', marginTop: 6, fontWeight: 600 }}>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--warning)', fontWeight: 600 }}>
                         🔒 Unlock the sync session above to resolve this conflict.
                       </div>
                     )}
+
+                    {/* Collapsible Technical Diagnostics */}
+                    <details style={{
+                      marginTop: 4,
+                      padding: '6px 10px',
+                      borderRadius: 6,
+                      background: 'rgba(0, 0, 0, 0.15)',
+                      border: '1px solid var(--border-light)',
+                      fontSize: '0.68rem',
+                      color: 'var(--text-muted)'
+                    }}>
+                      <summary style={{ cursor: 'pointer', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                        ⚙️ Technical Diagnostics (ID: {formatted.shortEntityId})
+                      </summary>
+                      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3, fontFamily: 'monospace', fontSize: '0.65rem' }}>
+                        <div><strong>Conflict ID:</strong> {c.conflict_id}</div>
+                        <div><strong>Collection:</strong> {c.collection}</div>
+                        <div><strong>Entity ID:</strong> {c.entity_id}</div>
+                        <div><strong>Conflict Type:</strong> {c.conflict_type}</div>
+                        <div><strong>Peer Device ID:</strong> {c.peer_device_id || '—'}</div>
+                        <div><strong>Event ID:</strong> {c.event_id || '—'}</div>
+                        <div><strong>Package ID:</strong> {c.package_id || '—'}</div>
+                        <div><strong>Base Checksum:</strong> {c.base_checksum ? c.base_checksum.slice(0, 16) + '...' : '—'}</div>
+                        <div><strong>Local Checksum:</strong> {c.local_checksum ? c.local_checksum.slice(0, 16) + '...' : '—'}</div>
+                        <div><strong>Remote Checksum:</strong> {c.remote_checksum ? c.remote_checksum.slice(0, 16) + '...' : '—'}</div>
+                      </div>
+                    </details>
                   </div>
                 );
               })}
@@ -1478,77 +1622,90 @@ export default function CloudSyncManager({ onBack }) {
       })()}
 
       {/* Conflict Resolution Confirmation Bottom-Sheet Modal */}
-      {confirmResolutionModal && confirmResolutionModal.conflict && (
-        <>
-          <div
-            className="dash-popup-overlay"
-            onClick={() => !resolvingId && setConfirmResolutionModal(null)}
-            style={{ zIndex: 10000 }}
-          />
-          <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px calc(var(--safe-bottom) + 20px)' }}>
-            <div className="dash-popup-sheet-handle" />
-            <div style={{ fontSize: '2.5rem', marginBottom: 8, textAlign: 'center' }}>
-              ⚖️
-            </div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6, textAlign: 'center' }}>
-              {confirmResolutionModal.resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
-                ? 'Confirm: Keep Your Version'
-                : 'Confirm: Accept Remote Version'}
-            </div>
+      {confirmResolutionModal && confirmResolutionModal.conflict && (() => {
+        const modalConflict = confirmResolutionModal.conflict;
+        const modalRes = confirmResolutionModal.resolution;
+        const modalFormatted = formatConflictEntity(modalConflict);
 
-            <div style={{
-              background: 'rgba(255, 179, 0, 0.08)',
-              border: '1px solid rgba(255, 179, 0, 0.25)',
-              borderRadius: 8,
-              padding: '12px 14px',
-              fontSize: '0.75rem',
-              color: 'var(--text-primary)',
-              marginBottom: 16,
-              lineHeight: 1.5,
-              textAlign: 'center'
-            }}>
-              <div style={{ fontWeight: 800, color: 'var(--warning)', marginBottom: 6, fontSize: '0.82rem' }}>
-                {confirmResolutionModal.resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
-                  ? 'Authoritative Local Choice'
-                  : 'Authoritative Remote Choice'}
+        return (
+          <>
+            <div
+              className="dash-popup-overlay"
+              onClick={() => !resolvingId && setConfirmResolutionModal(null)}
+              style={{ zIndex: 10000 }}
+            />
+            <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px calc(var(--safe-bottom) + 20px)' }}>
+              <div className="dash-popup-sheet-handle" />
+              <div style={{ fontSize: '2.5rem', marginBottom: 8, textAlign: 'center' }}>
+                ⚖️
               </div>
-              <div style={{ color: 'var(--text-primary)', marginBottom: 6 }}>
-                {confirmResolutionModal.resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
-                  ? 'You are choosing to keep your local version. This decision will be propagated to other devices on the next sync pass.'
-                  : 'You are choosing to accept the remote version. Your local record will be updated to match the remote version, and this decision will be propagated to other devices.'}
+              <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 4, textAlign: 'center' }}>
+                Confirm Conflict Resolution
               </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                Target: {confirmResolutionModal.conflict.collection} ({confirmResolutionModal.conflict.entity_id})
-              </div>
-            </div>
 
-            <div style={{ display: 'flex', gap: 12, width: '100%' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ flex: 1 }}
-                onClick={() => setConfirmResolutionModal(null)}
-                disabled={Boolean(resolvingId)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ flex: 1.5, fontWeight: 800 }}
-                onClick={handleExecuteConflictResolution}
-                disabled={Boolean(resolvingId)}
-              >
-                {resolvingId
-                  ? 'Resolving...'
-                  : (confirmResolutionModal.resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
-                    ? 'Yes, Keep My Version'
-                    : 'Yes, Accept Remote Version')}
-              </button>
+              <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--accent)', marginBottom: 12, textAlign: 'center' }}>
+                {modalFormatted.primaryTitle}
+                {modalFormatted.primarySubtitle && (
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 500, marginTop: 2 }}>
+                    {modalFormatted.primarySubtitle}
+                  </div>
+                )}
+              </div>
+
+              <div style={{
+                background: 'rgba(255, 179, 0, 0.08)',
+                border: '1px solid rgba(255, 179, 0, 0.25)',
+                borderRadius: 8,
+                padding: '12px 14px',
+                fontSize: '0.75rem',
+                color: 'var(--text-primary)',
+                marginBottom: 16,
+                lineHeight: 1.5,
+                textAlign: 'center'
+              }}>
+                <div style={{ fontWeight: 800, color: 'var(--warning)', marginBottom: 6, fontSize: '0.82rem' }}>
+                  {modalRes === CONFLICT_RESOLUTION.KEEP_LOCAL
+                    ? "📱 You are choosing: This Device's Version"
+                    : "☁️ You are choosing: Other Device's Version"}
+                </div>
+                <div style={{ color: 'var(--text-primary)', marginBottom: 6 }}>
+                  {modalRes === CONFLICT_RESOLUTION.KEEP_LOCAL
+                    ? 'You are choosing to keep the version on this device. Your other synced devices will receive this version during synchronization.'
+                    : 'You are choosing to accept the version from the other device. This device will be updated to match that version during synchronization.'}
+                </div>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                  Record: {modalFormatted.collectionLabel} (ID: {modalFormatted.shortEntityId})
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ flex: 1 }}
+                  onClick={() => setConfirmResolutionModal(null)}
+                  disabled={Boolean(resolvingId)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ flex: 1.5, fontWeight: 800 }}
+                  onClick={handleExecuteConflictResolution}
+                  disabled={Boolean(resolvingId)}
+                >
+                  {resolvingId
+                    ? 'Resolving...'
+                    : (modalRes === CONFLICT_RESOLUTION.KEEP_LOCAL
+                      ? 'Yes, Keep This Version'
+                      : 'Yes, Accept Remote Version')}
+                </button>
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        );
+      })()}
     </div>
   );
 }
