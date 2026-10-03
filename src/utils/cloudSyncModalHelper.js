@@ -111,10 +111,10 @@ export function getModalConfirmConfig(previewResult, stateTransactionsCount = 0,
     isNoOp: false,
     isBootstrap: false,
     isPullOnly: false,
-    icon: '⚡',
-    title: 'Confirm Cloud Sync',
+    icon: '📦',
+    title: 'Confirm Full Cloud Snapshot',
     badge: getFriendlyActionName(previewResult.action),
-    descriptionText: `${stateTransactionsCount.toLocaleString()} transactions will be encrypted with your session key and synchronized to your private Google Drive AppData folder.`,
-    buttonLabel: isSyncing ? 'Syncing snapshot...' : '🚀 Confirm & Upload'
+    descriptionText: `${stateTransactionsCount.toLocaleString()} transactions will be encrypted and saved as a full cloud snapshot baseline.`,
+    buttonLabel: isSyncing ? 'Creating snapshot...' : '🚀 Confirm & Create Snapshot'
   };
 }

@@ -29,6 +29,8 @@ import {
   getDeltaSyncMetrics,
   subscribeSyncStatus,
   SYNC_STATUS as DELTA_SYNC_STATUS,
+  SYNC_TRIGGER,
+  triggerAutomaticSync,
   resolveConflict
 } from '../../services/deltaSyncCoordinator.js';
 import {
@@ -64,6 +66,7 @@ export default function CloudSyncManager({ onBack }) {
   // Operations State
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isDeltaSyncing, setIsDeltaSyncing] = useState(false);
   const [operationType, setOperationType] = useState(null); // 'preview' | 'sync_now'
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -301,6 +304,48 @@ export default function CloudSyncManager({ onBack }) {
     } finally {
       setResolvingId(null);
       setConfirmResolutionModal(null);
+    }
+  };
+
+  // Step 5B/7.5 Live Cloud Sync (Manual Trigger — lightweight delta push/pull, NEVER invokes executeCloudSync)
+  const handleSyncChangesNow = async () => {
+    if (!isUnlocked) {
+      if (!pin || pin.trim().length < 4) {
+        setPinError('Please enter your 4+ digit PIN to unlock sync.');
+        return;
+      }
+      const ok = await handleUnlock();
+      if (!ok) return;
+    }
+
+    const token = await getValidAccessToken(true);
+    if (!token) {
+      setAuthError('Please connect your Google Drive account first.');
+      return;
+    }
+
+    setIsDeltaSyncing(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    try {
+      const result = await triggerAutomaticSync(SYNC_TRIGGER.MANUAL);
+      if (result && result.status === 'ERROR') {
+        setErrorMsg(result.error || 'Live delta sync failed.');
+      } else if (result && result.status === 'AUTH_REQUIRED') {
+        setErrorMsg('Authentication or session unlock required.');
+      } else {
+        setSuccessMsg('✓ Live sync completed — all changes synchronized.');
+        if (typeof load === 'function') {
+          load().catch(() => {});
+        }
+        const updatedMetrics = await getDeltaSyncMetrics();
+        setDeltaMetrics(prev => ({ ...prev, ...updatedMetrics }));
+      }
+    } catch (err) {
+      setErrorMsg(err.message || 'Live sync failed.');
+    } finally {
+      setIsDeltaSyncing(false);
     }
   };
 
@@ -702,66 +747,9 @@ export default function CloudSyncManager({ onBack }) {
           )}
         </div>
 
-        {/* Section 3: Sync Actions */}
-        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>3. Sync Operations</div>
-        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px' }}>
-          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-            <button
-              className="btn btn-secondary"
-              onClick={handlePreview}
-              disabled={isLoading || isSyncing || !isAuthenticated}
-              style={{ flex: 1, padding: '10px 14px', fontSize: '0.82rem', fontWeight: 700 }}
-            >
-              {isLoading && operationType === 'preview' ? 'Inspecting...' : '🔍 Preview Sync'}
-            </button>
-
-            <button
-              className="btn btn-primary"
-              onClick={handleSyncNowClick}
-              disabled={isLoading || isSyncing || !isAuthenticated}
-              style={{ flex: 1, padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
-            >
-              {isLoading && operationType === 'sync_now' ? 'Preparing...' : '⚡ Sync Now'}
-            </button>
-          </div>
-
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-            • <strong>Preview Sync</strong>: Performs a 100% read-only inspection. Zero database changes, zero Drive writes.<br />
-            • <strong>Sync Now</strong>: Encrypts and synchronizes your snapshot with Google Drive.
-          </div>
-
-          {errorMsg && (
-            <div style={{
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: 'rgba(255, 77, 106, 0.12)',
-              color: 'var(--expense)',
-              fontSize: '0.74rem',
-              fontWeight: 600
-            }}>
-              🛑 {errorMsg}
-            </div>
-          )}
-
-          {successMsg && (
-            <div style={{
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: 'rgba(0, 229, 160, 0.12)',
-              color: 'var(--green)',
-              fontSize: '0.74rem',
-              fontWeight: 700
-            }}>
-              {successMsg}
-            </div>
-          )}
-        </div>
-
-        {/* Section 4: Delta Sync Status & Metrics */}
+        {/* Section 3: Live Cloud Sync */}
         <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>4. Delta Sync (Automatic V3)</span>
+          <span>3. Live Cloud Sync</span>
           {(() => {
             const badge = (() => {
               if (!isAuthenticated) return { text: 'Authentication Required', color: 'var(--expense)', bg: 'rgba(255, 77, 106, 0.15)' };
@@ -815,7 +803,7 @@ export default function CloudSyncManager({ onBack }) {
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last Delta Sync</span>
+            <span style={{ color: 'var(--text-muted)' }}>Last Live Sync</span>
             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
               {deltaMetrics.lastDeltaSyncedAt ? new Date(deltaMetrics.lastDeltaSyncedAt).toLocaleString() : 'Never'}
             </span>
@@ -841,6 +829,93 @@ export default function CloudSyncManager({ onBack }) {
           {deltaMetrics.latestError && (
             <div style={{ marginTop: 8, padding: '6px 8px', borderRadius: 4, background: 'rgba(255, 77, 106, 0.1)', color: 'var(--expense)', fontSize: '0.7rem' }}>
               ⚠️ {deltaMetrics.latestError}
+            </div>
+          )}
+
+          <button
+            className="btn btn-primary"
+            onClick={handleSyncChangesNow}
+            disabled={isDeltaSyncing || isLoading || isSyncing || !isAuthenticated}
+            style={{ width: '100%', marginTop: 12, padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
+          >
+            {isDeltaSyncing ? 'Syncing Changes...' : '⚡ Sync Changes Now'}
+          </button>
+
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 8 }}>
+            • <strong>Sync Changes Now</strong>: Flushes pending local changes and pulls updates from peer devices (fast & lightweight).
+          </div>
+        </div>
+
+        {/* Section 4: Full Cloud Snapshot */}
+        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>4. Full Cloud Snapshot</div>
+        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Local Transactions</span>
+            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{state.transactions.length.toLocaleString()}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Last Full Snapshot</span>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+              {lastSyncInfo.lastSyncedAt ? new Date(lastSyncInfo.lastSyncedAt).toLocaleString() : 'Never'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Snapshot ID</span>
+            <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+              {lastSyncInfo.lastSnapshotId || 'None'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, marginTop: 12, marginBottom: 12 }}>
+            <button
+              className="btn btn-secondary"
+              onClick={handlePreview}
+              disabled={isLoading || isSyncing || isDeltaSyncing || !isAuthenticated}
+              style={{ flex: 1, padding: '10px 14px', fontSize: '0.82rem', fontWeight: 700 }}
+            >
+              {isLoading && operationType === 'preview' ? 'Inspecting...' : '🔍 Preview Snapshot'}
+            </button>
+
+            <button
+              className="btn btn-primary"
+              onClick={handleSyncNowClick}
+              disabled={isLoading || isSyncing || isDeltaSyncing || !isAuthenticated}
+              style={{ flex: 1, padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
+            >
+              {isLoading && operationType === 'sync_now' ? 'Preparing...' : '📦 Create Full Snapshot'}
+            </button>
+          </div>
+
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+            • <strong>Preview Snapshot</strong>: Performs a 100% read-only inspection. Zero database changes, zero Drive writes.<br />
+            • <strong>Create Full Snapshot</strong>: Encrypts and saves your entire database as a new cloud baseline.
+          </div>
+
+          {errorMsg && (
+            <div style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: 'rgba(255, 77, 106, 0.12)',
+              color: 'var(--expense)',
+              fontSize: '0.74rem',
+              fontWeight: 600
+            }}>
+              🛑 {errorMsg}
+            </div>
+          )}
+
+          {successMsg && (
+            <div style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: 'rgba(0, 229, 160, 0.12)',
+              color: 'var(--green)',
+              fontSize: '0.74rem',
+              fontWeight: 700
+            }}>
+              {successMsg}
             </div>
           )}
         </div>
@@ -1007,28 +1082,7 @@ export default function CloudSyncManager({ onBack }) {
           )}
         </div>
 
-        {/* Section 6: Legacy Full Snapshot Metadata */}
-        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>6. Full Snapshot Baseline (Legacy / Disaster Recovery)</div>
-        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Local Transactions</span>
-            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{state.transactions.length.toLocaleString()}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last Full Snapshot</span>
-            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-              {lastSyncInfo.lastSyncedAt ? new Date(lastSyncInfo.lastSyncedAt).toLocaleString() : 'Never'}
-            </span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Snapshot ID</span>
-            <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-              {lastSyncInfo.lastSnapshotId || 'None'}
-            </span>
-          </div>
-        </div>
-
-        {/* Section 5: Preview Results Display */}
+        {/* Preview Results Display */}
         {previewResult && (
           <>
             <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>Sync Preview Results (Dry-Run)</div>

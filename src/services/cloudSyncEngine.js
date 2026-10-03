@@ -1739,6 +1739,7 @@ export async function executeCloudSync({
       await setSetting('sync_base_manifest', JSON.stringify(initialManifest));
       await setSetting('last_synced_at', new Date().toISOString());
       await setSetting('last_snapshot_id', snapshotId);
+      await setSetting('last_parent_snapshot_id', '');
       tManifestSaveMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSave0);
 
       const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
@@ -1806,6 +1807,7 @@ export async function executeCloudSync({
       const recoveredManifest = await buildEntityManifest(localEntities);
       await setSetting('sync_base_manifest', JSON.stringify(recoveredManifest));
       await setSetting('last_snapshot_id', readSnapshotId);
+      await setSetting('last_parent_snapshot_id', cloudPayload.parent_snapshot_id || '');
       baseManifest = recoveredManifest;
     }
 
@@ -1881,6 +1883,7 @@ export async function executeCloudSync({
       await setSetting('sync_base_manifest', JSON.stringify(currentManifest));
       await setSetting('last_synced_at', new Date().toISOString());
       await setSetting('last_snapshot_id', readSnapshotId);
+      await setSetting('last_parent_snapshot_id', cloudPayload.parent_snapshot_id || '');
       tManifestSaveMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSave0);
 
       const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
@@ -1958,6 +1961,7 @@ export async function executeCloudSync({
       await setSetting('sync_base_manifest', JSON.stringify(updatedBaseManifest));
       await setSetting('last_synced_at', new Date().toISOString());
       await setSetting('last_snapshot_id', readSnapshotId);
+      await setSetting('last_parent_snapshot_id', cloudPayload.parent_snapshot_id || '');
       tManifestSaveMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSave0);
 
       const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
@@ -2052,6 +2056,7 @@ export async function executeCloudSync({
     await setSetting('sync_base_manifest', JSON.stringify(newBaseManifest));
     await setSetting('last_synced_at', new Date().toISOString());
     await setSetting('last_snapshot_id', newSnapshotId);
+    await setSetting('last_parent_snapshot_id', readSnapshotId || '');
     tManifestSaveMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSave0);
 
     const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
@@ -2672,6 +2677,7 @@ export async function executeBootstrap({
   await setSetting('sync_base_manifest', JSON.stringify(localManifest));
   await setSetting('last_synced_at', new Date().toISOString());
   await setSetting('last_snapshot_id', cloudPayload.snapshot_id);
+  await setSetting('last_parent_snapshot_id', cloudPayload.parent_snapshot_id || '');
   await setSetting('sub_accounts_migrated_v2', 'true');
   await setSetting('historical_charges_reconciled', 'true');
 

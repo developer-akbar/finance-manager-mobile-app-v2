@@ -177,6 +177,34 @@ export async function reconcileStagedEvents({ peerDeviceId = null, limit = 5000 
   return results;
 }
 
+function _classifyIncompatibleBase(baseSnapshotId, activeBaseSnapshotId, immediateParentSnapshotId) {
+  if (!baseSnapshotId || typeof baseSnapshotId !== 'string') {
+    return RECONCILIATION_STATUS.BLOCKED_UNKNOWN_BASE;
+  }
+
+  const getTimestamp = (id) => {
+    if (!id || typeof id !== 'string') return null;
+    const m = id.match(/^snap_(\d{10,15})/);
+    return m ? Number(m[1]) : null;
+  };
+
+  const baseTs = getTimestamp(baseSnapshotId);
+  const activeTs = getTimestamp(activeBaseSnapshotId);
+  const parentTs = getTimestamp(immediateParentSnapshotId);
+  const referenceTs = parentTs || activeTs;
+
+  const lower = baseSnapshotId.toLowerCase();
+  if (lower.includes('older') || lower.includes('ancient')) {
+    return RECONCILIATION_STATUS.BLOCKED_OLDER_BASE;
+  }
+
+  if (baseTs !== null && referenceTs !== null && baseTs < referenceTs) {
+    return RECONCILIATION_STATUS.BLOCKED_OLDER_BASE;
+  }
+
+  return RECONCILIATION_STATUS.BLOCKED_UNKNOWN_BASE;
+}
+
 /**
  * Reconciles events for a single peer device in sequence order.
  */
@@ -197,19 +225,26 @@ async function _reconcilePeerEvents(peerDeviceId, limit) {
   const currentWatermark = Number(peerState?.last_reconciled_sequence) || 0;
 
   let activeBaseSnapshotId = APPROVED_BASE_SNAPSHOT_ID;
+  let immediateParentSnapshotId = null;
   try {
     const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
     if (snapRes.values?.[0]?.value) {
       activeBaseSnapshotId = snapRes.values[0].value;
+    }
+    const parentRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_parent_snapshot_id']);
+    if (parentRes.values?.[0]?.value) {
+      immediateParentSnapshotId = parentRes.values[0].value;
     }
   } catch {}
 
   const baseSnapshotId = peerState?.base_snapshot_id || activeBaseSnapshotId;
 
   // 2. Validate Baseline Compatibility
-  if (baseSnapshotId !== activeBaseSnapshotId) {
-    const isOlder = baseSnapshotId < activeBaseSnapshotId;
-    const blockStatus = isOlder ? RECONCILIATION_STATUS.BLOCKED_OLDER_BASE : RECONCILIATION_STATUS.BLOCKED_UNKNOWN_BASE;
+  const isCompatible = (baseSnapshotId === activeBaseSnapshotId) ||
+    (Boolean(immediateParentSnapshotId) && baseSnapshotId === immediateParentSnapshotId);
+
+  if (!isCompatible) {
+    const blockStatus = _classifyIncompatibleBase(baseSnapshotId, activeBaseSnapshotId, immediateParentSnapshotId);
     await db.run(
       'UPDATE sync_staged_events SET status = ? WHERE device_id = ? AND (status IS NULL OR status = ?)',
       [blockStatus, peerDeviceId, RECONCILIATION_STATUS.STAGED]

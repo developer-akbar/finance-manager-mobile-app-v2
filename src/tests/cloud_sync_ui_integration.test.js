@@ -438,7 +438,7 @@ describe('FinMan Cloud Sync v2 — Step 5B UI/Integration Tests', () => {
     assert.strictEqual(syncingConfig.buttonLabel, 'Verifying sync...');
   });
 
-  it('14. Normal Sync Confirmation UI Copy — Preserves "Confirm Cloud Sync" and "🚀 Confirm & Upload"', () => {
+  it('14. Normal Snapshot Confirmation UI Copy — Displays "Confirm Full Cloud Snapshot" and "🚀 Confirm & Create Snapshot"', () => {
     const activePreview = {
       action: 'MERGE_CLEAN',
       isFirstSync: false,
@@ -449,10 +449,10 @@ describe('FinMan Cloud Sync v2 — Step 5B UI/Integration Tests', () => {
 
     const config = getModalConfirmConfig(activePreview, 29032, false);
     assert.strictEqual(config.isNoOp, false);
-    assert.strictEqual(config.title, 'Confirm Cloud Sync');
+    assert.strictEqual(config.title, 'Confirm Full Cloud Snapshot');
     assert.strictEqual(config.badge, 'Reconcile & Synchronize');
-    assert.ok(config.descriptionText.includes('synchronized to your private Google Drive'));
-    assert.strictEqual(config.buttonLabel, '🚀 Confirm & Upload');
+    assert.ok(config.descriptionText.includes('transactions will be encrypted and saved as a full cloud snapshot baseline'));
+    assert.strictEqual(config.buttonLabel, '🚀 Confirm & Create Snapshot');
   });
 
   it('15. Bootstrap Confirmation UI Copy — Preserves "Confirm Device Bootstrap" and "📥 Confirm & Bootstrap"', () => {
@@ -511,7 +511,7 @@ describe('FinMan Cloud Sync v2 — Step 5B UI/Integration Tests', () => {
     assert.strictEqual(isPullOnlyPreview(uploadPreview), false, 'Upload with cloud inserts > 0 is not pull-only');
     const uploadConfig = getModalConfirmConfig(uploadPreview, 29040, false);
     assert.strictEqual(uploadConfig.isPullOnly, false);
-    assert.strictEqual(uploadConfig.buttonLabel, '🚀 Confirm & Upload');
+    assert.strictEqual(uploadConfig.buttonLabel, '🚀 Confirm & Create Snapshot');
 
     // No-op (0 local, 0 cloud)
     const noOpPreview = {

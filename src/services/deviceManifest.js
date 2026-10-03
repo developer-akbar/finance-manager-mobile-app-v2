@@ -295,23 +295,46 @@ export async function writeOwnDeviceManifest(arg1, arg2, arg3) {
  * Discovers and validates all peer device manifests from Google Drive appDataFolder.
  */
 export async function listPeerManifests(arg1, arg2, arg3, arg4) {
-  let ownDeviceId, accessToken, currentBaseSnapshotId, driveClient;
+  let ownDeviceId, accessToken, currentBaseSnapshotId, immediateParentSnapshotId, driveClient;
   if (arg1 && typeof arg1 === 'object') {
     ownDeviceId = arg1.ownDeviceId || arg1.localDeviceId || arg1.deviceId;
     accessToken = arg1.accessToken;
-    currentBaseSnapshotId = arg1.currentBaseSnapshotId || arg1.baseSnapshotId || 'snap_1790493064581_jbhnf8';
+    currentBaseSnapshotId = arg1.currentBaseSnapshotId || arg1.baseSnapshotId;
+    immediateParentSnapshotId = arg1.immediateParentSnapshotId || arg1.parentSnapshotId;
     driveClient = arg1.driveClient;
   } else {
     ownDeviceId = arg1;
     if (arg2 && typeof arg2 === 'object' && (arg2.uploadFile || arg2.findFiles || arg2.readFile)) {
       driveClient = arg2;
       accessToken = null;
-      currentBaseSnapshotId = arg3 || 'snap_1790493064581_jbhnf8';
+      currentBaseSnapshotId = arg3;
     } else {
       accessToken = arg2;
-      currentBaseSnapshotId = arg3 || 'snap_1790493064581_jbhnf8';
+      currentBaseSnapshotId = arg3;
       driveClient = arg4;
     }
+  }
+
+  if (!currentBaseSnapshotId || !immediateParentSnapshotId) {
+    try {
+      const db = getDB();
+      if (!currentBaseSnapshotId) {
+        const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
+        if (snapRes.values?.[0]?.value) {
+          currentBaseSnapshotId = snapRes.values[0].value;
+        }
+      }
+      if (!immediateParentSnapshotId) {
+        const parentRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_parent_snapshot_id']);
+        if (parentRes.values?.[0]?.value) {
+          immediateParentSnapshotId = parentRes.values[0].value;
+        }
+      }
+    } catch {}
+  }
+
+  if (!currentBaseSnapshotId) {
+    currentBaseSnapshotId = 'snap_1790493064581_jbhnf8';
   }
 
   const ownFilename = ownDeviceId ? getDeviceManifestFilename(ownDeviceId) : null;
@@ -347,8 +370,13 @@ export async function listPeerManifests(arg1, arg2, arg3, arg4) {
       const manifest = typeof raw === 'string' ? JSON.parse(raw) : raw;
 
       if (!manifest || !manifest.device_id) continue;
-      if (currentBaseSnapshotId && manifest.base_snapshot_id && manifest.base_snapshot_id !== currentBaseSnapshotId) {
-        continue;
+      if (manifest.base_snapshot_id) {
+        const peerBase = manifest.base_snapshot_id;
+        const matchesActive = Boolean(currentBaseSnapshotId && peerBase === currentBaseSnapshotId);
+        const matchesParent = Boolean(immediateParentSnapshotId && peerBase === immediateParentSnapshotId);
+        if (!matchesActive && !matchesParent) {
+          continue;
+        }
       }
 
       peerManifests.push(manifest);

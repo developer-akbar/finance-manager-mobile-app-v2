@@ -477,6 +477,7 @@ export async function bootstrapNewDevice(options = {}) {
 
   const { setSetting } = await import('../database/settings.js');
   await setSetting('last_snapshot_id', payload.snapshot_id);
+  await setSetting('last_parent_snapshot_id', payload.parent_snapshot_id || '');
   await setSetting('last_synced_at', now);
   await setSetting('sub_accounts_migrated_v2', 'true');
   await setSetting('historical_charges_reconciled', 'true');

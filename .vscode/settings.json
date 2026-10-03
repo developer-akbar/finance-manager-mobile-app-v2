@@ -1,3 +1,20 @@
 {
-    "java.configuration.updateBuildConfiguration": "interactive"
+    "java.configuration.updateBuildConfiguration": "interactive",
+    "files.watcherExclude": {
+        "**/node_modules/**": true,
+        "**/dist/**": true,
+        "**/.git/objects/**": true,
+        "**/.git/logs/**": true,
+        "**/.gemini/**": true,
+        "**/coverage/**": true,
+        "**/build/**": true
+    },
+    "search.exclude": {
+        "**/node_modules": true,
+        "**/dist": true,
+        "**/.git": true,
+        "**/.gemini": true,
+        "**/coverage": true,
+        "**/build": true
+    }
 }
