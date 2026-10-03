@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import {
   signInWithGoogle,
@@ -52,6 +52,7 @@ export { getFriendlyActionName, isNoOpPreview, getModalConfirmConfig };
 
 export default function CloudSyncManager({ onBack }) {
   const { state, load } = useApp();
+  const refreshSeqRef = useRef(0);
 
   // Authentication & Configuration State
   const [isAuthenticated, setIsAuthenticated] = useState(() => isGoogleLinked());
@@ -138,10 +139,10 @@ export default function CloudSyncManager({ onBack }) {
       }
     }
 
-    async function refreshDeltaMetrics(details = {}, status = null) {
+    async function refreshDeltaMetrics(details = {}, status = null, seq = null) {
       try {
         const m = await getDeltaSyncMetrics();
-        if (mounted) {
+        if (mounted && (seq === null || seq === refreshSeqRef.current)) {
           setDeltaMetrics(prev => {
             let nextError = prev.latestError;
             if (status === DELTA_SYNC_STATUS.SUCCESS || details?.status === 'BOOTSTRAP_SUCCESS' || details?.operation === 'BOOTSTRAP' || details?.bootstrapped) {
@@ -151,6 +152,7 @@ export default function CloudSyncManager({ onBack }) {
             }
             return {
               ...m,
+              status: status || m.status || prev.status,
               latestError: nextError
             };
           });
@@ -168,9 +170,13 @@ export default function CloudSyncManager({ onBack }) {
     }
 
     async function refreshAll(details = {}, status = null) {
-      await refreshDeltaMetrics(details, status);
+      const currentSeq = ++refreshSeqRef.current;
+      await refreshDeltaMetrics(details, status, currentSeq);
+      if (currentSeq !== refreshSeqRef.current || !mounted) return;
       await refreshConflicts();
+      if (currentSeq !== refreshSeqRef.current || !mounted) return;
       await loadMeta();
+      if (currentSeq !== refreshSeqRef.current || !mounted) return;
       if (status === DELTA_SYNC_STATUS.SUCCESS || details?.bootstrapped || details?.status === 'BOOTSTRAP_SUCCESS' || details?.operation === 'BOOTSTRAP') {
         if (typeof load === 'function') {
           try { await load(); } catch {}
@@ -181,6 +187,15 @@ export default function CloudSyncManager({ onBack }) {
     refreshAll();
 
     const unsubscribeDelta = subscribeSyncStatus((status, details) => {
+      // 1. Immediately and synchronously update status to maintain real-time UI responsiveness
+      if (mounted && status) {
+        setDeltaMetrics(prev => ({
+          ...prev,
+          status,
+          latestError: (status === DELTA_SYNC_STATUS.SUCCESS || details?.bootstrapped) ? null : (details?.error || details?.reason || prev.latestError)
+        }));
+      }
+      // 2. Perform sequenced async database hydration
       refreshAll(details, status);
     });
 
@@ -576,6 +591,8 @@ export default function CloudSyncManager({ onBack }) {
 
         {/* --- UNIFIED PRIMARY STATUS BANNER (Stage B1) --- */}
         {(() => {
+          const isLiveDeltaSyncing = isDeltaSyncing || deltaMetrics.status === DELTA_SYNC_STATUS.SYNCING;
+
           const unifiedStatus = deriveUnifiedSyncStatus({
             isGoogleLinked: isGoogleLinked(),
             isAuthenticated,
@@ -586,8 +603,7 @@ export default function CloudSyncManager({ onBack }) {
             lastDeltaSyncedAt: deltaMetrics.lastDeltaSyncedAt,
             pendingConflictsCount: pendingConflicts.length,
             latestError: deltaMetrics.latestError || authError,
-            isSyncing,
-            isDeltaSyncing
+            isDeltaSyncing: isLiveDeltaSyncing
           });
 
           const bannerStyles = {
@@ -913,23 +929,34 @@ export default function CloudSyncManager({ onBack }) {
             borderRadius: 4,
             background: !isUnlocked
               ? 'rgba(255, 179, 0, 0.15)'
-              : (deltaMetrics.pendingCount > 0 ? 'rgba(255, 179, 0, 0.15)' : 'rgba(0, 229, 160, 0.15)'),
+              : (isLiveDeltaSyncing
+                  ? 'rgba(74, 144, 226, 0.15)'
+                  : (deltaMetrics.pendingCount > 0 ? 'rgba(255, 179, 0, 0.15)' : 'rgba(0, 229, 160, 0.15)')),
             color: !isUnlocked
               ? 'var(--warning)'
-              : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)')
+              : (isLiveDeltaSyncing
+                  ? 'var(--accent)'
+                  : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)'))
           }}>
             {!isUnlocked
               ? 'Sync Locked'
-              : (deltaMetrics.pendingCount > 0 ? `${deltaMetrics.pendingCount} Pending` : 'Cloud Sync On')}
+              : (isLiveDeltaSyncing
+                  ? 'Syncing…'
+                  : (deltaMetrics.pendingCount > 0 ? `${deltaMetrics.pendingCount} Pending` : 'Cloud Sync On'))}
           </span>
         </div>
         <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Status</span>
-            <span style={{ fontWeight: 700, color: !isUnlocked ? 'var(--warning)' : 'var(--text-primary)' }}>
+            <span style={{
+              fontWeight: 700,
+              color: !isUnlocked
+                ? 'var(--warning)'
+                : (isLiveDeltaSyncing ? 'var(--accent)' : 'var(--text-primary)')
+            }}>
               {!isUnlocked
                 ? '🔒 Sync Locked (PIN Required)'
-                : (isDeltaSyncing
+                : (isLiveDeltaSyncing
                     ? 'Syncing changes…'
                     : (deltaMetrics.pendingCount > 0 ? 'Changes Waiting' : 'All Changes Up to Date'))}
             </span>
@@ -953,7 +980,7 @@ export default function CloudSyncManager({ onBack }) {
               const pinInput = document.querySelector('input[placeholder*="sync PIN"]');
               if (pinInput) pinInput.focus();
             } : handleSyncChangesNow}
-            disabled={!isUnlocked ? false : (isDeltaSyncing || isLoading || isSyncing || !isGoogleLinked())}
+            disabled={!isUnlocked ? false : (isLiveDeltaSyncing || isLoading || isSyncing || !isGoogleLinked())}
             style={{
               width: '100%',
               marginTop: 12,
@@ -964,7 +991,7 @@ export default function CloudSyncManager({ onBack }) {
           >
             {!isUnlocked
               ? '🔒 Unlock Sync with PIN to Sync'
-              : (isDeltaSyncing ? 'Syncing Changes...' : '⚡ Sync Changes Now')}
+              : (isLiveDeltaSyncing ? 'Syncing Changes...' : '⚡ Sync Changes Now')}
           </button>
 
           <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 8 }}>

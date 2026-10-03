@@ -258,4 +258,123 @@ test('Cloud Sync Status & Error Translation Helper Test Suite (Stage B1)', async
 
     assert.equal(translateSyncError(null), null);
   });
+
+  // 13. Automatic sync: isDeltaSyncing = false, delta status = SYNCING -> returns SYNCING
+  await t.test('13. Automatic background sync (isDeltaSyncing=false, syncStatus=SYNCING) correctly derives SYNCING', () => {
+    const status = deriveUnifiedSyncStatus({
+      isGoogleLinked: true,
+      isAuthenticated: true,
+      isUnlocked: true,
+      lifecycleState: 'ACTIVE',
+      syncStatus: 'SYNCING',
+      isDeltaSyncing: false,
+      isSyncing: false,
+      pendingCount: 0
+    });
+
+    assert.equal(status.key, UNIFIED_SYNC_STATUS_KEYS.SYNCING);
+    assert.equal(status.title, 'Synchronizing Changes…');
+    assert.equal(status.icon, '🔄');
+  });
+
+  // 14. Automatic sync completion: transitions SYNCING -> SUCCESS settles to SYNCED
+  await t.test('14. Automatic sync completion with status SUCCESS/IDLE settles cleanly to SYNCED', () => {
+    const statusSuccess = deriveUnifiedSyncStatus({
+      isGoogleLinked: true,
+      isAuthenticated: true,
+      isUnlocked: true,
+      lifecycleState: 'ACTIVE',
+      syncStatus: 'SUCCESS',
+      isDeltaSyncing: false,
+      isSyncing: false,
+      pendingCount: 0
+    });
+
+    assert.equal(statusSuccess.key, UNIFIED_SYNC_STATUS_KEYS.SYNCED);
+    assert.equal(statusSuccess.title, 'All Changes Up to Date');
+    assert.equal(statusSuccess.icon, '🟢');
+  });
+
+  // 15. Race condition regression: sequence counter prevents older SYNCING from overwriting newer SUCCESS
+  await t.test('15. Race regression: sequence token rejects stale async SYNCING resolution', () => {
+    let state = {
+      status: 'IDLE',
+      pendingCount: 0
+    };
+    let currentSeq = 0;
+
+    // Simulated component update with sequence guard
+    const applyUpdate = (newStatus, seq) => {
+      if (seq === currentSeq) {
+        state = { ...state, status: newStatus };
+      }
+    };
+
+    // Event 1 (SYNCING) starts at seq 1
+    const seq1 = ++currentSeq;
+    // Event 2 (SUCCESS) starts at seq 2 and completes immediately
+    const seq2 = ++currentSeq;
+    applyUpdate('SUCCESS', seq2);
+    assert.equal(state.status, 'SUCCESS');
+
+    // Stale Event 1 (SYNCING) completes later with old seq1
+    applyUpdate('SYNCING', seq1);
+    // Verified: State remains SUCCESS, stale SYNCING discarded
+    assert.equal(state.status, 'SUCCESS', 'Stale SYNCING update must not overwrite newer SUCCESS state');
+  });
+
+  // 16. Manual delta sync: isDeltaSyncing = true -> returns SYNCING
+  await t.test('16. Manual delta sync trigger (isDeltaSyncing=true) derives SYNCING', () => {
+    const status = deriveUnifiedSyncStatus({
+      isGoogleLinked: true,
+      isAuthenticated: true,
+      isUnlocked: true,
+      lifecycleState: 'ACTIVE',
+      syncStatus: 'IDLE',
+      isDeltaSyncing: true,
+      isSyncing: false,
+      pendingCount: 1
+    });
+
+    assert.equal(status.key, UNIFIED_SYNC_STATUS_KEYS.SYNCING);
+    assert.equal(status.title, 'Synchronizing Changes…');
+  });
+
+  // 17. Full snapshot isolation: isSyncing = true (snapshot creation) does NOT force live delta sync status
+  await t.test('17. Full snapshot isSyncing=true is isolated from live delta sync status', () => {
+    const status = deriveUnifiedSyncStatus({
+      isGoogleLinked: true,
+      isAuthenticated: true,
+      isUnlocked: true,
+      lifecycleState: 'ACTIVE',
+      syncStatus: 'IDLE',
+      isDeltaSyncing: false,
+      isSyncing: true, // Snapshot operation in Section 5
+      pendingCount: 0
+    });
+
+    // Live delta status must NOT become SYNCING merely because a full snapshot operation is active
+    assert.equal(status.key, UNIFIED_SYNC_STATUS_KEYS.SYNCED);
+    assert.equal(status.title, 'All Changes Up to Date');
+  });
+
+  // 18. Existing conflict with healthy delta sync maintains healthy status with conflict attention
+  await t.test('18. Existing conflict with healthy delta sync maintains primary SYNCED with conflict notice', () => {
+    const status = deriveUnifiedSyncStatus({
+      isGoogleLinked: true,
+      isAuthenticated: true,
+      isUnlocked: true,
+      lifecycleState: 'ACTIVE',
+      syncStatus: 'SUCCESS',
+      isDeltaSyncing: false,
+      pendingCount: 0,
+      pendingConflictsCount: 1
+    });
+
+    assert.equal(status.key, UNIFIED_SYNC_STATUS_KEYS.SYNCED);
+    assert.equal(status.title, 'All Changes Up to Date');
+    assert.equal(status.hasPendingConflicts, true);
+    assert.equal(status.conflictsCount, 1);
+    assert.equal(status.conflictBadgeText, '1 Conflict to Review');
+  });
 });

@@ -189,8 +189,8 @@ export function deriveUnifiedSyncStatus(state = {}) {
     };
   }
 
-  // 5. Active Sync Cycle In-Progress
-  const isActivelySyncing = isSyncing || isDeltaSyncing || syncStatus === 'SYNCING';
+  // 5. Active Live Delta Sync Cycle In-Progress (Strictly isolated from snapshot operations)
+  const isActivelySyncing = Boolean(isDeltaSyncing) || syncStatus === 'SYNCING';
   if (isActivelySyncing) {
     return {
       key: UNIFIED_SYNC_STATUS_KEYS.SYNCING,
