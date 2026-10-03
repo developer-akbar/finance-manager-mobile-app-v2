@@ -532,6 +532,9 @@ export default function CloudSyncManager({ onBack }) {
     }
   };
 
+  // Authoritative live delta sync state across the entire component (Strictly isolates full snapshot isSyncing)
+  const isLiveDeltaSyncing = isDeltaSyncing || deltaMetrics.status === DELTA_SYNC_STATUS.SYNCING;
+
   return (
     <div className="settings-root" style={{ paddingBottom: 'calc(var(--safe-bottom) + 32px)' }}>
       {/* Header with polished Light-Mode accessible back button */}
@@ -591,8 +594,6 @@ export default function CloudSyncManager({ onBack }) {
 
         {/* --- UNIFIED PRIMARY STATUS BANNER (Stage B1) --- */}
         {(() => {
-          const isLiveDeltaSyncing = isDeltaSyncing || deltaMetrics.status === DELTA_SYNC_STATUS.SYNCING;
-
           const unifiedStatus = deriveUnifiedSyncStatus({
             isGoogleLinked: isGoogleLinked(),
             isAuthenticated,
