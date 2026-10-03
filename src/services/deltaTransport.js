@@ -519,16 +519,32 @@ export async function pullPeerDeltas(opts) {
   const driveClient = opts.driveClient;
 
   let dynamicBaseSnapshotId = opts.baseSnapshotId;
-  if (!dynamicBaseSnapshotId) {
+  let dynamicParentSnapshotId = opts.parentSnapshotId || opts.immediateParentSnapshotId;
+  if (!dynamicBaseSnapshotId || dynamicParentSnapshotId === undefined || dynamicParentSnapshotId === null) {
     try {
       const db = getDB();
-      const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
-      dynamicBaseSnapshotId = snapRes.values?.[0]?.value || null;
+      if (!dynamicBaseSnapshotId) {
+        const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
+        dynamicBaseSnapshotId = snapRes.values?.[0]?.value || null;
+      }
+      if (dynamicParentSnapshotId === undefined || dynamicParentSnapshotId === null) {
+        const parentRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_parent_snapshot_id']);
+        if (parentRes.values?.[0]?.value !== undefined && parentRes.values?.[0]?.value !== null) {
+          dynamicParentSnapshotId = parentRes.values[0].value;
+        }
+      }
     } catch {}
   }
   const baseSnapshotId = dynamicBaseSnapshotId || 'snap_1790493064581_jbhnf8';
+  const immediateParentSnapshotId = dynamicParentSnapshotId !== undefined && dynamicParentSnapshotId !== null ? dynamicParentSnapshotId : '';
 
-  const peerManifests = await listPeerManifests(ownDeviceId, accessToken, baseSnapshotId, driveClient);
+  const peerManifests = await listPeerManifests({
+    ownDeviceId,
+    accessToken,
+    baseSnapshotId,
+    immediateParentSnapshotId,
+    driveClient
+  });
   const db = getDB();
   const reader = driveClient?.readFile 
     ? async (id) => driveClient.readFile(id)

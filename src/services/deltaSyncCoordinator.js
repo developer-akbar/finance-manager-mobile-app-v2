@@ -396,6 +396,61 @@ export async function discoverCloudRepository(options = {}) {
     };
   }
 }
+/**
+ * Hydrates missing `last_parent_snapshot_id` for pre-existing active sessions (created before lineage tracking).
+ * Performs a read-only lookup of the current cloud snapshot envelope.
+ * 
+ * Strict safety:
+ * Only writes `last_parent_snapshot_id = cloudPayload.parent_snapshot_id || ''` if:
+ * cloudPayload.snapshot_id === local last_snapshot_id.
+ * 
+ * If mismatch, read error, or decrypt error: does not mutate settings or throw.
+ */
+export async function hydrateMissingSnapshotLineage(options = {}) {
+  const driveClient = options.driveClient || _syncConfig.driveClient;
+  const accessToken = options.accessToken !== undefined
+    ? options.accessToken
+    : (_syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null);
+  const sessionKey = options.sessionKey !== undefined
+    ? options.sessionKey
+    : (_syncConfig.getSessionKey ? await _syncConfig.getSessionKey() : null);
+  const pin = options.pin || null;
+  const effectiveKey = sessionKey || pin;
+
+  try {
+    const { getSetting, setSetting } = await import('../database/settings.js');
+    const localSnapshotId = await getSetting('last_snapshot_id');
+    const localParentSnapshotId = await getSetting('last_parent_snapshot_id');
+
+    // If no active snapshot ID, or parent is already known (including '' for root snapshot), nothing to hydrate
+    if (!localSnapshotId || (localParentSnapshotId !== null && localParentSnapshotId !== undefined)) {
+      return { hydrated: false, parentSnapshotId: localParentSnapshotId || '' };
+    }
+
+    // Attempt read-only cloud snapshot envelope discovery
+    const discovery = await discoverCloudRepository({
+      accessToken,
+      driveClient,
+      sessionKey: effectiveKey
+    });
+
+    if (discovery?.status === 'EXISTING_REPOSITORY_FOUND' && discovery.snapshotPayload) {
+      const cloudPayload = discovery.snapshotPayload;
+      
+      // Strict safety check: only hydrate if the cloud snapshot matches the active local snapshot
+      if (cloudPayload.snapshot_id && cloudPayload.snapshot_id === localSnapshotId) {
+        const parentId = cloudPayload.parent_snapshot_id || '';
+        await setSetting('last_parent_snapshot_id', parentId);
+        return { hydrated: true, parentSnapshotId: parentId };
+      }
+    }
+
+    return { hydrated: false, parentSnapshotId: null };
+  } catch (err) {
+    // Read-only inspection failed; do not mutate or fabricate lineage
+    return { hydrated: false, error: err.message };
+  }
+}
 
 /**
  * Headless bootstrap flow for a new device joining an existing repository.
@@ -877,6 +932,13 @@ export async function executeFullSyncPass(options = {}) {
       // 2. Outbound Push: Package pending deltas -> encrypt -> upload -> manifest RMW -> durable queue ACK
       const pushResult = await uploadPendingDeltas({
         deviceId,
+        accessToken,
+        driveClient,
+        sessionKey
+      });
+
+      // 2.5 Hydrate missing lineage metadata if this pre-existing active device lacks last_parent_snapshot_id
+      await hydrateMissingSnapshotLineage({
         accessToken,
         driveClient,
         sessionKey

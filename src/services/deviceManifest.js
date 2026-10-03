@@ -304,18 +304,30 @@ export async function listPeerManifests(arg1, arg2, arg3, arg4) {
     driveClient = arg1.driveClient;
   } else {
     ownDeviceId = arg1;
-    if (arg2 && typeof arg2 === 'object' && (arg2.uploadFile || arg2.findFiles || arg2.readFile)) {
+    if (arg2 && typeof arg2 === 'object' && (arg2.uploadFile || arg2.findFiles || arg2.readFile || arg2.listAppDataFiles)) {
       driveClient = arg2;
       accessToken = null;
-      currentBaseSnapshotId = arg3;
+      currentBaseSnapshotId = typeof arg3 === 'string' ? arg3 : null;
+      immediateParentSnapshotId = typeof arg4 === 'string' ? arg4 : null;
     } else {
       accessToken = arg2;
-      currentBaseSnapshotId = arg3;
-      driveClient = arg4;
+      if (arg3 && typeof arg3 === 'object' && (arg3.uploadFile || arg3.findFiles || arg3.readFile || arg3.listAppDataFiles)) {
+        driveClient = arg3;
+        currentBaseSnapshotId = null;
+        immediateParentSnapshotId = null;
+      } else {
+        currentBaseSnapshotId = typeof arg3 === 'string' ? arg3 : null;
+        if (arg4 && typeof arg4 === 'object' && (arg4.uploadFile || arg4.findFiles || arg4.readFile || arg4.listAppDataFiles)) {
+          driveClient = arg4;
+          immediateParentSnapshotId = null;
+        } else {
+          immediateParentSnapshotId = typeof arg4 === 'string' ? arg4 : null;
+        }
+      }
     }
   }
 
-  if (!currentBaseSnapshotId || !immediateParentSnapshotId) {
+  if (!currentBaseSnapshotId || immediateParentSnapshotId === undefined || immediateParentSnapshotId === null) {
     try {
       const db = getDB();
       if (!currentBaseSnapshotId) {
@@ -324,9 +336,9 @@ export async function listPeerManifests(arg1, arg2, arg3, arg4) {
           currentBaseSnapshotId = snapRes.values[0].value;
         }
       }
-      if (!immediateParentSnapshotId) {
+      if (immediateParentSnapshotId === undefined || immediateParentSnapshotId === null) {
         const parentRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_parent_snapshot_id']);
-        if (parentRes.values?.[0]?.value) {
+        if (parentRes.values?.[0]?.value !== undefined && parentRes.values?.[0]?.value !== null) {
           immediateParentSnapshotId = parentRes.values[0].value;
         }
       }
