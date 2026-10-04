@@ -17,6 +17,8 @@ export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive
 export const STORAGE_KEY_TOKEN = 'finman_gdrive_token';
 export const STORAGE_KEY_EXPIRY = 'finman_gdrive_token_expiry';
 export const STORAGE_KEY_LINKED = 'finman_gdrive_linked';
+export const STORAGE_KEY_EMAIL = 'finman_gdrive_email';
+export const STORAGE_KEY_DISPLAY_NAME = 'finman_gdrive_display_name';
 
 export const SILENT_REFRESH_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
 
@@ -107,8 +109,8 @@ export async function getGoogleClientId() {
   try {
     const saved = await getSetting('google_client_id');
     if (saved && saved.trim()) return saved.trim();
-  } catch {}
-  return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID) || '';
+  } catch { }
+  return (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_GOOGLE_CLIENT_ID || import.meta.env?.GOOGLE_CLIENT_ID)) || '';
 }
 
 /**
@@ -154,11 +156,77 @@ function notifyAuthListeners(isAuthenticated, token) {
  * Subscribe to Google OAuth state changes (connect, reconnect, token refresh, disconnect)
  */
 export function subscribeGoogleAuth(listener) {
-  if (typeof listener !== 'function') return () => {};
+  if (typeof listener !== 'function') return () => { };
   _authListeners.add(listener);
   return () => {
     _authListeners.delete(listener);
   };
+}
+
+/**
+ * Get cached Google user identity from local storage
+ */
+export function getStoredGoogleUser() {
+  try {
+    if (typeof localStorage === 'undefined') return { email: '', displayName: '' };
+    return {
+      email: localStorage.getItem(STORAGE_KEY_EMAIL) || '',
+      displayName: localStorage.getItem(STORAGE_KEY_DISPLAY_NAME) || ''
+    };
+  } catch {
+    return { email: '', displayName: '' };
+  }
+}
+
+/**
+ * Save Google user identity to local storage
+ */
+export function saveGoogleUserData(emailAddress, displayName) {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (emailAddress) {
+      localStorage.setItem(STORAGE_KEY_EMAIL, String(emailAddress).trim());
+    } else {
+      localStorage.removeItem(STORAGE_KEY_EMAIL);
+    }
+    if (displayName) {
+      localStorage.setItem(STORAGE_KEY_DISPLAY_NAME, String(displayName).trim());
+    } else {
+      localStorage.removeItem(STORAGE_KEY_DISPLAY_NAME);
+    }
+  } catch (err) {
+    console.warn('Failed to save Google user identity:', err);
+  }
+}
+
+/**
+ * Clear cached Google user identity
+ */
+export function clearGoogleUserData() {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.removeItem(STORAGE_KEY_EMAIL);
+    localStorage.removeItem(STORAGE_KEY_DISPLAY_NAME);
+  } catch { }
+}
+
+/**
+ * Asynchronously fetch and cache Google user info without blocking auth
+ */
+export async function syncGoogleUserInfo(accessToken) {
+  if (!accessToken) return null;
+  try {
+    const { fetchGoogleUserInfo } = await import('./googleDriveSync.js');
+    const info = await fetchGoogleUserInfo(accessToken);
+    if (info && info.emailAddress) {
+      saveGoogleUserData(info.emailAddress, info.displayName);
+      notifyAuthListeners(true, accessToken);
+    }
+    return info;
+  } catch (err) {
+    // Non-blocking: identity fetch failure (e.g. offline/network) must not break auth token
+    return null;
+  }
 }
 
 /**
@@ -173,6 +241,8 @@ export function saveTokenData(accessToken, expiresInSeconds) {
     setGoogleLinked(true);
     _lastSilentRefreshFailureTime = 0; // Clear failure cooldown on successful token save
     notifyAuthListeners(true, accessToken);
+    // Non-blocking background fetch of user info
+    syncGoogleUserInfo(accessToken).catch(() => { });
   } catch (err) {
     console.error('Failed to save Google token data:', err);
   }
@@ -204,16 +274,18 @@ export function clearGoogleAuth() {
       localStorage.removeItem(STORAGE_KEY_TOKEN);
       localStorage.removeItem(STORAGE_KEY_EXPIRY);
     }
+    clearGoogleUserData();
     _lastSilentRefreshFailureTime = 0;
     setGoogleLinked(false);
     notifyAuthListeners(false, null);
     if (typeof window !== 'undefined' && window.google?.accounts?.oauth2?.revoke && token) {
-      window.google.accounts.oauth2.revoke(token, () => {});
+      window.google.accounts.oauth2.revoke(token, () => { });
     }
   } catch (err) {
     console.warn('Error clearing Google auth:', err);
   }
 }
+
 
 /**
  * Trigger Google Sign-In & Authorization
@@ -268,7 +340,13 @@ export async function signInWithGoogle({ prompt = 'consent' } = {}) {
  */
 export async function getValidAccessToken(interactive = false) {
   const stored = getStoredToken();
-  if (stored) return stored;
+  if (stored) {
+    const user = getStoredGoogleUser();
+    if (!user.email) {
+      syncGoogleUserInfo(stored).catch(() => { });
+    }
+    return stored;
+  }
 
   // Attempt silent refresh if account was previously linked and not in cooldown
   const isCooldownActive = (Date.now() - _lastSilentRefreshFailureTime) < SILENT_REFRESH_COOLDOWN_MS;
@@ -277,6 +355,7 @@ export async function getValidAccessToken(interactive = false) {
       const result = await signInWithGoogle({ prompt: '' });
       if (result && result.accessToken) {
         _lastSilentRefreshFailureTime = 0;
+        syncGoogleUserInfo(result.accessToken).catch(() => { });
         return result.accessToken;
       }
     } catch (silentErr) {
@@ -290,8 +369,9 @@ export async function getValidAccessToken(interactive = false) {
     const result = await signInWithGoogle({ prompt: 'consent' });
     if (result && result.accessToken) {
       _lastSilentRefreshFailureTime = 0;
+      syncGoogleUserInfo(result.accessToken).catch(() => { });
+      return result.accessToken;
     }
-    return result.accessToken;
   }
 
   return null;

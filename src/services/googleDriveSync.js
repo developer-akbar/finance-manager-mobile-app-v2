@@ -12,6 +12,39 @@ const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
 /**
+ * Fetch authenticated Google user identity (emailAddress and displayName) via Drive about.get
+ * Uses the existing https://www.googleapis.com/auth/drive.appdata scope.
+ */
+export async function fetchGoogleUserInfo(accessToken) {
+  if (!accessToken) throw new Error('Missing Google access token.');
+
+  const url = `${DRIVE_API_BASE}/about?fields=user(displayName,emailAddress,photoLink)`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    if (res.status === 401) {
+      invalidateStoredToken();
+    }
+    const err = new Error(`Failed to fetch Google user info (${res.status}): ${errText}`);
+    err.status = res.status;
+    throw err;
+  }
+
+  const data = await res.json();
+  const user = data.user || data;
+  return {
+    emailAddress: user?.emailAddress || user?.email || '',
+    displayName: user?.displayName || user?.name || '',
+    photoLink: user?.photoLink || user?.picture || ''
+  };
+}
+
+
+
+/**
  * Find a file by name inside appDataFolder
  */
 export async function findAppDataFile(filename, accessToken) {

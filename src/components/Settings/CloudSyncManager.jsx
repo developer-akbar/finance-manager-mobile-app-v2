@@ -7,8 +7,12 @@ import {
   isGoogleLinked,
   clearGoogleAuth,
   getGoogleClientId,
-  setGoogleClientId
+  setGoogleClientId,
+  getStoredGoogleUser,
+  syncGoogleUserInfo,
+  subscribeGoogleAuth
 } from '../../services/googleAuth.js';
+import { getSetting } from '../../database/settings.js';
 import {
   previewCloudSync,
   executeCloudSync,
@@ -31,7 +35,11 @@ import {
   SYNC_STATUS as DELTA_SYNC_STATUS,
   SYNC_TRIGGER,
   triggerAutomaticSync,
-  resolveConflict
+  resolveConflict,
+  getDeviceLifecycleState,
+  discoverCloudRepository,
+  bootstrapNewDevice,
+  DEVICE_LIFECYCLE
 } from '../../services/deltaSyncCoordinator.js';
 import {
   getPendingConflicts,
@@ -60,10 +68,14 @@ export default function CloudSyncManager({ onBack }) {
 
   // Authentication & Configuration State
   const [isAuthenticated, setIsAuthenticated] = useState(() => isGoogleLinked());
+  const [googleUser, setGoogleUser] = useState(() => getStoredGoogleUser());
   const [clientId, setClientId] = useState('');
   const [showConfig, setShowConfig] = useState(false);
   const [authError, setAuthError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+
+  // New-Device Restore Backup Modal State (WhatsApp-style flow)
+  const [restorePromptState, setRestorePromptState] = useState(null);
 
   // In-Memory Session Key State (Never Persisted to Storage)
   const [isUnlocked, setIsUnlocked] = useState(() => isSyncUnlocked());
@@ -71,6 +83,7 @@ export default function CloudSyncManager({ onBack }) {
   const [pin, setPin] = useState('');
   const [showPin, setShowPin] = useState(false);
   const [pinError, setPinError] = useState('');
+
 
   // Operations State
   const [isLoading, setIsLoading] = useState(false);
@@ -114,6 +127,15 @@ export default function CloudSyncManager({ onBack }) {
     return unsubscribe;
   }, []);
 
+  // Subscribe to Google Auth state changes (identity hydration, token refresh, disconnect)
+  useEffect(() => {
+    const unsubscribe = subscribeGoogleAuth((isAuth) => {
+      setIsAuthenticated(isAuth);
+      setGoogleUser(getStoredGoogleUser());
+    });
+    return unsubscribe;
+  }, []);
+
   // Subscribe to Phase 7.5 Delta Sync Coordinator State, Metrics & Conflicts & Sync Metadata
   useEffect(() => {
     let mounted = true;
@@ -131,10 +153,30 @@ export default function CloudSyncManager({ onBack }) {
           });
           setIsAuthenticated(isGoogleLinked());
           setIsUnlocked(isSyncUnlocked());
+          const user = getStoredGoogleUser();
+          setGoogleUser(user);
 
-          if (isGoogleLinked() && !getStoredToken()) {
-            getValidAccessToken(false).then(token => {
-              if (mounted) setIsAuthenticated(!!token || isGoogleLinked());
+          const token = getStoredToken();
+          if (token && !user.email) {
+            syncGoogleUserInfo(token).then(u => {
+              if (mounted && u?.emailAddress) {
+                setGoogleUser({ email: u.emailAddress, displayName: u.displayName || '' });
+              }
+            }).catch(() => {});
+          }
+
+          if (isGoogleLinked() && !token) {
+            getValidAccessToken(false).then(validToken => {
+              if (mounted) {
+                setIsAuthenticated(!!validToken || isGoogleLinked());
+                if (validToken) {
+                  syncGoogleUserInfo(validToken).then(u => {
+                    if (mounted && u?.emailAddress) {
+                      setGoogleUser({ email: u.emailAddress, displayName: u.displayName || '' });
+                    }
+                  }).catch(() => {});
+                }
+              }
             }).catch(() => {});
           }
         }
@@ -209,6 +251,28 @@ export default function CloudSyncManager({ onBack }) {
     };
   }, [isUnlocked, isAuthenticated, load]);
 
+  // Check if an UNINITIALIZED / new device should offer cloud restore
+  const checkNewDeviceBackup = async (token) => {
+    try {
+      const lifecycle = await getDeviceLifecycleState();
+      if (lifecycle === DEVICE_LIFECYCLE.UNINITIALIZED || lifecycle === DEVICE_LIFECYCLE.JOINING) {
+        const discovery = await discoverCloudRepository({ accessToken: token });
+        if (discovery && discovery.exists) {
+          setRestorePromptState({
+            show: true,
+            discovery,
+            pin: '',
+            pinError: '',
+            isRestoring: false,
+            progressMsg: ''
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[CloudSyncManager] New device backup check error:', err);
+    }
+  };
+
   // Handle Google Sign-In
   const handleConnect = async () => {
     setAuthError('');
@@ -220,6 +284,11 @@ export default function CloudSyncManager({ onBack }) {
       const res = await signInWithGoogle({ prompt: 'consent' });
       if (res && res.accessToken) {
         setIsAuthenticated(true);
+        const user = await syncGoogleUserInfo(res.accessToken);
+        if (user?.emailAddress) {
+          setGoogleUser({ email: user.emailAddress, displayName: user.displayName || '' });
+        }
+        await checkNewDeviceBackup(res.accessToken);
       }
     } catch (err) {
       setAuthError(err.message || 'Google authentication failed.');
@@ -233,11 +302,100 @@ export default function CloudSyncManager({ onBack }) {
     clearGoogleAuth();
     lockSyncSession();
     setIsAuthenticated(false);
+    setGoogleUser({ email: '', displayName: '' });
+    setRestorePromptState(null);
     setPreviewResult(null);
     setShowConfirmModal(false);
     setSuccessMsg('');
     setPin('');
   };
+
+  // Handle WhatsApp-Style Cloud Backup Restore Execution
+  const handleExecuteRestore = async () => {
+    if (!restorePromptState) return;
+    const restorePin = restorePromptState.pin?.trim();
+    if (!restorePin || restorePin.length < 4) {
+      setRestorePromptState(prev => ({
+        ...prev,
+        pinError: 'PIN must be at least 4 characters.'
+      }));
+      return;
+    }
+
+    const token = await getValidAccessToken(true);
+    if (!token) {
+      setRestorePromptState(prev => ({
+        ...prev,
+        pinError: 'Please reconnect your Google account.'
+      }));
+      return;
+    }
+
+    setRestorePromptState(prev => ({
+      ...prev,
+      isRestoring: true,
+      pinError: '',
+      progressMsg: 'Checking backup…'
+    }));
+
+    try {
+      // 1. Derive session key and unlock in-memory session
+      const sessionKey = await unlockSyncSession(restorePin);
+
+      // 2. Run bootstrapNewDevice
+      await bootstrapNewDevice({
+        accessToken: token,
+        sessionKey,
+        pin: restorePin,
+        onProgress: ({ stage, message }) => {
+          setRestorePromptState(prev => ({
+            ...prev,
+            progressMsg: message || 'Restoring your FinMan data…'
+          }));
+        }
+      });
+
+      // 3. Reload AppContext local data
+      if (typeof load === 'function') {
+        try {
+          await load();
+        } catch (loadErr) {
+          console.warn('[CloudSyncManager] Post-restore reload warning:', loadErr);
+        }
+      }
+
+      setRestorePromptState(null);
+      setSuccessMsg('✓ Your FinMan data has been restored successfully!');
+      const updatedMetrics = await getDeltaSyncMetrics();
+      setDeltaMetrics(prev => ({ ...prev, ...updatedMetrics }));
+    } catch (err) {
+      console.error('[CloudSyncManager] Restore error:', err);
+      let errorText = err.message || 'Restore failed.';
+      if (errorText.toLowerCase().includes('decrypt') || errorText.toLowerCase().includes('pin') || errorText.toLowerCase().includes('operation-specific')) {
+        errorText = 'That Sync PIN could not decrypt this backup. Please try again.';
+      } else if (errorText.toLowerCase().includes('verification_failed') || errorText.toLowerCase().includes('validation_error')) {
+        errorText = 'This FinMan backup could not be verified.';
+      }
+      setRestorePromptState(prev => ({
+        ...prev,
+        isRestoring: false,
+        pinError: errorText,
+        progressMsg: ''
+      }));
+    }
+  };
+
+  // Handle WhatsApp-Style "Start Fresh" on New Device
+  const handleConfirmStartFresh = () => {
+    clearGoogleAuth();
+    lockSyncSession();
+    setIsAuthenticated(false);
+    setGoogleUser({ email: '', displayName: '' });
+    setRestorePromptState(null);
+    setSuccessMsg('Starting fresh with a new local ledger. Your Google Drive backup was left untouched.');
+  };
+
+
 
   // Handle Custom Client ID Save
   const handleSaveClientId = async () => {
@@ -855,13 +1013,26 @@ export default function CloudSyncManager({ onBack }) {
               <div>
                 <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                   {isAuthenticated
-                    ? 'Connected to Google Drive'
-                    : (isGoogleLinked() ? 'Google Account Linked (Needs Reconnect)' : 'Not Connected to Google Drive')}
+                    ? 'Google Drive'
+                    : (isGoogleLinked() ? 'Google Drive (Needs Reconnect)' : 'Not Connected to Google Drive')}
                 </div>
-                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                  Your changes are automatically synced across your devices.
+                {isAuthenticated && (
+                  <div style={{ marginTop: 2 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--green)' }}>● Connected</span>
+                    </div>
+                    {googleUser.email && (
+                      <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--accent)', marginTop: 1 }}>
+                        {googleUser.displayName ? `${googleUser.displayName} <${googleUser.email}>` : googleUser.email}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                  Used for encrypted FinMan cloud sync
                 </div>
               </div>
+
             </div>
 
             {isGoogleLinked() ? (
@@ -1733,6 +1904,210 @@ export default function CloudSyncManager({ onBack }) {
           </>
         );
       })()}
+
+      {/* WhatsApp-Style New Device Restore Backup Modal */}
+      {restorePromptState && restorePromptState.show && (
+        <>
+          <div
+            className="dash-popup-overlay"
+            style={{ zIndex: 10002 }}
+          />
+          <div
+            className="dash-popup-sheet"
+            style={{
+              zIndex: 10003,
+              padding: '24px 24px calc(var(--safe-bottom) + 24px)',
+              maxWidth: 460,
+              margin: '0 auto'
+            }}
+          >
+            <div className="dash-popup-sheet-handle" />
+            {(!restorePromptState.step || restorePromptState.step === 'CHOICE') && (
+              <>
+                <div style={{ textAlign: 'center', marginBottom: 14 }}>
+                  <div style={{ fontSize: '2.4rem', marginBottom: 6 }}>✨</div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Welcome to FinMan
+                  </div>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--green)', marginTop: 2 }}>
+                    Backup Found
+                  </div>
+                </div>
+
+                <div style={{
+                  background: 'rgba(0, 229, 160, 0.08)',
+                  border: '1px solid rgba(0, 229, 160, 0.25)',
+                  borderRadius: 10,
+                  padding: '14px 16px',
+                  marginBottom: 20,
+                  fontSize: '0.8rem',
+                  color: 'var(--text-primary)',
+                  lineHeight: 1.5,
+                  textAlign: 'center'
+                }}>
+                  We found an existing encrypted FinMan backup in Google Drive.
+                  <div style={{ fontWeight: 700, marginTop: 6 }}>
+                    Restore your FinMan data to this device?
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setRestorePromptState(prev => ({ ...prev, step: 'ENTER_PIN', pin: '', pinError: '' }))}
+                    style={{ padding: '12px 16px', fontSize: '0.88rem', fontWeight: 800 }}
+                  >
+                    Restore Backup
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setRestorePromptState(prev => ({ ...prev, step: 'START_FRESH_CONFIRM' }))}
+                    style={{ padding: '8px 16px', fontSize: '0.78rem', color: 'var(--text-muted)' }}
+                  >
+                    Start Fresh
+                  </button>
+                </div>
+              </>
+            )}
+
+            {restorePromptState.step === 'ENTER_PIN' && (
+              <>
+                <div style={{ textAlign: 'center', marginBottom: 14 }}>
+                  <div style={{ fontSize: '2.4rem', marginBottom: 6 }}>🔐</div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Restore Backup
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                    Enter your Sync PIN to decrypt your FinMan backup
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 18 }}>
+                  <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                    Sync PIN:
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type={showPin ? 'text' : 'password'}
+                      value={restorePromptState.pin || ''}
+                      onChange={(e) => setRestorePromptState(prev => ({ ...prev, pin: e.target.value, pinError: '' }))}
+                      placeholder="4+ digit Sync PIN"
+                      disabled={restorePromptState.isRestoring}
+                      autoFocus
+                      style={{
+                        width: '100%',
+                        padding: '10px 42px 10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid var(--border-light)',
+                        background: 'var(--bg-surface)',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.9rem',
+                        letterSpacing: '0.1em'
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPin(!showPin)}
+                      style={{
+                        position: 'absolute',
+                        right: 10,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'none',
+                        border: 'none',
+                        fontSize: '0.9rem',
+                        cursor: 'pointer',
+                        opacity: 0.6
+                      }}
+                      aria-label={showPin ? 'Hide PIN' : 'Show PIN'}
+                    >
+                      {showPin ? '👁️' : '🔒'}
+                    </button>
+                  </div>
+                  {restorePromptState.pinError && (
+                    <div style={{ color: 'var(--expense)', fontSize: '0.72rem', fontWeight: 600, marginTop: 6 }}>
+                      ⚠️ {restorePromptState.pinError}
+                    </div>
+                  )}
+                  {restorePromptState.progressMsg && (
+                    <div style={{ color: 'var(--accent)', fontSize: '0.75rem', fontWeight: 600, marginTop: 8, textAlign: 'center' }}>
+                      ⏳ {restorePromptState.progressMsg}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={handleExecuteRestore}
+                    disabled={restorePromptState.isRestoring || !restorePromptState.pin?.trim()}
+                    style={{ padding: '12px 16px', fontSize: '0.88rem', fontWeight: 800 }}
+                  >
+                    {restorePromptState.isRestoring ? 'Restoring Data…' : 'Unlock & Restore'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setRestorePromptState(prev => ({ ...prev, step: 'CHOICE', pin: '', pinError: '', progressMsg: '' }))}
+                    disabled={restorePromptState.isRestoring}
+                    style={{ padding: '8px 16px', fontSize: '0.78rem' }}
+                  >
+                    Back
+                  </button>
+                </div>
+              </>
+            )}
+
+            {restorePromptState.step === 'START_FRESH_CONFIRM' && (
+              <>
+                <div style={{ textAlign: 'center', marginBottom: 14 }}>
+                  <div style={{ fontSize: '2.4rem', marginBottom: 6 }}>⚠️</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Start Fresh on This Device?
+                  </div>
+                </div>
+
+                <div style={{
+                  background: 'rgba(255, 179, 0, 0.08)',
+                  border: '1px solid rgba(255, 179, 0, 0.25)',
+                  borderRadius: 10,
+                  padding: '14px 16px',
+                  marginBottom: 18,
+                  fontSize: '0.78rem',
+                  color: 'var(--text-primary)',
+                  lineHeight: 1.45,
+                  textAlign: 'center'
+                }}>
+                  Your existing Google Drive backup will remain untouched. This device will start with a new local ledger.
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={handleConfirmStartFresh}
+                    style={{ padding: '12px 16px', fontSize: '0.88rem', fontWeight: 800 }}
+                  >
+                    Confirm Start Fresh
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setRestorePromptState(prev => ({ ...prev, step: 'CHOICE' }))}
+                    style={{ padding: '8px 16px', fontSize: '0.78rem' }}
+                  >
+                    Back to Restore Option
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
     </div>
   );
 }
