@@ -266,11 +266,13 @@ export async function readLocalEntities(dbInstance = null) {
  * Construct normalized canonical JSON payload package
  */
 export async function createCanonicalSnapshotPayload({
-  entities,
+  entities = {},
   snapshotId,
   parentSnapshotId = null,
   cloudVersion = 1,
-  deviceId = 'unknown_device'
+  deviceId = 'unknown_device',
+  coveredPeerWatermarks = null,
+  db = null
 }) {
   const now = new Date().toISOString();
   
@@ -298,6 +300,42 @@ export async function createCanonicalSnapshotPayload({
   if (!sortedEntities.transactions) sortedEntities.transactions = [];
   if (!sortedEntities.investment_transactions) sortedEntities.investment_transactions = [];
 
+  // Capture authoritative covered peer watermarks
+  let peerWatermarksObj = null;
+  if (coveredPeerWatermarks && typeof coveredPeerWatermarks === 'object') {
+    const sortedPeerKeys = Object.keys(coveredPeerWatermarks).sort();
+    if (sortedPeerKeys.length > 0) {
+      peerWatermarksObj = {};
+      for (const k of sortedPeerKeys) {
+        const seq = Number(coveredPeerWatermarks[k]);
+        if (!isNaN(seq) && seq > 0) {
+          peerWatermarksObj[k] = seq;
+        }
+      }
+    }
+  } else {
+    try {
+      const targetDb = db || getDB();
+      if (targetDb) {
+        const peerRows = (await targetDb.query('SELECT peer_device_id, last_reconciled_sequence FROM sync_peer_state')).values || [];
+        if (peerRows.length > 0) {
+          const sortedRows = [...peerRows].sort((a, b) => String(a.peer_device_id || '').localeCompare(String(b.peer_device_id || '')));
+          const tempObj = {};
+          for (const r of sortedRows) {
+            const pId = String(r.peer_device_id || '').trim();
+            const seq = Number(r.last_reconciled_sequence || 0);
+            if (pId && seq > 0) {
+              tempObj[pId] = seq;
+            }
+          }
+          if (Object.keys(tempObj).length > 0) {
+            peerWatermarksObj = tempObj;
+          }
+        }
+      }
+    } catch {}
+  }
+
   const payload = {
     schema_version: 13,
     engine_version: CURRENT_ENGINE_VERSION,
@@ -308,6 +346,10 @@ export async function createCanonicalSnapshotPayload({
     created_at: now,
     entities: sortedEntities
   };
+
+  if (peerWatermarksObj) {
+    payload.covered_peer_watermarks = peerWatermarksObj;
+  }
 
   const canonicalJson = JSON.stringify(payload);
   const checksum = await sha256Hex(canonicalJson);
@@ -2006,7 +2048,8 @@ export async function executeCloudSync({
       snapshotId: newSnapshotId,
       parentSnapshotId: readSnapshotId,
       cloudVersion: newCloudVersion,
-      deviceId
+      deviceId,
+      db
     });
     tSnapshotCreationMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSnap0);
 
