@@ -110,7 +110,7 @@ export async function getGoogleClientId() {
     const saved = await getSetting('google_client_id');
     if (saved && saved.trim()) return saved.trim();
   } catch { }
-  return (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_GOOGLE_CLIENT_ID || import.meta.env?.GOOGLE_CLIENT_ID)) || '';
+  return (typeof import.meta !== 'undefined' && (import.meta.env?.GOOGLE_CLIENT_ID || import.meta.env?.GOOGLE_CLIENT_ID)) || '';
 }
 
 /**
