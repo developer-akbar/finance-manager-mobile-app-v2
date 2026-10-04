@@ -16,7 +16,7 @@ import './Settings.css';
 // ─────────────────────────────────────────────
 // Confirm Modal — native bottom-sheet alternative
 // ─────────────────────────────────────────────
-function ConfirmModal({ isOpen, title, message, onConfirm, onCancel, isWarning = false }) {
+export function ConfirmModal({ isOpen, title, message, onConfirm, onCancel, isWarning = false, confirmLabel }) {
   if (!isOpen) return null;
   return (
     <>
@@ -37,7 +37,7 @@ function ConfirmModal({ isOpen, title, message, onConfirm, onCancel, isWarning =
                 Cancel
               </button>
               <button className={isWarning ? "btn btn-danger" : "btn btn-primary"} style={{ flex: 1 }} onClick={onConfirm}>
-                Yes, Delete
+                {confirmLabel || 'Yes, Delete'}
               </button>
             </>
           ) : (
@@ -203,6 +203,7 @@ export function AccountsManager({ onBack }) {
         title: 'Delete Sub Account?',
         message: `Sub Account "${sub.name}" has ${count} associated transaction(s).\n\nDeleting it will remove the sub-account mapping from these transactions. Do you want to proceed?`,
         isWarning: true,
+        confirmLabel: 'Remove Sub-Account',
         onConfirm: async () => {
           setConfirmState(null);
           const nextSubs = acct.subAccounts.filter((_, idx) => idx !== subIdx);
@@ -217,6 +218,7 @@ export function AccountsManager({ onBack }) {
         title: 'Delete Sub Account?',
         message: `Are you sure you want to delete sub-account "${sub.name}"?`,
         isWarning: false,
+        confirmLabel: 'Delete Sub Account',
         onConfirm: async () => {
           setConfirmState(null);
           const nextSubs = acct.subAccounts.filter((_, idx) => idx !== subIdx);
@@ -267,6 +269,7 @@ export function AccountsManager({ onBack }) {
         title: 'Delete Account Group?',
         message: `Group "${g}" contains ${count} account(s).\n\nDeleting it will move these accounts to the "Ungrouped" section. Do you want to proceed?`,
         isWarning: true,
+        confirmLabel: 'Move to Ungrouped',
         onConfirm: async () => {
           setConfirmState(null);
           const upd = accounts.map(a => a.group === g ? { ...a, group: '' } : a);
@@ -281,6 +284,7 @@ export function AccountsManager({ onBack }) {
         title: 'Delete Account Group?',
         message: `Are you sure you want to delete the group "${g}"?`,
         isWarning: false,
+        confirmLabel: 'Delete Group',
         onConfirm: async () => {
           setConfirmState(null);
           const grps = groups.filter(x => x !== g);
@@ -338,6 +342,7 @@ export function AccountsManager({ onBack }) {
         title: 'Move to Ungrouped?',
         message: `Account "${name}" has ${count} associated transaction(s).\n\nIt cannot be deleted permanently. Clicking delete will remove it from its current group and move it to the "Ungrouped" accounts section. Do you want to proceed?`,
         isWarning: true,
+        confirmLabel: 'Move to Ungrouped',
         onConfirm: async () => {
           setConfirmState(null);
           const upd = accounts.map(a => a.name === name ? { ...a, group: '' } : a);
@@ -350,6 +355,7 @@ export function AccountsManager({ onBack }) {
         title: 'Delete Account?',
         message: `Are you sure you want to delete the account "${name}"?`,
         isWarning: false,
+        confirmLabel: 'Delete Account',
         onConfirm: async () => {
           setConfirmState(null);
           const upd = accounts.filter(a => a.name !== name);
@@ -820,6 +826,7 @@ export function CategoriesManager({ onBack }) {
         title: 'Delete Category?',
         message: `Category "${name}" has ${count} associated transaction(s).\n\nDeleting it will move these transactions to the "Unassigned" category. Do you want to proceed?`,
         isWarning: true,
+        confirmLabel: 'Move to Unassigned',
         onConfirm: async () => {
           setConfirmState(null);
           let nextCats = [...cats];
@@ -837,6 +844,7 @@ export function CategoriesManager({ onBack }) {
         title: 'Delete Category?',
         message: `Are you sure you want to delete category "${name}"?`,
         isWarning: false,
+        confirmLabel: 'Delete Category',
         onConfirm: async () => {
           setConfirmState(null);
           const upd = cats.filter((_, idx) => idx !== i);
@@ -856,6 +864,7 @@ export function CategoriesManager({ onBack }) {
         title: 'Delete Subcategory?',
         message: `Subcategory "${subName}" has ${count} associated transaction(s).\n\nDeleting it will remove the subcategory from these transactions. Do you want to proceed?`,
         isWarning: true,
+        confirmLabel: 'Remove Subcategory',
         onConfirm: async () => {
           setConfirmState(null);
           const upd = cats.map((c, idx) => idx === ci ? { ...c, subcategories: c.subcategories.filter((_, j) => j !== si) } : c);
@@ -869,6 +878,7 @@ export function CategoriesManager({ onBack }) {
         title: 'Delete Subcategory?',
         message: `Are you sure you want to delete subcategory "${subName}"?`,
         isWarning: false,
+        confirmLabel: 'Delete Subcategory',
         onConfirm: async () => {
           setConfirmState(null);
           const upd = cats.map((c, idx) => idx === ci ? { ...c, subcategories: c.subcategories.filter((_, j) => j !== si) } : c);
@@ -1966,7 +1976,7 @@ function DataManager({ onBack, onOpenCloudSync }) {
 
   const handleCryptoImport = async () => {
     if (!cryptoPin) {
-      setCryptoErr('Please enter the password/PIN to decrypt');
+      setCryptoErr('Please enter the Backup PIN or password to decrypt');
       return;
     }
     setImportLoadingMessage('Decrypting & reading backup file...');
@@ -2067,10 +2077,7 @@ function DataManager({ onBack, onOpenCloudSync }) {
             style={{ width: '100%', padding: '8px 12px', borderRadius: 8, background: 'var(--bg-card2)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
           >
             <option value="generic">FinMan CSV/JSON Backup or MM Excel</option>
-            <option value="cas_liquid_mf">CAMS / KFintech CAS (Auto-Detect)</option>
-            <option value="cas_liquid_mf_ak">CAMS / KFintech CAS (Ak ETMoney)</option>
-            <option value="cas_liquid_mf_fareeda">CAMS / KFintech CAS (Fareeda Groww)</option>
-            <option value="cas_liquid_mf_ammi">CAMS / KFintech CAS (Ammi Groww)</option>
+            <option value="cas_liquid_mf">CAMS / KFintech CAS Statement (.pdf / .txt)</option>
             <option value="zerodha_tradebook">Zerodha Tradebook (XLSX / CSV)</option>
             <option value="zerodha_ledger">Zerodha Ledger (CSV)</option>
             <option value="zerodha_holdings">Zerodha Holdings Snapshot (CSV)</option>
@@ -2096,7 +2103,7 @@ function DataManager({ onBack, onOpenCloudSync }) {
           </div>
           <div className="dm-row" onClick={() => { setCryptoModal({ mode: 'export' }); setCryptoPin(''); setCryptoErr(''); }}>
             <div className="dm-row-icon">🔒</div>
-            <div className="dm-row-content"><div className="dm-row-title">Export Encrypted Backup (.finman)</div><div className="dm-row-sub">AES-256 zero-knowledge backup protected by your PIN</div></div>
+            <div className="dm-row-content"><div className="dm-row-title">Export Encrypted Backup (.finman)</div><div className="dm-row-sub">AES-256 zero-knowledge backup protected by your Backup PIN</div></div>
           </div>
           <div className="dm-row" onClick={exportJSON}>
             <div className="dm-row-icon">🗃️</div>
@@ -2121,8 +2128,8 @@ function DataManager({ onBack, onOpenCloudSync }) {
           <div className="dm-row" onClick={() => onOpenCloudSync?.()}>
             <div className="dm-row-icon">☁️</div>
             <div className="dm-row-content">
-              <div className="dm-row-title">Cloud Sync (Google Drive) <span style={{ fontSize: '0.62rem', fontWeight: 700, background: 'rgba(0,229,160,0.15)', color: 'var(--green)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>Encrypted v2</span></div>
-              <div className="dm-row-sub">End-to-End Encrypted 3-Way Sync · Sandboxed AppData</div>
+              <div className="dm-row-title">Cloud Sync (Google Drive) <span style={{ fontSize: '0.62rem', fontWeight: 700, background: 'rgba(0,229,160,0.15)', color: 'var(--green)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>Encrypted</span></div>
+              <div className="dm-row-sub">End-to-End Encrypted Cloud Sync · Google Drive</div>
             </div>
             <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
           </div>
@@ -2194,8 +2201,8 @@ function DataManager({ onBack, onOpenCloudSync }) {
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginBottom: 14 }}>
                 {cryptoModal.mode === 'export'
-                  ? 'Set a 4+ digit PIN or password. You will need this key whenever restoring on any device.'
-                  : 'Enter the PIN or password used when this backup was encrypted.'}
+                  ? 'Set a 4+ digit Backup PIN or password. You will need this key whenever restoring on any device.'
+                  : 'Enter the Backup PIN or password used when this backup was encrypted.'}
               </div>
 
               {cryptoErr && (
@@ -2208,7 +2215,7 @@ function DataManager({ onBack, onOpenCloudSync }) {
                 type="password"
                 className="form-input"
                 autoFocus
-                placeholder="Enter PIN or Password"
+                placeholder="Enter Backup PIN or Password"
                 value={cryptoPin}
                 onChange={e => { setCryptoPin(e.target.value); setCryptoErr(''); }}
                 style={{ fontSize: '1.1rem', textAlign: 'center', letterSpacing: 3, marginBottom: 16, background: 'var(--bg-card2)', borderRadius: 10, padding: '10px' }}
@@ -2220,7 +2227,7 @@ function DataManager({ onBack, onOpenCloudSync }) {
                   className="btn btn-primary btn-full"
                   onClick={cryptoModal.mode === 'export' ? handleCryptoExport : handleCryptoImport}
                 >
-                  {cryptoModal.mode === 'export' ? '🔒 Save Encrypted' : '🔓 Unlock & Import'}
+                  {cryptoModal.mode === 'export' ? '🔒 Save Encrypted Backup' : '🔓 Unlock & Import'}
                 </button>
               </div>
             </div>
@@ -2232,7 +2239,7 @@ function DataManager({ onBack, onOpenCloudSync }) {
         <div className="dm-card" style={{ margin: '0 0 14px', borderRadius: 0, borderLeft: 'none', borderRight: 'none' }}>
           <div className="dm-row danger-row" onClick={() => setShowDel(true)}>
             <div className="dm-row-icon">🗑️</div>
-            <div className="dm-row-content"><div className="dm-row-title" style={{ color: 'var(--expense)' }}>Delete All Transactions &amp; Metadata</div><div className="dm-row-sub">Perform factory reset · deletes all setups</div></div>
+            <div className="dm-row-content"><div className="dm-row-title" style={{ color: 'var(--expense)' }}>Delete All Transactions &amp; Reset Local Data</div><div className="dm-row-sub">Reset local database on this device · re-seeds default setup</div></div>
           </div>
         </div>
 
@@ -2244,11 +2251,13 @@ function DataManager({ onBack, onOpenCloudSync }) {
               <div className="sheet-handle" />
               <div style={{ textAlign: 'center', padding: '0 var(--page-px) 16px' }}>
                 <div style={{ fontSize: '2rem', marginBottom: 10 }}>⚠️</div>
-                <div style={{ fontSize: '1rem', fontWeight: 800, marginBottom: 8 }}>Delete all data &amp; metadata?</div>
+                <div style={{ fontSize: '1rem', fontWeight: 800, marginBottom: 8 }}>Reset local database &amp; delete all data?</div>
                 <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 20 }}>
-                  This will permanently remove {txnCount.toLocaleString()} transactions, accounts, categories, groups, budgets, and all configuration settings.
+                  This will permanently remove {txnCount.toLocaleString()} transactions, accounts, categories, groups, budgets, and all configuration settings on this device.
                   <br /><br />
-                  A CSV backup of your transactions will be automatically exported and downloaded before deletion.
+                  A CSV safety backup of your transactions will be automatically exported and downloaded before clearing.
+                  <br /><br />
+                  <span style={{ color: 'var(--text-secondary)' }}>Note: This affects only this device. Cloud backups and snapshots stored in Google Drive are not deleted.</span>
                 </div>
                 <div style={{ display: 'flex', gap: 10 }}>
                   <button className="btn btn-ghost btn-full" onClick={() => setShowDel(false)}>Cancel</button>
@@ -2262,8 +2271,8 @@ function DataManager({ onBack, onOpenCloudSync }) {
                     // 2. Clear all tables
                     await clearAllData();
                     setShowDel(false);
-                    setStatus({ type: 'success', msg: '✓ Backup downloaded. All transactions and metadata deleted successfully.' });
-                  }}>Delete All &amp; Backup</button>
+                    setStatus({ type: 'success', msg: '✓ Backup downloaded. All transactions and metadata deleted successfully on this device.' });
+                  }}>Download Backup &amp; Reset</button>
                 </div>
               </div>
             </div>
@@ -2643,19 +2652,19 @@ function ProfileManager({ onBack }) {
   };
 
   const savePin = async () => {
-    if (newPin.length < 4 || newPin.length > 6) { setMsg({ type: 'error', text: 'PIN must be 4–6 digits' }); return; }
-    if (!/^\d+$/.test(newPin)) { setMsg({ type: 'error', text: 'PIN must be digits only' }); return; }
-    if (newPin !== confirm) { setMsg({ type: 'error', text: 'PINs do not match' }); return; }
+    if (newPin.length < 4 || newPin.length > 6) { setMsg({ type: 'error', text: 'App PIN must be 4–6 digits' }); return; }
+    if (!/^\d+$/.test(newPin)) { setMsg({ type: 'error', text: 'App PIN must be digits only' }); return; }
+    if (newPin !== confirm) { setMsg({ type: 'error', text: 'App PINs do not match' }); return; }
     await updateSettings({ pin: newPin, pinIdleSeconds: 10 });
     setPin(newPin); setNewPin(''); setConfirm('');
-    setMsg({ type: 'success', text: 'PIN set ✓ — app locks after 10s idle' });
+    setMsg({ type: 'success', text: 'App PIN set ✓ — app locks after 10s idle' });
     setTimeout(() => setMsg(null), 3000);
   };
 
   const clearPin = async () => {
     await updateSettings({ pin: '', pinIdleSeconds: 0 });
     setPin(''); setShowClear(false);
-    setMsg({ type: 'success', text: 'PIN removed' });
+    setMsg({ type: 'success', text: 'App PIN removed' });
     setTimeout(() => setMsg(null), 2000);
   };
 
@@ -2684,29 +2693,32 @@ function ProfileManager({ onBack }) {
         </div>
       </div>
 
-      {/* PIN */}
-      <div className="settings-group-label">PIN Lock</div>
+      {/* App PIN */}
+      <div className="settings-group-label">App PIN Lock</div>
       <div className="settings-card" style={{ padding: '14px var(--page-px)' }}>
-        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 12 }}>
-          {hasPin ? '🔒 PIN is set. App auto-locks after 10 seconds of inactivity.' : '🔓 No PIN set. Anyone can open the app.'}
+        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+          {hasPin ? '🔒 App PIN is set. App auto-locks after 10 seconds of inactivity.' : '🔓 No App PIN set. Anyone can open the app.'}
+        </div>
+        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: 12 }}>
+          Protects access to FinMan on this device. This is separate from your Sync PIN.
         </div>
 
         {hasPin ? (
           <>
-            <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>Change PIN</div>
-            <input className="form-input" style={{ marginBottom: 8, letterSpacing: '0.3em' }} type="number" inputMode="numeric" maxLength={6} value={newPin} onChange={e => setNewPin(e.target.value.slice(0, 6))} placeholder="New PIN (4–6 digits)" />
-            <input className="form-input" style={{ marginBottom: 12, letterSpacing: '0.3em' }} type="number" inputMode="numeric" maxLength={6} value={confirm} onChange={e => setConfirm(e.target.value.slice(0, 6))} placeholder="Confirm PIN" />
+            <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>Change App PIN</div>
+            <input className="form-input" style={{ marginBottom: 8, letterSpacing: '0.3em' }} type="number" inputMode="numeric" maxLength={6} value={newPin} onChange={e => setNewPin(e.target.value.slice(0, 6))} placeholder="New App PIN (4–6 digits)" />
+            <input className="form-input" style={{ marginBottom: 12, letterSpacing: '0.3em' }} type="number" inputMode="numeric" maxLength={6} value={confirm} onChange={e => setConfirm(e.target.value.slice(0, 6))} placeholder="Confirm App PIN" />
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-primary btn-full" onClick={savePin}>Update PIN</button>
+              <button className="btn btn-primary btn-full" onClick={savePin}>Update App PIN</button>
               <button className="btn btn-danger" onClick={() => setShowClear(true)}>Remove</button>
             </div>
           </>
         ) : (
           <>
-            <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>Set PIN</div>
-            <input className="form-input" style={{ marginBottom: 8, letterSpacing: '0.3em' }} type="number" inputMode="numeric" maxLength={6} value={newPin} onChange={e => setNewPin(e.target.value.slice(0, 6))} placeholder="New PIN (4–6 digits)" />
-            <input className="form-input" style={{ marginBottom: 12, letterSpacing: '0.3em' }} type="number" inputMode="numeric" maxLength={6} value={confirm} onChange={e => setConfirm(e.target.value.slice(0, 6))} placeholder="Confirm PIN" />
-            <button className="btn btn-primary btn-full" onClick={savePin}>Set PIN</button>
+            <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>Set App PIN</div>
+            <input className="form-input" style={{ marginBottom: 8, letterSpacing: '0.3em' }} type="number" inputMode="numeric" maxLength={6} value={newPin} onChange={e => setNewPin(e.target.value.slice(0, 6))} placeholder="New App PIN (4–6 digits)" />
+            <input className="form-input" style={{ marginBottom: 12, letterSpacing: '0.3em' }} type="number" inputMode="numeric" maxLength={6} value={confirm} onChange={e => setConfirm(e.target.value.slice(0, 6))} placeholder="Confirm App PIN" />
+            <button className="btn btn-primary btn-full" onClick={savePin}>Set App PIN</button>
           </>
         )}
       </div>
@@ -2741,11 +2753,11 @@ function ProfileManager({ onBack }) {
             <div className="sheet-handle" />
             <div style={{ textAlign: 'center', padding: '0 var(--page-px) 16px' }}>
               <div style={{ fontSize: '2rem', marginBottom: 8 }}>🔓</div>
-              <div style={{ fontWeight: 800, marginBottom: 8 }}>Remove PIN?</div>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>Remove App PIN?</div>
               <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 20 }}>App will no longer lock when idle.</div>
               <div style={{ display: 'flex', gap: 10 }}>
                 <button className="btn btn-ghost btn-full" onClick={() => setShowClear(false)}>Cancel</button>
-                <button className="btn btn-danger btn-full" onClick={clearPin}>Remove PIN</button>
+                <button className="btn btn-danger btn-full" onClick={clearPin}>Remove App PIN</button>
               </div>
             </div>
           </div>
@@ -3234,7 +3246,7 @@ export default function Settings({ backInterceptRef } = {}) {
         </div>
         <div className="settings-profile-info">
           <div className="settings-profile-name">{state.settings?.profileName || state.settings?.name || 'Your Name'}</div>
-          <div className="settings-profile-sub">{state.settings?.pin ? '🔒 PIN enabled' : 'Finance Manager v2'}</div>
+          <div className="settings-profile-sub">{state.settings?.pin ? '🔒 App PIN enabled' : 'Finance Manager v2'}</div>
         </div>
         <div className="settings-profile-stats-desktop">
           <span className="settings-profile-stat-badge">{txnCount.toLocaleString()} Transactions</span>
@@ -3271,7 +3283,7 @@ export default function Settings({ backInterceptRef } = {}) {
           <div className="settings-card">
             <div className="settings-row" onClick={() => setScreen('cloud_sync')}>
               <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>☁️</div>
-              <div className="settings-row-content"><div className="settings-row-title">Cloud Sync (Google Drive)</div><div className="settings-row-sub">End-to-end encrypted multi-device 3-way sync</div></div>
+              <div className="settings-row-content"><div className="settings-row-title">Cloud Sync (Google Drive)</div><div className="settings-row-sub">Multi-device cloud sync protected by your Sync PIN</div></div>
               <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
             </div>
             <div className="settings-row" onClick={() => setScreen('data')}>
