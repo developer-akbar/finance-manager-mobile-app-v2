@@ -896,4 +896,305 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
     const txns = await getTransactions();
     assert.ok(txns.some(t => t.id === 'tx_cloud_auth_1'), 'Authoritative baseline installed');
   });
+
+  await t.test('WATERMARK FIX 1: Fresh device restoring child snapshot (v9 with parent v8) skips parent packages and creates 0 false conflicts', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_fresh_watermark_test_1';
+
+    // 1. Prepare child snapshot v9 with parent v8
+    const v9Txn = { id: 'txn_v9_canonical_1', Date: '2026-03-01', INR: 1000, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' };
+    const snapshotPayload = {
+      snapshot_id: 'snap_1790500000000_v9',
+      parent_snapshot_id: 'snap_1790400000000_v8',
+      cloud_version: 9,
+      created_at: new Date().toISOString(),
+      device_id: 'device_primary',
+      entities: {
+        transactions: [v9Txn],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encryptedSnapshot = await encryptBackupData(snapshotPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({
+      name: SNAPSHOT_FILENAME,
+      content: encryptedSnapshot
+    });
+
+    // 2. Peer C and Peer D uploaded packages 1..5 and 1..6 against parent baseline v8 (which would conflict if replayed on v9)
+    const pkgPayloadC = buildDeterministicPackagePayload({
+      deviceId: 'peer_dev_c',
+      startSequence: 1,
+      endSequence: 5,
+      baseSnapshotId: 'snap_1790400000000_v8',
+      events: [{
+        event_id: 'evt_c_1',
+        device_id: 'peer_dev_c',
+        sequence: 1,
+        timestamp: new Date().toISOString(),
+        collection: 'transactions',
+        entity_id: 'txn_v9_canonical_1',
+        operation: 'UPDATE',
+        base_checksum: 'old_v8_base_checksum',
+        new_checksum: 'peer_c_checksum',
+        payload: { id: 'txn_v9_canonical_1', Date: '2026-03-01', INR: 500, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+      }]
+    });
+    const encPkgC = await encryptDeltaPackage(pkgPayloadC, TEST_SESSION_KEY);
+    const drivePkgC = await mockDrive.uploadFile({ name: 'pkg_dev_c_000001_000005.finmanpkg', content: JSON.stringify(encPkgC) });
+
+    const manifestC = createEmptyDeviceManifest({
+      deviceId: 'peer_dev_c',
+      baseSnapshotId: 'snap_1790400000000_v8',
+      baseCloudVersion: 8,
+      manifestRevision: 1,
+      lifecycleState: 'ACTIVE'
+    });
+    manifestC.packages = [{
+      package_id: 'pkg_peer_dev_c_000001_000005',
+      start_sequence: 1,
+      end_sequence: 5,
+      event_count: 1,
+      package_checksum: encPkgC.package_checksum,
+      drive_file_id: drivePkgC.id
+    }];
+    await mockDrive.uploadFile({
+      name: 'manifest_dev_peer_dev_c.json',
+      content: JSON.stringify(manifestC)
+    });
+
+    // 3. Run bootstrapNewDevice on fresh device
+    const bootRes = await bootstrapNewDevice({
+      deviceId: freshDevId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    assert.strictEqual(bootRes.success, true);
+    assert.strictEqual(bootRes.snapshotId, 'snap_1790500000000_v9');
+
+    // 4. Verify sync_peer_state was initialized to 5 for peer_dev_c
+    const peerStateRes = await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', ['peer_dev_c']);
+    const peerState = peerStateRes.values?.[0];
+    assert.ok(peerState, 'Peer state exists for peer_dev_c');
+    assert.strictEqual(Number(peerState.last_staged_sequence), 5, 'last_staged_sequence set to covered maxSeq (5)');
+    assert.strictEqual(Number(peerState.last_reconciled_sequence), 5, 'last_reconciled_sequence set to covered maxSeq (5)');
+    assert.strictEqual(peerState.base_snapshot_id, 'snap_1790500000000_v9');
+
+    // 5. Verify 0 packages were staged and 0 false conflicts were created
+    assert.strictEqual(bootRes.inboundDeltas.stagedPackagesCount, 0, 'Parent packages skipped');
+    const conflicts = await getPendingConflicts();
+    assert.strictEqual(conflicts.length, 0, 'Zero false conflicts generated');
+
+    // 6. Verify local transactions and lifecycle state
+    const localTxns = await getTransactions();
+    assert.strictEqual(localTxns.length, 1);
+    assert.strictEqual(localTxns[0].id, 'txn_v9_canonical_1');
+    assert.strictEqual(localTxns[0].INR, 1000, 'Original v9 canonical value preserved');
+
+    const lifecycle = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE);
+  });
+
+  await t.test('WATERMARK FIX 2: Fresh device restoring child snapshot still downloads and reconciles new package published after snapshot boundary', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_fresh_watermark_test_2';
+
+    // 1. Snapshot v9 with parent v8
+    const snapshotPayload = {
+      snapshot_id: 'snap_1790500000000_v9',
+      parent_snapshot_id: 'snap_1790400000000_v8',
+      cloud_version: 9,
+      created_at: new Date().toISOString(),
+      device_id: 'device_primary',
+      entities: {
+        transactions: [{ id: 'txn_init', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encryptedSnapshot = await encryptBackupData(snapshotPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({
+      name: SNAPSHOT_FILENAME,
+      content: encryptedSnapshot
+    });
+
+    // 2. Peer D has parent packages 1..5 on v8, plus a NEW package 6 (seq 6..6) on v9 (or new post-snapshot package)
+    const newTxn = { id: 'txn_post_v9_d', Date: '2026-03-02', INR: 250, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' };
+    const newTxnChecksum = await computeCanonicalSha256(newTxn);
+
+    const pkgPayloadD6 = buildDeterministicPackagePayload({
+      deviceId: 'peer_dev_d',
+      startSequence: 6,
+      endSequence: 6,
+      baseSnapshotId: 'snap_1790500000000_v9',
+      baseCloudVersion: 9,
+      events: [{
+        event_id: 'evt_d_6',
+        device_id: 'peer_dev_d',
+        sequence: 6,
+        timestamp: new Date().toISOString(),
+        collection: 'transactions',
+        entity_id: newTxn.id,
+        operation: 'INSERT',
+        base_checksum: null,
+        new_checksum: newTxnChecksum,
+        payload: newTxn
+      }]
+    });
+    const encPkgD6 = await encryptDeltaPackage(pkgPayloadD6, TEST_SESSION_KEY);
+    const drivePkgD6 = await mockDrive.uploadFile({ name: 'pkg_dev_d_000006_000006.finmanpkg', content: JSON.stringify(encPkgD6) });
+
+    const manifestD = createEmptyDeviceManifest({
+      deviceId: 'peer_dev_d',
+      baseSnapshotId: 'snap_1790500000000_v9',
+      baseCloudVersion: 9,
+      manifestRevision: 2,
+      lifecycleState: 'ACTIVE'
+    });
+    manifestD.packages = [
+      {
+        package_id: 'pkg_peer_dev_d_000001_000005',
+        start_sequence: 1,
+        end_sequence: 5,
+        event_count: 5,
+        base_snapshot_id: 'snap_1790400000000_v8',
+        package_checksum: 'checksum_old_v8_pkg',
+        drive_file_id: 'drive_dummy_v8'
+      },
+      {
+        package_id: 'pkg_peer_dev_d_000006_000006',
+        start_sequence: 6,
+        end_sequence: 6,
+        event_count: 1,
+        base_snapshot_id: 'snap_1790500000000_v9',
+        package_checksum: encPkgD6.package_checksum,
+        drive_file_id: drivePkgD6.id
+      }
+    ];
+    await mockDrive.uploadFile({
+      name: 'manifest_dev_peer_dev_d.json',
+      content: JSON.stringify(manifestD)
+    });
+
+    // 3. Run bootstrapNewDevice
+    const bootRes = await bootstrapNewDevice({
+      deviceId: freshDevId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    assert.strictEqual(bootRes.success, true);
+    // 4. Verify package 6 was staged and reconciled!
+    assert.strictEqual(bootRes.inboundDeltas.stagedPackagesCount, 1, 'Only new package 6 was staged');
+    assert.strictEqual(bootRes.reconciliation.reconciledCount, 1, 'Package 6 event cleanly reconciled');
+
+    // 5. Verify peer watermark updated to 6
+    const peerStateRes = await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', ['peer_dev_d']);
+    const peerState = peerStateRes.values?.[0];
+    assert.strictEqual(Number(peerState.last_staged_sequence), 6);
+    assert.strictEqual(Number(peerState.last_reconciled_sequence), 6);
+
+    // 6. Verify newly inserted transaction exists in DB
+    const txns = await getTransactions();
+    assert.strictEqual(txns.length, 2);
+    assert.ok(txns.some(t => t.id === 'txn_post_v9_d'), 'Post-v9 transaction was inserted');
+  });
+
+  await t.test('WATERMARK FIX 3: Failure during parent-peer watermark initialization fails closed with BOOTSTRAP_FAILED and aborts without false conflicts or ACTIVE transition', async () => {
+    const db = getDB();
+    const failDevId = 'dev_fail_closed_test';
+
+    // 1. Snapshot v9 with parent v8
+    const snapshotPayload = {
+      snapshot_id: 'snap_1790500000000_v9',
+      parent_snapshot_id: 'snap_1790400000000_v8',
+      cloud_version: 9,
+      created_at: new Date().toISOString(),
+      device_id: 'device_primary',
+      entities: {
+        transactions: [{ id: 'txn_init', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encryptedSnapshot = await encryptBackupData(snapshotPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({
+      name: SNAPSHOT_FILENAME,
+      content: encryptedSnapshot
+    });
+
+    // 2. Drive client that fails on manifest discovery during parent watermark check
+    const failingDrive = {
+      ...mockDrive,
+      findFiles: async (opts) => {
+        if (!opts?.name || opts.name.startsWith('manifest_dev_')) {
+          throw new Error('Google Drive API 503 Service Unavailable');
+        }
+        return mockDrive.findFiles(opts);
+      },
+      listAppDataFiles: async () => {
+        throw new Error('Google Drive API 503 Service Unavailable');
+      },
+      readFile: async (fileId) => mockDrive.readFile(fileId),
+      readAppDataFile: async (fileId, token) => mockDrive.readAppDataFile(fileId, token),
+      uploadFile: async (opts) => mockDrive.uploadFile(opts),
+      uploadAppDataFile: async (name, content, mime, token) => mockDrive.uploadAppDataFile(name, content, mime, token)
+    };
+
+    // Add a peer manifest in mockDrive so listPeerManifests tries to read it
+    const manifestC = createEmptyDeviceManifest({
+      deviceId: 'peer_dev_c',
+      baseSnapshotId: 'snap_1790400000000_v8',
+      baseCloudVersion: 8,
+      manifestRevision: 1,
+      lifecycleState: 'ACTIVE'
+    });
+    await mockDrive.uploadFile({
+      name: 'manifest_dev_peer_dev_c.json',
+      content: JSON.stringify(manifestC)
+    });
+
+    // 3. bootstrapNewDevice must reject with BOOTSTRAP_FAILED
+    await assert.rejects(
+      async () => {
+        await bootstrapNewDevice({
+          deviceId: failDevId,
+          sessionKey: TEST_SESSION_KEY,
+          driveClient: failingDrive
+        });
+      },
+      (err) => {
+        assert.ok(err.message.startsWith('BOOTSTRAP_FAILED: Failed to initialize baseline lineage peer watermarks'), `Error message should be BOOTSTRAP_FAILED, got: ${err.message}`);
+        return true;
+      }
+    );
+
+    // 4. Verify no peer delta packages were staged
+    const stagedPkgs = (await db.query('SELECT * FROM sync_staged_packages')).values || [];
+    assert.strictEqual(stagedPkgs.length, 0, 'Zero packages staged');
+
+    const stagedEvts = (await db.query('SELECT * FROM sync_staged_events')).values || [];
+    assert.strictEqual(stagedEvts.length, 0, 'Zero events staged');
+
+    // 5. Verify no sync_conflicts rows were created
+    const conflicts = await getPendingConflicts();
+    assert.strictEqual(conflicts.length, 0, 'Zero conflicts created');
+
+    // 6. Verify lifecycle remains JOINING (not ACTIVE)
+    const lifecycle = await getDeviceLifecycleState(failDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.JOINING, 'Lifecycle must remain JOINING on failure');
+
+    // 7. Verify no ACTIVE manifest published for failDevId
+    const ownManifestFiles = await mockDrive.findFiles({ name: `manifest_dev_${failDevId}.json` });
+    assert.strictEqual(ownManifestFiles.length, 0, 'No active manifest published on abort');
+
+    // 8. Verify no outbound delta queue entries created
+    const queueRows = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    const pendingOutbound = queueRows.filter(r => r.status !== 'ACKNOWLEDGED');
+    assert.strictEqual(pendingOutbound.length, 0, 'Zero pending outbound deltas generated');
+  });
 });

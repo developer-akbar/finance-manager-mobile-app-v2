@@ -537,6 +537,58 @@ export async function bootstrapNewDevice(options = {}) {
   await setSetting('sub_accounts_migrated_v2', 'true');
   await setSetting('historical_charges_reconciled', 'true');
 
+  // 6.5 Initialize peer watermarks for packages covered by baseline snapshot lineage
+  if (payload.parent_snapshot_id) {
+    try {
+      const peerManifests = await listPeerManifests({
+        ownDeviceId: deviceId,
+        accessToken,
+        driveClient,
+        baseSnapshotId: payload.snapshot_id,
+        immediateParentSnapshotId: payload.parent_snapshot_id
+      });
+
+      for (const peer of peerManifests) {
+        const peerDeviceId = peer.device_id;
+        if (!peerDeviceId) continue;
+
+        // Filter packages belonging strictly to the snapshot's immediate parent baseline
+        const parentPackages = (peer.packages || []).filter(pkg => {
+          const pkgBase = pkg.base_snapshot_id || peer.base_snapshot_id;
+          return pkgBase === payload.parent_snapshot_id;
+        });
+
+        if (parentPackages.length > 0) {
+          const maxSeq = Math.max(...parentPackages.map(pkg => Number(pkg.end_sequence || pkg.endSequence || 0)));
+          if (maxSeq > 0) {
+            if (rawIdb) {
+              await new Promise((resolve, reject) => {
+                const tx = rawIdb.transaction(['sync_peer_state'], 'readwrite');
+                const store = tx.objectStore('sync_peer_state');
+                store.put({
+                  peer_device_id: peerDeviceId,
+                  last_staged_sequence: maxSeq,
+                  last_reconciled_sequence: maxSeq,
+                  base_snapshot_id: payload.snapshot_id,
+                  updated_at: now
+                });
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+              });
+            } else {
+              await db.run(
+                'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+                [peerDeviceId, maxSeq, maxSeq, payload.snapshot_id, now]
+              );
+            }
+          }
+        }
+      }
+    } catch (err) {
+      throw new Error(`BOOTSTRAP_FAILED: Failed to initialize baseline lineage peer watermarks: ${err.message}`);
+    }
+  }
+
   // 7. Pull post-baseline peer deltas
   onProgress({ stage: 'REPLAYING_DELTAS', message: 'Replaying recent cloud changes…' });
   const pullResult = await downloadAndStagePeerPackages({
