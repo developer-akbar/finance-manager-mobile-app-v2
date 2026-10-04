@@ -27,25 +27,52 @@ export function translateSyncError(rawError) {
   const str = typeof rawError === 'string' ? rawError : (rawError.message || String(rawError));
   const lower = str.toLowerCase();
 
-  // 1. Network & Connectivity Issues
+  // 0. Informational / Non-Error Auth States (Suppress noisy error banners during clean startup)
+  if (lower.includes('no google drive credentials') || lower.includes('not connected to google drive') || lower === 'auth_required' || lower.includes('credentials missing')) {
+    return null;
+  }
+
+  // 1. Missing OAuth Deployment Configuration
+  if (
+    lower.includes('oauth client id is not configured') ||
+    lower.includes('client id is not configured') ||
+    lower.includes('missing google_client_id') ||
+    lower.includes('google_client_id is not configured') ||
+    lower.includes('vite_google_client_id')
+  ) {
+    return "Google Drive isn't configured for this FinMan deployment. Please contact the administrator.";
+  }
+
+  // 2. User Cancelled / Popup Blocked / Access Denied
+  if (lower.includes('popup was closed') || lower.includes('popup_closed') || lower.includes('user_cancelled')) {
+    return 'Google Sign-In was cancelled or the sign-in popup was closed.';
+  }
+  if (lower.includes('popup_blocked') || lower.includes('popup was blocked') || lower.includes('failed to open popup')) {
+    return 'Google Sign-In popup was blocked by the browser. Please allow popups for this site.';
+  }
+  if (lower.includes('origin_mismatch') || lower.includes('unauthorized_client') || lower.includes('access_denied')) {
+    return 'This domain is not authorized for Google Sign-In. Please check Google Cloud configuration.';
+  }
+
+  // 3. Network & Connectivity Issues
   if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('network request failed') || lower.includes('econnrefused')) {
     return 'Unable to reach Google Drive. Please check your internet connection.';
   }
 
-  // 2. Authentication & OAuth Token Expirations
-  if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid_grant') || lower.includes('auth_required') || lower.includes('token expired') || lower.includes('authentication required')) {
+  // 4. Authentication & OAuth Token Expirations
+  if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid_grant') || lower.includes('token expired') || lower.includes('authentication required')) {
     return 'Google Drive authorization expired. Please reconnect your account to resume sync.';
   }
-  if (lower.includes('google sign-in failed') || lower.includes('popup was closed') || lower.includes('access_denied')) {
-    return 'Google Sign-In was cancelled or could not be completed.';
+  if (lower.includes('google sign-in failed') || lower.includes('google authentication failed')) {
+    return 'Google Sign-In could not be completed. Please try again.';
   }
 
-  // 3. Cryptographic Key & PIN Mismatch
+  // 5. Cryptographic Key & PIN Mismatch
   if (lower.includes('tag mismatch') || lower.includes('aes-gcm') || lower.includes('failed to decrypt') || lower.includes('invalid key') || lower.includes('pin mismatch')) {
     return 'Encryption key verification failed. Please check that your PIN is correct for this cloud data.';
   }
 
-  // 4. Rate Limits & Google Drive Backend Errors
+  // 6. Rate Limits & Google Drive Backend Errors
   if (lower.includes('429') || lower.includes('ratelimit') || lower.includes('user rate limit') || lower.includes('quota')) {
     return 'Google Drive request limit reached. Sync will pause and retry automatically.';
   }
@@ -53,17 +80,17 @@ export function translateSyncError(rawError) {
     return 'Google Drive is temporarily unavailable. FinMan will retry automatically shortly.';
   }
 
-  // 5. Lineage & Peer Baseline Guards
+  // 7. Lineage & Peer Baseline Guards
   if (lower.includes('blocked_older_base') || lower.includes('blocked_unknown_base') || lower.includes('sequence_gap')) {
     return 'Peer synchronization is waiting for cloud baseline updates. Local financial records are completely safe.';
   }
 
-  // 6. Safety Guardrails & Mass Deletion
+  // 8. Safety Guardrails & Mass Deletion
   if (lower.includes('safety_abort_mass_deletion') || lower.includes('excessive deletion')) {
     return 'Safety shield triggered: Unusually high deletions detected. Sync paused to protect your financial data.';
   }
 
-  // 7. Bootstrap & Initial Setup
+  // 9. Bootstrap & Initial Setup
   if (lower.includes('bootstrap_failed') || lower.includes('bootstrap_verification_failed') || lower.includes('existing_local_data_requires_merge')) {
     return 'Could not set up cloud repository. Please verify your connection and encryption PIN.';
   }
@@ -116,8 +143,8 @@ export function deriveUnifiedSyncStatus(state = {}) {
         ? 'Your FinMan data is safe on this device. Reconnect Google to continue syncing across your devices.'
         : 'Connect your Google Drive account to enable end-to-end encrypted multi-device sync.',
       badgeText: isGoogleLinked ? 'Reconnect Required' : 'Not Connected',
-      badgeType: 'error',
-      icon: '🔐',
+      badgeType: isGoogleLinked ? 'error' : 'info',
+      icon: isGoogleLinked ? '🔐' : '☁️',
       hasPendingConflicts: conflictsNum > 0,
       conflictsCount: conflictsNum,
       conflictBadgeText,

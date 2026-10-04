@@ -35,11 +35,19 @@ import {
   setGoogleLinked,
   invalidateStoredToken,
   subscribeGoogleAuth,
+  getGoogleClientId,
+  setGoogleClientId,
+  signInWithGoogle,
   STORAGE_KEY_EMAIL,
   STORAGE_KEY_DISPLAY_NAME,
   STORAGE_KEY_TOKEN,
   STORAGE_KEY_LINKED
 } from '../services/googleAuth.js';
+import {
+  translateSyncError,
+  deriveUnifiedSyncStatus,
+  UNIFIED_SYNC_STATUS_KEYS
+} from '../utils/cloudSyncStatusHelper.js';
 import {
   DEVICE_LIFECYCLE,
   getDeviceLifecycleState,
@@ -565,5 +573,78 @@ test('GOOGLE ACCOUNT IDENTITY & RESTORE FLOW SUITE', async (t) => {
     const dec = await decryptBackupData(readBack, TEST_PIN);
     assert.strictEqual(dec.snapshot_id, 'snap_inviolable_base');
     assert.strictEqual(dec.cloud_version, 5);
+  });
+
+  // ----------------------------------------------------
+  // PART 3: OAUTH CONFIGURATION CONTRACT & DISCONNECTED UX (FIX TESTS)
+  // ----------------------------------------------------
+
+  await t.test('21. Custom OAuth Client ID saved in settings takes precedence', async () => {
+    await setSetting('google_client_id', 'custom-client-id-override-123.apps.googleusercontent.com');
+    const resolved = await getGoogleClientId();
+    assert.strictEqual(resolved, 'custom-client-id-override-123.apps.googleusercontent.com');
+  });
+
+  await t.test('22. Missing Client ID throws configuration error during signInWithGoogle', async () => {
+    await setSetting('google_client_id', '');
+    let threw = false;
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      threw = true;
+      assert(err.message.includes('Google OAuth Client ID is not configured'));
+    }
+    assert.strictEqual(threw, true);
+  });
+
+  await t.test('23. Fresh disconnected app does NOT show error banner during startup / tab switch', () => {
+    // Simulated fresh disconnected state where Google is not linked
+    const status = deriveUnifiedSyncStatus({
+      isGoogleLinked: false,
+      isAuthenticated: false,
+      isUnlocked: false,
+      lifecycleState: 'ACTIVE',
+      syncStatus: 'AUTH_REQUIRED',
+      pendingCount: 0,
+      latestError: 'No Google Drive credentials',
+      isDeltaSyncing: false
+    });
+
+    assert.strictEqual(status.key, UNIFIED_SYNC_STATUS_KEYS.AUTH_REQUIRED);
+    assert.strictEqual(status.title, 'Google Drive Not Connected');
+    assert.strictEqual(status.badgeText, 'Not Connected');
+    assert.strictEqual(status.badgeType, 'info'); // Neutral info badge, not error!
+    assert.strictEqual(status.icon, '☁️');
+    assert.strictEqual(status.errorMessage, null, 'Fresh disconnected app must NOT show an error message banner');
+  });
+
+  await t.test('24. Clicking Connect Google with missing deployment config displays specific administrator guidance', () => {
+    const rawError = 'Google OAuth Client ID is not configured. Please enter your Client ID in Cloud Sync settings.';
+    const translated = translateSyncError(rawError);
+    assert.strictEqual(
+      translated,
+      "Google Drive isn't configured for this FinMan deployment. Please contact the administrator."
+    );
+  });
+
+  await t.test('25. User cancelled / popup blocked / unauthorized origin OAuth errors translate accurately', () => {
+    assert.strictEqual(
+      translateSyncError('Google Sign-In failed or popup was closed.'),
+      'Google Sign-In was cancelled or the sign-in popup was closed.'
+    );
+    assert.strictEqual(
+      translateSyncError('popup_blocked by browser'),
+      'Google Sign-In popup was blocked by the browser. Please allow popups for this site.'
+    );
+    assert.strictEqual(
+      translateSyncError('unauthorized_client for origin https://finman-umber.vercel.app'),
+      'This domain is not authorized for Google Sign-In. Please check Google Cloud configuration.'
+    );
+  });
+
+  await t.test('26. Informational auth states return null from error translator', () => {
+    assert.strictEqual(translateSyncError('No Google Drive credentials'), null);
+    assert.strictEqual(translateSyncError('Not connected to Google Drive'), null);
+    assert.strictEqual(translateSyncError('AUTH_REQUIRED'), null);
   });
 });
