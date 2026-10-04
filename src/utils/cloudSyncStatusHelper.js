@@ -111,9 +111,9 @@ export function deriveUnifiedSyncStatus(state = {}) {
   if (!isGoogleLinked || (!isAuthenticated && syncStatus === 'AUTH_REQUIRED')) {
     return {
       key: UNIFIED_SYNC_STATUS_KEYS.AUTH_REQUIRED,
-      title: isGoogleLinked ? 'Google Drive Reconnect Required' : 'Google Drive Not Connected',
+      title: isGoogleLinked ? 'Google Sign-In Required' : 'Google Drive Not Connected',
       explanation: isGoogleLinked
-        ? 'Your Google Drive authorization has expired. Reconnect to resume automatic synchronization.'
+        ? 'Your FinMan data is safe on this device. Reconnect Google to continue syncing across your devices.'
         : 'Connect your Google Drive account to enable end-to-end encrypted multi-device sync.',
       badgeText: isGoogleLinked ? 'Reconnect Required' : 'Not Connected',
       badgeType: 'error',

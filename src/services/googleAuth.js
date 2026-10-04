@@ -18,8 +18,26 @@ export const STORAGE_KEY_TOKEN = 'finman_gdrive_token';
 export const STORAGE_KEY_EXPIRY = 'finman_gdrive_token_expiry';
 export const STORAGE_KEY_LINKED = 'finman_gdrive_linked';
 
+export const SILENT_REFRESH_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+
 let _tokenClient = null;
 let _gisLoadedPromise = null;
+let _lastSilentRefreshFailureTime = 0;
+
+/**
+ * Reset the silent refresh failure cooldown timer (useful for testing and user-initiated auth resets)
+ */
+export function resetSilentRefreshCooldown() {
+  _lastSilentRefreshFailureTime = 0;
+}
+
+/**
+ * Get remaining cooldown time in milliseconds before next silent refresh attempt is allowed
+ */
+export function getSilentRefreshCooldownRemaining() {
+  const elapsed = Date.now() - _lastSilentRefreshFailureTime;
+  return Math.max(0, SILENT_REFRESH_COOLDOWN_MS - elapsed);
+}
 
 /**
  * Check if the user has previously linked their Google Drive account
@@ -153,9 +171,26 @@ export function saveTokenData(accessToken, expiresInSeconds) {
     const expiryTimestamp = Date.now() + (expiresInSeconds || 3500) * 1000;
     localStorage.setItem(STORAGE_KEY_EXPIRY, String(expiryTimestamp));
     setGoogleLinked(true);
+    _lastSilentRefreshFailureTime = 0; // Clear failure cooldown on successful token save
     notifyAuthListeners(true, accessToken);
   } catch (err) {
     console.error('Failed to save Google token data:', err);
+  }
+}
+
+/**
+ * Invalidate cached access token on confirmed authorization failure (e.g. 401).
+ * Clears access token and expiry from storage while preserving account linked state.
+ */
+export function invalidateStoredToken() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(STORAGE_KEY_TOKEN);
+      localStorage.removeItem(STORAGE_KEY_EXPIRY);
+    }
+    notifyAuthListeners(false, null);
+  } catch (err) {
+    console.warn('[GoogleAuth] Error invalidating stored token:', err);
   }
 }
 
@@ -169,6 +204,7 @@ export function clearGoogleAuth() {
       localStorage.removeItem(STORAGE_KEY_TOKEN);
       localStorage.removeItem(STORAGE_KEY_EXPIRY);
     }
+    _lastSilentRefreshFailureTime = 0;
     setGoogleLinked(false);
     notifyAuthListeners(false, null);
     if (typeof window !== 'undefined' && window.google?.accounts?.oauth2?.revoke && token) {
@@ -227,27 +263,34 @@ export async function signInWithGoogle({ prompt = 'consent' } = {}) {
 /**
  * Get a valid access token.
  * 1. Checks unexpired cached token.
- * 2. If expired/missing but account is linked, attempts GIS silent refresh (prompt: '').
- * 3. If interactive is true and silent refresh fails, prompts user with popup.
+ * 2. If expired/missing but account is linked, attempts GIS silent refresh (prompt: '') if not in cooldown.
+ * 3. If interactive is true and silent refresh fails (or was in cooldown), prompts user with interactive popup.
  */
 export async function getValidAccessToken(interactive = false) {
   const stored = getStoredToken();
   if (stored) return stored;
 
-  // Attempt silent refresh if account was previously linked
-  if (isGoogleLinked()) {
+  // Attempt silent refresh if account was previously linked and not in cooldown
+  const isCooldownActive = (Date.now() - _lastSilentRefreshFailureTime) < SILENT_REFRESH_COOLDOWN_MS;
+  if (isGoogleLinked() && !isCooldownActive) {
     try {
       const result = await signInWithGoogle({ prompt: '' });
       if (result && result.accessToken) {
+        _lastSilentRefreshFailureTime = 0;
         return result.accessToken;
       }
     } catch (silentErr) {
-      console.warn('[GoogleAuth] Silent token refresh failed:', silentErr.message);
+      _lastSilentRefreshFailureTime = Date.now();
+      console.warn('[GoogleAuth] Silent token refresh failed, starting cooldown:', silentErr.message);
     }
   }
 
+  // Interactive authentication is never blocked by silent refresh cooldown
   if (interactive) {
     const result = await signInWithGoogle({ prompt: 'consent' });
+    if (result && result.accessToken) {
+      _lastSilentRefreshFailureTime = 0;
+    }
     return result.accessToken;
   }
 

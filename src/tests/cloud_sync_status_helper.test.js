@@ -106,8 +106,9 @@ test('Cloud Sync Status & Error Translation Helper Test Suite (Stage B1)', async
     });
 
     assert.equal(statusExpired.key, UNIFIED_SYNC_STATUS_KEYS.AUTH_REQUIRED);
-    assert.equal(statusExpired.title, 'Google Drive Reconnect Required');
+    assert.equal(statusExpired.title, 'Google Sign-In Required');
     assert.equal(statusExpired.primaryActionKey, 'RECONNECT_GOOGLE');
+    assert.ok(statusExpired.explanation.includes('Your FinMan data is safe on this device.'));
   });
 
   // 6. Persistent sync failure -> SYNC_ERROR

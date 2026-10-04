@@ -975,7 +975,14 @@ export async function executeFullSyncPass(options = {}) {
       return syncResult;
     });
   } catch (err) {
-    const isAuthError = err?.status === 401 || err?.message?.includes('AUTH') || err?.message?.includes('401');
+    const is401 = err?.status === 401 || err?.message?.includes('(401)') || err?.message?.includes('401');
+    if (is401) {
+      try {
+        const { invalidateStoredToken } = await import('./googleAuth.js');
+        invalidateStoredToken();
+      } catch {}
+    }
+    const isAuthError = is401 || err?.message?.includes('AUTH') || err?.message?.includes('No Google Drive credentials');
     const finalStatus = isAuthError ? SYNC_STATUS.AUTH_REQUIRED : SYNC_STATUS.ERROR;
 
     broadcastSyncStatus(finalStatus, { error: err.message, trigger });

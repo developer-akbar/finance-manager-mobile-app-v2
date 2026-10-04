@@ -6,6 +6,8 @@
  * Scope: https://www.googleapis.com/auth/drive.appdata
  */
 
+import { invalidateStoredToken } from './googleAuth.js';
+
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
@@ -24,7 +26,12 @@ export async function findAppDataFile(filename, accessToken) {
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Google Drive API error (${res.status}): ${errText}`);
+    if (res.status === 401) {
+      invalidateStoredToken();
+    }
+    const err = new Error(`Google Drive API error (${res.status}): ${errText}`);
+    err.status = res.status;
+    throw err;
   }
 
   const data = await res.json();
@@ -45,7 +52,12 @@ export async function readAppDataFile(fileId, accessToken) {
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Failed to read file from Drive (${res.status}): ${errText}`);
+    if (res.status === 401) {
+      invalidateStoredToken();
+    }
+    const err = new Error(`Failed to read file from Drive (${res.status}): ${errText}`);
+    err.status = res.status;
+    throw err;
   }
 
   return await res.text();
@@ -93,7 +105,12 @@ export async function uploadAppDataFile(filename, content, mimeType = 'applicati
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Failed to upload file to Drive (${res.status}): ${errText}`);
+    if (res.status === 401) {
+      invalidateStoredToken();
+    }
+    const err = new Error(`Failed to upload file to Drive (${res.status}): ${errText}`);
+    err.status = res.status;
+    throw err;
   }
 
   return await res.json();
