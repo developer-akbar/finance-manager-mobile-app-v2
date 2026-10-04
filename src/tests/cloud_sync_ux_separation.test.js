@@ -53,7 +53,7 @@ describe('FinMan Cloud Sync UX Separation Tests (Stage A)', () => {
     db = await initDB();
   });
 
-  it('1. Modal confirmation copy explicitly specifies full snapshot baseline creation', () => {
+  it('1. Modal confirmation copy explicitly specifies full cloud backup creation', () => {
     const preview = {
       action: 'MERGE_CLEAN',
       isFirstSync: false,
@@ -63,16 +63,16 @@ describe('FinMan Cloud Sync UX Separation Tests (Stage A)', () => {
     };
 
     const modalConfig = getModalConfirmConfig(preview, 29044, false);
-    assert.strictEqual(modalConfig.title, 'Confirm Full Cloud Snapshot');
+    assert.strictEqual(modalConfig.title, 'Confirm Full Cloud Backup');
     assert.strictEqual(modalConfig.icon, '📦');
     assert.strictEqual(
       modalConfig.descriptionText,
-      '29,044 transactions will be encrypted and saved as a full cloud snapshot baseline.'
+      '29,044 transactions will be encrypted and saved as a complete cloud backup.'
     );
-    assert.strictEqual(modalConfig.buttonLabel, '🚀 Confirm & Create Snapshot');
+    assert.strictEqual(modalConfig.buttonLabel, '🚀 Confirm & Back Up');
 
     const syncingConfig = getModalConfirmConfig(preview, 29044, true);
-    assert.strictEqual(syncingConfig.buttonLabel, 'Creating snapshot...');
+    assert.strictEqual(syncingConfig.buttonLabel, 'Creating backup...');
   });
 
   it('2. Manual delta flush invokes triggerAutomaticSync with SYNC_TRIGGER.MANUAL and DOES NOT call executeCloudSync', async () => {

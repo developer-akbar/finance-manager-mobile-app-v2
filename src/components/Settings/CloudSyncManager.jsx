@@ -589,10 +589,10 @@ export default function CloudSyncManager({ onBack }) {
           color: 'var(--text-primary)'
         }}>
           <div style={{ fontWeight: 800, color: 'var(--green)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span>🔒 End-to-End Encrypted</span>
+            <span>🔒 Your Data Is Protected</span>
           </div>
           <div>
-            Your financial data is encrypted with AES-256-GCM using your private PIN before leaving your device. Google Drive acts solely as a private sync repository in your sandboxed AppData folder.
+            Your financial data is encrypted before it leaves your device. Your private Sync PIN protects access to your synced data.
           </div>
         </div>
 
@@ -731,131 +731,22 @@ export default function CloudSyncManager({ onBack }) {
           );
         })()}
 
-        {/* Section 1: Google Account Connection */}
-        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>1. Google Drive Account</div>
-        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{
-                width: 10,
-                height: 10,
-                borderRadius: '50%',
-                background: isAuthenticated ? 'var(--green)' : (isGoogleLinked() ? 'var(--warning)' : 'var(--text-muted)'),
-                boxShadow: isAuthenticated ? '0 0 6px var(--green)' : (isGoogleLinked() ? '0 0 6px var(--warning)' : 'none')
-              }} />
-              <div>
-                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {isAuthenticated
-                    ? 'Connected to Google Drive'
-                    : (isGoogleLinked() ? 'Google Account Linked (Needs Reconnect)' : 'Not Connected')}
-                </div>
-                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                  {isAuthenticated
-                    ? 'Scope: drive.appdata (Sandboxed)'
-                    : (isGoogleLinked() ? 'Authorization expired — reconnect to sync' : 'Connect your account to enable sync')}
-                </div>
-              </div>
-            </div>
-
-            {isGoogleLinked() ? (
-              <div style={{ display: 'flex', gap: 6 }}>
-                {!isAuthenticated && (
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleConnect}
-                    disabled={isAuthenticating}
-                    style={{ fontSize: '0.75rem', padding: '4px 10px' }}
-                  >
-                    {isAuthenticating ? 'Connecting...' : 'Reconnect'}
-                  </button>
-                )}
-                <button
-                  className="btn btn-ghost"
-                  onClick={handleDisconnect}
-                  style={{ fontSize: '0.75rem', color: 'var(--expense)', padding: '4px 10px' }}
-                >
-                  Disconnect
-                </button>
-              </div>
-            ) : (
-              <button
-                className="btn btn-primary"
-                onClick={handleConnect}
-                disabled={isAuthenticating}
-                style={{ fontSize: '0.78rem', padding: '6px 14px' }}
-              >
-                {isAuthenticating ? 'Connecting...' : 'Connect Google'}
-              </button>
-            )}
-          </div>
-
-          {/* Client ID Configuration Toggle */}
-          <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 8, marginTop: 6 }}>
-            <button
-              className="btn btn-ghost"
-              onClick={() => setShowConfig(!showConfig)}
-              style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textDecoration: 'underline' }}
-            >
-              {showConfig ? 'Hide OAuth Client ID Config' : 'Configure Custom OAuth Client ID'}
-            </button>
-
-            {showConfig && (
-              <div style={{ marginTop: 8 }}>
-                <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                  OAuth 2.0 Web Client ID
-                </label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="e.g. 123456...apps.googleusercontent.com"
-                    value={clientId}
-                    onChange={e => setClientId(e.target.value)}
-                    style={{ flex: 1, fontSize: '0.75rem', padding: '6px 10px' }}
-                  />
-                  <button
-                    className="btn btn-secondary"
-                    onClick={handleSaveClientId}
-                    style={{ fontSize: '0.72rem', padding: '6px 12px' }}
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {authError && (
-            <div style={{
-              marginTop: 10,
-              padding: '8px 12px',
-              borderRadius: 6,
-              background: 'rgba(255, 77, 106, 0.12)',
-              color: 'var(--expense)',
-              fontSize: '0.72rem',
-              fontWeight: 600
-            }}>
-              ⚠️ {translateSyncError(authError)}
-            </div>
-          )}
-        </div>
-
-        {/* Section 2: Session Key / PIN Unlock */}
+        {/* Card 1: Sync Security */}
         <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>2. Session Encryption Key</span>
+          <span>🔐 Sync Security</span>
           <span style={{ fontSize: '0.72rem', fontWeight: 800, color: isUnlocked ? 'var(--green)' : 'var(--warning)' }}>
-            {isUnlocked ? '🔓 Session Unlocked' : '🔒 Sync Locked'}
+            {isUnlocked ? 'Protected · Unlocked' : '🔒 Sync Locked'}
           </span>
         </div>
         <div className="settings-card" style={{ padding: 14, margin: '0 0 14px' }}>
           {isUnlocked ? (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
               <div>
-                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span>Session Unlocked</span>
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Protected · Unlocked for this session
                 </div>
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                  Non-extractable key cached in memory. Cleared on refresh, tab close, or Lock Sync.
+                  Your data is encrypted before it leaves this device.
                 </div>
               </div>
               <button
@@ -870,7 +761,7 @@ export default function CloudSyncManager({ onBack }) {
           ) : (
             <>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 10 }}>
-                Enter your PIN once to unlock cloud sync for this browser session. The raw PIN is never stored.
+                PIN required to sync your encrypted data.
               </div>
 
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -911,7 +802,7 @@ export default function CloudSyncManager({ onBack }) {
                   disabled={isUnlocking}
                   style={{ fontSize: '0.78rem', padding: '8px 16px', flexShrink: 0 }}
                 >
-                  {isUnlocking ? 'Unlocking...' : 'Unlock'}
+                  {isUnlocking ? 'Unlocking...' : 'Unlock Sync'}
                 </button>
               </div>
 
@@ -924,9 +815,9 @@ export default function CloudSyncManager({ onBack }) {
           )}
         </div>
 
-        {/* Section 3: Live Cloud Sync */}
+        {/* Card 2: Cloud Sync */}
         <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>3. Live Cloud Sync</span>
+          <span>☁️ Cloud Sync</span>
           <span style={{
             fontSize: '0.68rem',
             fontWeight: 800,
@@ -947,10 +838,79 @@ export default function CloudSyncManager({ onBack }) {
               ? 'Sync Locked'
               : (isLiveDeltaSyncing
                   ? 'Syncing…'
-                  : (deltaMetrics.pendingCount > 0 ? `${deltaMetrics.pendingCount} Pending` : 'Cloud Sync On'))}
+                  : (deltaMetrics.pendingCount > 0 ? `${deltaMetrics.pendingCount} Waiting` : 'All Changes Up to Date'))}
           </span>
         </div>
         <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
+          {/* Account Connection Sub-Row */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 10, borderBottom: '1px solid var(--border-light)', marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: isAuthenticated ? 'var(--green)' : (isGoogleLinked() ? 'var(--warning)' : 'var(--text-muted)'),
+                boxShadow: isAuthenticated ? '0 0 6px var(--green)' : (isGoogleLinked() ? '0 0 6px var(--warning)' : 'none')
+              }} />
+              <div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {isAuthenticated
+                    ? 'Connected to Google Drive'
+                    : (isGoogleLinked() ? 'Google Account Linked (Needs Reconnect)' : 'Not Connected to Google Drive')}
+                </div>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                  Your changes are automatically synced across your devices.
+                </div>
+              </div>
+            </div>
+
+            {isGoogleLinked() ? (
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                {!isAuthenticated && (
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleConnect}
+                    disabled={isAuthenticating}
+                    style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                  >
+                    {isAuthenticating ? 'Connecting...' : 'Reconnect'}
+                  </button>
+                )}
+                <button
+                  className="btn btn-ghost"
+                  onClick={handleDisconnect}
+                  style={{ fontSize: '0.75rem', color: 'var(--expense)', padding: '4px 10px' }}
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <button
+                className="btn btn-primary"
+                onClick={handleConnect}
+                disabled={isAuthenticating}
+                style={{ fontSize: '0.78rem', padding: '6px 14px', flexShrink: 0 }}
+              >
+                {isAuthenticating ? 'Connecting...' : 'Connect Google'}
+              </button>
+            )}
+          </div>
+
+          {authError && (
+            <div style={{
+              marginBottom: 10,
+              padding: '8px 12px',
+              borderRadius: 6,
+              background: 'rgba(255, 77, 106, 0.12)',
+              color: 'var(--expense)',
+              fontSize: '0.72rem',
+              fontWeight: 600
+            }}>
+              ⚠️ {translateSyncError(authError)}
+            </div>
+          )}
+
+          {/* Sync Metrics Table */}
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Status</span>
             <span style={{
@@ -962,18 +922,18 @@ export default function CloudSyncManager({ onBack }) {
               {!isUnlocked
                 ? '🔒 Sync Locked (PIN Required)'
                 : (isLiveDeltaSyncing
-                    ? 'Syncing changes…'
+                    ? 'Syncing...'
                     : (deltaMetrics.pendingCount > 0 ? 'Changes Waiting' : 'All Changes Up to Date'))}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Pending Changes</span>
+            <span style={{ color: 'var(--text-muted)' }}>Changes waiting</span>
             <span style={{ fontWeight: 700, color: deltaMetrics.pendingCount > 0 ? 'var(--warning)' : (!isUnlocked ? 'var(--text-secondary)' : 'var(--green)') }}>
               {deltaMetrics.pendingCount} {deltaMetrics.pendingCount === 1 ? 'change' : 'changes'}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last Live Sync</span>
+            <span style={{ color: 'var(--text-muted)' }}>Last synced</span>
             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
               {deltaMetrics.lastDeltaSyncedAt ? new Date(deltaMetrics.lastDeltaSyncedAt).toLocaleString() : 'Never'}
             </span>
@@ -996,140 +956,21 @@ export default function CloudSyncManager({ onBack }) {
           >
             {!isUnlocked
               ? '🔒 Unlock Sync with PIN to Sync'
-              : (isLiveDeltaSyncing ? 'Syncing Changes...' : '⚡ Sync Changes Now')}
+              : (isLiveDeltaSyncing ? 'Syncing...' : '⚡ Sync Now')}
           </button>
 
           <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 8 }}>
             {!isUnlocked ? (
-              <span>• <strong>Sync Locked</strong>: Enter your PIN in Section 2 above to resume live cloud synchronization.</span>
+              <span>• <strong>Sync Locked</strong>: Enter your PIN in Sync Security above to resume sync.</span>
             ) : (
-              <span>• <strong>Sync Changes Now</strong>: Flushes pending local changes and pulls updates from peer devices (fast & lightweight).</span>
+              <span>• <strong>Sync Now</strong>: Uploads your latest edits and downloads changes from your other devices.</span>
             )}
           </div>
         </div>
 
-        {/* Section 4: Technical Details & Diagnostics (Collapsible Accordion) */}
-        <details className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem', cursor: 'pointer' }}>
-          <summary style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
-            <span>⚙️ Technical Details &amp; Diagnostics</span>
-            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Expand / Collapse</span>
-          </summary>
-          <div style={{ marginTop: 12, borderTop: '1px solid var(--border-light)', paddingTop: 8, cursor: 'default' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Uploaded Sequence</span>
-              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {deltaMetrics.lastUploadedSequence}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Acknowledged Sequence</span>
-              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {deltaMetrics.lastAckedSequence}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Local Device ID</span>
-              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                {deltaMetrics.deviceId}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Lifecycle State</span>
-              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                {deltaMetrics.lifecycleState}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Active Snapshot ID</span>
-              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                {lastSyncInfo.lastSnapshotId || 'None'}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Local Transactions</span>
-              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                {state.transactions.length.toLocaleString()}
-              </span>
-            </div>
-            {deltaMetrics.latestError && (
-              <div style={{ marginTop: 8, padding: '6px 8px', borderRadius: 4, background: 'rgba(255, 77, 106, 0.08)', color: 'var(--expense)', fontSize: '0.68rem', fontFamily: 'monospace', wordBreak: 'break-word' }}>
-                Diagnostic Log: {deltaMetrics.latestError}
-              </div>
-            )}
-          </div>
-        </details>
-
-        {/* Section 5: Full Cloud Snapshot (Stage A Separation Preserved) */}
-        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>5. Advanced Cloud Snapshot &amp; Baseline</div>
-        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Local Database Records</span>
-            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{state.transactions.length.toLocaleString()} transactions</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last Full Snapshot</span>
-            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-              {lastSyncInfo.lastSyncedAt ? new Date(lastSyncInfo.lastSyncedAt).toLocaleString() : 'Never'}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, marginTop: 12, marginBottom: 12 }}>
-            <button
-              className="btn btn-secondary"
-              onClick={handlePreview}
-              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
-              style={{ flex: 1, padding: '10px 14px', fontSize: '0.82rem', fontWeight: 700 }}
-            >
-              {isLoading && operationType === 'preview' ? 'Inspecting...' : '🔍 Preview Snapshot'}
-            </button>
-
-            <button
-              className="btn btn-primary"
-              onClick={handleSyncNowClick}
-              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
-              style={{ flex: 1, padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
-            >
-              {isLoading && operationType === 'sync_now' ? 'Preparing...' : '📦 Create Full Snapshot'}
-            </button>
-          </div>
-
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-            • <strong>Preview Snapshot</strong>: Performs a 100% read-only inspection. Zero database changes, zero Drive writes.<br />
-            • <strong>Create Full Snapshot</strong>: Encrypts and saves your entire database as a new cloud baseline.
-          </div>
-
-          {errorMsg && (
-            <div style={{
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: 'rgba(255, 77, 106, 0.12)',
-              color: 'var(--expense)',
-              fontSize: '0.74rem',
-              fontWeight: 600
-            }}>
-              🛑 {translateSyncError(errorMsg)}
-            </div>
-          )}
-
-          {successMsg && (
-            <div style={{
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: 'rgba(0, 229, 160, 0.12)',
-              color: 'var(--green)',
-              fontSize: '0.74rem',
-              fontWeight: 700
-            }}>
-              {successMsg}
-            </div>
-          )}
-        </div>
-
-        {/* Section 6: Sync Conflicts (Automatic V3) */}
+        {/* Card 3: Sync Conflicts */}
         <div id="sync-conflicts-section" className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>6. Sync Conflicts</span>
+          <span>⚖️ Sync Conflicts</span>
           <span style={{
             fontSize: '0.68rem',
             fontWeight: 800,
@@ -1158,8 +999,12 @@ export default function CloudSyncManager({ onBack }) {
           )}
 
           {pendingConflicts.length === 0 ? (
-            <div style={{ color: 'var(--text-muted)', lineHeight: 1.5 }}>
-              No sync conflicts detected. All local and peer delta events have reconciled cleanly.
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
+              <span style={{ fontSize: '1rem' }}>✅</span>
+              <div>
+                <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.78rem' }}>No Sync Conflicts</div>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>All your devices are in sync.</div>
+              </div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1428,6 +1273,188 @@ export default function CloudSyncManager({ onBack }) {
             </div>
           )}
         </div>
+
+        {/* Card 4: Cloud Backup */}
+        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>📦 Cloud Backup</div>
+        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 10 }}>
+            Create a complete encrypted backup of your FinMan data in Google Drive.
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Local Records</span>
+            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{state.transactions.length.toLocaleString()} transactions</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Last Full Backup</span>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+              {lastSyncInfo.lastSyncedAt ? new Date(lastSyncInfo.lastSyncedAt).toLocaleString() : 'Never'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 12 }}>
+            <button
+              className="btn btn-primary"
+              onClick={handleSyncNowClick}
+              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
+              style={{ flex: '1 1 180px', padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
+            >
+              {isLoading && operationType === 'sync_now' ? 'Preparing...' : '📦 Create Cloud Backup'}
+            </button>
+
+            <button
+              className="btn btn-secondary"
+              onClick={handlePreview}
+              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
+              style={{ flex: '1 1 180px', padding: '9px 14px', fontSize: '0.8rem', fontWeight: 600 }}
+            >
+              {isLoading && operationType === 'preview' ? 'Inspecting...' : '🔍 Preview Cloud Backup'}
+            </button>
+          </div>
+
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+            • <strong>Create Cloud Backup</strong>: Encrypts and saves your entire database as a complete cloud backup.<br />
+            • <strong>Preview Cloud Backup</strong>: Performs a 100% read-only inspection. Zero database changes, zero Drive writes.
+          </div>
+
+          {errorMsg && (
+            <div style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: 'rgba(255, 77, 106, 0.12)',
+              color: 'var(--expense)',
+              fontSize: '0.74rem',
+              fontWeight: 600
+            }}>
+              🛑 {translateSyncError(errorMsg)}
+            </div>
+          )}
+
+          {successMsg && (
+            <div style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: 'rgba(0, 229, 160, 0.12)',
+              color: 'var(--green)',
+              fontSize: '0.74rem',
+              fontWeight: 700
+            }}>
+              {successMsg}
+            </div>
+          )}
+        </div>
+
+        {/* Card 5: Advanced Settings & Diagnostics */}
+        <details className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem', cursor: 'pointer' }}>
+          <summary style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
+            <div>
+              <div>⚙️ Advanced Settings &amp; Diagnostics</div>
+              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 400, marginTop: 2 }}>
+                Technical information for troubleshooting.
+              </div>
+            </div>
+            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Expand / Collapse</span>
+          </summary>
+          <div style={{ marginTop: 12, borderTop: '1px solid var(--border-light)', paddingTop: 8, cursor: 'default' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Uploaded Sequence</span>
+              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {deltaMetrics.lastUploadedSequence}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Acknowledged Sequence</span>
+              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {deltaMetrics.lastAckedSequence}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Local Device ID</span>
+              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                {deltaMetrics.deviceId}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Lifecycle State</span>
+              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                {deltaMetrics.lifecycleState}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Active Snapshot ID</span>
+              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                {lastSyncInfo.lastSnapshotId || 'None'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Google Drive Scope</span>
+              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                {isAuthenticated ? 'drive.appdata (Sandboxed)' : 'None'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Encryption Standard</span>
+              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-primary)' }}>
+                AES-256-GCM (Zero-Knowledge)
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Storage Repository</span>
+              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-primary)' }}>
+                Google Drive (Sandboxed AppData)
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Local Transactions</span>
+              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                {state.transactions.length.toLocaleString()}
+              </span>
+            </div>
+            {deltaMetrics.latestError && (
+              <div style={{ marginTop: 8, padding: '6px 8px', borderRadius: 4, background: 'rgba(255, 77, 106, 0.08)', color: 'var(--expense)', fontSize: '0.68rem', fontFamily: 'monospace', wordBreak: 'break-word' }}>
+                Diagnostic Log: {deltaMetrics.latestError}
+              </div>
+            )}
+
+            {/* Client ID Configuration Toggle inside Advanced */}
+            <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowConfig(!showConfig)}
+                style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textDecoration: 'underline', padding: 0 }}
+              >
+                {showConfig ? 'Hide OAuth Client ID Config' : 'Configure Custom OAuth Client ID'}
+              </button>
+
+              {showConfig && (
+                <div style={{ marginTop: 8 }}>
+                  <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                    OAuth 2.0 Web Client ID
+                  </label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. 123456...apps.googleusercontent.com"
+                      value={clientId}
+                      onChange={e => setClientId(e.target.value)}
+                      style={{ flex: 1, fontSize: '0.75rem', padding: '6px 10px' }}
+                    />
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleSaveClientId}
+                      style={{ fontSize: '0.72rem', padding: '6px 12px' }}
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </details>
 
         {/* Preview Results Display */}
         {previewResult && (
