@@ -234,14 +234,14 @@ export async function getDeviceLifecycleState(deviceId = 'local_device') {
     const db = getDB();
     const res = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']);
     const row = res.values?.[0];
-    if (row?.lifecycle_state) {
+    
+    // Explicit persisted lifecycle_state takes absolute precedence
+    if (row && row.lifecycle_state) {
       return row.lifecycle_state;
     }
 
-    // Backward compatibility for existing active replicas:
-    // A device is only considered ACTIVE through backward compatibility if there is evidence
-    // of an established snapshot baseline (base_snapshot_id in sync_local_state or settings).
-    // Historical sequence numbers alone (e.g. from failed/interrupted bootstraps) MUST NOT imply ACTIVE.
+    // Backward compatibility for legacy replicas where lifecycle_state was not yet explicitly persisted:
+    // A device is considered ACTIVE if there is an established snapshot baseline in row or settings.
     const hasRowBaseline = Boolean(row?.base_snapshot_id && String(row.base_snapshot_id).trim().length > 0);
     if (hasRowBaseline) {
       return DEVICE_LIFECYCLE.ACTIVE;
@@ -575,66 +575,83 @@ export async function bootstrapNewDevice(options = {}) {
   }
 
   // 7. Pull post-baseline peer deltas
-  onProgress({ stage: 'REPLAYING_DELTAS', message: 'Replaying recent cloud changes…' });
-  const pullResult = await downloadAndStagePeerPackages({
-    localDeviceId: deviceId,
-    accessToken,
-    driveClient,
-    sessionKey: effectiveKey,
-    baseSnapshotId: payload.snapshot_id,
-    immediateParentSnapshotId: payload.parent_snapshot_id
-  });
-
-  // 8. Reconcile staged events (preserves existing conflicts)
-  const reconResult = await reconcileStagedEvents({});
-
-  // 9. Verification before transitioning to ACTIVE
-  onProgress({ stage: 'VERIFYING', message: 'Verifying your data…' });
-  const deltaQueueRows = (await db.query('SELECT * FROM sync_delta_queue').catch(() => ({ values: [] }))).values || [];
-  const pendingOutbound = deltaQueueRows.filter(r => r.status !== 'ACKNOWLEDGED');
-  if (pendingOutbound.length > 0) {
-    throw new Error(`BOOTSTRAP_VERIFICATION_FAILED: Unexpected outbound delta queue entries created during bootstrap (${pendingOutbound.length} events).`);
-  }
-
-  // 10. Transition to ACTIVE
-  await setDeviceLifecycleState(DEVICE_LIFECYCLE.ACTIVE, deviceId);
-
-  // 11. Publish initial clean own device manifest as ACTIVE participant
+  // 7. Pull post-baseline peer deltas and reconcile under attempt-scoped safety
+  let stagedPackageIdsInAttempt = [];
   try {
-    const ownManifest = createEmptyDeviceManifest({
-      deviceId,
-      baseSnapshotId: payload.snapshot_id,
-      baseCloudVersion: payload.cloud_version || 1,
-      manifestRevision: 1,
-      device_lifecycle_state: DEVICE_LIFECYCLE.ACTIVE
-    });
-    await writeOwnDeviceManifest({
-      driveClient,
+    onProgress({ stage: 'REPLAYING_DELTAS', message: 'Replaying recent cloud changes…' });
+    const pullResult = await downloadAndStagePeerPackages({
+      localDeviceId: deviceId,
+      creatorDeviceId: payload.device_id,
       accessToken,
-      deviceId,
-      manifestData: ownManifest
+      driveClient,
+      sessionKey: effectiveKey,
+      baseSnapshotId: payload.snapshot_id,
+      immediateParentSnapshotId: payload.parent_snapshot_id
     });
-  } catch {}
+    stagedPackageIdsInAttempt = pullResult?.stagedPackageIds || [];
 
-  const finalLocalEntities = await readLocalEntities(db);
-  const result = {
-    success: true,
-    status: 'BOOTSTRAP_SUCCESS',
-    operation: 'BOOTSTRAP',
-    snapshotId: payload.snapshot_id,
-    cloudVersion: payload.cloud_version || 1,
-    recordsBootstrapped: {
-      transactions: finalLocalEntities.transactions.length,
-      investment_transactions: finalLocalEntities.investment_transactions.length,
-      accounts: finalLocalEntities.accounts.length,
-      categories: finalLocalEntities.categories.length
-    },
-    inboundDeltas: pullResult,
-    reconciliation: reconResult
-  };
+    // 8. Reconcile staged events (preserves existing conflicts)
+    const reconResult = await reconcileStagedEvents({ isBootstrap: true });
 
-  broadcastSyncStatus(SYNC_STATUS.SUCCESS, { ...result, message: 'Cloud Sync On' });
-  return result;
+    // 9. Verification before transitioning to ACTIVE
+    onProgress({ stage: 'VERIFYING', message: 'Verifying your data…' });
+    const deltaQueueRows = (await db.query('SELECT * FROM sync_delta_queue').catch(() => ({ values: [] }))).values || [];
+    const pendingOutbound = deltaQueueRows.filter(r => r.status !== 'ACKNOWLEDGED');
+    if (pendingOutbound.length > 0) {
+      throw new Error(`BOOTSTRAP_VERIFICATION_FAILED: Unexpected outbound delta queue entries created during bootstrap (${pendingOutbound.length} events).`);
+    }
+
+    // 10. Transition to ACTIVE
+    await setDeviceLifecycleState(DEVICE_LIFECYCLE.ACTIVE, deviceId);
+
+    // 11. Publish initial clean own device manifest as ACTIVE participant
+    try {
+      const ownManifest = createEmptyDeviceManifest({
+        deviceId,
+        baseSnapshotId: payload.snapshot_id,
+        baseCloudVersion: payload.cloud_version || 1,
+        manifestRevision: 1,
+        device_lifecycle_state: DEVICE_LIFECYCLE.ACTIVE
+      });
+      await writeOwnDeviceManifest({
+        driveClient,
+        accessToken,
+        deviceId,
+        manifestData: ownManifest
+      });
+    } catch {}
+
+    const finalLocalEntities = await readLocalEntities(db);
+    const result = {
+      success: true,
+      status: 'BOOTSTRAP_SUCCESS',
+      operation: 'BOOTSTRAP',
+      snapshotId: payload.snapshot_id,
+      cloudVersion: payload.cloud_version || 1,
+      recordsBootstrapped: {
+        transactions: finalLocalEntities.transactions.length,
+        investment_transactions: finalLocalEntities.investment_transactions.length,
+        accounts: finalLocalEntities.accounts.length,
+        categories: finalLocalEntities.categories.length
+      },
+      inboundDeltas: pullResult,
+      reconciliation: reconResult
+    };
+
+    broadcastSyncStatus(SYNC_STATUS.SUCCESS, { ...result, message: 'Cloud Sync On' });
+    return result;
+  } catch (err) {
+    // Attempt-scoped rollback: Delete ONLY records staged in this failed attempt
+    if (stagedPackageIdsInAttempt.length > 0) {
+      try {
+        const placeholders = stagedPackageIdsInAttempt.map(() => '?').join(',');
+        await db.run(`DELETE FROM sync_staged_events WHERE package_id IN (${placeholders})`, stagedPackageIdsInAttempt);
+        await db.run(`DELETE FROM sync_staged_packages WHERE package_id IN (${placeholders})`, stagedPackageIdsInAttempt);
+      } catch {}
+    }
+    await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, deviceId);
+    throw err;
+  }
 }
 
 let _isRuntimeInitialized = false;

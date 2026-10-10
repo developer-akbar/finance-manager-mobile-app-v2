@@ -143,8 +143,25 @@ async function _releaseReconcileFallbackLock(lockName, ownerToken) {
  * Scans staged events for peer devices, evaluates preconditions,
  * atomically applies clean mutations, logs conflicts, and advances watermarks.
  */
-export async function reconcileStagedEvents({ peerDeviceId = null, limit = 5000 } = {}) {
+export async function reconcileStagedEvents({ peerDeviceId = null, limit = 5000, isBootstrap = false } = {}) {
   const db = getDB();
+
+  // Guard: Reconciliation is forbidden if device is not ACTIVE (unless explicitly part of bootstrap JOINING flow)
+  try {
+    const stRes = await db.query('SELECT lifecycle_state FROM sync_local_state WHERE key = ?', ['device_state']);
+    const currentLifecycle = stRes.values?.[0]?.lifecycle_state;
+    if (currentLifecycle && currentLifecycle !== 'ACTIVE' && !(isBootstrap && currentLifecycle === 'JOINING')) {
+      return {
+        reconciledCount: 0,
+        idempotentCount: 0,
+        conflictCount: 0,
+        blockedDependencyCount: 0,
+        blockedGapCount: 0,
+        peerWatermarks: {},
+        status: 'RECONCILIATION_SKIPPED_DEVICE_NOT_ACTIVE'
+      };
+    }
+  } catch {}
 
   // Find all distinct peer devices with staged events
   let peers = [];

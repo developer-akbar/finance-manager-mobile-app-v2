@@ -550,20 +550,74 @@ export async function pullPeerDeltas(opts) {
     ? async (id) => driveClient.readFile(id)
     : (driveClient?.readAppDataFile || readAppDataFile);
 
+  const creatorDeviceId = opts.creatorDeviceId || null;
+  const stagedPackageIds = new Set();
   let stagedPackagesCount = 0;
   let stagedEventsCount = 0;
 
   for (const peerManifest of peerManifests) {
     const peerDeviceId = peerManifest.device_id;
+    const isCreator = Boolean(creatorDeviceId && peerDeviceId === creatorDeviceId);
 
     // 1. Get current local staging watermark for this peer
     const peerStateRes = await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', [peerDeviceId]);
     let lastStagedSeq = Number(peerStateRes.values?.[0]?.last_staged_sequence) || 0;
 
     // 2. Identify un-staged packages
-    const unStagedPackages = (peerManifest.packages || [])
+    let unStagedPackages = (peerManifest.packages || [])
       .filter(pkg => (pkg.end_sequence || pkg.endSequence) > lastStagedSeq)
       .sort((a, b) => (a.start_sequence || a.startSequence) - (b.start_sequence || b.startSequence));
+
+    if (isCreator) {
+      // Lineage filtering for snapshot creator packages:
+      // Packages authored on immediateParentSnapshotId are pre-snapshot and covered by the snapshot baseline.
+      // Packages authored on baseSnapshotId are post-snapshot packages.
+      // Any unrecognized or ambiguous base fails closed.
+      const preSnapshotPackages = [];
+      const postSnapshotPackages = [];
+
+      for (const pkg of unStagedPackages) {
+        const pkgBase = pkg.base_snapshot_id || pkg.baseSnapshotId || peerManifest.base_snapshot_id;
+        if (pkgBase === immediateParentSnapshotId) {
+          preSnapshotPackages.push(pkg);
+        } else if (pkgBase === baseSnapshotId) {
+          postSnapshotPackages.push(pkg);
+        } else {
+          throw new Error(`UNKNOWN_CREATOR_PACKAGE_LINEAGE: Cannot determine snapshot coverage for creator package ${pkg.package_id || 'unknown'} with base ${pkgBase}`);
+        }
+      }
+
+      if (preSnapshotPackages.length > 0) {
+        const maxPreSeq = Math.max(...preSnapshotPackages.map(p => p.end_sequence || p.endSequence || 0));
+        if (lastStagedSeq < maxPreSeq) {
+          lastStagedSeq = maxPreSeq;
+          const rawIdb = getRawIDB();
+          const now = new Date().toISOString();
+          if (rawIdb) {
+            await new Promise((resolve, reject) => {
+              const tx = rawIdb.transaction(['sync_peer_state'], 'readwrite');
+              const store = tx.objectStore('sync_peer_state');
+              store.put({
+                peer_device_id: peerDeviceId,
+                last_staged_sequence: maxPreSeq,
+                last_reconciled_sequence: maxPreSeq,
+                base_snapshot_id: baseSnapshotId,
+                updated_at: now
+              });
+              tx.oncomplete = resolve;
+              tx.onerror = () => reject(tx.error);
+            });
+          } else {
+            await db.run(
+              'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+              [peerDeviceId, maxPreSeq, maxPreSeq, baseSnapshotId, now]
+            );
+          }
+        }
+      }
+
+      unStagedPackages = postSnapshotPackages.filter(pkg => (pkg.end_sequence || pkg.endSequence) > lastStagedSeq);
+    }
 
     for (const pkg of unStagedPackages) {
       const startSeq = pkg.start_sequence || pkg.startSequence;
@@ -607,12 +661,17 @@ export async function pullPeerDeltas(opts) {
       if (stageRes.staged) {
         stagedPackagesCount++;
         stagedEventsCount += payload.events.length;
+        stagedPackageIds.add(payload.package_id);
         lastStagedSeq = payload.end_sequence;
       }
     }
   }
 
-  return { stagedPackagesCount, stagedEventsCount };
+  return {
+    stagedPackagesCount,
+    stagedEventsCount,
+    stagedPackageIds: Array.from(stagedPackageIds)
+  };
 }
 
 export const downloadAndStagePeerPackages = pullPeerDeltas;

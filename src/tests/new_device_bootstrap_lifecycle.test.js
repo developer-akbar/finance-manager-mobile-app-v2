@@ -1400,4 +1400,476 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
     const pendingOutbound = queueRows.filter(r => r.status !== 'ACKNOWLEDGED');
     assert.strictEqual(pendingOutbound.length, 0, 'Zero pending outbound deltas generated');
   });
+
+  await t.test('CREATOR LINEAGE TEST 1: Creator pre-snapshot packages are skipped safely without false gap errors', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_edge_test_1';
+    const creatorDevId = 'dev_creator_c';
+
+    // 1. Snapshot v10 authored by creatorDevId with parent v9
+    const snap10Payload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: creatorDevId,
+      covered_peer_watermarks: {
+        peer_dev_d: 5
+      },
+      entities: {
+        transactions: [
+          { id: 'txn_c_v10_base', Date: '2026-03-01', INR: 1000, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snap10Payload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({
+      name: SNAPSHOT_FILENAME,
+      content: encSnap
+    });
+
+    // 2. Creator has historical packages on v9 with sequence gaps (seq 1..1, seq 3..3)
+    const pkgC1 = buildDeterministicPackagePayload({
+      deviceId: creatorDevId,
+      startSequence: 1,
+      endSequence: 1,
+      baseSnapshotId: 'snap_1790500000000_v9',
+      events: [{
+        event_id: 'ev_c_1',
+        device_id: creatorDevId,
+        sequence: 1,
+        timestamp: '2026-03-01T00:00:00Z',
+        collection: 'transactions',
+        entity_id: 'txn_old_1',
+        operation: 'INSERT',
+        payload: { id: 'txn_old_1', Date: '2026-03-01', INR: 50, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+      }]
+    });
+    const encPkgC1 = await encryptDeltaPackage(pkgC1, TEST_SESSION_KEY);
+    const driveC1 = await mockDrive.uploadFile({
+      name: `${pkgC1.package_id}.pkg`,
+      content: JSON.stringify(encPkgC1)
+    });
+
+    const pkgC3 = buildDeterministicPackagePayload({
+      deviceId: creatorDevId,
+      startSequence: 3,
+      endSequence: 3,
+      baseSnapshotId: 'snap_1790500000000_v9',
+      events: [{
+        event_id: 'ev_c_3',
+        device_id: creatorDevId,
+        sequence: 3,
+        timestamp: '2026-03-01T00:00:00Z',
+        collection: 'transactions',
+        entity_id: 'txn_old_3',
+        operation: 'INSERT',
+        payload: { id: 'txn_old_3', Date: '2026-03-01', INR: 150, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+      }]
+    });
+    const encPkgC3 = await encryptDeltaPackage(pkgC3, TEST_SESSION_KEY);
+    const driveC3 = await mockDrive.uploadFile({
+      name: `${pkgC3.package_id}.pkg`,
+      content: JSON.stringify(encPkgC3)
+    });
+
+    // Creator manifest on v9 containing both packages
+    const creatorManifest = {
+      schema_version: 1,
+      manifest_type: 'DEVICE_MANIFEST',
+      device_id: creatorDevId,
+      manifest_revision: 5,
+      updated_at: new Date().toISOString(),
+      base_snapshot_id: 'snap_1790500000000_v9',
+      device_lifecycle_state: 'ACTIVE',
+      packages: [
+        { package_id: pkgC1.package_id, drive_file_id: driveC1.id, start_sequence: 1, end_sequence: 1, package_checksum: encPkgC1.package_checksum, base_snapshot_id: 'snap_1790500000000_v9' },
+        { package_id: pkgC3.package_id, drive_file_id: driveC3.id, start_sequence: 3, end_sequence: 3, package_checksum: encPkgC3.package_checksum, base_snapshot_id: 'snap_1790500000000_v9' }
+      ]
+    };
+    await mockDrive.uploadFile({
+      name: `manifest_dev_${creatorDevId}.json`,
+      content: JSON.stringify(creatorManifest)
+    });
+
+    // 3. Bootstrap fresh device
+    const res = await bootstrapNewDevice({
+      deviceId: freshDevId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.inboundDeltas.stagedPackagesCount, 0, 'Zero pre-snapshot creator packages staged');
+    assert.strictEqual(res.recordsBootstrapped.transactions, 1, '1 baseline transaction installed');
+    const txns = await getTransactions();
+    assert.strictEqual(txns.length, 1);
+    assert.strictEqual(txns[0].id, 'txn_c_v10_base');
+    const conflicts = await getPendingConflicts();
+    assert.strictEqual(conflicts.length, 0, 'Zero false conflicts created');
+  });
+
+  await t.test('CREATOR LINEAGE TEST 2: Creator genuine post-snapshot package is processed and reconciled', async () => {
+    const freshDevId = 'dev_edge_test_2';
+    const creatorDevId = 'dev_creator_c';
+
+    // 1. Snapshot v10
+    const snap10Payload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: creatorDevId,
+      covered_peer_watermarks: {},
+      entities: {
+        transactions: [
+          { id: 'txn_base', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snap10Payload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({
+      name: SNAPSHOT_FILENAME,
+      content: encSnap
+    });
+
+    // 2. Creator pre-snapshot package (seq 1..5 on v9)
+    const pkgPre = buildDeterministicPackagePayload({
+      deviceId: creatorDevId,
+      startSequence: 1,
+      endSequence: 5,
+      baseSnapshotId: 'snap_1790500000000_v9',
+      events: []
+    });
+    const encPkgPre = await encryptDeltaPackage(pkgPre, TEST_SESSION_KEY);
+    const drivePre = await mockDrive.uploadFile({
+      name: `${pkgPre.package_id}.pkg`,
+      content: JSON.stringify(encPkgPre)
+    });
+
+    // 3. Creator post-snapshot package (seq 6..6 on v10)
+    const pkgPost = buildDeterministicPackagePayload({
+      deviceId: creatorDevId,
+      startSequence: 6,
+      endSequence: 6,
+      baseSnapshotId: 'snap_1790600000000_v10',
+      events: [{
+        event_id: 'ev_post_6',
+        device_id: creatorDevId,
+        sequence: 6,
+        timestamp: '2026-03-02T00:00:00Z',
+        collection: 'transactions',
+        entity_id: 'txn_post_6',
+        operation: 'INSERT',
+        payload: { id: 'txn_post_6', Date: '2026-03-02', INR: 250, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+      }]
+    });
+    const encPkgPost = await encryptDeltaPackage(pkgPost, TEST_SESSION_KEY);
+    const drivePost = await mockDrive.uploadFile({
+      name: `${pkgPost.package_id}.pkg`,
+      content: JSON.stringify(encPkgPost)
+    });
+
+    // Creator manifest on v10
+    const creatorManifest = {
+      schema_version: 1,
+      manifest_type: 'DEVICE_MANIFEST',
+      device_id: creatorDevId,
+      manifest_revision: 6,
+      updated_at: new Date().toISOString(),
+      base_snapshot_id: 'snap_1790600000000_v10',
+      device_lifecycle_state: 'ACTIVE',
+      packages: [
+        { package_id: pkgPre.package_id, drive_file_id: drivePre.id, start_sequence: 1, end_sequence: 5, package_checksum: encPkgPre.package_checksum, base_snapshot_id: 'snap_1790500000000_v9' },
+        { package_id: pkgPost.package_id, drive_file_id: drivePost.id, start_sequence: 6, end_sequence: 6, package_checksum: encPkgPost.package_checksum, base_snapshot_id: 'snap_1790600000000_v10' }
+      ]
+    };
+    await mockDrive.uploadFile({
+      name: `manifest_dev_${creatorDevId}.json`,
+      content: JSON.stringify(creatorManifest)
+    });
+
+    // 4. Bootstrap
+    const res = await bootstrapNewDevice({
+      deviceId: freshDevId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive
+    });
+
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.inboundDeltas.stagedPackagesCount, 1, 'Post-snapshot package 6 staged');
+    assert.strictEqual(res.reconciliation.reconciledCount, 1, 'Post-snapshot transaction reconciled');
+    const txns = await getTransactions();
+    assert.strictEqual(txns.length, 2);
+    assert.ok(txns.some(t => t.id === 'txn_post_6'));
+  });
+
+  await t.test('CREATOR LINEAGE TEST 3: Ambiguous or unknown creator package lineage fails closed', async () => {
+    const freshDevId = 'dev_edge_test_3';
+    const creatorDevId = 'dev_creator_c';
+
+    const snapPayload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: creatorDevId,
+      entities: { transactions: [], investment_transactions: [], accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }], categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }] }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Creator package with unknown unparseable base
+    const badPkg = buildDeterministicPackagePayload({
+      deviceId: creatorDevId,
+      startSequence: 1,
+      endSequence: 1,
+      baseSnapshotId: 'snap_corrupt_unknown_alien_base',
+      events: []
+    });
+    const encBad = await encryptDeltaPackage(badPkg, TEST_SESSION_KEY);
+    const driveBad = await mockDrive.uploadFile({ name: `${badPkg.package_id}.pkg`, content: JSON.stringify(encBad) });
+
+    const creatorManifest = {
+      schema_version: 1,
+      manifest_type: 'DEVICE_MANIFEST',
+      device_id: creatorDevId,
+      base_snapshot_id: 'snap_1790500000000_v9',
+      packages: [{ package_id: badPkg.package_id, drive_file_id: driveBad.id, start_sequence: 1, end_sequence: 1, package_checksum: encBad.package_checksum, base_snapshot_id: 'snap_corrupt_unknown_alien_base' }]
+    };
+    await mockDrive.uploadFile({ name: `manifest_dev_${creatorDevId}.json`, content: JSON.stringify(creatorManifest) });
+
+    await assert.rejects(
+      async () => {
+        await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+      },
+      (err) => {
+        assert.ok(err.message.includes('UNKNOWN_CREATOR_PACKAGE_LINEAGE'), `Expected UNKNOWN_CREATOR_PACKAGE_LINEAGE, got: ${err.message}`);
+        return true;
+      }
+    );
+  });
+
+  await t.test('CREATOR LINEAGE TEST 4: External peer D6 processed and genuine conflict preserved under authoritative watermark 5', async () => {
+    const freshDevId = 'dev_edge_test_4';
+    const creatorDevId = 'dev_creator_c';
+    const peerDevD = 'peer_dev_d';
+
+    // Snapshot v10 with covered_peer_watermarks = {"peer_dev_d": 5}
+    const snapPayload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: creatorDevId,
+      covered_peer_watermarks: { [peerDevD]: 5 },
+      entities: {
+        transactions: [
+          { id: 'txn_shared_conflict', Date: '2026-03-01', INR: 500, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // D's Package 6 on base v9 modifying txn_shared_conflict concurrently
+    const initialCanonical = await computeCanonicalSha256({ id: 'txn_shared_conflict', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' });
+    const pkgD6 = buildDeterministicPackagePayload({
+      deviceId: peerDevD,
+      startSequence: 6,
+      endSequence: 6,
+      baseSnapshotId: 'snap_1790500000000_v9',
+      events: [{
+        event_id: 'ev_d_6',
+        device_id: peerDevD,
+        sequence: 6,
+        timestamp: '2026-03-01T12:00:00Z',
+        collection: 'transactions',
+        entity_id: 'txn_shared_conflict',
+        operation: 'UPDATE',
+        base_checksum: initialCanonical,
+        payload: { id: 'txn_shared_conflict', Date: '2026-03-01', INR: 999, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+      }]
+    });
+    const encPkgD6 = await encryptDeltaPackage(pkgD6, TEST_SESSION_KEY);
+    const driveD6 = await mockDrive.uploadFile({ name: `${pkgD6.package_id}.pkg`, content: JSON.stringify(encPkgD6) });
+
+    const manifestD = {
+      schema_version: 1,
+      manifest_type: 'DEVICE_MANIFEST',
+      device_id: peerDevD,
+      base_snapshot_id: 'snap_1790500000000_v9',
+      packages: [
+        { package_id: pkgD6.package_id, drive_file_id: driveD6.id, start_sequence: 6, end_sequence: 6, package_checksum: encPkgD6.package_checksum, base_snapshot_id: 'snap_1790500000000_v9' }
+      ]
+    };
+    await mockDrive.uploadFile({ name: `manifest_dev_${peerDevD}.json`, content: JSON.stringify(manifestD) });
+
+    const res = await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.inboundDeltas.stagedPackagesCount, 1, 'D6 package staged');
+    assert.strictEqual(res.reconciliation.conflictCount, 1, 'Genuine conflict preserved');
+    const conflicts = await getPendingConflicts();
+    assert.strictEqual(conflicts.length, 1, 'Exactly 1 genuine conflict recorded');
+  });
+
+  await t.test('CREATOR LINEAGE TEST 5: Failed bootstrap followed by reload produces no false conflicts', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_edge_test_5';
+
+    const snapPayload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: 'dev_creator_c',
+      entities: {
+        transactions: [{ id: 'txn_safe_1', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Mock drive reading failure mid-stage
+    const originalRead = mockDrive.readFile;
+    mockDrive.readFile = async () => { throw new Error('Simulated network failure mid-download'); };
+
+    const peerPkg = buildDeterministicPackagePayload({
+      deviceId: 'peer_dev_x',
+      startSequence: 1,
+      endSequence: 1,
+      baseSnapshotId: 'snap_1790600000000_v10',
+      events: []
+    });
+    const encPeer = await encryptDeltaPackage(peerPkg, TEST_SESSION_KEY);
+    const drivePeer = await mockDrive.uploadFile({ name: `${peerPkg.package_id}.pkg`, content: JSON.stringify(encPeer) });
+    await mockDrive.uploadFile({
+      name: `manifest_dev_peer_dev_x.json`,
+      content: JSON.stringify({
+        schema_version: 1,
+        manifest_type: 'DEVICE_MANIFEST',
+        device_id: 'peer_dev_x',
+        base_snapshot_id: 'snap_1790600000000_v10',
+        packages: [{ package_id: peerPkg.package_id, drive_file_id: drivePeer.id, start_sequence: 1, end_sequence: 1, package_checksum: encPeer.package_checksum, base_snapshot_id: 'snap_1790600000000_v10' }]
+      })
+    });
+
+    try {
+      await assert.rejects(async () => {
+        await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+      });
+    } finally {
+      mockDrive.readFile = originalRead;
+    }
+
+    // Verify lifecycle remains JOINING
+    const lifecycle = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.JOINING);
+
+    // Simulate page reload: reconcileStagedEvents must refuse execution and produce 0 conflicts
+    const recon = await (await import('../services/deltaReconciliation.js')).reconcileStagedEvents({});
+    assert.strictEqual(recon.reconciledCount, 0);
+    assert.strictEqual(recon.conflictCount, 0);
+    const conflicts = await getPendingConflicts();
+    assert.strictEqual(conflicts.length, 0, 'Zero conflicts on reload after failed bootstrap');
+  });
+
+  await t.test('CREATOR LINEAGE TEST 6: Attempt-scoped cleanup preserves unrelated staged records', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_edge_test_6';
+
+    // Insert an unrelated staged event
+    await db.run(
+      'INSERT OR REPLACE INTO sync_staged_packages (package_id, device_id, start_sequence, end_sequence, event_count, package_checksum, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ['pkg_unrelated_existing', 'peer_unrelated', 1, 1, 1, 'chk_123', new Date().toISOString(), 'STAGED']
+    );
+    await db.run(
+      'INSERT OR REPLACE INTO sync_staged_events (event_id, package_id, device_id, sequence, timestamp, collection, entity_id, operation, base_checksum, new_checksum, tombstone_generation, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['ev_unrelated', 'pkg_unrelated_existing', 'peer_unrelated', 1, new Date().toISOString(), 'transactions', 'txn_u', 'INSERT', null, 'chk_u', 0, new Date().toISOString(), 'STAGED']
+    );
+
+    // Bootstrap fails
+    const originalRead = mockDrive.readFile;
+    mockDrive.readFile = async () => { throw new Error('Simulated failure'); };
+    try {
+      await assert.rejects(async () => {
+        await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+      });
+    } finally {
+      mockDrive.readFile = originalRead;
+    }
+
+    // Unrelated staged record must still exist
+    const stagedPkgs = (await db.query('SELECT * FROM sync_staged_packages WHERE package_id = ?', ['pkg_unrelated_existing'])).values || [];
+    assert.strictEqual(stagedPkgs.length, 1, 'Unrelated staged package preserved');
+  });
+
+  await t.test('CREATOR LINEAGE TEST 7: JOINING lifecycle strictly blocks manifest publication and outbound delta uploads', async () => {
+    const testDevId = 'dev_joining_test_7';
+    await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, testDevId);
+
+    // Attempting to publish active manifest must throw
+    await assert.rejects(
+      async () => {
+        await writeOwnDeviceManifest({
+          deviceId: testDevId,
+          driveClient: mockDrive,
+          manifestData: createEmptyDeviceManifest({ deviceId: testDevId, device_lifecycle_state: 'ACTIVE' })
+        });
+      },
+      (err) => {
+        assert.ok(err.message.includes('DEVICE_NOT_INITIALIZED_FOR_SYNC'), `Expected DEVICE_NOT_INITIALIZED_FOR_SYNC, got: ${err.message}`);
+        return true;
+      }
+    );
+
+    // Attempting outbound upload must throw
+    await assert.rejects(
+      async () => {
+        await uploadPendingDeltas({ deviceId: testDevId, driveClient: mockDrive, sessionKey: TEST_SESSION_KEY });
+      },
+      (err) => {
+        assert.ok(err.message.includes('DEVICE_NOT_INITIALIZED_FOR_SYNC'), `Expected DEVICE_NOT_INITIALIZED_FOR_SYNC, got: ${err.message}`);
+        return true;
+      }
+    );
+  });
+
+  await t.test('CREATOR LINEAGE TEST 8: Legacy snapshot without covered_peer_watermarks remains safe and functional', async () => {
+    const freshDevId = 'dev_legacy_test_8';
+    const legacySnapPayload = {
+      snapshot_id: 'snap_legacy_v7',
+      parent_snapshot_id: '',
+      cloud_version: 7,
+      created_at: new Date().toISOString(),
+      device_id: 'device_legacy_author',
+      covered_peer_watermarks: null,
+      entities: {
+        transactions: [{ id: 'txn_leg_1', Date: '2026-01-01', INR: 50, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(legacySnapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    const res = await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.recordsBootstrapped.transactions, 1);
+    const lifecycle = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE);
+  });
 });
