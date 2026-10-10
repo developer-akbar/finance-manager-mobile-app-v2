@@ -662,6 +662,11 @@ export async function pullPeerDeltas(opts) {
         stagedPackagesCount++;
         stagedEventsCount += payload.events.length;
         stagedPackageIds.add(payload.package_id);
+        if (typeof opts.onPackageStaged === 'function') {
+          try {
+            opts.onPackageStaged(payload.package_id);
+          } catch {}
+        }
         lastStagedSeq = payload.end_sequence;
       }
     }
@@ -786,22 +791,29 @@ export async function stagePeerPackageAtomically(arg1, arg2) {
       tx.onabort = () => reject(new Error('Transaction aborted during atomic peer staging'));
     });
   } else {
-    await db.run(
-      'INSERT OR REPLACE INTO sync_staged_packages (package_id, device_id, start_sequence, end_sequence, event_count, package_checksum, drive_file_id, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [packagePayload.package_id, packagePayload.device_id, packagePayload.start_sequence, packagePayload.end_sequence, packagePayload.event_count, packageChecksum, driveFileId, now, 'STAGED']
-    );
-
-    for (const e of packagePayload.events) {
+    try {
+      await db.execute?.('BEGIN TRANSACTION').catch(() => {});
       await db.run(
-        'INSERT OR REPLACE INTO sync_staged_events (event_id, package_id, device_id, sequence, timestamp, collection, entity_id, operation, base_checksum, new_checksum, tombstone_generation, payload, bundle_id, bundle_index, bundle_total, bundle_checksum, parent_event_id, resolution_type, resolved_event_id, resolved_conflict_id, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [e.event_id, packagePayload.package_id, packagePayload.device_id, e.sequence, e.timestamp, e.collection, e.entity_id, e.operation, e.base_checksum, e.new_checksum, e.tombstone_generation || 0, typeof e.payload === 'object' ? JSON.stringify(e.payload) : e.payload, e.bundle_id, e.bundle_index, e.bundle_total, e.bundle_checksum, e.parent_event_id, e.resolution_type || null, e.resolved_event_id || null, e.resolved_conflict_id || null, now, 'STAGED']
+        'INSERT OR REPLACE INTO sync_staged_packages (package_id, device_id, start_sequence, end_sequence, event_count, package_checksum, drive_file_id, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [packagePayload.package_id, packagePayload.device_id, packagePayload.start_sequence, packagePayload.end_sequence, packagePayload.event_count, packageChecksum, driveFileId, now, 'STAGED']
       );
-    }
 
-    await db.run(
-      'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
-      [packagePayload.device_id, packagePayload.end_sequence, 0, packagePayload.base_snapshot_id, now]
-    );
+      for (const e of packagePayload.events) {
+        await db.run(
+          'INSERT OR REPLACE INTO sync_staged_events (event_id, package_id, device_id, sequence, timestamp, collection, entity_id, operation, base_checksum, new_checksum, tombstone_generation, payload, bundle_id, bundle_index, bundle_total, bundle_checksum, parent_event_id, resolution_type, resolved_event_id, resolved_conflict_id, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [e.event_id, packagePayload.package_id, packagePayload.device_id, e.sequence, e.timestamp, e.collection, e.entity_id, e.operation, e.base_checksum, e.new_checksum, e.tombstone_generation || 0, typeof e.payload === 'object' ? JSON.stringify(e.payload) : e.payload, e.bundle_id, e.bundle_index, e.bundle_total, e.bundle_checksum, e.parent_event_id, e.resolution_type || null, e.resolved_event_id || null, e.resolved_conflict_id || null, now, 'STAGED']
+        );
+      }
+
+      await db.run(
+        'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+        [packagePayload.device_id, packagePayload.end_sequence, peerStateRes.values?.[0]?.last_reconciled_sequence || 0, packagePayload.base_snapshot_id, now]
+      );
+      await db.execute?.('COMMIT').catch(() => {});
+    } catch (err) {
+      await db.execute?.('ROLLBACK').catch(() => {});
+      throw err;
+    }
 
     return { staged: true, package_id: packagePayload.package_id, eventCount: packagePayload.events.length };
   }

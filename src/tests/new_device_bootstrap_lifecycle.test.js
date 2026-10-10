@@ -1872,4 +1872,455 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
     const lifecycle = await getDeviceLifecycleState(freshDevId);
     assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE);
   });
+
+  await t.test('QUEUE ISOLATION TEST 1: Legitimate settings initialization during bootstrap does not emit outbound queue events', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_queue_iso_1';
+
+    const snapPayload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: 'dev_creator_c',
+      entities: {
+        transactions: [{ id: 'txn_qi_1', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }],
+        settings: { theme: 'light', headerColor: 'pink' }
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    const res = await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+    assert.strictEqual(res.success, true);
+
+    // Verify zero outbound delta queue events were emitted
+    const queueRows = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    const pending = queueRows.filter(r => r.status !== 'ACKNOWLEDGED');
+    assert.strictEqual(pending.length, 0, 'Zero pending outbound delta events emitted during bootstrap');
+  });
+
+  await t.test('QUEUE ISOLATION TEST 2: Unexpected outbound financial mutation during bootstrap fails closed via Gate 2', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_queue_iso_2';
+
+    const snapPayload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: 'dev_creator_c',
+      entities: {
+        transactions: [{ id: 'txn_qi_2', Date: '2026-03-01', INR: 200, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Inject an unexpected pending outbound row into delta queue
+    await db.run(
+      'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_unexpected_1', freshDevId, 1, new Date().toISOString(), 'transactions', 'txn_unexp_1', 'INSERT', JSON.stringify({ id: 'txn_unexp_1' }), 'PENDING']
+    );
+
+    await assert.rejects(
+      async () => {
+        await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+      },
+      (err) => {
+        assert.ok(err.message.includes('BOOTSTRAP_VERIFICATION_FAILED'), `Expected BOOTSTRAP_VERIFICATION_FAILED, got: ${err.message}`);
+        return true;
+      }
+    );
+
+    // Lifecycle must remain JOINING
+    const lifecycle = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.JOINING);
+  });
+
+  await t.test('QUEUE ISOLATION TEST 3: Post-reconciliation verification failure rollback & idempotent retry preserves D6 and 1 conflict', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_queue_iso_3';
+    const peerDevD = 'peer_dev_d_iso_3';
+
+    // Baseline snapshot with D at seq 5
+    const snapPayload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: 'dev_creator_c',
+      covered_peer_watermarks: { [peerDevD]: 5 },
+      entities: {
+        transactions: [
+          { id: 'txn_conflict_target', Date: '2026-03-01', INR: 500, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // D6 package modifying txn_conflict_target concurrently
+    const initialCanonical = await computeCanonicalSha256({ id: 'txn_conflict_target', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' });
+    const pkgD6 = buildDeterministicPackagePayload({
+      deviceId: peerDevD,
+      startSequence: 6,
+      endSequence: 6,
+      baseSnapshotId: 'snap_1790500000000_v9',
+      events: [
+        {
+          event_id: 'evt_d6_iso',
+          device_id: peerDevD,
+          sequence: 6,
+          timestamp: '2026-03-01T12:00:00Z',
+          collection: 'transactions',
+          entity_id: 'txn_conflict_target',
+          operation: 'UPDATE',
+          base_checksum: initialCanonical,
+          payload: { id: 'txn_conflict_target', Date: '2026-03-01', INR: 999, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+        }
+      ]
+    });
+    const encPkgD6 = await encryptDeltaPackage(pkgD6, TEST_SESSION_KEY);
+    const driveD6 = await mockDrive.uploadFile({ name: `${pkgD6.package_id}.pkg`, content: JSON.stringify(encPkgD6) });
+
+    const manifestD = {
+      schema_version: 1,
+      manifest_type: 'DEVICE_MANIFEST',
+      device_id: peerDevD,
+      base_snapshot_id: 'snap_1790500000000_v9',
+      packages: [
+        { package_id: pkgD6.package_id, drive_file_id: driveD6.id, start_sequence: 6, end_sequence: 6, package_checksum: encPkgD6.package_checksum, base_snapshot_id: 'snap_1790500000000_v9' }
+      ]
+    };
+    await mockDrive.uploadFile({ name: `manifest_dev_${peerDevD}.json`, content: JSON.stringify(manifestD) });
+
+    // Seed an unrelated pre-existing conflict to verify attempt-scoped rollback preservation
+    await db.run(
+      'INSERT INTO sync_conflicts (conflict_id, collection, entity_id, conflict_type, peer_device_id, event_id, package_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['conf_unrelated_existing', 'transactions', 'txn_unrelated', 'CONCURRENT_EDIT', 'peer_dev_x', 'evt_unrelated', 'pkg_unrelated', 'PENDING', new Date().toISOString()]
+    );
+
+    // Attempt 1: Inject unexpected queue item right before Gate 2 to simulate verification failure after reconciliation
+    await db.run(
+      'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_trip_1', freshDevId, 1, new Date().toISOString(), 'transactions', 'txn_trip_1', 'INSERT', JSON.stringify({ id: 'txn_trip_1' }), 'PENDING']
+    );
+
+    try {
+      await assert.rejects(async () => {
+        await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+      });
+    } catch {}
+
+    // Verify Attempt 1 left device in JOINING with 0 orphaned staged packages
+    let lifecycle = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.JOINING);
+
+    // Verify attempt-scoped rollback preserved the unrelated pre-existing conflict while removing D6's attempt conflict
+    const postRollbackConflicts = await getPendingConflicts();
+    assert.strictEqual(postRollbackConflicts.length, 1, 'Pre-existing unrelated conflict preserved after rollback');
+    assert.strictEqual(postRollbackConflicts[0].conflict_id, 'conf_unrelated_existing');
+
+    // Clear the injected test glitch to allow retry
+    await db.run('DELETE FROM sync_delta_queue WHERE event_id = ?', ['evt_trip_1']);
+
+    // Attempt 2: Retry bootstrap on same device
+    const res = await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.inboundDeltas.stagedPackagesCount, 1, 'D6 restaged cleanly on retry');
+    assert.strictEqual(res.reconciliation.conflictCount, 1, 'Exactly 1 genuine conflict recorded on retry');
+
+    const conflicts = await getPendingConflicts();
+    assert.strictEqual(conflicts.length, 2, 'Contains 1 pre-existing conflict + 1 genuine D6 conflict (no duplicates)');
+    assert.ok(conflicts.some(c => c.conflict_id === 'conf_unrelated_existing'), 'Pre-existing conflict preserved across retry');
+    assert.ok(conflicts.some(c => c.entity_id === 'txn_conflict_target'), 'D6 genuine conflict recorded');
+
+    lifecycle = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE);
+  });
+
+  await t.test('QUEUE ISOLATION TEST 4: Normal active-device settings change emits delta event to sync_delta_queue', async () => {
+    const db = getDB();
+    const activeDevId = 'dev_active_settings_4';
+    await setDeviceLifecycleState(DEVICE_LIFECYCLE.ACTIVE, activeDevId);
+
+    // Clear queue
+    await db.run('DELETE FROM sync_delta_queue');
+
+    // Normal user changes theme
+    await setSetting('theme', 'dark');
+
+    const queueRows = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    assert.strictEqual(queueRows.length, 1, 'Setting change emitted delta event on active device');
+    assert.strictEqual(queueRows[0].collection, 'settings');
+    assert.strictEqual(queueRows[0].entity_id, 'theme');
+  });
+
+  await t.test('QUEUE ISOLATION TEST 5: Mid-staging failure cleans up partially staged package and preserves unrelated staged rows', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_mid_stage_5';
+    const peerDev = 'peer_dev_mid_5';
+
+    // Seed snapshot v10
+    const snapPayload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: 'dev_creator_c',
+      entities: {
+        transactions: [{ id: 'txn_base_5', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Seed unrelated staged package before attempt
+    await db.run(
+      'INSERT INTO sync_staged_packages (package_id, device_id, start_sequence, end_sequence, event_count, status, staged_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ['pkg_unrelated_hist', 'peer_dev_unrelated', 1, 1, 1, 'STAGED', new Date().toISOString()]
+    );
+    await db.run(
+      'INSERT INTO sync_staged_events (event_id, package_id, device_id, sequence, timestamp, collection, entity_id, operation, payload, status, staged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_unrelated_hist', 'pkg_unrelated_hist', 'peer_dev_unrelated', 1, new Date().toISOString(), 'transactions', 'txn_unrel', 'INSERT', JSON.stringify({ id: 'txn_unrel' }), 'STAGED', new Date().toISOString()]
+    );
+
+    // Package 1: valid
+    const pkg1 = buildDeterministicPackagePayload({
+      deviceId: peerDev,
+      startSequence: 1,
+      endSequence: 1,
+      baseSnapshotId: 'snap_1790600000000_v10',
+      events: [{
+        event_id: 'evt_mid_1',
+        device_id: peerDev,
+        sequence: 1,
+        timestamp: '2026-03-01T12:00:00Z',
+        collection: 'transactions',
+        entity_id: 'txn_mid_1',
+        operation: 'INSERT',
+        payload: { id: 'txn_mid_1', Date: '2026-03-01', INR: 50, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+      }]
+    });
+    const encPkg1 = await encryptDeltaPackage(pkg1, TEST_SESSION_KEY);
+    const drivePkg1 = await mockDrive.uploadFile({ name: `${pkg1.package_id}.pkg`, content: JSON.stringify(encPkg1) });
+
+    // Manifest contains pkg 1 and pkg 2 (pkg 2 drive file is missing)
+    const manifestPeer = {
+      schema_version: 1,
+      manifest_type: 'DEVICE_MANIFEST',
+      device_id: peerDev,
+      base_snapshot_id: 'snap_1790600000000_v10',
+      packages: [
+        { package_id: pkg1.package_id, drive_file_id: drivePkg1.id, start_sequence: 1, end_sequence: 1, package_checksum: encPkg1.package_checksum, base_snapshot_id: 'snap_1790600000000_v10' },
+        { package_id: 'pkg_mid_missing_2', drive_file_id: 'drive_missing_id_999', start_sequence: 2, end_sequence: 2, package_checksum: 'fake_chk', base_snapshot_id: 'snap_1790600000000_v10' }
+      ]
+    };
+    await mockDrive.uploadFile({ name: `manifest_dev_${peerDev}.json`, content: JSON.stringify(manifestPeer) });
+
+    // Bootstrap fails on package 2 after package 1 was already staged
+    await assert.rejects(
+      async () => {
+        await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+      },
+      (err) => {
+        assert.ok(err.message.includes('Missing peer package') || err.message.includes('drive_missing_id_999'), `Expected missing package error, got: ${err.message}`);
+        return true;
+      }
+    );
+
+    // Verify package 1 was rolled back from staged stores
+    const stagedPkgs = (await db.query('SELECT * FROM sync_staged_packages WHERE package_id = ?', [pkg1.package_id])).values || [];
+    assert.strictEqual(stagedPkgs.length, 0, 'Partially staged package 1 rolled back');
+
+    const stagedEvts = (await db.query('SELECT * FROM sync_staged_events WHERE package_id = ?', [pkg1.package_id])).values || [];
+    assert.strictEqual(stagedEvts.length, 0, 'Partially staged events rolled back');
+
+    // Verify unrelated historical staged package is intact
+    const unrelPkgs = (await db.query('SELECT * FROM sync_staged_packages WHERE package_id = ?', ['pkg_unrelated_hist'])).values || [];
+    assert.strictEqual(unrelPkgs.length, 1, 'Unrelated historical staged package preserved');
+
+    const lifecycle = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.JOINING);
+  });
+
+  await t.test('QUEUE ISOLATION TEST 6: Stale watermark cleanup for peer absent from snapshot coverage enables clean retry', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_stale_wm_6';
+    const peerDev = 'peer_dev_absent_from_snap';
+
+    // Snapshot has NO covered_peer_watermarks for peerDev
+    const snapPayload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: 'dev_creator_c',
+      covered_peer_watermarks: {},
+      entities: {
+        transactions: [{ id: 'txn_base_6', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Peer package 1
+    const pkg1 = buildDeterministicPackagePayload({
+      deviceId: peerDev,
+      startSequence: 1,
+      endSequence: 1,
+      baseSnapshotId: 'snap_1790600000000_v10',
+      events: [{
+        event_id: 'evt_p_6_1',
+        device_id: peerDev,
+        sequence: 1,
+        timestamp: '2026-03-01T12:00:00Z',
+        collection: 'transactions',
+        entity_id: 'txn_p_6_1',
+        operation: 'INSERT',
+        payload: { id: 'txn_p_6_1', Date: '2026-03-01', INR: 75, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+      }]
+    });
+    const encPkg1 = await encryptDeltaPackage(pkg1, TEST_SESSION_KEY);
+    const drivePkg1 = await mockDrive.uploadFile({ name: `${pkg1.package_id}.pkg`, content: JSON.stringify(encPkg1) });
+
+    const manifestPeer = {
+      schema_version: 1,
+      manifest_type: 'DEVICE_MANIFEST',
+      device_id: peerDev,
+      base_snapshot_id: 'snap_1790600000000_v10',
+      packages: [
+        { package_id: pkg1.package_id, drive_file_id: drivePkg1.id, start_sequence: 1, end_sequence: 1, package_checksum: encPkg1.package_checksum, base_snapshot_id: 'snap_1790600000000_v10' }
+      ]
+    };
+    await mockDrive.uploadFile({ name: `manifest_dev_${peerDev}.json`, content: JSON.stringify(manifestPeer) });
+
+    // Attempt 1: Inject unexpected queue item to trip Gate 2 after staging peerDev pkg 1
+    await db.run(
+      'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_trip_6', freshDevId, 1, new Date().toISOString(), 'transactions', 'txn_trip_6', 'INSERT', JSON.stringify({ id: 'txn_trip_6' }), 'PENDING']
+    );
+
+    try {
+      await assert.rejects(async () => {
+        await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+      });
+    } catch {}
+
+    // Verify peerDev watermark was removed during rollback (since not in covered_peer_watermarks)
+    const peerStateAfterRollback = (await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ? AND base_snapshot_id = ?', [peerDev, snapPayload.snapshot_id])).values || [];
+    assert.strictEqual(peerStateAfterRollback.length, 0, 'Stale watermark for non-covered peer deleted on rollback');
+
+    // Clear test glitch
+    await db.run('DELETE FROM sync_delta_queue WHERE event_id = ?', ['evt_trip_6']);
+
+    // Attempt 2: Retry bootstrap
+    const res = await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.inboundDeltas.stagedPackagesCount, 1, 'Peer package restaged cleanly without sequence gap');
+
+    const lifecycle = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE);
+  });
+
+  await t.test('QUEUE ISOLATION TEST 7: Rollback failure surfaces distinctly with ROLLBACK_FAILED diagnostics', async () => {
+    const db = getDB();
+    const freshDevId = 'dev_rollback_fail_7';
+    const peerDev = 'peer_dev_fail_7';
+
+    const snapPayload = {
+      snapshot_id: 'snap_1790600000000_v10',
+      parent_snapshot_id: 'snap_1790500000000_v9',
+      cloud_version: 10,
+      created_at: new Date().toISOString(),
+      device_id: 'dev_creator_c',
+      entities: {
+        transactions: [{ id: 'txn_base_7', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
+        investment_transactions: [],
+        accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Valid peer package to stage
+    const pkg1 = buildDeterministicPackagePayload({
+      deviceId: peerDev,
+      startSequence: 1,
+      endSequence: 1,
+      baseSnapshotId: 'snap_1790600000000_v10',
+      events: [{
+        event_id: 'evt_p_7_1',
+        device_id: peerDev,
+        sequence: 1,
+        timestamp: '2026-03-01T12:00:00Z',
+        collection: 'transactions',
+        entity_id: 'txn_p_7_1',
+        operation: 'INSERT',
+        payload: { id: 'txn_p_7_1', Date: '2026-03-01', INR: 75, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+      }]
+    });
+    const encPkg1 = await encryptDeltaPackage(pkg1, TEST_SESSION_KEY);
+    const drivePkg1 = await mockDrive.uploadFile({ name: `${pkg1.package_id}.pkg`, content: JSON.stringify(encPkg1) });
+
+    const manifestPeer = {
+      schema_version: 1,
+      manifest_type: 'DEVICE_MANIFEST',
+      device_id: peerDev,
+      base_snapshot_id: 'snap_1790600000000_v10',
+      packages: [
+        { package_id: pkg1.package_id, drive_file_id: drivePkg1.id, start_sequence: 1, end_sequence: 1, package_checksum: encPkg1.package_checksum, base_snapshot_id: 'snap_1790600000000_v10' }
+      ]
+    };
+    await mockDrive.uploadFile({ name: `manifest_dev_${peerDev}.json`, content: JSON.stringify(manifestPeer) });
+
+    // Inject Gate 2 verification failure
+    await db.run(
+      'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_trip_7', freshDevId, 1, new Date().toISOString(), 'transactions', 'txn_trip_7', 'INSERT', JSON.stringify({ id: 'txn_trip_7' }), 'PENDING']
+    );
+
+    // Monkey-patch db.run to throw on DELETE FROM sync_conflicts during rollback
+    const origRun = db.run.bind(db);
+    db.run = async (sql, params) => {
+      if (typeof sql === 'string' && sql.includes('DELETE FROM sync_conflicts')) {
+        throw new Error('Simulated disk failure during conflict cleanup');
+      }
+      return origRun(sql, params);
+    };
+
+    try {
+      await assert.rejects(
+        async () => {
+          await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive, snapshotPayload: snapPayload });
+        },
+        (err) => {
+          assert.ok(err.message.includes('BOOTSTRAP_VERIFICATION_FAILED'), 'Original error preserved');
+          assert.ok(err.message.includes('ROLLBACK_FAILED'), 'Rollback failure surfaced distinctly');
+          assert.ok(err.rollbackErrors && err.rollbackErrors.length > 0, 'Rollback errors array preserved');
+          return true;
+        }
+      );
+    } finally {
+      db.run = origRun;
+      await db.run('DELETE FROM sync_delta_queue WHERE event_id = ?', ['evt_trip_7']);
+    }
+  });
 });

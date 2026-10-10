@@ -370,11 +370,16 @@ export default function CloudSyncManager({ onBack }) {
       setDeltaMetrics(prev => ({ ...prev, ...updatedMetrics }));
     } catch (err) {
       console.error('[CloudSyncManager] Restore error:', err);
-      let errorText = err.message || 'Restore failed.';
-      if (errorText.toLowerCase().includes('decrypt') || errorText.toLowerCase().includes('pin') || errorText.toLowerCase().includes('operation-specific')) {
+      const msg = err?.message || 'Restore failed.';
+      let errorText = msg;
+      if (msg.toLowerCase().includes('decrypt') || msg.toLowerCase().includes('pin') || msg.toLowerCase().includes('operation-specific')) {
         errorText = 'That Sync PIN could not decrypt this backup. Please try again.';
-      } else if (errorText.toLowerCase().includes('verification_failed') || errorText.toLowerCase().includes('validation_error')) {
-        errorText = 'This FinMan backup could not be verified.';
+      } else if (msg.includes('BOOTSTRAP_VERIFICATION_FAILED')) {
+        errorText = `Restore verification failed: ${msg.replace(/^.*BOOTSTRAP_VERIFICATION_FAILED:\s*/, '')}`;
+      } else if (msg.includes('VALIDATION_ERROR')) {
+        errorText = `Cloud backup payload format error: ${msg.replace(/^.*VALIDATION_ERROR:\s*/, '')}`;
+      } else if (msg.includes('SEQUENCE_GAP_DETECTED')) {
+        errorText = `Cloud delta sequence gap detected: ${msg.replace(/^.*SEQUENCE_GAP_DETECTED:\s*/, '')}`;
       }
       setRestorePromptState(prev => ({
         ...prev,

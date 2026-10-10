@@ -136,6 +136,7 @@ const idbPutBatch = (db, store, items) => new Promise((res, rej) => {
 const parseWhere = (clause, vals) => {
   let vi = 0;
   return clause.split(/\s+AND\s+/i).map(p => {
+    const inM = p.trim().match(/^(\w+)\s+IN\s*\(([^)]+)\)/i);
     const lm  = p.trim().match(/^(\w+)\s+LIKE\s+\?/i);
     const lte = p.trim().match(/^(\w+)\s*<=\s*\?/);
     const gte = p.trim().match(/^(\w+)\s*>=\s*\?/);
@@ -143,6 +144,12 @@ const parseWhere = (clause, vals) => {
     const gt  = p.trim().match(/^(\w+)\s*>\s*\?/);
     const em  = p.trim().match(/^(\w+)\s*=\s*\?/);
     const om  = p.trim().match(/^\((.+)\)/);  // OR groups like (a=? OR b=? OR c=?)
+    if (inM) {
+      const qCount = (inM[2].match(/\?/g) || []).length;
+      const inVals = vals.slice(vi, vi + qCount);
+      vi += qCount;
+      return { col: inM[1], op: 'IN', val: inVals };
+    }
     if (lm)  return { col:lm[1],  op:'LIKE', val:vals[vi++] };
     if (lte) return { col:lte[1], op:'<=',   val:vals[vi++] };
     if (gte) return { col:gte[1], op:'>=',   val:vals[vi++] };
@@ -168,6 +175,7 @@ const matchCond = (row, c) => {
   if (c.op === 'OR')   return c.subs.some(s => matchCond(row, s));
   const rawVal = row[c.col];
   const rv = String(rawVal ?? '');
+  if (c.op === 'IN')   return Array.isArray(c.val) && c.val.map(x => String(x ?? '')).includes(rv);
   if (c.op === '=')    return rv === String(c.val ?? '');
   if (c.op === '<=') {
     const n1 = Number(rawVal), n2 = Number(c.val);

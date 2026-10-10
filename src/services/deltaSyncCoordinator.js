@@ -531,11 +531,11 @@ export async function bootstrapNewDevice(options = {}) {
   }
 
   const { setSetting } = await import('../database/settings.js');
-  await setSetting('last_snapshot_id', payload.snapshot_id);
-  await setSetting('last_parent_snapshot_id', payload.parent_snapshot_id || '');
-  await setSetting('last_synced_at', now);
-  await setSetting('sub_accounts_migrated_v2', 'true');
-  await setSetting('historical_charges_reconciled', 'true');
+  await setSetting('last_snapshot_id', payload.snapshot_id, { suppressDeltaQueue: true });
+  await setSetting('last_parent_snapshot_id', payload.parent_snapshot_id || '', { suppressDeltaQueue: true });
+  await setSetting('last_synced_at', now, { suppressDeltaQueue: true });
+  await setSetting('sub_accounts_migrated_v2', 'true', { suppressDeltaQueue: true });
+  await setSetting('historical_charges_reconciled', 'true', { suppressDeltaQueue: true });
 
   // 6.5 Initialize peer watermarks from authoritative snapshot coverage metadata
   try {
@@ -574,9 +574,8 @@ export async function bootstrapNewDevice(options = {}) {
     throw new Error(`BOOTSTRAP_FAILED: Failed to initialize baseline lineage peer watermarks: ${err.message}`);
   }
 
-  // 7. Pull post-baseline peer deltas
   // 7. Pull post-baseline peer deltas and reconcile under attempt-scoped safety
-  let stagedPackageIdsInAttempt = [];
+  const stagedPackageIdsInAttempt = new Set();
   try {
     onProgress({ stage: 'REPLAYING_DELTAS', message: 'Replaying recent cloud changes…' });
     const pullResult = await downloadAndStagePeerPackages({
@@ -586,9 +585,16 @@ export async function bootstrapNewDevice(options = {}) {
       driveClient,
       sessionKey: effectiveKey,
       baseSnapshotId: payload.snapshot_id,
-      immediateParentSnapshotId: payload.parent_snapshot_id
+      immediateParentSnapshotId: payload.parent_snapshot_id,
+      onPackageStaged: (pkgId) => {
+        if (pkgId) stagedPackageIdsInAttempt.add(pkgId);
+      }
     });
-    stagedPackageIdsInAttempt = pullResult?.stagedPackageIds || [];
+    if (pullResult?.stagedPackageIds) {
+      for (const pId of pullResult.stagedPackageIds) {
+        stagedPackageIdsInAttempt.add(pId);
+      }
+    }
 
     // 8. Reconcile staged events (preserves existing conflicts)
     const reconResult = await reconcileStagedEvents({ isBootstrap: true });
@@ -641,15 +647,74 @@ export async function bootstrapNewDevice(options = {}) {
     broadcastSyncStatus(SYNC_STATUS.SUCCESS, { ...result, message: 'Cloud Sync On' });
     return result;
   } catch (err) {
+    const rollbackTimestamp = new Date().toISOString();
+    const rollbackErrors = [];
+
     // Attempt-scoped rollback: Delete ONLY records staged in this failed attempt
-    if (stagedPackageIdsInAttempt.length > 0) {
+    const attemptPkgIds = Array.from(stagedPackageIdsInAttempt);
+    if (attemptPkgIds.length > 0) {
       try {
-        const placeholders = stagedPackageIdsInAttempt.map(() => '?').join(',');
-        await db.run(`DELETE FROM sync_staged_events WHERE package_id IN (${placeholders})`, stagedPackageIdsInAttempt);
-        await db.run(`DELETE FROM sync_staged_packages WHERE package_id IN (${placeholders})`, stagedPackageIdsInAttempt);
-      } catch {}
+        const placeholders = attemptPkgIds.map(() => '?').join(',');
+        await db.run(`DELETE FROM sync_staged_events WHERE package_id IN (${placeholders})`, attemptPkgIds);
+        await db.run(`DELETE FROM sync_staged_packages WHERE package_id IN (${placeholders})`, attemptPkgIds);
+        await db.run(`DELETE FROM sync_conflicts WHERE package_id IN (${placeholders})`, attemptPkgIds);
+      } catch (cleanupErr) {
+        console.error('[deltaSyncCoordinator] Error rolling back attempt-scoped staged packages and conflicts:', cleanupErr);
+        rollbackErrors.push(`Cleanup failed: ${cleanupErr.message}`);
+      }
     }
-    await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, deviceId);
+    // Revert canonical stores back to pristine snapshot baseline
+    if (payload && payload.entities) {
+      try {
+        await populateLocalEntitiesBootstrap(db, payload.entities || {});
+      } catch (popErr) {
+        console.error('[deltaSyncCoordinator] Error reverting canonical stores during bootstrap rollback:', popErr);
+        rollbackErrors.push(`Canonical revert failed: ${popErr.message}`);
+      }
+    }
+    // Reset watermarks to exact authoritative snapshot coverage
+    if (payload) {
+      try {
+        const coveredMap = (payload.covered_peer_watermarks && typeof payload.covered_peer_watermarks === 'object')
+          ? payload.covered_peer_watermarks
+          : {};
+
+        const existingPeers = (await db.query('SELECT peer_device_id FROM sync_peer_state WHERE base_snapshot_id = ?', [payload.snapshot_id]).catch(() => ({ values: [] }))).values || [];
+        for (const row of existingPeers) {
+          const pId = row.peer_device_id;
+          if (!coveredMap[pId]) {
+            await db.run('DELETE FROM sync_peer_state WHERE peer_device_id = ? AND base_snapshot_id = ?', [pId, payload.snapshot_id]);
+          }
+        }
+
+        for (const [pId, pSeq] of Object.entries(coveredMap)) {
+          const numSeq = Number(pSeq);
+          if (pId && !isNaN(numSeq) && numSeq > 0) {
+            await db.run(
+              'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+              [pId, numSeq, numSeq, payload.snapshot_id, rollbackTimestamp]
+            );
+          }
+        }
+      } catch (wmErr) {
+        console.error('[deltaSyncCoordinator] Error resetting peer watermarks during bootstrap rollback:', wmErr);
+        rollbackErrors.push(`Watermark reset failed: ${wmErr.message}`);
+      }
+    }
+    try {
+      await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, deviceId);
+    } catch (lcErr) {
+      console.error('[deltaSyncCoordinator] Error setting device lifecycle to JOINING during rollback:', lcErr);
+      rollbackErrors.push(`Lifecycle set failed: ${lcErr.message}`);
+    }
+
+    if (rollbackErrors.length > 0) {
+      const compositeError = new Error(`${err.message} [ROLLBACK_FAILED: ${rollbackErrors.join('; ')}]`);
+      compositeError.originalError = err;
+      compositeError.rollbackErrors = rollbackErrors;
+      throw compositeError;
+    }
+
     throw err;
   }
 }

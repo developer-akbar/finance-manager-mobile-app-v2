@@ -22,11 +22,11 @@ export const getSetting = async (key, fallback = null) => {
   } catch { return fallback; }
 };
 
-export const setSetting = async (key, value) => {
+export const setSetting = async (key, value, options = {}) => {
   const strVal = String(value);
   const isSynced = SYNCED_SETTINGS_WHITELIST.includes(key);
 
-  if (isSynced) {
+  if (isSynced && !options.suppressDeltaQueue) {
     const db = getDB();
     const ex = await db.query('SELECT * FROM settings WHERE key = ?', [key]);
     const isExisting = (ex.values || []).length > 0;
@@ -38,7 +38,7 @@ export const setSetting = async (key, value) => {
       entityData: { key, value: strVal }
     });
   } else {
-    // Local-only setting: write directly without creating delta event
+    // Local-only setting or explicitly suppressed (e.g. baseline installation / bootstrap): write directly without creating delta event
     await getDB().run(
       'INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)',
       [key, strVal]
