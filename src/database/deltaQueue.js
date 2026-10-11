@@ -75,6 +75,13 @@ export function createDeltaEvent({
 }
 
 /**
+ * Generates a persistent, unique device identifier in canonical format: dev_<12 hex chars>.
+ */
+export function generateUniqueDeviceId() {
+  return `dev_${uuid().replace(/-/g, '').slice(0, 12)}`;
+}
+
+/**
  * Initializes or reads the persistent device sync state in `sync_local_state`.
  */
 export async function initLocalSyncState(deviceId = null, baseSnapshotId = null, baseCloudVersion = null, lifecycleState = null) {
@@ -84,7 +91,7 @@ export async function initLocalSyncState(deviceId = null, baseSnapshotId = null,
     return existing;
   }
 
-  const generatedDeviceId = deviceId || `dev_${uuid().replace(/-/g, '').slice(0, 12)}`;
+  const generatedDeviceId = deviceId || generateUniqueDeviceId();
   const now = new Date().toISOString();
   const initialState = {
     key: 'device_state',

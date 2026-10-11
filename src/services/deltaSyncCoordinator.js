@@ -11,6 +11,7 @@
  */
 
 import { v4 as uuid } from 'uuid';
+import { generateUniqueDeviceId } from '../database/deltaQueue.js';
 import { getDB, getRawIDB } from '../database/db.js';
 import {
   uploadPendingDeltas,
@@ -220,22 +221,115 @@ export function configureDeltaSyncEngine(options = {}) {
   };
 }
 
-export async function getLocalDeviceId() {
+export async function getLocalDeviceId(options = {}) {
+  const { createIfMissing = false } = (typeof options === 'boolean' ? { createIfMissing: options } : options);
   try {
+    const rawIdb = getRawIDB();
+    if (rawIdb) {
+      const stored = await new Promise((resolve) => {
+        const tx = rawIdb.transaction(['sync_local_state'], 'readonly');
+        const req = tx.objectStore('sync_local_state').get('device_state');
+        req.onsuccess = () => resolve(req.result?.device_id || req.result?.deviceId || null);
+        req.onerror = () => resolve(null);
+      });
+      if (stored && stored !== 'local_device') return stored;
+    }
     const db = getDB();
     const res = await db.query('SELECT device_id FROM sync_local_state WHERE key = ?', ['device_state']);
-    if (res.values?.[0]?.device_id) {
+    if (res.values?.[0]?.device_id && res.values[0].device_id !== 'local_device') {
       return res.values[0].device_id;
     }
   } catch {}
-  return 'local_device';
+
+  if (createIfMissing) {
+    return await getOrCreateLocalDeviceId();
+  }
+  return null;
+}
+
+/**
+ * Returns or allocates and persists a persistent, unique device identifier (dev_<12 hex chars>).
+ * Concurrently safe across tabs and retries on the same browser profile.
+ */
+export async function getOrCreateLocalDeviceId() {
+  const existing = await getLocalDeviceId();
+  if (existing && existing !== 'local_device') {
+    return existing;
+  }
+
+  const generatedId = generateUniqueDeviceId();
+  const db = getDB();
+  const rawIdb = getRawIDB();
+  const now = new Date().toISOString();
+
+  try {
+    if (rawIdb) {
+      await new Promise((resolve, reject) => {
+        const tx = rawIdb.transaction(['sync_local_state'], 'readwrite');
+        const store = tx.objectStore('sync_local_state');
+        const req = store.get('device_state');
+        req.onsuccess = () => {
+          const row = req.result || { key: 'device_state' };
+          // If concurrent tab already allocated an ID, use it
+          if (row.device_id && row.device_id !== 'local_device') {
+            resolve(row.device_id);
+            return;
+          }
+          row.device_id = generatedId;
+          row.deviceId = generatedId;
+          row.updated_at = now;
+          const putReq = store.put(row);
+          putReq.onsuccess = () => resolve(generatedId);
+          putReq.onerror = () => reject(putReq.error);
+        };
+        req.onerror = () => reject(req.error);
+        tx.onerror = () => reject(tx.error);
+      });
+    } else {
+      const res = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] }));
+      const row = res.values?.[0];
+      if (row && row.device_id && row.device_id !== 'local_device') {
+        return row.device_id;
+      }
+      if (row) {
+        await db.run('UPDATE sync_local_state SET device_id = ?, updated_at = ? WHERE key = ?', [generatedId, now, 'device_state']);
+      } else {
+        await db.run('INSERT INTO sync_local_state (key, device_id, updated_at) VALUES (?, ?, ?)', ['device_state', generatedId, now]);
+      }
+    }
+
+    // Verification readback to ensure persistence succeeded
+    const verified = await getLocalDeviceId();
+    if (!verified || verified === 'local_device') {
+      throw new Error('Verification readback failed to confirm persisted device ID.');
+    }
+    return verified;
+  } catch (err) {
+    throw new Error(`DEVICE_IDENTITY_ALLOCATION_FAILED: ${err.message}`);
+  }
 }
 
 /**
  * Returns the persisted lifecycle state for the local device.
  */
-export async function getDeviceLifecycleState(deviceId = 'local_device') {
+export async function getDeviceLifecycleState(deviceId = null) {
   try {
+    const rawIdb = getRawIDB();
+    if (rawIdb) {
+      const row = await new Promise((resolve) => {
+        const tx = rawIdb.transaction(['sync_local_state'], 'readonly');
+        const req = tx.objectStore('sync_local_state').get('device_state');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+      if (row && row.lifecycle_state) {
+        return row.lifecycle_state;
+      }
+      if (row && row.base_snapshot_id && String(row.base_snapshot_id).trim().length > 0) {
+        return DEVICE_LIFECYCLE.ACTIVE;
+      }
+    }
+
     const db = getDB();
     const res = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']);
     const row = res.values?.[0];
@@ -271,8 +365,9 @@ export async function getDeviceLifecycleState(deviceId = 'local_device') {
 
 /**
  * Persists the lifecycle state into sync_local_state.
+ * Preserves existing valid device identity and prevents defaulting to local_device.
  */
-export async function setDeviceLifecycleState(state, deviceId = 'local_device') {
+export async function setDeviceLifecycleState(state, deviceId = null) {
   if (!Object.values(DEVICE_LIFECYCLE).includes(state)) {
     throw new Error(`Invalid device lifecycle state: ${state}`);
   }
@@ -287,9 +382,12 @@ export async function setDeviceLifecycleState(state, deviceId = 'local_device') 
       const store = tx.objectStore('sync_local_state');
       const req = store.get('device_state');
       req.onsuccess = () => {
-        const existing = req.result || { key: 'device_state', device_id: deviceId };
+        const existing = req.result || { key: 'device_state' };
         existing.lifecycle_state = state;
-        existing.device_id = deviceId || existing.device_id || 'local_device';
+        if (deviceId && deviceId !== 'local_device') {
+          existing.device_id = deviceId;
+          existing.deviceId = deviceId;
+        }
         existing.updated_at = now;
         store.put(existing);
       };
@@ -300,9 +398,14 @@ export async function setDeviceLifecycleState(state, deviceId = 'local_device') 
     const res = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] }));
     const existing = res.values?.[0];
     if (existing) {
-      await db.run('UPDATE sync_local_state SET lifecycle_state = ?, updated_at = ? WHERE key = ?', [state, now, 'device_state']);
+      if (deviceId && deviceId !== 'local_device') {
+        await db.run('UPDATE sync_local_state SET lifecycle_state = ?, device_id = ?, updated_at = ? WHERE key = ?', [state, deviceId, now, 'device_state']);
+      } else {
+        await db.run('UPDATE sync_local_state SET lifecycle_state = ?, updated_at = ? WHERE key = ?', [state, now, 'device_state']);
+      }
     } else {
-      await db.run('INSERT INTO sync_local_state (key, device_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?)', ['device_state', deviceId, state, now]);
+      const effectiveId = (deviceId && deviceId !== 'local_device') ? deviceId : generateUniqueDeviceId();
+      await db.run('INSERT INTO sync_local_state (key, device_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?)', ['device_state', effectiveId, state, now]);
     }
   }
 }
@@ -486,9 +589,19 @@ async function _executeBootstrapFlow(options = {}) {
       : (_syncConfig.getSessionKey ? await _syncConfig.getSessionKey() : null);
     const pin = options.pin || null;
     const effectiveKey = sessionKey || pin;
-    const deviceId = options.deviceId || (typeof _syncConfig.getDeviceId === 'function' ? await _syncConfig.getDeviceId() : _syncConfig.deviceId) || 'local_device';
-    const onProgress = options.onProgress || (() => {});
+    // Step 0: Ensure valid persistent unique device identity before any operations
+    let deviceId = options.deviceId;
+    if (!deviceId || deviceId === 'local_device') {
+      deviceId = (typeof _syncConfig.getDeviceId === 'function' ? await _syncConfig.getDeviceId() : _syncConfig.deviceId);
+    }
+    if (!deviceId || deviceId === 'local_device') {
+      deviceId = await getOrCreateLocalDeviceId();
+    }
+    if (!deviceId || deviceId === 'local_device') {
+      throw new Error('DEVICE_IDENTITY_ALLOCATION_FAILED: Cannot bootstrap without a valid persistent device identifier.');
+    }
 
+    const onProgress = options.onProgress || (() => {});
     const db = getDB();
 
     // 1. Transition state to JOINING
@@ -788,7 +901,7 @@ export function initializeDeltaSyncRuntime() {
         return null;
       }
     },
-    getDeviceId: getLocalDeviceId
+    getDeviceId: getOrCreateLocalDeviceId
   });
 
   // 2. Subscribe to session unlock events (wakes and flushes pending queue on unlock for ACTIVE devices)
@@ -967,6 +1080,7 @@ export function scheduleSync(trigger = SYNC_TRIGGER.MUTATION) {
       _flushSyncTimers();
       triggerAutomaticSync(SYNC_TRIGGER.MUTATION);
     }, DEBOUNCE_MS);
+    _debounceTimer?.unref?.();
 
     // 2. Ensure hard ceiling timer is running (max 60s from first mutation)
     if (!_ceilingTimer) {
@@ -974,6 +1088,7 @@ export function scheduleSync(trigger = SYNC_TRIGGER.MUTATION) {
         _flushSyncTimers();
         triggerAutomaticSync(SYNC_TRIGGER.MUTATION);
       }, MAX_CEILING_MS);
+      _ceilingTimer?.unref?.();
     }
     return;
   }
@@ -1049,8 +1164,6 @@ export async function executeFullSyncPass(options = {}) {
     ? options.sessionKey
     : (getSessionKey ? await getSessionKey() : (_syncConfig.sessionKey || null));
 
-  const deviceId = options.deviceId || (getDeviceId ? (typeof getDeviceId === 'function' ? await getDeviceId() : getDeviceId) : (_syncConfig.deviceId || 'local_device'));
-
   if (!driveClient && !accessToken) {
     broadcastSyncStatus(SYNC_STATUS.AUTH_REQUIRED, { reason: 'No Google Drive credentials' });
     return { success: false, status: SYNC_STATUS.AUTH_REQUIRED, reason: 'No Google Drive credentials' };
@@ -1059,6 +1172,14 @@ export async function executeFullSyncPass(options = {}) {
   if (!sessionKey) {
     broadcastSyncStatus(SYNC_STATUS.AUTH_REQUIRED, { reason: 'Sync session is locked (no encryption key)' });
     return { success: false, status: SYNC_STATUS.AUTH_REQUIRED, reason: 'Sync session is locked' };
+  }
+
+  let deviceId = options.deviceId;
+  if (!deviceId || deviceId === 'local_device') {
+    deviceId = getDeviceId ? (typeof getDeviceId === 'function' ? await getDeviceId() : getDeviceId) : (_syncConfig.deviceId || null);
+  }
+  if (!deviceId || deviceId === 'local_device') {
+    deviceId = await getOrCreateLocalDeviceId().catch(() => null);
   }
 
   broadcastSyncStatus(SYNC_STATUS.SYNCING, { trigger });

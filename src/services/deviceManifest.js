@@ -182,6 +182,10 @@ export async function readOwnDeviceManifest(arg1, arg2, arg3, arg4, arg5) {
     }
   }
 
+  if (!deviceId || deviceId === 'local_device') {
+    throw new Error('ILLEGAL_DEVICE_ID: Cannot read manifest for unassigned or reserved device_id ' + deviceId);
+  }
+
   const filename = getDeviceManifestFilename(deviceId);
   
   if (driveClient?.findFiles) {
@@ -204,8 +208,7 @@ export async function readOwnDeviceManifest(arg1, arg2, arg3, arg4, arg5) {
   if (!file) {
     return createEmptyDeviceManifest({ deviceId, baseSnapshotId, baseCloudVersion, manifestRevision: 0 });
   }
-
-  const rawContent = await reader(file.id, accessToken);
+    const rawContent = await reader(file.id, accessToken);
   try {
     const parsed = typeof rawContent === 'string' ? JSON.parse(rawContent) : rawContent;
     if (parsed.device_id !== deviceId) {
@@ -247,6 +250,16 @@ export async function writeOwnDeviceManifest(arg1, arg2, arg3) {
     throw new Error('Valid manifest object with device_id is required.');
   }
 
+  // Legacy manifest protection: Never write for reserved legacy identifier 'local_device'
+  if (manifest.device_id === 'local_device') {
+    throw new Error(`ILLEGAL_DEVICE_ID: Cannot write manifest for unassigned or reserved device_id '${manifest.device_id}'.`);
+  }
+
+  const filename = getDeviceManifestFilename(manifest.device_id);
+  if (filename === 'manifest_dev_local_device.json') {
+    throw new Error(`ILLEGAL_MANIFEST_WRITE: Writing to reserved legacy manifest '${filename}' is strictly prohibited.`);
+  }
+
   // Safety guard: block publishing ACTIVE manifest if local lifecycle state is non-ACTIVE
   if (manifest.device_lifecycle_state === 'ACTIVE') {
     try {
@@ -261,7 +274,6 @@ export async function writeOwnDeviceManifest(arg1, arg2, arg3) {
     }
   }
 
-  const filename = getDeviceManifestFilename(manifest.device_id);
   manifest.manifest_revision = (Number(manifest.manifest_revision || manifest.revision) || 0) + 1;
   manifest.revision = manifest.manifest_revision;
   manifest.updated_at = new Date().toISOString();
@@ -271,6 +283,17 @@ export async function writeOwnDeviceManifest(arg1, arg2, arg3) {
   if (driveClient?.uploadFile) {
     const existing = await driveClient.findFiles({ name: filename });
     if (existing && existing.length > 0) {
+      if (driveClient.readFile) {
+        try {
+          const raw = await driveClient.readFile(existing[0].id);
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (parsed && parsed.device_id && parsed.device_id !== manifest.device_id) {
+            throw new Error(`MANIFEST_COLLISION: Refusing to overwrite manifest owned by '${parsed.device_id}' with caller '${manifest.device_id}'`);
+          }
+        } catch (e) {
+          if (e.message?.startsWith('MANIFEST_COLLISION')) throw e;
+        }
+      }
       driveClient.files.set(existing[0].id, {
         ...driveClient.files.get(existing[0].id),
         content,
@@ -284,6 +307,21 @@ export async function writeOwnDeviceManifest(arg1, arg2, arg3) {
       appProperties: { device_id: manifest.device_id, revision: String(manifest.manifest_revision) }
     });
     return { manifest, driveResult: uploaded };
+  }
+
+  const finder = driveClient?.findAppDataFile || findAppDataFile;
+  const reader = driveClient?.readAppDataFile || readAppDataFile;
+  const existingFile = await finder(filename, accessToken);
+  if (existingFile) {
+    try {
+      const raw = await reader(existingFile.id, accessToken);
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (parsed && parsed.device_id && parsed.device_id !== manifest.device_id) {
+        throw new Error(`MANIFEST_COLLISION: Refusing to overwrite manifest owned by '${parsed.device_id}' with caller '${manifest.device_id}'`);
+      }
+    } catch (e) {
+      if (e.message?.startsWith('MANIFEST_COLLISION')) throw e;
+    }
   }
 
   const uploader = driveClient?.uploadAppDataFile || uploadAppDataFile;
@@ -381,7 +419,7 @@ export async function listPeerManifests(arg1, arg2, arg3, arg4) {
       const raw = await reader(f.id, accessToken);
       const manifest = typeof raw === 'string' ? JSON.parse(raw) : raw;
 
-      if (!manifest || !manifest.device_id) continue;
+      if (!manifest || !manifest.device_id || manifest.device_id === 'local_device') continue;
       if (manifest.base_snapshot_id) {
         const peerBase = manifest.base_snapshot_id;
         const matchesActive = Boolean(currentBaseSnapshotId && peerBase === currentBaseSnapshotId);
