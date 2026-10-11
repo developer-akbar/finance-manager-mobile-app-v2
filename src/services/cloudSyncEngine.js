@@ -2494,8 +2494,11 @@ export async function populateLocalEntitiesBootstrap(db, entities) {
   await db.run('DELETE FROM investment_transactions').catch(() => {});
   await db.run('DELETE FROM sync_tombstones').catch(() => {});
 
-  // 2. Insert Transactions
-  if (Array.isArray(entities.transactions) && entities.transactions.length > 0) {
+  // 2. Insert Transactions (Atomic batch replace if available)
+  if (typeof db.batchReplace === 'function') {
+    const txnRows = (Array.isArray(entities.transactions) ? entities.transactions : []).map(txnObjectToDBRow);
+    await db.batchReplace('transactions', txnRows);
+  } else if (Array.isArray(entities.transactions) && entities.transactions.length > 0) {
     for (const t of entities.transactions) {
       const row = txnObjectToDBRow(t);
       await db.run(
@@ -2514,8 +2517,11 @@ export async function populateLocalEntitiesBootstrap(db, entities) {
     }
   }
 
-  // 3. Insert Investment Transactions
-  if (Array.isArray(entities.investment_transactions) && entities.investment_transactions.length > 0) {
+  // 3. Insert Investment Transactions (Atomic batch replace if available)
+  if (typeof db.batchReplace === 'function') {
+    const invRows = (Array.isArray(entities.investment_transactions) ? entities.investment_transactions : []).map(invTxnObjectToDBRow);
+    await db.batchReplace('investment_transactions', invRows);
+  } else if (Array.isArray(entities.investment_transactions) && entities.investment_transactions.length > 0) {
     for (const t of entities.investment_transactions) {
       const row = invTxnObjectToDBRow(t);
       await db.run(

@@ -84,7 +84,12 @@ let _currentSyncStatus = SYNC_STATUS.IDLE;
 let _debounceTimer = null;
 let _ceilingTimer = null;
 let _isSyncRunning = false;
+let _isBootstrapInProgress = false;
 let _pendingSyncRequested = false;
+
+export function isBootstrapInProgress() {
+  return _isBootstrapInProgress;
+}
 let _syncConfig = {
   getAccessToken: null,
   getSessionKey: null,
@@ -456,22 +461,38 @@ export async function hydrateMissingSnapshotLineage(options = {}) {
  * Headless bootstrap flow for a new device joining an existing repository.
  */
 export async function bootstrapNewDevice(options = {}) {
+  // Enforce exclusive master sync lock across tabs and concurrent sync tasks
+  if (!options._hasMasterLock) {
+    return await withMasterSyncLock(async () => {
+      return await bootstrapNewDevice({ ...options, _hasMasterLock: true });
+    });
+  }
+
+  _isBootstrapInProgress = true;
+  try {
+    return await _executeBootstrapFlow(options);
+  } finally {
+    _isBootstrapInProgress = false;
+  }
+}
+
+async function _executeBootstrapFlow(options = {}) {
   const driveClient = options.driveClient || _syncConfig.driveClient;
-  const accessToken = options.accessToken !== undefined
-    ? options.accessToken
-    : (_syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null);
-  const sessionKey = options.sessionKey !== undefined
-    ? options.sessionKey
-    : (_syncConfig.getSessionKey ? await _syncConfig.getSessionKey() : null);
-  const pin = options.pin || null;
-  const effectiveKey = sessionKey || pin;
-  const deviceId = options.deviceId || (typeof _syncConfig.getDeviceId === 'function' ? await _syncConfig.getDeviceId() : _syncConfig.deviceId) || 'local_device';
-  const onProgress = options.onProgress || (() => {});
+    const accessToken = options.accessToken !== undefined
+      ? options.accessToken
+      : (_syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null);
+    const sessionKey = options.sessionKey !== undefined
+      ? options.sessionKey
+      : (_syncConfig.getSessionKey ? await _syncConfig.getSessionKey() : null);
+    const pin = options.pin || null;
+    const effectiveKey = sessionKey || pin;
+    const deviceId = options.deviceId || (typeof _syncConfig.getDeviceId === 'function' ? await _syncConfig.getDeviceId() : _syncConfig.deviceId) || 'local_device';
+    const onProgress = options.onProgress || (() => {});
 
-  const db = getDB();
+    const db = getDB();
 
-  // 1. Transition state to JOINING
-  await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, deviceId);
+    // 1. Transition state to JOINING
+    await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, deviceId);
   broadcastSyncStatus(SYNC_STATUS.SYNCING, { stage: 'BOOTSTRAP_JOINING', message: 'Setting Up Your Cloud Data…' });
   onProgress({ stage: 'JOINING', message: 'Setting Up Your Cloud Data…' });
 
@@ -489,94 +510,95 @@ export async function bootstrapNewDevice(options = {}) {
   // 3. Deep validate cloud snapshot
   await validateCloudSnapshotPayload(payload);
 
-  // 4. Populate local DB stores atomically (reusing populateLocalEntitiesBootstrap)
-  onProgress({ stage: 'POPULATING', message: 'Installing baseline data…' });
-  await populateLocalEntitiesBootstrap(db, payload.entities || {});
-
-  // 5. Post-population count check
-  const localEntities = await readLocalEntities(db);
-  const expectedTxns = (payload.entities?.transactions || []).length;
-  const expectedInvTxns = (payload.entities?.investment_transactions || []).length;
-  if (localEntities.transactions.length !== expectedTxns || localEntities.investment_transactions.length !== expectedInvTxns) {
-    throw new Error(`BOOTSTRAP_VERIFICATION_FAILED: Count mismatch after baseline install. Expected ${expectedTxns} txns, ${expectedInvTxns} inv_txns; Got ${localEntities.transactions.length} txns, ${localEntities.investment_transactions.length} inv_txns.`);
-  }
-
-  // 6. Set watermarks & baseline settings (still JOINING)
-  const rawIdb = getRawIDB();
-  const now = new Date().toISOString();
-  if (rawIdb) {
-    await new Promise((resolve, reject) => {
-      const tx = rawIdb.transaction(['sync_local_state'], 'readwrite');
-      const store = tx.objectStore('sync_local_state');
-      store.put({
-        key: 'device_state',
-        device_id: deviceId,
-        base_snapshot_id: payload.snapshot_id,
-        base_cloud_version: payload.cloud_version || 1,
-        last_allocated_sequence: 0,
-        last_uploaded_sequence: 0,
-        last_pushed_sequence: 0,
-        last_acked_sequence: 0,
-        lifecycle_state: DEVICE_LIFECYCLE.JOINING,
-        updated_at: now
-      });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  } else {
-    await db.run(
-      'INSERT OR REPLACE INTO sync_local_state (key, device_id, base_snapshot_id, base_cloud_version, last_allocated_sequence, last_uploaded_sequence, last_pushed_sequence, last_acked_sequence, lifecycle_state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ['device_state', deviceId, payload.snapshot_id, payload.cloud_version || 1, 0, 0, 0, 0, DEVICE_LIFECYCLE.JOINING, now]
-    );
-  }
-
-  const { setSetting } = await import('../database/settings.js');
-  await setSetting('last_snapshot_id', payload.snapshot_id, { suppressDeltaQueue: true });
-  await setSetting('last_parent_snapshot_id', payload.parent_snapshot_id || '', { suppressDeltaQueue: true });
-  await setSetting('last_synced_at', now, { suppressDeltaQueue: true });
-  await setSetting('sub_accounts_migrated_v2', 'true', { suppressDeltaQueue: true });
-  await setSetting('historical_charges_reconciled', 'true', { suppressDeltaQueue: true });
-
-  // 6.5 Initialize peer watermarks from authoritative snapshot coverage metadata
-  try {
-    const watermarksToApply = (payload.covered_peer_watermarks && typeof payload.covered_peer_watermarks === 'object')
-      ? payload.covered_peer_watermarks
-      : null;
-
-    if (watermarksToApply) {
-      for (const [peerDeviceId, rawSeq] of Object.entries(watermarksToApply)) {
-        const coveredSeq = Number(rawSeq);
-        if (!peerDeviceId || isNaN(coveredSeq) || coveredSeq <= 0) continue;
-
-        if (rawIdb) {
-          await new Promise((resolve, reject) => {
-            const tx = rawIdb.transaction(['sync_peer_state'], 'readwrite');
-            const store = tx.objectStore('sync_peer_state');
-            store.put({
-              peer_device_id: peerDeviceId,
-              last_staged_sequence: coveredSeq,
-              last_reconciled_sequence: coveredSeq,
-              base_snapshot_id: payload.snapshot_id,
-              updated_at: now
-            });
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-          });
-        } else {
-          await db.run(
-            'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
-            [peerDeviceId, coveredSeq, coveredSeq, payload.snapshot_id, now]
-          );
-        }
-      }
-    }
-  } catch (err) {
-    throw new Error(`BOOTSTRAP_FAILED: Failed to initialize baseline lineage peer watermarks: ${err.message}`);
-  }
-
-  // 7. Pull post-baseline peer deltas and reconcile under attempt-scoped safety
   const stagedPackageIdsInAttempt = new Set();
   try {
+    // 4. Populate local DB stores atomically (reusing populateLocalEntitiesBootstrap)
+    onProgress({ stage: 'POPULATING', message: 'Installing baseline data…' });
+    await populateLocalEntitiesBootstrap(db, payload.entities || {});
+
+    // 5. Post-population count check
+    const localEntities = await readLocalEntities(db);
+    const expectedTxns = (payload.entities?.transactions || []).length;
+    const expectedInvTxns = (payload.entities?.investment_transactions || []).length;
+    if (localEntities.transactions.length !== expectedTxns || localEntities.investment_transactions.length !== expectedInvTxns) {
+      throw new Error(`BOOTSTRAP_VERIFICATION_FAILED: Count mismatch after baseline install. Expected ${expectedTxns} txns, ${expectedInvTxns} inv_txns; Got ${localEntities.transactions.length} txns, ${localEntities.investment_transactions.length} inv_txns.`);
+    }
+
+    // 6. Set watermarks & baseline settings (still JOINING)
+    const rawIdb = getRawIDB();
+    const now = new Date().toISOString();
+    if (rawIdb) {
+      await new Promise((resolve, reject) => {
+        const tx = rawIdb.transaction(['sync_local_state'], 'readwrite');
+        const store = tx.objectStore('sync_local_state');
+        store.put({
+          key: 'device_state',
+          deviceId: deviceId,
+          device_id: deviceId,
+          base_snapshot_id: payload.snapshot_id,
+          base_cloud_version: payload.cloud_version || 1,
+          last_allocated_sequence: 0,
+          last_uploaded_sequence: 0,
+          last_pushed_sequence: 0,
+          last_acked_sequence: 0,
+          lifecycle_state: DEVICE_LIFECYCLE.JOINING,
+          updated_at: now
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } else {
+      await db.run(
+        'INSERT OR REPLACE INTO sync_local_state (key, device_id, base_snapshot_id, base_cloud_version, last_allocated_sequence, last_uploaded_sequence, last_pushed_sequence, last_acked_sequence, lifecycle_state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ['device_state', deviceId, payload.snapshot_id, payload.cloud_version || 1, 0, 0, 0, 0, DEVICE_LIFECYCLE.JOINING, now]
+      );
+    }
+
+    const { setSetting } = await import('../database/settings.js');
+    await setSetting('last_snapshot_id', payload.snapshot_id, { suppressDeltaQueue: true });
+    await setSetting('last_parent_snapshot_id', payload.parent_snapshot_id || '', { suppressDeltaQueue: true });
+    await setSetting('last_synced_at', now, { suppressDeltaQueue: true });
+    await setSetting('sub_accounts_migrated_v2', 'true', { suppressDeltaQueue: true });
+    await setSetting('historical_charges_reconciled', 'true', { suppressDeltaQueue: true });
+
+    // 6.5 Initialize peer watermarks from authoritative snapshot coverage metadata
+    try {
+      const watermarksToApply = (payload.covered_peer_watermarks && typeof payload.covered_peer_watermarks === 'object')
+        ? payload.covered_peer_watermarks
+        : null;
+
+      if (watermarksToApply) {
+        for (const [peerDeviceId, rawSeq] of Object.entries(watermarksToApply)) {
+          const coveredSeq = Number(rawSeq);
+          if (!peerDeviceId || isNaN(coveredSeq) || coveredSeq <= 0) continue;
+
+          if (rawIdb) {
+            await new Promise((resolve, reject) => {
+              const tx = rawIdb.transaction(['sync_peer_state'], 'readwrite');
+              const store = tx.objectStore('sync_peer_state');
+              store.put({
+                peer_device_id: peerDeviceId,
+                last_staged_sequence: coveredSeq,
+                last_reconciled_sequence: coveredSeq,
+                base_snapshot_id: payload.snapshot_id,
+                updated_at: now
+              });
+              tx.oncomplete = () => resolve();
+              tx.onerror = () => reject(tx.error);
+            });
+          } else {
+            await db.run(
+              'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+              [peerDeviceId, coveredSeq, coveredSeq, payload.snapshot_id, now]
+            );
+          }
+        }
+      }
+    } catch (err) {
+      throw new Error(`BOOTSTRAP_FAILED: Failed to initialize baseline lineage peer watermarks: ${err.message}`);
+    }
+
+    // 7. Pull post-baseline peer deltas and reconcile under attempt-scoped safety
     onProgress({ stage: 'REPLAYING_DELTAS', message: 'Replaying recent cloud changes…' });
     const pullResult = await downloadAndStagePeerPackages({
       localDeviceId: deviceId,
@@ -667,6 +689,13 @@ export async function bootstrapNewDevice(options = {}) {
     if (payload && payload.entities) {
       try {
         await populateLocalEntitiesBootstrap(db, payload.entities || {});
+        // Verify rollback canonical store counts
+        const rolledBackEntities = await readLocalEntities(db);
+        const expectedTxns = (payload.entities?.transactions || []).length;
+        const expectedInvTxns = (payload.entities?.investment_transactions || []).length;
+        if (rolledBackEntities.transactions.length !== expectedTxns || rolledBackEntities.investment_transactions.length !== expectedInvTxns) {
+          rollbackErrors.push(`Rollback count verification mismatch: expected ${expectedTxns} txns, ${expectedInvTxns} inv_txns; got ${rolledBackEntities.transactions.length} txns, ${rolledBackEntities.investment_transactions.length} inv_txns`);
+        }
       } catch (popErr) {
         console.error('[deltaSyncCoordinator] Error reverting canonical stores during bootstrap rollback:', popErr);
         rollbackErrors.push(`Canonical revert failed: ${popErr.message}`);
@@ -701,6 +730,16 @@ export async function bootstrapNewDevice(options = {}) {
         rollbackErrors.push(`Watermark reset failed: ${wmErr.message}`);
       }
     }
+
+    // Clean up baseline settings so fallback inference cannot treat device as ACTIVE
+    try {
+      const { setSetting } = await import('../database/settings.js');
+      await setSetting('last_snapshot_id', '', { suppressDeltaQueue: true });
+      await setSetting('last_parent_snapshot_id', '', { suppressDeltaQueue: true });
+    } catch (setErr) {
+      rollbackErrors.push(`Settings reset failed: ${setErr.message}`);
+    }
+
     try {
       await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, deviceId);
     } catch (lcErr) {
@@ -752,35 +791,55 @@ export function initializeDeltaSyncRuntime() {
     getDeviceId: getLocalDeviceId
   });
 
-  // 2. Subscribe to session unlock events (wakes and flushes pending queue on unlock)
+  // 2. Subscribe to session unlock events (wakes and flushes pending queue on unlock for ACTIVE devices)
   let unsubscribeSession = null;
   import('./syncSession.js').then(({ subscribeSyncSession }) => {
-    unsubscribeSession = subscribeSyncSession((isUnlocked, key) => {
+    unsubscribeSession = subscribeSyncSession(async (isUnlocked, key) => {
       if (isUnlocked && key) {
-        scheduleSync(SYNC_TRIGGER.STARTUP);
+        try {
+          const state = await getDeviceLifecycleState();
+          if (state === DEVICE_LIFECYCLE.ACTIVE) {
+            scheduleSync(SYNC_TRIGGER.STARTUP);
+          }
+        } catch {}
       }
     });
   }).catch(() => {});
 
-  // 3. Subscribe to Google OAuth state restoration events (wakes and flushes pending queue on connect/reconnect)
+  // 3. Subscribe to Google OAuth state restoration events (wakes and flushes pending queue on connect/reconnect for ACTIVE devices)
   let unsubscribeAuth = null;
   import('./googleAuth.js').then(({ subscribeGoogleAuth }) => {
-    unsubscribeAuth = subscribeGoogleAuth((isAuthenticated, token) => {
+    unsubscribeAuth = subscribeGoogleAuth(async (isAuthenticated, token) => {
       if (isAuthenticated && token) {
-        scheduleSync(SYNC_TRIGGER.STARTUP);
+        try {
+          const state = await getDeviceLifecycleState();
+          if (state === DEVICE_LIFECYCLE.ACTIVE) {
+            scheduleSync(SYNC_TRIGGER.STARTUP);
+          }
+        } catch {}
       }
     });
   }).catch(() => {});
 
-  // 4. Register visibilitychange & focus listeners once (foreground wake)
-  const handleVisibilityChange = () => {
+  // 4. Register visibilitychange & focus listeners once (foreground wake only for ACTIVE devices)
+  const handleVisibilityChange = async () => {
     if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      scheduleSync(SYNC_TRIGGER.FOREGROUND);
+      try {
+        const state = await getDeviceLifecycleState();
+        if (state === DEVICE_LIFECYCLE.ACTIVE) {
+          scheduleSync(SYNC_TRIGGER.FOREGROUND);
+        }
+      } catch {}
     }
   };
 
-  const handleFocus = () => {
-    scheduleSync(SYNC_TRIGGER.FOREGROUND);
+  const handleFocus = async () => {
+    try {
+      const state = await getDeviceLifecycleState();
+      if (state === DEVICE_LIFECYCLE.ACTIVE) {
+        scheduleSync(SYNC_TRIGGER.FOREGROUND);
+      }
+    } catch {}
   };
 
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
@@ -790,8 +849,12 @@ export function initializeDeltaSyncRuntime() {
     window.addEventListener('focus', handleFocus);
   }
 
-  // 5. Trigger startup sync check
-  scheduleSync(SYNC_TRIGGER.STARTUP);
+  // 5. Trigger startup sync check only for established ACTIVE devices
+  getDeviceLifecycleState().then(state => {
+    if (state === DEVICE_LIFECYCLE.ACTIVE) {
+      scheduleSync(SYNC_TRIGGER.STARTUP);
+    }
+  }).catch(() => {});
 
   _isRuntimeInitialized = true;
 
@@ -823,18 +886,21 @@ export function isDeltaSyncRuntimeInitialized() {
 /**
  * Acquires the master sync lock across browser tabs.
  */
-export async function withMasterSyncLock(taskFn) {
-  if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function') {
+export async function withMasterSyncLock(taskFn, lockOptions = {}) {
+  if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function' && !lockOptions.forceFallback) {
     return await navigator.locks.request(MASTER_SYNC_LOCK_NAME, { mode: 'exclusive' }, async () => {
       return await taskFn();
     });
   }
 
   // Fallback locking for node/test/non-supported environments
+  const leaseDurationMs = lockOptions.leaseDurationMs || 60000;
+  const heartbeatIntervalMs = lockOptions.heartbeatIntervalMs || 15000;
+
   const db = getDB();
   const ownerToken = uuid();
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + 60000).toISOString();
+  const expiresAt = new Date(now.getTime() + leaseDurationMs).toISOString();
 
   let acquired = false;
   try {
@@ -854,9 +920,30 @@ export async function withMasterSyncLock(taskFn) {
     throw new Error('[MasterLock] Failed to acquire master sync lock. Another sync operation is active.');
   }
 
+  let heartbeatTimer = null;
   try {
+    heartbeatTimer = setInterval(async () => {
+      try {
+        const check = await db.query('SELECT * FROM sync_process_locks WHERE lock_name = ?', [MASTER_SYNC_LOCK_NAME]);
+        if (check.values?.[0]?.owner_token === ownerToken) {
+          const renewedExpiresAt = new Date(Date.now() + leaseDurationMs).toISOString();
+          await db.run(
+            'UPDATE sync_process_locks SET expires_at = ?, updated_at = ? WHERE lock_name = ? AND owner_token = ?',
+            [renewedExpiresAt, new Date().toISOString(), MASTER_SYNC_LOCK_NAME, ownerToken]
+          );
+        }
+      } catch {}
+    }, heartbeatIntervalMs);
+    if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') {
+      heartbeatTimer.unref();
+    }
+
     return await taskFn();
   } finally {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
     try {
       const res = await db.query('SELECT * FROM sync_process_locks WHERE lock_name = ?', [MASTER_SYNC_LOCK_NAME]);
       if (res.values?.[0]?.owner_token === ownerToken) {
@@ -871,6 +958,7 @@ export async function withMasterSyncLock(taskFn) {
  */
 export function scheduleSync(trigger = SYNC_TRIGGER.MUTATION) {
   if (!_syncConfig.enabled) return;
+  if (_isBootstrapInProgress) return;
 
   if (trigger === SYNC_TRIGGER.MUTATION) {
     // 1. Reset debounce timer (30s)
@@ -915,6 +1003,9 @@ function _flushSyncTimers() {
  */
 export async function triggerAutomaticSync(trigger = SYNC_TRIGGER.MANUAL) {
   _flushSyncTimers();
+  if (_isBootstrapInProgress) {
+    return { status: 'BLOCKED_BOOTSTRAP_IN_PROGRESS' };
+  }
   if (_isSyncRunning) {
     _pendingSyncRequested = true;
     return { status: 'DEFERRED_PENDING_ACTIVE_SYNC' };
@@ -976,8 +1067,18 @@ export async function executeFullSyncPass(options = {}) {
     return await withMasterSyncLock(async () => {
       const lifecycleState = await getDeviceLifecycleState(deviceId);
 
-      // Handle UNINITIALIZED or JOINING new device bootstrap
-      if (lifecycleState === DEVICE_LIFECYCLE.UNINITIALIZED || lifecycleState === DEVICE_LIFECYCLE.JOINING) {
+      // Block ordinary background sync and reconciliation while lifecycle is JOINING
+      if (lifecycleState === DEVICE_LIFECYCLE.JOINING) {
+        broadcastSyncStatus(SYNC_STATUS.IDLE, { reason: 'Device is in JOINING lifecycle state' });
+        return {
+          success: false,
+          status: 'BLOCKED_DEVICE_JOINING',
+          reason: 'Device is in JOINING lifecycle state. Background sync is suspended.'
+        };
+      }
+
+      // Handle UNINITIALIZED new device bootstrap
+      if (lifecycleState === DEVICE_LIFECYCLE.UNINITIALIZED) {
         const discovery = await discoverCloudRepository({
           accessToken,
           driveClient,
@@ -991,7 +1092,8 @@ export async function executeFullSyncPass(options = {}) {
             sessionKey,
             driveClient,
             deviceId,
-            snapshotPayload: discovery.snapshotPayload
+            snapshotPayload: discovery.snapshotPayload,
+            _hasMasterLock: true
           });
 
           const nowIso = new Date().toISOString();

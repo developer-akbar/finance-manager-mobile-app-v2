@@ -36,6 +36,7 @@ import { getAccounts, replaceAccounts } from '../database/accounts.js';
 import { getCategories, replaceCategories } from '../database/categories.js';
 import { getSetting, setSetting } from '../database/settings.js';
 import { getPendingConflicts } from '../database/conflicts.js';
+import { unlockSyncSession, lockSyncSession } from '../services/syncSession.js';
 import {
   DEVICE_LIFECYCLE,
   getDeviceLifecycleState,
@@ -44,7 +45,13 @@ import {
   bootstrapNewDevice,
   executeFullSyncPass,
   configureDeltaSyncEngine,
-  SYNC_STATUS
+  SYNC_STATUS,
+  SYNC_TRIGGER,
+  scheduleSync,
+  triggerAutomaticSync,
+  initializeDeltaSyncRuntime,
+  isBootstrapInProgress,
+  withMasterSyncLock
 } from '../services/deltaSyncCoordinator.js';
 import {
   uploadPendingDeltas,
@@ -2322,5 +2329,685 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       db.run = origRun;
       await db.run('DELETE FROM sync_delta_queue WHERE event_id = ?', ['evt_trip_7']);
     }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // PHASE 7.6 CONCURRENCY TESTS: MUTUAL EXCLUSION & RACE PREVENTION
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  await t.test('CONCURRENCY TEST 1: Unlocking the sync session while explicit bootstrap starts does NOT trigger competing bootstrap', async () => {
+    const db = getDB();
+    const mockDrive = new MockDriveStorage();
+    const freshDevId = 'dev_concur_1';
+    await initLocalSyncState(freshDevId);
+
+    // Setup cloud repository with baseline snapshot
+    const snapPayload = {
+      snapshot_id: 'snap_c1_base',
+      cloud_version: 1,
+      device_id: 'dev_creator',
+      created_at: new Date().toISOString(),
+      entities: {
+        transactions: [
+          { id: 'tx_c1_1', inr: 100, date: '2026-10-01', type: 'Expense' },
+          { id: 'tx_c1_2', inr: 200, date: '2026-10-02', type: 'Expense' },
+          { id: 'tx_c1_3', inr: 300, date: '2026-10-03', type: 'Expense' },
+          { id: 'tx_c1_4', inr: 400, date: '2026-10-04', type: 'Expense' },
+          { id: 'tx_c1_5', inr: 500, date: '2026-10-05', type: 'Expense' }
+        ],
+        investment_transactions: [
+          { id: 'inv_c1_1', inr: 1000, date: '2026-10-01', type: 'Investment', investment_transaction_type: 'BUY' },
+          { id: 'inv_c1_2', inr: 2000, date: '2026-10-02', type: 'Investment', investment_transaction_type: 'SELL' }
+        ],
+        accounts: [{ id: 'acct_c1', name: 'Main Account', group_name: 'Bank' }],
+        categories: [{ id: 'cat_c1', name: 'General', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Initialize runtime listeners
+    const cleanupRuntime = initializeDeltaSyncRuntime();
+
+    try {
+      // Concurrently unlock session AND call explicit bootstrapNewDevice
+      const unlockPromise = unlockSyncSession(TEST_SESSION_KEY);
+      const bootPromise = bootstrapNewDevice({
+        deviceId: freshDevId,
+        driveClient: mockDrive,
+        sessionKey: TEST_SESSION_KEY,
+        snapshotPayload: snapPayload
+      });
+
+      const [keyResult, bootResult] = await Promise.all([unlockPromise, bootPromise]);
+
+      assert.ok(keyResult, 'Session key derived');
+      assert.strictEqual(bootResult.success, true, 'Bootstrap succeeded cleanly');
+      assert.strictEqual(bootResult.recordsBootstrapped.transactions, 5, 'Exact 5 txns bootstrapped');
+      assert.strictEqual(bootResult.recordsBootstrapped.investment_transactions, 2, 'Exact 2 inv txns bootstrapped');
+
+      // Verify canonical counts
+      const localEntities = await readLocalEntities(db);
+      assert.strictEqual(localEntities.transactions.length, 5, 'Canonical store has exact 5 txns');
+      assert.strictEqual(localEntities.investment_transactions.length, 2, 'Canonical store has exact 2 inv txns');
+
+      // Verify zero outbound queue rows and zero conflicts
+      const queueRows = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+      assert.strictEqual(queueRows.length, 0, 'Zero delta queue entries created');
+
+      const conflicts = await getPendingConflicts();
+      assert.strictEqual(conflicts.length, 0, 'Zero conflicts generated');
+
+      // Lifecycle must be ACTIVE
+      const lifecycle = await getDeviceLifecycleState(freshDevId);
+      assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE, 'Device reached ACTIVE');
+    } finally {
+      if (typeof cleanupRuntime === 'function') cleanupRuntime();
+      lockSyncSession();
+    }
+  });
+
+  await t.test('CONCURRENCY TEST 2: Startup, focus, and visibility triggers are strictly blocked during JOINING', async () => {
+    const db = getDB();
+    const mockDrive = new MockDriveStorage();
+    const joiningDevId = 'dev_concur_2_joining';
+    await initLocalSyncState(joiningDevId);
+    await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, joiningDevId);
+
+    // Verify lifecycle is JOINING
+    const stateBefore = await getDeviceLifecycleState(joiningDevId);
+    assert.strictEqual(stateBefore, DEVICE_LIFECYCLE.JOINING);
+
+    // Call scheduleSync with background triggers — must not trigger active sync
+    scheduleSync(SYNC_TRIGGER.STARTUP);
+    scheduleSync(SYNC_TRIGGER.FOREGROUND);
+    scheduleSync(SYNC_TRIGGER.VISIBILITY_CHANGE);
+
+    // Directly call executeFullSyncPass while JOINING
+    const passResult = await executeFullSyncPass({
+      deviceId: joiningDevId,
+      driveClient: mockDrive,
+      sessionKey: TEST_SESSION_KEY,
+      trigger: SYNC_TRIGGER.FOREGROUND
+    });
+
+    assert.strictEqual(passResult.success, false, 'Sync pass is blocked');
+    assert.strictEqual(passResult.status, 'BLOCKED_DEVICE_JOINING', 'Status is BLOCKED_DEVICE_JOINING');
+
+    // Verify canonical stores, staged stores, and queue remain untouched
+    const stagedPkgs = (await db.query('SELECT * FROM sync_staged_packages')).values || [];
+    assert.strictEqual(stagedPkgs.length, 0, 'No packages staged');
+
+    const queueRows = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    assert.strictEqual(queueRows.length, 0, 'No queue entries created');
+
+    const stateAfter = await getDeviceLifecycleState(joiningDevId);
+    assert.strictEqual(stateAfter, DEVICE_LIFECYCLE.JOINING, 'Lifecycle remains firmly JOINING');
+  });
+
+  await t.test('CONCURRENCY TEST 3: Competing sync attempt during active bootstrap is blocked by master lock and maintenance boundary', async () => {
+    const db = getDB();
+    const mockDrive = new MockDriveStorage();
+    const freshDevId = 'dev_concur_3';
+    await initLocalSyncState(freshDevId);
+
+    const snapPayload = {
+      snapshot_id: 'snap_c3_base',
+      cloud_version: 1,
+      device_id: 'dev_creator',
+      created_at: new Date().toISOString(),
+      entities: {
+        transactions: [
+          { id: 'tx_c3_1', inr: 100, date: '2026-10-01', type: 'Expense' },
+          { id: 'tx_c3_2', inr: 200, date: '2026-10-02', type: 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acct_c3', name: 'Main Account', group_name: 'Bank' }],
+        categories: [{ id: 'cat_c3', name: 'General', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Track that competing sync triggered midway receives BLOCKED_BOOTSTRAP_IN_PROGRESS or is blocked
+    let competingSyncResult = null;
+
+    const bootPromise = bootstrapNewDevice({
+      deviceId: freshDevId,
+      driveClient: mockDrive,
+      sessionKey: TEST_SESSION_KEY,
+      snapshotPayload: snapPayload,
+      onProgress: ({ stage }) => {
+        if (stage === 'POPULATING') {
+          // While bootstrap is in POPULATING, simulate competing tab/background trigger
+          triggerAutomaticSync(SYNC_TRIGGER.STARTUP).then(res => {
+            competingSyncResult = res;
+          });
+        }
+      }
+    });
+
+    const bootResult = await bootPromise;
+    assert.strictEqual(bootResult.success, true);
+
+    // Wait a brief tick for competingSyncResult to resolve
+    await new Promise(r => setTimeout(r, 50));
+    assert.ok(competingSyncResult, 'Competing sync was dispatched');
+    assert.ok(
+      competingSyncResult.status === 'BLOCKED_BOOTSTRAP_IN_PROGRESS' ||
+      competingSyncResult.status === 'DEFERRED_PENDING_ACTIVE_SYNC' ||
+      competingSyncResult.status === 'BLOCKED_DEVICE_JOINING',
+      `Competing sync blocked gracefully, got: ${competingSyncResult?.status}`
+    );
+
+    // Verify canonical counts: exact 2 txns, 0 corrupted rows
+    const localEntities = await readLocalEntities(db);
+    assert.strictEqual(localEntities.transactions.length, 2);
+    assert.strictEqual(localEntities.investment_transactions.length, 0);
+
+    const conflicts = await getPendingConflicts();
+    assert.strictEqual(conflicts.length, 0);
+  });
+
+  await t.test('CONCURRENCY TEST 4: Baseline count mismatch while competing sync attempt is pending rolls back cleanly and stays JOINING', async () => {
+    const db = getDB();
+    const mockDrive = new MockDriveStorage();
+    const freshDevId = 'dev_concur_4';
+    await initLocalSyncState(freshDevId);
+
+    const snapPayload = {
+      snapshot_id: 'snap_c4_base',
+      cloud_version: 1,
+      device_id: 'dev_creator',
+      created_at: new Date().toISOString(),
+      entities: {
+        transactions: [
+          { id: 'tx_c4_1', inr: 100, date: '2026-10-01', type: 'Expense' },
+          { id: 'tx_c4_2', inr: 200, date: '2026-10-02', type: 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acct_c4', name: 'Main Account', group_name: 'Bank' }],
+        categories: [{ id: 'cat_c4', name: 'General', type: 'Expense' }]
+      }
+    };
+
+    // Monkey-patch populateLocalEntitiesBootstrap once during initial install to inject extra transactions
+    let injectedOnce = false;
+    const origBatchReplace = db.batchReplace?.bind(db);
+    if (db.batchReplace) {
+      db.batchReplace = async (store, items) => {
+        if (store === 'transactions' && !injectedOnce) {
+          injectedOnce = true;
+          // Inject 3 extra transactions mimicking race condition
+          const injected = [
+            ...items,
+            { id: 'tx_race_1', inr: 99, date: '2026-10-01', type: 'Expense' },
+            { id: 'tx_race_2', inr: 99, date: '2026-10-01', type: 'Expense' },
+            { id: 'tx_race_3', inr: 99, date: '2026-10-01', type: 'Expense' }
+          ];
+          return origBatchReplace(store, injected);
+        }
+        return origBatchReplace(store, items);
+      };
+    }
+
+    try {
+      await assert.rejects(
+        async () => {
+          await bootstrapNewDevice({
+            deviceId: freshDevId,
+            driveClient: mockDrive,
+            sessionKey: TEST_SESSION_KEY,
+            snapshotPayload: snapPayload
+          });
+        },
+        (err) => {
+          assert.ok(err.message.includes('BOOTSTRAP_VERIFICATION_FAILED'), 'Gate 1 error surfaced');
+          assert.ok(err.message.includes('Count mismatch after baseline install'), 'Count mismatch specified');
+          assert.ok(err.message.includes('Expected 2 txns, 0 inv_txns; Got 5 txns, 0 inv_txns'), 'Exact count mismatch diagnostic');
+          return true;
+        }
+      );
+    } finally {
+      if (origBatchReplace) db.batchReplace = origBatchReplace;
+    }
+
+    // Rollback must have reverted canonical stores back to exact 2 txns
+    const localEntities = await readLocalEntities(db);
+    assert.strictEqual(localEntities.transactions.length, 2, 'Rollback restored canonical txns to 2');
+    assert.strictEqual(localEntities.investment_transactions.length, 0, 'Rollback restored inv txns to 0');
+
+    // Lifecycle must remain fail-closed in JOINING
+    const lifecycle = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.JOINING, 'Lifecycle remains fail-closed in JOINING');
+
+    // Fallback settings must be cleaned up
+    const lastSnapSetting = await getSetting('last_snapshot_id');
+    assert.strictEqual(lastSnapSetting || '', '', 'last_snapshot_id setting cleared to prevent false ACTIVE inference');
+
+    // Conflicts and queue must be 0
+    const conflicts = await getPendingConflicts();
+    assert.strictEqual(conflicts.length, 0, 'Zero phantom conflicts created');
+
+    const queueRows = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    assert.strictEqual(queueRows.length, 0, 'Zero queue rows');
+  });
+
+  await t.test('CONCURRENCY TEST 5: Rollback failure followed by a safe retry recovers cleanly', async () => {
+    const db = getDB();
+    const mockDrive = new MockDriveStorage();
+    const freshDevId = 'dev_concur_5';
+    await initLocalSyncState(freshDevId);
+
+    const snapPayload = {
+      snapshot_id: 'snap_c5_base',
+      cloud_version: 1,
+      device_id: 'dev_creator',
+      created_at: new Date().toISOString(),
+      entities: {
+        transactions: [
+          { id: 'tx_c5_1', inr: 100, date: '2026-10-01', type: 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acct_c5', name: 'Main Account', group_name: 'Bank' }],
+        categories: [{ id: 'cat_c5', name: 'General', type: 'Expense' }]
+      }
+    };
+
+    // Inject Gate 2 verification failure
+    await db.run(
+      'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, payload, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['evt_trip_c5', freshDevId, 1, new Date().toISOString(), 'transactions', 'txn_trip_c5', 'INSERT', JSON.stringify({ id: 'txn_trip_c5' }), 'PENDING']
+    );
+
+    let tripRollbackOnce = false;
+    const origBatchReplace = db.batchReplace?.bind(db);
+    if (db.batchReplace) {
+      db.batchReplace = async (store, items) => {
+        if (store === 'transactions' && tripRollbackOnce) {
+          throw new Error('Simulated transient I/O failure during canonical rollback');
+        }
+        return origBatchReplace(store, items);
+      };
+    }
+
+    try {
+      await assert.rejects(
+        async () => {
+          await bootstrapNewDevice({
+            deviceId: freshDevId,
+            sessionKey: TEST_SESSION_KEY,
+            driveClient: mockDrive,
+            snapshotPayload: snapPayload,
+            onProgress: ({ stage }) => {
+              if (stage === 'VERIFYING') {
+                tripRollbackOnce = true;
+              }
+            }
+          });
+        },
+        (err) => {
+          assert.ok(err.message.includes('BOOTSTRAP_VERIFICATION_FAILED'));
+          assert.ok(err.message.includes('ROLLBACK_FAILED'));
+          return true;
+        }
+      );
+    } finally {
+      if (origBatchReplace) db.batchReplace = origBatchReplace;
+      await db.run('DELETE FROM sync_delta_queue WHERE event_id = ?', ['evt_trip_c5']);
+    }
+
+    // Device must still be in JOINING
+    const lcBeforeRetry = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lcBeforeRetry, DEVICE_LIFECYCLE.JOINING);
+
+    // Now execute clean retry
+    const retryResult = await bootstrapNewDevice({
+      deviceId: freshDevId,
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: mockDrive,
+      snapshotPayload: snapPayload
+    });
+
+    assert.strictEqual(retryResult.success, true, 'Retry bootstrap succeeded');
+    const lcAfterRetry = await getDeviceLifecycleState(freshDevId);
+    assert.strictEqual(lcAfterRetry, DEVICE_LIFECYCLE.ACTIVE, 'Device is ACTIVE after clean retry');
+
+    const finalEntities = await readLocalEntities(db);
+    assert.strictEqual(finalEntities.transactions.length, 1, 'Exact 1 transaction after retry');
+  });
+
+  await t.test('CONCURRENCY TEST 6: D6 replay fixture retains exactly 1 genuine conflict without race-induced conflicts', async () => {
+    const db = getDB();
+    const mockDrive = new MockDriveStorage();
+    const freshDevId = 'dev_concur_6';
+    await initLocalSyncState(freshDevId);
+
+    // Setup snapshot v10 with base transaction txn_d6_conflict
+    const baseTxn = { id: 'txn_d6_conflict', inr: 500, date: '2026-10-01', type: 'Expense', note: 'Base Note' };
+    const snapPayload = {
+      snapshot_id: 'snap_c6_v10',
+      cloud_version: 1,
+      device_id: 'dev_creator',
+      created_at: new Date().toISOString(),
+      covered_peer_watermarks: { dev_d: 5 },
+      entities: {
+        transactions: [
+          baseTxn,
+          { id: 'tx_c6_clean_1', inr: 100, date: '2026-10-01', type: 'Expense', note: 'Clean 1' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acct_c6', name: 'Main Account', group_name: 'Bank' }],
+        categories: [{ id: 'cat_c6', name: 'General', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Seed peer D with package 6 containing genuine conflict on txn_d6_conflict
+    const conflictPayload = { id: 'txn_d6_conflict', inr: 999, note: 'Remote Edit D6' };
+    const d6Event1 = {
+      event_id: 'evt_d6_1',
+      device_id: 'dev_d',
+      sequence: 6,
+      timestamp: new Date().toISOString(),
+      collection: 'transactions',
+      entity_id: 'txn_d6_conflict',
+      operation: 'UPDATE',
+      base_checksum: 'wrong_stale_checksum_fixture', // Diverged base checksum -> genuine conflict
+      new_checksum: await computeCanonicalSha256(conflictPayload),
+      payload: conflictPayload
+    };
+    const cleanInsertPayload = { id: 'txn_d6_clean_insert', inr: 250, date: '2026-10-02', type: 'Expense', note: 'Clean D6' };
+    const d6Event2 = {
+      event_id: 'evt_d6_2',
+      device_id: 'dev_d',
+      sequence: 6,
+      timestamp: new Date().toISOString(),
+      collection: 'transactions',
+      entity_id: 'txn_d6_clean_insert',
+      operation: 'INSERT',
+      base_checksum: null,
+      new_checksum: await computeCanonicalSha256(cleanInsertPayload),
+      payload: cleanInsertPayload
+    };
+
+    const pkgD6Payload = buildDeterministicPackagePayload({
+      packageId: 'pkg_dev_d_6',
+      deviceId: 'dev_d',
+      startSequence: 6,
+      endSequence: 6,
+      baseSnapshotId: 'snap_c6_v10',
+      events: [d6Event1, d6Event2]
+    });
+    const encD6 = await encryptDeltaPackage(pkgD6Payload, TEST_SESSION_KEY);
+    const driveFileD6 = await mockDrive.uploadFile({ name: `${pkgD6Payload.package_id}.pkg`, content: JSON.stringify(encD6) });
+
+    const manifestPeerD = {
+      device_id: 'dev_d',
+      base_snapshot_id: 'snap_c6_v10',
+      manifest_revision: 1,
+      device_lifecycle_state: 'ACTIVE',
+      packages: [
+        {
+          package_id: pkgD6Payload.package_id,
+          drive_file_id: driveFileD6.id,
+          start_sequence: 6,
+          end_sequence: 6,
+          package_checksum: encD6.package_checksum,
+          base_snapshot_id: 'snap_c6_v10'
+        }
+      ]
+    };
+    await mockDrive.uploadFile({ name: 'manifest_dev_dev_d.json', content: JSON.stringify(manifestPeerD) });
+
+    // Concurrently trigger session unlock and foreground focus during bootstrap
+    const cleanupRuntime = initializeDeltaSyncRuntime();
+    try {
+      const bootPromise = bootstrapNewDevice({
+        deviceId: freshDevId,
+        driveClient: mockDrive,
+        sessionKey: TEST_SESSION_KEY,
+        snapshotPayload: snapPayload,
+        onProgress: ({ stage }) => {
+          if (stage === 'REPLAYING_DELTAS') {
+            // Foreground wake and session unlock attempts while replaying
+            scheduleSync(SYNC_TRIGGER.FOREGROUND);
+            unlockSyncSession(TEST_SESSION_KEY);
+          }
+        }
+      });
+
+      const bootResult = await bootPromise;
+      assert.strictEqual(bootResult.success, true);
+
+      // Verify canonical transactions: 2 baseline + 1 clean D6 insert = 3 txns
+      const localEntities = await readLocalEntities(db);
+      assert.strictEqual(localEntities.transactions.length, 3, 'Exact 3 canonical transactions');
+
+      // Verify EXACTLY 1 genuine conflict fixture preserved, ZERO race-induced conflicts
+      const conflicts = await getPendingConflicts();
+      assert.strictEqual(conflicts.length, 1, 'Exact 1 genuine conflict recorded');
+      assert.strictEqual(conflicts[0].entity_id, 'txn_d6_conflict', 'Conflict is the genuine D6 entity');
+      assert.strictEqual(conflicts[0].peer_device_id, 'dev_d', 'Conflict from peer D');
+
+      // Verify peer D watermark advanced
+      const peerState = (await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', ['dev_d'])).values[0];
+      assert.strictEqual(Number(peerState.last_staged_sequence), 6);
+
+      // Verify device reached ACTIVE
+      const lifecycle = await getDeviceLifecycleState(freshDevId);
+      assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE);
+    } finally {
+      if (typeof cleanupRuntime === 'function') cleanupRuntime();
+      lockSyncSession();
+    }
+  });
+
+  await t.test('CONCURRENCY TEST 7: Normal sync and settings changes continue to work seamlessly on an ACTIVE device', async () => {
+    const db = getDB();
+    const mockDrive = new MockDriveStorage();
+    const activeDevId = 'dev_concur_7_active';
+    await initLocalSyncState(activeDevId);
+
+    // Setup active device state
+    await db.run(
+      'INSERT OR REPLACE INTO sync_local_state (key, device_id, base_snapshot_id, base_cloud_version, last_allocated_sequence, last_uploaded_sequence, last_pushed_sequence, last_acked_sequence, lifecycle_state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['device_state', activeDevId, 'snap_c7', 1, 0, 0, 0, 0, DEVICE_LIFECYCLE.ACTIVE, new Date().toISOString()]
+    );
+    await setSetting('last_snapshot_id', 'snap_c7', { suppressDeltaQueue: true });
+
+    // Seed 1 active account
+    await replaceAccounts([{ id: 'acct_act_1', name: 'Checking', group_name: 'Bank' }], { suppressDeltaQueue: true });
+
+    // 1. Mutate setting (normal active setting change emits delta event)
+    await setSetting('theme', 'dark');
+
+    // 2. Add local financial transaction (emits delta event)
+    await addTransaction({
+      id: 'txn_act_live_1',
+      date: '2026-10-10',
+      inr: 750,
+      amount: 750,
+      account: 'Checking',
+      type: 'Expense',
+      note: 'Normal Active Transaction'
+    });
+
+    // Verify delta queue has pending events
+    const queueBefore = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    assert.ok(queueBefore.length >= 2, 'Pending mutations queued');
+
+    // 3. Execute normal sync pass under active device
+    const syncRes = await executeFullSyncPass({
+      deviceId: activeDevId,
+      driveClient: mockDrive,
+      sessionKey: TEST_SESSION_KEY,
+      trigger: SYNC_TRIGGER.MUTATION
+    });
+
+    assert.strictEqual(syncRes.success, true, 'Active sync pass succeeds');
+
+    // Verify queue acknowledged or package uploaded
+    const files = await mockDrive.findFiles({});
+    const pkgFiles = files.filter(f => f.name.endsWith('.pkg') || f.name.startsWith('pkg_'));
+    assert.ok(pkgFiles.length > 0, 'Outbound delta package uploaded to Drive');
+
+    // Lifecycle remains ACTIVE
+    const lc = await getDeviceLifecycleState(activeDevId);
+    assert.strictEqual(lc, DEVICE_LIFECYCLE.ACTIVE);
+  });
+
+  await t.test('CONCURRENCY TEST 8: Lock lease renewal keeps lock held across a long-running operation, excluding concurrent tasks', async () => {
+    let task1Completed = false;
+    let task2Blocked = false;
+
+    // Start Task 1 with forceFallback so it uses sync_process_locks with short lease + fast heartbeat
+    const task1Promise = withMasterSyncLock(async () => {
+      // Sleep 250ms with lease duration of 150ms and heartbeat of 40ms
+      await new Promise(r => setTimeout(r, 250));
+      task1Completed = true;
+      return 'task1_done';
+    }, {
+      forceFallback: true,
+      leaseDurationMs: 150,
+      heartbeatIntervalMs: 40
+    });
+
+    // Wait 160ms (exceeding initial 150ms lease, heartbeat must have renewed it)
+    await new Promise(r => setTimeout(r, 160));
+
+    // Task 2 attempts to acquire lock while Task 1 is still running at t=160ms
+    try {
+      await withMasterSyncLock(async () => {
+        return 'task2_ran_prematurely';
+      }, {
+        forceFallback: true,
+        leaseDurationMs: 150,
+        heartbeatIntervalMs: 40
+      });
+    } catch (err) {
+      if (err.message.includes('Another sync operation is active')) {
+        task2Blocked = true;
+      }
+    }
+
+    assert.strictEqual(task2Blocked, true, 'Task 2 was rejected because Task 1 renewed its lease via heartbeat');
+
+    const result1 = await task1Promise;
+    assert.strictEqual(result1, 'task1_done');
+    assert.strictEqual(task1Completed, true);
+
+    // After Task 1 completes, lock is deleted and Task 3 can acquire it cleanly
+    const result3 = await withMasterSyncLock(async () => {
+      return 'task3_acquired';
+    }, {
+      forceFallback: true,
+      leaseDurationMs: 150,
+      heartbeatIntervalMs: 40
+    });
+    assert.strictEqual(result3, 'task3_acquired');
+  });
+
+  await t.test('CONCURRENCY TEST 9: Atomic batch replacement rolls back cleanly on insertion error', async () => {
+    const db = getDB();
+    // Seed initial transaction
+    await db.run(
+      'INSERT OR REPLACE INTO transactions (id, date, amount, inr, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ['tx_init_batch_test', '2026-10-01', '500', 500, 'Expense', new Date().toISOString(), new Date().toISOString()]
+    );
+
+    const initialRows = (await db.query('SELECT * FROM transactions WHERE id = ?', ['tx_init_batch_test'])).values;
+    assert.strictEqual(initialRows.length, 1, 'Initial row exists');
+
+    // Create an object that throws an error during insertion/key extraction
+    const faultyObj = {};
+    Object.defineProperty(faultyObj, 'id', {
+      get() { throw new Error('Simulated insertion error during batchReplace'); },
+      enumerable: true
+    });
+
+    let replaceFailed = false;
+    try {
+      await db.batchReplace('transactions', [faultyObj]);
+    } catch (err) {
+      if (err.message.includes('Simulated insertion error')) {
+        replaceFailed = true;
+      }
+    }
+
+    assert.strictEqual(replaceFailed, true, 'batchReplace failed on un-insertable item');
+
+    // Verify transaction atomicity: Initial row was not cleared / destroyed by the failed batchReplace
+    const rowsAfterFail = (await db.query('SELECT * FROM transactions WHERE id = ?', ['tx_init_batch_test'])).values;
+    assert.strictEqual(rowsAfterFail.length, 1, 'Initial row was preserved because transaction aborted atomically');
+  });
+
+  await t.test('CONCURRENCY TEST 10: Failure around manifest publication prevents ACTIVE manifest and leaves device fail-closed in JOINING', async () => {
+    const db = getDB();
+    const mockDrive = new MockDriveStorage();
+    const testDevId = 'dev_concur_10_fail_pub';
+    await initLocalSyncState(testDevId);
+
+    const snapPayload = {
+      snapshot_id: 'snap_pub_fail_test',
+      cloud_version: 1,
+      device_id: 'dev_creator',
+      created_at: new Date().toISOString(),
+      covered_peer_watermarks: { dev_peer_x: 10 },
+      entities: {
+        transactions: [
+          { id: 'tx_pf_1', Date: '2026-10-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
+        ],
+        investment_transactions: [],
+        accounts: [{ id: 'acct_pf', name: 'Cash', group_name: 'Cash' }],
+        categories: [{ id: 'cat_pf', name: 'Food', type: 'Expense' }]
+      }
+    };
+    const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
+    await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
+
+    // Inject an unexpected unsynced event into sync_delta_queue during delta replay to trigger Gate 2 verification failure (before Step 10/11)
+    let failedAsExpected = false;
+    try {
+      await bootstrapNewDevice({
+        deviceId: testDevId,
+        driveClient: mockDrive,
+        sessionKey: TEST_SESSION_KEY,
+        snapshotPayload: snapPayload,
+        onProgress: async ({ stage }) => {
+          if (stage === 'REPLAYING_DELTAS') {
+            // Dirty the delta queue to trigger Gate 2 verification failure at Step 9
+            await db.run(
+              'INSERT INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+              ['evt_dirty_gate2', testDevId, 1, new Date().toISOString(), 'transactions', 'tx_pf_1', 'UPDATE', 'PENDING']
+            );
+          }
+        }
+      });
+    } catch (err) {
+      if (err.message.includes('BOOTSTRAP_VERIFICATION_FAILED')) {
+        failedAsExpected = true;
+      }
+    }
+
+    assert.strictEqual(failedAsExpected, true, 'Bootstrap failed at Gate 2 verification');
+
+    // Verify 1: Device lifecycle remains strictly JOINING
+    const lifecycle = await getDeviceLifecycleState(testDevId);
+    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.JOINING, 'Device is fail-closed in JOINING state');
+
+    // Verify 2: No ACTIVE device manifest was uploaded to Drive
+    const files = await mockDrive.findFiles({});
+    const manifestFile = files.find(f => f.name === `manifest_dev_${testDevId}.json`);
+    assert.strictEqual(manifestFile, undefined, 'No device manifest was uploaded');
+
+    // Verify 3: Peer watermarks were rolled back to pristine snapshot coverage
+    const peerXState = (await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', ['dev_peer_x'])).values[0];
+    assert.strictEqual(Number(peerXState?.last_staged_sequence), 10, 'Peer X watermark rolled back to base coverage');
+
+    // Verify 4: last_snapshot_id setting was reset
+    const lastSnapSetting = await getSetting('last_snapshot_id').catch(() => null);
+    assert.strictEqual(lastSnapSetting || '', '', 'Snapshot ID setting was wiped');
   });
 });

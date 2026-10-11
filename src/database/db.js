@@ -300,6 +300,35 @@ const makeWebDB = (idb) => ({
     await idbPutBatch(idb, store, news);
     return { added: news.length, skipped: items.length - news.length };
   },
+  // Atomic store replacement — clears and puts all items in ONE IDB transaction
+  batchReplace: async (store, items) => {
+    return new Promise((resolve, reject) => {
+      let tx;
+      try {
+        tx = idb.transaction(store, 'readwrite');
+        const st = tx.objectStore(store);
+        st.clear();
+        let added = 0;
+        if (Array.isArray(items) && items.length > 0) {
+          items.forEach(obj => {
+            st.put(obj);
+            added++;
+          });
+        }
+        tx.oncomplete = () => resolve({ replaced: added });
+        tx.onerror = () => {
+          try { tx.abort(); } catch {}
+          reject(tx.error);
+        };
+        tx.onabort = () => reject(tx.error || new Error(`Transaction aborted for batchReplace(${store})`));
+      } catch (err) {
+        if (tx) {
+          try { tx.abort(); } catch {}
+        }
+        reject(err);
+      }
+    });
+  },
 });
 
 // ── SQLite (Android) ──────────────────────────────────────────────────────────
@@ -364,6 +393,41 @@ const openSQLite = async () => {
 
     try { await db.run('COMMIT;'); } catch {}
     return { added, skipped: items.length - added };
+  };
+
+  db.batchReplace = async (store, items) => {
+    if (!/^[a-zA-Z0-9_]+$/.test(store)) {
+      throw new Error(`Invalid store name: ${store}`);
+    }
+    await db.run('BEGIN TRANSACTION;');
+    try {
+      await db.run(`DELETE FROM ${store};`);
+      let added = 0;
+      if (Array.isArray(items) && items.length > 0) {
+        const sample = items[0];
+        const cols = Object.keys(sample);
+        const colCount = cols.length;
+        const ROWS_PER_BATCH = Math.max(1, Math.floor(900 / colCount));
+        for (let i = 0; i < items.length; i += ROWS_PER_BATCH) {
+          const chunk = items.slice(i, i + ROWS_PER_BATCH);
+          const placeholders = chunk.map(() => `(${cols.map(() => '?').join(',')})`).join(',');
+          const sql = `INSERT INTO ${store} (${cols.join(',')}) VALUES ${placeholders}`;
+          const vals = [];
+          for (const row of chunk) {
+            for (const col of cols) {
+              vals.push(row[col] ?? null);
+            }
+          }
+          await db.run(sql, vals);
+          added += chunk.length;
+        }
+      }
+      await db.run('COMMIT;');
+      return { replaced: added };
+    } catch (err) {
+      try { await db.run('ROLLBACK;'); } catch {}
+      throw err;
+    }
   };
 
   return db;
