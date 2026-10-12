@@ -347,9 +347,7 @@ export async function createCanonicalSnapshotPayload({
     entities: sortedEntities
   };
 
-  if (peerWatermarksObj) {
-    payload.covered_peer_watermarks = peerWatermarksObj;
-  }
+  payload.covered_peer_watermarks = peerWatermarksObj || {};
 
   const canonicalJson = JSON.stringify(payload);
   const checksum = await sha256Hex(canonicalJson);

@@ -249,6 +249,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 5,
       created_at: new Date().toISOString(),
       device_id: 'device_c',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_b01', Date: '2026-03-01', INR: 2000, Account: 'Savings', Category: 'Salary', 'Income/Expense': 'Income' },
@@ -316,6 +317,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 1,
       created_at: new Date().toISOString(),
       device_id: 'device_c',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_baseline_1', Date: '2026-03-01', INR: 1000, Account: 'Checking', Category: 'Misc', 'Income/Expense': 'Expense' }
@@ -429,6 +431,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 1,
       created_at: new Date().toISOString(),
       device_id: 'device_c',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_conflict_target', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
@@ -660,6 +663,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 1,
       created_at: new Date().toISOString(),
       device_id: 'device_primary',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [],
         investment_transactions: [],
@@ -728,6 +732,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 1,
       created_at: new Date().toISOString(),
       device_id: 'device_primary',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_cloud_1', Date: '2026-03-01', INR: 999, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
@@ -874,6 +879,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 2,
       created_at: new Date().toISOString(),
       device_id: 'device_primary',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_cloud_auth_1', Date: '2026-03-01', INR: 1000, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }
@@ -1210,7 +1216,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
     assert.strictEqual(conflicts[0].entity_id, 'txn_conflicted_fixture');
   });
 
-  await t.test('WATERMARK TEST D: Legacy snapshot compatibility — Starts with zero peer coverage, ignores live creator manifest, reconciles historical packages', async () => {
+  await t.test('WATERMARK TEST D: Unknown legacy snapshot fail-closed — Unrecognized legacy snapshot without authoritative coverage metadata rejects with UNSUPPORTED_SNAPSHOT_METADATA', async () => {
     const db = getDB();
     const freshDevId = 'dev_fresh_watermark_test_d';
 
@@ -1234,7 +1240,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       content: encryptedSnapshot
     });
 
-    // 2. Snapshot creator manifest exists on Drive with high post-snapshot watermarks (which must NOT be consulted)
+    // 2. Snapshot creator manifest exists on Drive with high post-snapshot watermarks
     const creatorManifest = createEmptyDeviceManifest({
       deviceId: 'dev_creator_primary',
       baseSnapshotId: 'snap_legacy_v9',
@@ -1252,7 +1258,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       content: JSON.stringify(creatorManifest)
     });
 
-    // 3. Peer D has package 1 (seq 1..1) based on legacy v8 containing a historical unmerged transaction
+    // 3. Peer D has package 1 based on legacy v8
     const txnD = { id: 'txn_d_historical_unmerged', Date: '2026-03-01', INR: 400, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' };
     const txnDChecksum = await computeCanonicalSha256(txnD);
 
@@ -1299,25 +1305,32 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       content: JSON.stringify(manifestD)
     });
 
-    // 4. Run bootstrap on fresh device
-    const bootRes = await bootstrapNewDevice({
-      deviceId: freshDevId,
-      sessionKey: TEST_SESSION_KEY,
-      driveClient: mockDrive
-    });
+    // 4. Run bootstrap on fresh device — MUST fail closed before package staging or database mutation
+    await assert.rejects(
+      async () => {
+        await bootstrapNewDevice({
+          deviceId: freshDevId,
+          sessionKey: TEST_SESSION_KEY,
+          driveClient: mockDrive
+        });
+      },
+      (err) => {
+        assert.ok(err.message.includes('UNSUPPORTED_SNAPSHOT_METADATA'), `Expected UNSUPPORTED_SNAPSHOT_METADATA, got: ${err.message}`);
+        return true;
+      }
+    );
 
-    assert.strictEqual(bootRes.success, true);
-    // Verify package 1 was NOT skipped (it was staged and reconciled!)
-    assert.strictEqual(bootRes.inboundDeltas.stagedPackagesCount, 1, 'Historical package 1 was pulled (not skipped)');
-    assert.strictEqual(bootRes.reconciliation.reconciledCount, 1, 'Historical transaction reconciled cleanly');
+    // 5. Verify zero packages staged
+    const stagedPkgs = (await db.query('SELECT * FROM sync_staged_packages')).values || [];
+    assert.strictEqual(stagedPkgs.length, 0, 'Zero packages staged');
 
-    // Verify peer state watermark advanced legitimately to 1 (not falsely to 99 from creator manifest)
-    const peerStateDRes = await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', ['peer_dev_d']);
-    assert.strictEqual(Number(peerStateDRes.values?.[0]?.last_reconciled_sequence), 1, 'Reconciled sequence reflects actual package 1, not live creator manifest');
+    // 6. Verify zero conflicts created
+    const conflicts = await getPendingConflicts();
+    assert.strictEqual(conflicts.length, 0, 'Zero conflicts created');
 
-    // Verify transaction is present locally
+    // 7. Verify local canonical stores remain completely untouched
     const txns = await getTransactions();
-    assert.ok(txns.some(t => t.id === 'txn_d_historical_unmerged'), 'Historical unmerged transaction was preserved and inserted');
+    assert.strictEqual(txns.length, 0, 'Local canonical transactions untouched');
   });
 
   await t.test('WATERMARK TEST E: Fail-closed behavior — Watermark initialization failure aborts bootstrap with BOOTSTRAP_FAILED', async () => {
@@ -1627,6 +1640,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 10,
       created_at: new Date().toISOString(),
       device_id: creatorDevId,
+      covered_peer_watermarks: {},
       entities: { transactions: [], investment_transactions: [], accounts: [{ id: 'acc_1', name: 'Cash', group_name: 'Cash' }], categories: [{ id: 'cat_1', name: 'Food', type: 'Expense' }] }
     };
     const encSnap = await encryptBackupData(snapPayload, TEST_SESSION_KEY);
@@ -1854,7 +1868,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
     );
   });
 
-  await t.test('CREATOR LINEAGE TEST 8: Legacy snapshot without covered_peer_watermarks remains safe and functional', async () => {
+  await t.test('CREATOR LINEAGE TEST 8: Unknown legacy snapshot fails closed with UNSUPPORTED_SNAPSHOT_METADATA', async () => {
     const freshDevId = 'dev_legacy_test_8';
     const legacySnapPayload = {
       snapshot_id: 'snap_legacy_v7',
@@ -1873,11 +1887,15 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
     const encSnap = await encryptBackupData(legacySnapPayload, TEST_SESSION_KEY);
     await mockDrive.uploadFile({ name: SNAPSHOT_FILENAME, content: encSnap });
 
-    const res = await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
-    assert.strictEqual(res.success, true);
-    assert.strictEqual(res.recordsBootstrapped.transactions, 1);
-    const lifecycle = await getDeviceLifecycleState(freshDevId);
-    assert.strictEqual(lifecycle, DEVICE_LIFECYCLE.ACTIVE);
+    await assert.rejects(
+      async () => {
+        await bootstrapNewDevice({ deviceId: freshDevId, sessionKey: TEST_SESSION_KEY, driveClient: mockDrive });
+      },
+      (err) => {
+        assert.ok(err.message.includes('UNSUPPORTED_SNAPSHOT_METADATA'), `Expected UNSUPPORTED_SNAPSHOT_METADATA, got: ${err.message}`);
+        return true;
+      }
+    );
   });
 
   await t.test('QUEUE ISOLATION TEST 1: Legitimate settings initialization during bootstrap does not emit outbound queue events', async () => {
@@ -1890,6 +1908,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 10,
       created_at: new Date().toISOString(),
       device_id: 'dev_creator_c',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [{ id: 'txn_qi_1', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
         investment_transactions: [],
@@ -1920,6 +1939,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 10,
       created_at: new Date().toISOString(),
       device_id: 'dev_creator_c',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [{ id: 'txn_qi_2', Date: '2026-03-01', INR: 200, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
         investment_transactions: [],
@@ -2085,6 +2105,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 10,
       created_at: new Date().toISOString(),
       device_id: 'dev_creator_c',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [{ id: 'txn_base_5', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
         investment_transactions: [],
@@ -2257,6 +2278,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 10,
       created_at: new Date().toISOString(),
       device_id: 'dev_creator_c',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [{ id: 'txn_base_7', Date: '2026-03-01', INR: 100, Account: 'Cash', Category: 'Food', 'Income/Expense': 'Expense' }],
         investment_transactions: [],
@@ -2347,6 +2369,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 1,
       device_id: 'dev_creator',
       created_at: new Date().toISOString(),
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_c1_1', inr: 100, date: '2026-10-01', type: 'Expense' },
@@ -2456,6 +2479,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 1,
       device_id: 'dev_creator',
       created_at: new Date().toISOString(),
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_c3_1', inr: 100, date: '2026-10-01', type: 'Expense' },
@@ -2520,6 +2544,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 1,
       device_id: 'dev_creator',
       created_at: new Date().toISOString(),
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_c4_1', inr: 100, date: '2026-10-01', type: 'Expense' },
@@ -2604,6 +2629,7 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       cloud_version: 1,
       device_id: 'dev_creator',
       created_at: new Date().toISOString(),
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_c5_1', inr: 100, date: '2026-10-01', type: 'Expense' }

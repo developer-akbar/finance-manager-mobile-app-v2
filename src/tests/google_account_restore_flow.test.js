@@ -384,6 +384,7 @@ test('GOOGLE ACCOUNT IDENTITY & RESTORE FLOW SUITE', async (t) => {
       cloud_version: 1,
       created_at: new Date().toISOString(),
       device_id: 'dev_primary_orig',
+      covered_peer_watermarks: {},
       entities: {
         transactions: [
           { id: 'tx_restored_1', Amount: 1200, Type: 'Income', Description: 'Salary', Date: '2026-10-01' },

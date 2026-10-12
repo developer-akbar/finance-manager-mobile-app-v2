@@ -1136,12 +1136,16 @@ test('FinMan Phase 7.5 — Automatic Delta Synchronization Engine Suite', async 
     // 3. Simulate interactive Google reconnect / token save
     saveTokenData('newly_connected_token_999', 3600);
 
-    // Wait brief tick for scheduled immediate pass to execute under lock
-    await new Promise(r => setTimeout(r, 200));
+    // Wait for scheduled immediate pass to execute under lock
+    let queueRows = [];
+    for (let i = 0; i < 20; i++) {
+      queueRows = (await db.query('SELECT * FROM sync_delta_queue WHERE event_id = ?', ['evt_d12_pending'])).values || [];
+      if (queueRows[0]?.status === 'ACKNOWLEDGED') break;
+      await new Promise(r => setTimeout(r, 50));
+    }
 
     // Verify delta was picked up and ACKed
-    const queueRows = (await db.query('SELECT * FROM sync_delta_queue WHERE event_id = ?', ['evt_d12_pending'])).values;
-    assert.equal(queueRows[0].status, 'ACKNOWLEDGED');
+    assert.equal(queueRows[0]?.status, 'ACKNOWLEDGED');
 
     cleanup();
     clearGoogleAuth();

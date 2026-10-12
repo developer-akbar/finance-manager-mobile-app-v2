@@ -58,6 +58,46 @@ export const DEVICE_LIFECYCLE = Object.freeze({
   ACTIVE: 'ACTIVE'
 });
 
+/**
+ * Verified legacy snapshot watermarks catalog.
+ * For historical snapshots predating authoritative covered_peer_watermarks (commit 991edf5),
+ * maps known snapshot IDs to verified peer coverage watermarks.
+ */
+export const VERIFIED_LEGACY_SNAPSHOT_WATERMARKS = Object.freeze({
+  'snap_1790963722004_bq5y93': Object.freeze({
+    'dev_6edc69e37943': 4,
+    'dev_b91065cd877f': 5,
+    'dev_f31f6e6d6628': 9
+  })
+});
+
+/**
+ * Resolves authoritative peer coverage watermarks for a snapshot payload.
+ * Priority order:
+ * 1. Authoritative embedded metadata (v10+): If payload.covered_peer_watermarks is an object, use it directly.
+ * 2. Narrowly scoped backward-compatibility catalog for verified legacy snapshots.
+ * 3. Fail-closed: Reject unrecognized snapshots lacking coverage metadata with UNSUPPORTED_SNAPSHOT_METADATA.
+ */
+export function resolveSnapshotPeerWatermarks(payload) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('VALIDATION_ERROR: Missing or invalid snapshot payload.');
+  }
+
+  // 1. Authoritative embedded metadata takes priority for newer snapshots
+  if (payload.covered_peer_watermarks && typeof payload.covered_peer_watermarks === 'object') {
+    return payload.covered_peer_watermarks;
+  }
+
+  // 2. Verified backward-compatible transition catalog
+  const legacyWatermarks = VERIFIED_LEGACY_SNAPSHOT_WATERMARKS[payload.snapshot_id];
+  if (legacyWatermarks) {
+    return { ...legacyWatermarks };
+  }
+
+  // 3. Fail closed on unrecognized legacy snapshots
+  throw new Error(`UNSUPPORTED_SNAPSHOT_METADATA: Snapshot ${payload.snapshot_id || 'unknown'} lacks covered_peer_watermarks and cannot establish safe delta replay boundaries.`);
+}
+
 export const SYNC_STATUS = Object.freeze({
   IDLE: 'IDLE',
   SYNCING: 'SYNCING',
@@ -623,11 +663,16 @@ async function _executeBootstrapFlow(options = {}) {
   // 3. Deep validate cloud snapshot
   await validateCloudSnapshotPayload(payload);
 
+  // 3.5 Validate & resolve authoritative peer coverage watermarks before any database mutations
+  const watermarksToApply = resolveSnapshotPeerWatermarks(payload);
+
+  let baselineInstalled = false;
   const stagedPackageIdsInAttempt = new Set();
   try {
     // 4. Populate local DB stores atomically (reusing populateLocalEntitiesBootstrap)
     onProgress({ stage: 'POPULATING', message: 'Installing baseline data…' });
     await populateLocalEntitiesBootstrap(db, payload.entities || {});
+    baselineInstalled = true;
 
     // 5. Post-population count check
     const localEntities = await readLocalEntities(db);
@@ -674,12 +719,8 @@ async function _executeBootstrapFlow(options = {}) {
     await setSetting('sub_accounts_migrated_v2', 'true', { suppressDeltaQueue: true });
     await setSetting('historical_charges_reconciled', 'true', { suppressDeltaQueue: true });
 
-    // 6.5 Initialize peer watermarks from authoritative snapshot coverage metadata
+    // 6.5 Initialize peer watermarks from authoritative or verified transition coverage metadata
     try {
-      const watermarksToApply = (payload.covered_peer_watermarks && typeof payload.covered_peer_watermarks === 'object')
-        ? payload.covered_peer_watermarks
-        : null;
-
       if (watermarksToApply) {
         for (const [peerDeviceId, rawSeq] of Object.entries(watermarksToApply)) {
           const coveredSeq = Number(rawSeq);
@@ -798,8 +839,8 @@ async function _executeBootstrapFlow(options = {}) {
         rollbackErrors.push(`Cleanup failed: ${cleanupErr.message}`);
       }
     }
-    // Revert canonical stores back to pristine snapshot baseline
-    if (payload && payload.entities) {
+    // Revert canonical stores back to pristine snapshot baseline ONLY IF baseline was installed
+    if (baselineInstalled && payload && payload.entities) {
       try {
         await populateLocalEntitiesBootstrap(db, payload.entities || {});
         // Verify rollback canonical store counts
@@ -814,11 +855,11 @@ async function _executeBootstrapFlow(options = {}) {
         rollbackErrors.push(`Canonical revert failed: ${popErr.message}`);
       }
     }
-    // Reset watermarks to exact authoritative snapshot coverage
-    if (payload) {
+    // Reset watermarks to exact authoritative snapshot coverage ONLY IF baseline was installed
+    if (baselineInstalled && payload) {
       try {
-        const coveredMap = (payload.covered_peer_watermarks && typeof payload.covered_peer_watermarks === 'object')
-          ? payload.covered_peer_watermarks
+        const coveredMap = (watermarksToApply && typeof watermarksToApply === 'object')
+          ? watermarksToApply
           : {};
 
         const existingPeers = (await db.query('SELECT peer_device_id FROM sync_peer_state WHERE base_snapshot_id = ?', [payload.snapshot_id]).catch(() => ({ values: [] }))).values || [];
@@ -844,13 +885,15 @@ async function _executeBootstrapFlow(options = {}) {
       }
     }
 
-    // Clean up baseline settings so fallback inference cannot treat device as ACTIVE
-    try {
-      const { setSetting } = await import('../database/settings.js');
-      await setSetting('last_snapshot_id', '', { suppressDeltaQueue: true });
-      await setSetting('last_parent_snapshot_id', '', { suppressDeltaQueue: true });
-    } catch (setErr) {
-      rollbackErrors.push(`Settings reset failed: ${setErr.message}`);
+    // Clean up baseline settings so fallback inference cannot treat device as ACTIVE ONLY IF baseline was installed
+    if (baselineInstalled) {
+      try {
+        const { setSetting } = await import('../database/settings.js');
+        await setSetting('last_snapshot_id', '', { suppressDeltaQueue: true });
+        await setSetting('last_parent_snapshot_id', '', { suppressDeltaQueue: true });
+      } catch (setErr) {
+        rollbackErrors.push(`Settings reset failed: ${setErr.message}`);
+      }
     }
 
     try {
