@@ -130,14 +130,67 @@ export function canonicalizeEntity(entity, entityType = 'transaction') {
 
   if (entityType === 'account' || entityType === 'accounts') {
     const name = String(entity.name || entity.id || '').trim();
-    const group = String(entity.group || '').trim();
+    const group = String(entity.group || entity.group_name || '').trim();
     return `${id}|${name}|${group}`;
+  }
+
+  if (entityType === 'account_group' || entityType === 'account_groups') {
+    const name = String(entity.name || entity.id || '').trim();
+    return `${id}|${name}`;
   }
 
   if (entityType === 'category' || entityType === 'categories') {
     const name = String(entity.name || entity.id || '').trim();
     const type = String(entity.type || '').trim();
     return `${id}|${name}|${type}`;
+  }
+
+  if (entityType === 'subcategory' || entityType === 'subcategories') {
+    const name = String(entity.name || entity.id || '').trim();
+    const catId = String(entity.category_id || entity.categoryId || entity.category || '').trim();
+    return `${id}|${name}|${catId}`;
+  }
+
+  if (entityType === 'sub_account' || entityType === 'sub_accounts') {
+    const name = String(entity.name || entity.id || '').trim();
+    const acctId = String(entity.account_id || entity.accountId || entity.account || '').trim();
+    return `${id}|${name}|${acctId}`;
+  }
+
+  if (entityType === 'budget' || entityType === 'budgets') {
+    const category = String(entity.category || '').trim();
+    const amount = parseFloat(entity.amount || 0).toFixed(2);
+    const period = String(entity.period || 'Monthly').trim();
+    return `${id}|${category}|${amount}|${period}`;
+  }
+
+  if (entityType === 'recurring_rule' || entityType === 'recurring_rules') {
+    const ruleType = String(entity.rule_type || '').trim();
+    const status = String(entity.status || '').trim();
+    const acct = String(entity.account || '').trim();
+    const cat = String(entity.category || '').trim();
+    const subcat = String(entity.subcategory || '').trim();
+    const amt = parseFloat(entity.total_amount || 0).toFixed(2);
+    return `${id}|${ruleType}|${status}|${acct}|${cat}|${subcat}|${amt}`;
+  }
+
+  if (entityType === 'investment_plan' || entityType === 'investment_plans') {
+    const name = String(entity.name || entity.id || '').trim();
+    const targetAmt = parseFloat(entity.target_amount || 0).toFixed(2);
+    return `${id}|${name}|${targetAmt}`;
+  }
+
+  if (entityType === 'account_mapping') {
+    const src = String(entity.source_name || '').trim();
+    const acct = String(entity.account_name || '').trim();
+    return `${id}|${src}|${acct}`;
+  }
+
+  if (entityType === 'brokerage' || entityType === 'brokerages') {
+    const name = String(entity.name || entity.id || '').trim();
+    const bankAccount = String(entity.bank_account || entity.bankAccount || '').trim();
+    const owner = String(entity.owner || '').trim();
+    return `${id}|${name}|${bankAccount}|${owner}`;
   }
 
   if (entityType === 'setting' || entityType === 'settings') {
@@ -164,6 +217,27 @@ export function fastFingerprint(str) {
 }
 
 /**
+ * Scopes manifest keys by entity collection type to prevent key collisions across tables.
+ * Transactions and investment transactions retain un-prefixed IDs for backward compatibility.
+ * Settings retain 'setting:' prefix.
+ */
+export function getManifestEntityKey(entityType, rawId) {
+  const normType = String(entityType || '').toLowerCase();
+  if (normType === 'transaction' || normType === 'transactions' ||
+      normType === 'investment_transaction' || normType === 'investment_transactions') {
+    return String(rawId);
+  }
+  if (normType === 'setting' || normType === 'settings') {
+    const sId = String(rawId);
+    return sId.startsWith('setting:') ? sId : `setting:${sId}`;
+  }
+  const typePrefix = normType.endsWith('s') ? normType : `${normType}s`;
+  const strId = String(rawId);
+  if (strId.startsWith(`${typePrefix}:`)) return strId;
+  return `${typePrefix}:${strId}`;
+}
+
+/**
  * Build snapshot manifest vector containing fast fingerprints and canonical hashes
  */
 export async function buildEntityManifest(entitiesMap) {
@@ -181,12 +255,14 @@ export async function buildEntityManifest(entitiesMap) {
     }
     if (!Array.isArray(items)) continue;
     for (const item of items) {
-      const id = String(item.id || item.ID || item._id || item.key || '');
-      if (!id) continue;
+      const rawId = String(item.id || item.ID || item._id || item.key || item.name || '');
+      if (!rawId) continue;
+      const id = getManifestEntityKey(entityType, rawId);
       const canonical = canonicalizeEntity(item, entityType);
       const fp = fastFingerprint(canonical);
       manifest[id] = {
         type: entityType,
+        rawId,
         fp,
         canonical
       };
@@ -582,8 +658,11 @@ export async function reconcile3Way({
     }
     if (!Array.isArray(items)) continue;
     for (const item of items) {
-      const id = String(item.id || item.ID || item._id || item.key || '');
-      if (id) localMap.set(id, { item, type, canonical: canonicalizeEntity(item, type) });
+      const rawId = String(item.id || item.ID || item._id || item.key || item.name || '');
+      if (rawId) {
+        const id = getManifestEntityKey(type, rawId);
+        localMap.set(id, { item, type, rawId, canonical: canonicalizeEntity(item, type) });
+      }
     }
   }
 
@@ -595,8 +674,11 @@ export async function reconcile3Way({
     }
     if (!Array.isArray(items)) continue;
     for (const item of items) {
-      const id = String(item.id || item.ID || item._id || item.key || '');
-      if (id) cloudMap.set(id, { item, type, canonical: canonicalizeEntity(item, type) });
+      const rawId = String(item.id || item.ID || item._id || item.key || item.name || '');
+      if (rawId) {
+        const id = getManifestEntityKey(type, rawId);
+        cloudMap.set(id, { item, type, rawId, canonical: canonicalizeEntity(item, type) });
+      }
     }
   }
 
@@ -1107,13 +1189,13 @@ export async function reconcile3Way({
 
       // 4A: Local Deleted, Cloud Unchanged (Delete vs Unchanged) -> Propagate Delete to Cloud
       if (localDeleted && cloudEntry && !cloudChanged) {
-        plannedCloudDeletes.push(id);
+        plannedCloudDeletes.push(cloudEntry.rawId || id);
         continue;
       }
 
       // 4B: Cloud Deleted, Local Unchanged (Unchanged vs Delete) -> Propagate Delete to Local
       if (cloudDeleted && localEntry && !localChanged) {
-        plannedLocalDeletes.push({ id, type: localEntry.type });
+        plannedLocalDeletes.push({ id: localEntry.rawId || id, type: localEntry.type });
         continue;
       }
 
@@ -2547,7 +2629,18 @@ export async function populateLocalEntitiesBootstrap(db, entities) {
     for (const a of entities.accounts) {
       await db.run(
         `INSERT INTO accounts (id,name,group_name,sort_order,created_at,acct_type,settlement_date,payment_due_days,is_asset,card_last4) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [a.id || a.name, a.name, a.group_name || a.group || '', a.sort_order || a.sortOrder || 0, a.created_at || new Date().toISOString(), a.acct_type || a.acctType || '', a.settlement_date || a.settlementDate || 0, a.payment_due_days || a.paymentDueDays || 0, a.is_asset !== undefined ? (a.is_asset ? 1 : 0) : (a.isAsset !== undefined ? (a.isAsset ? 1 : 0) : 1), a.card_last4 || a.cardLast4 || '']
+        [
+          a.id || a.name,
+          a.name,
+          a.group_name || a.group || '',
+          a.sort_order || a.sortOrder || a.order || 0,
+          a.created_at || new Date().toISOString(),
+          a.acct_type || a.acctType || a.type || '',
+          a.settlement_date || a.settlementDate || 0,
+          a.payment_due_days || a.paymentDueDays || 0,
+          a.is_asset !== undefined ? (a.is_asset ? 1 : 0) : (a.isAsset !== undefined ? (a.isAsset ? 1 : 0) : 1),
+          a.card_last4 || a.cardLast4 || ''
+        ]
       );
     }
   }
@@ -2555,28 +2648,50 @@ export async function populateLocalEntitiesBootstrap(db, entities) {
   // 5. Account Groups
   if (Array.isArray(entities.account_groups)) {
     for (const g of entities.account_groups) {
-      await db.run(`INSERT INTO account_groups (id,name,sort_order) VALUES (?,?,?)`, [g.id || g.name, g.name, g.sort_order || g.sortOrder || 0]);
+      await db.run(
+        `INSERT INTO account_groups (id,name,sort_order) VALUES (?,?,?)`,
+        [g.id || g.name, g.name, g.sort_order || g.sortOrder || g.order || 0]
+      );
     }
   }
 
   // 6. Categories
   if (Array.isArray(entities.categories)) {
     for (const c of entities.categories) {
-      await db.run(`INSERT INTO categories (id,name,type,sort_order) VALUES (?,?,?,?)`, [c.id || c.name, c.name, c.type || 'Expense', c.sort_order || c.sortOrder || 0]);
+      await db.run(
+        `INSERT INTO categories (id,name,type,sort_order) VALUES (?,?,?,?)`,
+        [c.id || c.name, c.name, c.type || 'Expense', c.sort_order || c.sortOrder || c.order || 0]
+      );
     }
   }
 
   // 7. Subcategories
   if (Array.isArray(entities.subcategories)) {
     for (const sc of entities.subcategories) {
-      await db.run(`INSERT INTO subcategories (id,name,category_id,sort_order) VALUES (?,?,?,?)`, [sc.id || sc.name, sc.name, sc.category_id || sc.categoryId || '', sc.sort_order || sc.sortOrder || 0]);
+      await db.run(
+        `INSERT INTO subcategories (id,name,category_id,sort_order) VALUES (?,?,?,?)`,
+        [
+          sc.id || sc.name,
+          sc.name,
+          sc.category_id || sc.categoryId || sc.category || '',
+          sc.sort_order || sc.sortOrder || sc.order || 0
+        ]
+      );
     }
   }
 
   // 8. Sub Accounts
   if (Array.isArray(entities.sub_accounts)) {
     for (const sa of entities.sub_accounts) {
-      await db.run(`INSERT INTO sub_accounts (id,name,account_id,sort_order) VALUES (?,?,?,?)`, [sa.id || sa.name, sa.name, sa.account_id || sa.accountId || '', sa.sort_order || sa.sortOrder || 0]);
+      await db.run(
+        `INSERT INTO sub_accounts (id,name,account_id,sort_order) VALUES (?,?,?,?)`,
+        [
+          sa.id || sa.name,
+          sa.name,
+          sa.account_id || sa.accountId || sa.account || '',
+          sa.sort_order || sa.sortOrder || sa.order || 0
+        ]
+      );
     }
   }
 
@@ -2749,3 +2864,12 @@ export async function executeBootstrap({
     }
   };
 }
+
+export {
+  importSnapshotV10ToDevice,
+  preflightSnapshotV10Import,
+  verifyLocalRecoveryState,
+  V10_TARGET_REFERENCE,
+  SNAPSHOT_IMPORT_ERROR_CODES,
+  SnapshotImportError
+} from './snapshotDeviceImport.js';

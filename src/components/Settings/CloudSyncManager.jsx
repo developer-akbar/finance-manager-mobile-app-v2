@@ -17,6 +17,10 @@ import {
   previewCloudSync,
   executeCloudSync,
   executeBootstrap,
+  importSnapshotV10ToDevice,
+  preflightSnapshotV10Import,
+  verifyLocalRecoveryState,
+  V10_TARGET_REFERENCE,
   SYNC_STATUS,
   BOOTSTRAP_STATUS,
   CONFLICT_TYPES,
@@ -118,6 +122,41 @@ export default function CloudSyncManager({ onBack }) {
   const [resolvingId, setResolvingId] = useState(null);
   const [resolutionMsg, setResolutionMsg] = useState(null);
   const [confirmResolutionModal, setConfirmResolutionModal] = useState(null);
+
+  // Controlled V10 Cloud Snapshot Direct Recovery State
+  const [v10RecoveryModal, setV10RecoveryModal] = useState(null);
+
+  // Register global window helper for programmatic or console invocation
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__finmanImportSnapshotV10 = async (options = {}) => {
+        const token = await getValidAccessToken(true);
+        if (!token) throw new Error('Not authenticated with Google Drive. Please connect first.');
+        return importSnapshotV10ToDevice({
+          accessToken: token,
+          ...options
+        });
+      };
+      window.__finmanPreflightSnapshotV10 = async (options = {}) => {
+        const token = await getValidAccessToken(true);
+        if (!token) throw new Error('Not authenticated with Google Drive. Please connect first.');
+        return preflightSnapshotV10Import({
+          accessToken: token,
+          ...options
+        });
+      };
+      window.__finmanVerifyRollbackState = async () => {
+        return verifyLocalRecoveryState();
+      };
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        delete window.__finmanImportSnapshotV10;
+        delete window.__finmanPreflightSnapshotV10;
+        delete window.__finmanVerifyRollbackState;
+      }
+    };
+  }, []);
 
   // Subscribe to Session Key state changes
   useEffect(() => {
@@ -696,6 +735,85 @@ export default function CloudSyncManager({ onBack }) {
       setShowConfirmModal(false);
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  // Controlled V10 Direct Recovery Handlers
+  const handleOpenV10Recovery = async () => {
+    if (!isUnlocked) {
+      if (!pin || pin.trim().length < 4) {
+        setPinError('Please enter your 4+ digit PIN to unlock sync first.');
+        return;
+      }
+      const ok = await handleUnlock();
+      if (!ok) return;
+    }
+
+    const token = await getValidAccessToken(true);
+    if (!token) {
+      setAuthError('Please connect your Google Drive account first.');
+      return;
+    }
+
+    setV10RecoveryModal({ step: 'PREFLIGHT_LOADING', preflightData: null, confirmed: false, error: null });
+
+    try {
+      const preflight = await preflightSnapshotV10Import({
+        accessToken: token
+      });
+      setV10RecoveryModal({
+        step: 'PREFLIGHT_READY',
+        preflightData: preflight,
+        confirmed: false,
+        error: null
+      });
+    } catch (err) {
+      setV10RecoveryModal({
+        step: 'ERROR',
+        preflightData: null,
+        confirmed: false,
+        error: err.message
+      });
+    }
+  };
+
+  const handleExecuteV10Recovery = async () => {
+    if (!v10RecoveryModal?.confirmed) return;
+    const token = await getValidAccessToken(true);
+    if (!token) {
+      setV10RecoveryModal(prev => ({ ...prev, step: 'ERROR', error: 'Google session lost. Please reconnect.' }));
+      return;
+    }
+
+    setV10RecoveryModal(prev => ({ ...prev, step: 'IMPORTING', error: null }));
+
+    try {
+      const res = await importSnapshotV10ToDevice({
+        accessToken: token,
+        confirmation: 'CONFIRM_REPLACE_LOCAL_DATA'
+      });
+
+      if (typeof load === 'function') {
+        try { await load(); } catch {}
+      }
+
+      const nowIso = new Date().toISOString();
+      setLastSyncInfo({
+        lastSyncedAt: nowIso,
+        lastSnapshotId: res.snapshotId
+      });
+
+      setV10RecoveryModal({
+        step: 'SUCCESS',
+        result: res
+      });
+      setSuccessMsg('✓ Successfully imported Cloud Snapshot v10! Local dataset updated cleanly.');
+    } catch (err) {
+      setV10RecoveryModal({
+        step: 'ERROR',
+        error: err.message,
+        details: err.details
+      });
     }
   };
 
@@ -1559,7 +1677,7 @@ export default function CloudSyncManager({ onBack }) {
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Active Snapshot ID</span>
+              <span style={{ color: 'var(--text-muted)' }}>Local Base Snapshot ID</span>
               <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                 {lastSyncInfo.lastSnapshotId || 'None'}
               </span>
@@ -1593,6 +1711,24 @@ export default function CloudSyncManager({ onBack }) {
                 Diagnostic Log: {deltaMetrics.latestError}
               </div>
             )}
+
+            {/* Direct V10 Recovery / Replace Local Dataset */}
+            <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, marginTop: 12 }}>
+              <div style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
+                📥 Restore Verified Cloud Snapshot v10
+              </div>
+              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: 8, lineHeight: 1.4 }}>
+                Directly install verified Snapshot v10 (29,158 txns, 36 accounts, 732 inventory), replacing this device's local database. Takes an automatic local backup before replacement.
+              </div>
+              <button
+                className="btn btn-secondary"
+                onClick={handleOpenV10Recovery}
+                disabled={isLoading || isSyncing || !isGoogleLinked()}
+                style={{ fontSize: '0.74rem', padding: '6px 12px', fontWeight: 700 }}
+              >
+                📥 Restore Cloud Snapshot v10...
+              </button>
+            </div>
 
             {/* Client ID Configuration Toggle inside Advanced */}
             <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
@@ -2109,6 +2245,198 @@ export default function CloudSyncManager({ onBack }) {
                 </div>
               </>
             )}
+          </div>
+        </>
+      )}
+
+      {/* Controlled V10 Cloud Snapshot Recovery Modal */}
+      {v10RecoveryModal && (
+        <>
+          <div
+            className="dash-popup-overlay"
+            onClick={() => v10RecoveryModal.step !== 'IMPORTING' && setV10RecoveryModal(null)}
+            style={{ zIndex: 10000 }}
+          />
+          <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px calc(var(--safe-bottom) + 20px)' }}>
+            <div className="dash-popup-sheet-handle" />
+
+            {v10RecoveryModal.step === 'PREFLIGHT_LOADING' && (
+              <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <div style={{ fontSize: '2.2rem', marginBottom: 8 }}>⏳</div>
+                <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 4 }}>
+                  Validating Cloud Snapshot v10
+                </div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                  Downloading snapshot metadata and verifying against verified baseline...
+                </div>
+              </div>
+            )}
+
+            {v10RecoveryModal.step === 'PREFLIGHT_READY' && (
+              <>
+                <div style={{ textAlign: 'center', marginBottom: 12 }}>
+                  <div style={{ fontSize: '2.2rem', marginBottom: 4 }}>📥</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Restore Cloud Snapshot v10
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                    Replaces local browser dataset with verified cloud data
+                  </div>
+                </div>
+
+                <div style={{
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-light)',
+                  borderRadius: 8,
+                  padding: '12px 14px',
+                  marginBottom: 12,
+                  fontSize: '0.72rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Cloud Snapshot ID:</span>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {v10RecoveryModal.preflightData?.targetSnapshotId}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Incoming Transactions:</span>
+                    <span style={{ fontWeight: 700, color: 'var(--green)' }}>
+                      {v10RecoveryModal.preflightData?.incomingCounts?.totalTransactions?.toLocaleString()}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Incoming Accounts:</span>
+                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {v10RecoveryModal.preflightData?.incomingCounts?.accounts}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Incoming Inventory Items:</span>
+                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {v10RecoveryModal.preflightData?.incomingCounts?.inventory}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderTop: '1px solid var(--border-light)', marginTop: 4, paddingTop: 4 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Current Local Records:</span>
+                    <span style={{ color: 'var(--expense)', fontWeight: 600 }}>
+                      {v10RecoveryModal.preflightData?.localCounts?.totalTransactions?.toLocaleString()} (to be replaced)
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{
+                  background: 'rgba(255, 179, 0, 0.08)',
+                  border: '1px solid rgba(255, 179, 0, 0.25)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  fontSize: '0.7rem',
+                  color: 'var(--text-primary)',
+                  marginBottom: 14,
+                  lineHeight: 1.45
+                }}>
+                  🛡️ <strong>Safety Guarantee:</strong> An automatic recoverable backup of your current local data will be saved before replacement. If anything fails, changes will be rolled back automatically.
+                </div>
+
+                <label style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  fontSize: '0.74rem',
+                  color: 'var(--text-primary)',
+                  cursor: 'pointer',
+                  marginBottom: 16
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={v10RecoveryModal.confirmed || false}
+                    onChange={(e) => setV10RecoveryModal(prev => ({ ...prev, confirmed: e.target.checked }))}
+                    style={{ marginTop: 2 }}
+                  />
+                  <span>
+                    I confirm replacing this device's local database with verified Cloud Snapshot v10.
+                  </span>
+                </label>
+
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ flex: 1, padding: '10px' }}
+                    onClick={() => setV10RecoveryModal(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    style={{ flex: 1.6, padding: '10px', fontWeight: 800 }}
+                    onClick={handleExecuteV10Recovery}
+                    disabled={!v10RecoveryModal.confirmed}
+                  >
+                    📥 Confirm & Replace
+                  </button>
+                </div>
+              </>
+            )}
+
+            {v10RecoveryModal.step === 'IMPORTING' && (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <div style={{ fontSize: '2.4rem', marginBottom: 8 }}>🔄</div>
+                <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 4 }}>
+                  Importing Verified Snapshot v10...
+                </div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                  Populating local tables and verifying canonical integrity...
+                </div>
+              </div>
+            )}
+
+            {v10RecoveryModal.step === 'SUCCESS' && (
+              <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>✅</div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--green)', marginBottom: 6 }}>
+                  Import Complete!
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-primary)', marginBottom: 14 }}>
+                  Successfully installed {v10RecoveryModal.result?.recordsImported?.totalTransactions?.toLocaleString()} transactions, {v10RecoveryModal.result?.recordsImported?.accounts} accounts, and {v10RecoveryModal.result?.recordsImported?.inventory} inventory items.
+                </div>
+                <button
+                  className="btn btn-primary"
+                  style={{ width: '100%', padding: '10px', fontWeight: 800 }}
+                  onClick={() => setV10RecoveryModal(null)}
+                >
+                  Done
+                </button>
+              </div>
+            )}
+
+            {v10RecoveryModal.step === 'ERROR' && (
+              <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>❌</div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--expense)', marginBottom: 6 }}>
+                  Import Failed
+                </div>
+                <div style={{
+                  background: 'rgba(255, 77, 106, 0.08)',
+                  border: '1px solid rgba(255, 77, 106, 0.25)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  fontSize: '0.72rem',
+                  color: 'var(--expense)',
+                  marginBottom: 16,
+                  textAlign: 'left',
+                  wordBreak: 'break-word'
+                }}>
+                  {v10RecoveryModal.error}
+                </div>
+                <button
+                  className="btn btn-secondary"
+                  style={{ width: '100%', padding: '10px' }}
+                  onClick={() => setV10RecoveryModal(null)}
+                >
+                  Close
+                </button>
+              </div>
+            )}
+
           </div>
         </>
       )}
