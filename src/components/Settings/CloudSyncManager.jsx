@@ -7,6 +7,7 @@ import {
   isGoogleLinked,
   clearGoogleAuth,
   getGoogleClientId,
+  getGoogleClientIdSource,
   setGoogleClientId,
   getStoredGoogleUser,
   syncGoogleUserInfo,
@@ -74,6 +75,8 @@ export default function CloudSyncManager({ onBack }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => isGoogleLinked());
   const [googleUser, setGoogleUser] = useState(() => getStoredGoogleUser());
   const [clientId, setClientId] = useState('');
+  const [clientIdSource, setClientIdSource] = useState('NONE'); // 'CUSTOM_SAVED' | 'ENV_DEFAULT' | 'NONE'
+  const [clientIdSavedMsg, setClientIdSavedMsg] = useState('');
   const [showConfig, setShowConfig] = useState(false);
   const [authError, setAuthError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
@@ -182,10 +185,12 @@ export default function CloudSyncManager({ onBack }) {
     async function loadMeta() {
       try {
         const id = await getGoogleClientId();
+        const idSource = await getGoogleClientIdSource();
         const lastAt = await getSetting('last_synced_at').catch(() => null);
         const lastSnap = await getSetting('last_snapshot_id').catch(() => null);
         if (mounted) {
           setClientId(id || '');
+          setClientIdSource(idSource.source);
           setLastSyncInfo({
             lastSyncedAt: lastAt,
             lastSnapshotId: lastSnap
@@ -444,8 +449,17 @@ export default function CloudSyncManager({ onBack }) {
   // Handle Custom Client ID Save
   const handleSaveClientId = async () => {
     try {
-      await setGoogleClientId(clientId.trim());
-      setShowConfig(false);
+      const trimmed = clientId.trim();
+      await setGoogleClientId(trimmed);
+      const idSource = await getGoogleClientIdSource();
+      setClientIdSource(idSource.source);
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      if (trimmed) {
+        setClientIdSavedMsg(`Custom Client ID saved to IndexedDB for origin: ${origin}`);
+      } else {
+        setClientIdSavedMsg(`Custom Client ID cleared. Reverted to environment default for origin: ${origin}`);
+      }
+      setTimeout(() => setClientIdSavedMsg(''), 6000);
     } catch (err) {
       setAuthError('Failed to save Client ID.');
     }
@@ -1732,16 +1746,50 @@ export default function CloudSyncManager({ onBack }) {
 
             {/* Client ID Configuration Toggle inside Advanced */}
             <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
-              <button
-                className="btn btn-ghost"
-                onClick={() => setShowConfig(!showConfig)}
-                style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textDecoration: 'underline', padding: 0 }}
-              >
-                {showConfig ? 'Hide OAuth Client ID Config' : 'Configure Custom OAuth Client ID'}
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => setShowConfig(!showConfig)}
+                  style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textDecoration: 'underline', padding: 0 }}
+                >
+                  {showConfig ? 'Hide OAuth Client ID Config' : 'Configure Custom OAuth Client ID'}
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Active Client ID:</span>
+                  <span style={{
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    fontWeight: 700,
+                    fontSize: '0.68rem',
+                    background: clientIdSource === 'CUSTOM_SAVED' ? 'rgba(0, 229, 160, 0.15)' : 'rgba(255, 179, 0, 0.15)',
+                    color: clientIdSource === 'CUSTOM_SAVED' ? 'var(--green)' : 'var(--warning, #ffb300)'
+                  }}>
+                    {clientIdSource === 'CUSTOM_SAVED' ? 'Custom / Saved to this origin' : 'Environment Default'}
+                  </span>
+                </div>
+              </div>
 
               {showConfig && (
                 <div style={{ marginTop: 8 }}>
+                  {/* Current Origin Display Banner */}
+                  <div style={{
+                    padding: '8px 12px',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    borderRadius: 6,
+                    marginBottom: 10,
+                    border: '1px solid var(--border-light)'
+                  }}>
+                    <div style={{ color: 'var(--text-muted)', marginBottom: 3, fontSize: '0.68rem' }}>
+                      Current Browser Origin (for Google Cloud Console):
+                    </div>
+                    <code style={{ color: 'var(--accent, #6366f1)', fontWeight: 600, fontSize: '0.74rem', wordBreak: 'break-all', display: 'block' }}>
+                      {typeof window !== 'undefined' ? window.location.origin : ''}
+                    </code>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                      Add this exact origin to <strong>Authorized JavaScript origins</strong> in Google Cloud Console.
+                    </div>
+                  </div>
+
                   <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>
                     OAuth 2.0 Web Client ID
                   </label>
@@ -1762,6 +1810,21 @@ export default function CloudSyncManager({ onBack }) {
                       Save
                     </button>
                   </div>
+
+                  {clientIdSavedMsg && (
+                    <div style={{
+                      marginTop: 8,
+                      padding: '6px 10px',
+                      borderRadius: 4,
+                      background: 'rgba(0, 229, 160, 0.1)',
+                      border: '1px solid rgba(0, 229, 160, 0.3)',
+                      color: 'var(--green)',
+                      fontSize: '0.72rem',
+                      fontWeight: 600
+                    }}>
+                      ✓ {clientIdSavedMsg}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -114,6 +114,27 @@ export async function getGoogleClientId() {
 }
 
 /**
+ * Inspect source and classification of active Google OAuth Client ID
+ * Returns whether active ID is a custom database setting or environment fallback.
+ */
+export async function getGoogleClientIdSource() {
+  try {
+    const saved = await getSetting('google_client_id');
+    if (saved && saved.trim()) {
+      return {
+        isCustom: true,
+        source: 'CUSTOM_SAVED'
+      };
+    }
+  } catch { }
+  const envId = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID) || '';
+  return {
+    isCustom: false,
+    source: envId ? 'ENV_DEFAULT' : 'NONE'
+  };
+}
+
+/**
  * Save custom Google OAuth Client ID
  */
 export async function setGoogleClientId(clientId) {
