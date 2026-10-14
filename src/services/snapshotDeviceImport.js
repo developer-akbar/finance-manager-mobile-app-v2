@@ -46,6 +46,19 @@ export const V10_TARGET_REFERENCE = {
   inventoryCount: 732
 };
 
+export const V11_TARGET_REFERENCE = {
+  filename: 'finman_cloud_sync_snapshot.finman',
+  snapshotId: 'snap_1791983000000_recovery_v11',
+  cloudVersion: 11,
+  schemaVersion: 13,
+  parentSnapshotId: 'snap_1790963722004_bq5y93',
+  regularTransactionsCount: 28274,
+  investmentTransactionsCount: 899,
+  totalTransactionsCount: 29173,
+  accountsCount: 36,
+  inventoryCount: 732
+};
+
 export const SNAPSHOT_IMPORT_ERROR_CODES = {
   CONFIRMATION_REQUIRED: 'CONFIRMATION_REQUIRED',
   MISSING_PARAMETERS: 'MISSING_PARAMETERS',

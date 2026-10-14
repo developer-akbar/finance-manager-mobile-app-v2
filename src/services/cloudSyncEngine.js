@@ -231,7 +231,15 @@ export function getManifestEntityKey(entityType, rawId) {
     const sId = String(rawId);
     return sId.startsWith('setting:') ? sId : `setting:${sId}`;
   }
-  const typePrefix = normType.endsWith('s') ? normType : `${normType}s`;
+  let typePrefix = normType;
+  if (normType === 'category') typePrefix = 'categories';
+  else if (normType === 'subcategory') typePrefix = 'subcategories';
+  else if (normType === 'sub_account') typePrefix = 'sub_accounts';
+  else if (normType === 'account_group') typePrefix = 'account_groups';
+  else if (normType === 'brokerage') typePrefix = 'brokerages';
+  else if (normType === 'inventory') typePrefix = 'inventory';
+  else if (!normType.endsWith('s')) typePrefix = `${normType}s`;
+
   const strId = String(rawId);
   if (strId.startsWith(`${typePrefix}:`)) return strId;
   return `${typePrefix}:${strId}`;
@@ -653,7 +661,16 @@ export async function reconcile3Way({
   // Index Local Entities
   for (const [type, items] of Object.entries(localEntities)) {
     if (type === 'sync_tombstones') {
-      for (const t of items) localTombstoneMap.set(String(t.id), t);
+      for (const t of items) {
+        const rawId = String(t.id || '');
+        if (rawId) {
+          localTombstoneMap.set(rawId, t);
+          const scopedKey = getManifestEntityKey(t.entity_type || t.type || '', rawId);
+          if (scopedKey !== rawId) {
+            localTombstoneMap.set(scopedKey, t);
+          }
+        }
+      }
       continue;
     }
     if (!Array.isArray(items)) continue;
@@ -669,7 +686,16 @@ export async function reconcile3Way({
   // Index Cloud Entities
   for (const [type, items] of Object.entries(cloudEntities)) {
     if (type === 'sync_tombstones') {
-      for (const t of items) cloudTombstoneMap.set(String(t.id), t);
+      for (const t of items) {
+        const rawId = String(t.id || '');
+        if (rawId) {
+          cloudTombstoneMap.set(rawId, t);
+          const scopedKey = getManifestEntityKey(t.entity_type || t.type || '', rawId);
+          if (scopedKey !== rawId) {
+            cloudTombstoneMap.set(scopedKey, t);
+          }
+        }
+      }
       continue;
     }
     if (!Array.isArray(items)) continue;
@@ -1150,8 +1176,8 @@ export async function reconcile3Way({
     const baseEntry = baseManifest[id];
     const localEntry = localMap.get(id);
     const cloudEntry = cloudMap.get(id);
-    const localDeleted = localTombstoneMap.has(id);
-    const cloudDeleted = cloudTombstoneMap.has(id);
+    const localDeleted = localTombstoneMap.has(id) || (localEntry && localTombstoneMap.has(localEntry.rawId));
+    const cloudDeleted = cloudTombstoneMap.has(id) || (cloudEntry && cloudTombstoneMap.has(cloudEntry.rawId));
 
     // CASE 1: Brand new on Local only (not in Base, not in Cloud, not deleted)
     if (!baseEntry && localEntry && !cloudEntry && !cloudDeleted) {
@@ -2870,6 +2896,7 @@ export {
   preflightSnapshotV10Import,
   verifyLocalRecoveryState,
   V10_TARGET_REFERENCE,
+  V11_TARGET_REFERENCE,
   SNAPSHOT_IMPORT_ERROR_CODES,
   SnapshotImportError
 } from './snapshotDeviceImport.js';
