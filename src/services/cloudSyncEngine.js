@@ -2342,7 +2342,17 @@ export function txnObjectToDBRow(t) {
     inr, amount, currency, type,
     created_at, updated_at, recurring_rule_id,
     tags, split_group_id, receipt_image, warranty_expiry, serial_no,
-    sub_account, from_sub_account, to_sub_account,
+    sub_account, from_sub_account, to_sub_account
+  };
+}
+
+/**
+ * Format investment transaction entity into raw DB column row
+ */
+export function invTxnObjectToDBRow(t) {
+  const base = txnObjectToDBRow(t);
+  return {
+    ...base,
     investment_account: String(t.InvestmentAccount || t.investment_account || ''),
     actual_amount: parseFloat(t.ActualAmount ?? t.actual_amount ?? 0) || 0,
     total_charges: parseFloat(t.TotalCharges ?? t.total_charges ?? 0) || 0,
@@ -2355,17 +2365,7 @@ export function txnObjectToDBRow(t) {
     dp_charges: parseFloat(t.DPCharges ?? t.dp_charges ?? 0) || 0,
     other_charges: parseFloat(t.OtherCharges ?? t.other_charges ?? 0) || 0,
     security_display_name: String(t.SecurityDisplayName || t.security_display_name || ''),
-    settlement_mode: String(t.SettlementMode || t.settlement_mode || 'ACTUAL')
-  };
-}
-
-/**
- * Format investment transaction entity into raw DB column row
- */
-export function invTxnObjectToDBRow(t) {
-  const base = txnObjectToDBRow(t);
-  return {
-    ...base,
+    settlement_mode: String(t.SettlementMode || t.settlement_mode || 'ACTUAL'),
     investment_transaction_type: String(t.InvestmentTransactionType || t.investment_transaction_type || ''),
     brokerage: String(t.Brokerage || t.brokerage || ''),
     security_symbol: String(t.SecuritySymbol || t.security_symbol || ''),
@@ -2894,9 +2894,17 @@ export async function executeBootstrap({
 export {
   importSnapshotV10ToDevice,
   preflightSnapshotV10Import,
+  restorePreImportBackup,
+  getQuarantinedDeltas,
+  getQuarantinedHeldEvents,
+  restoreQuarantinedDeltas,
+  evaluateQuarantinedEventAgainstSnapshot,
   verifyLocalRecoveryState,
   V10_TARGET_REFERENCE,
   V11_TARGET_REFERENCE,
+  V12_TARGET_REFERENCE,
   SNAPSHOT_IMPORT_ERROR_CODES,
-  SnapshotImportError
+  SnapshotImportError,
+  preflightSnapshotV12Reconciliation,
+  reconcileExistingDeviceWithSnapshot
 } from './snapshotDeviceImport.js';

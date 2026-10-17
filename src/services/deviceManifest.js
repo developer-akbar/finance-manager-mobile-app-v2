@@ -329,10 +329,17 @@ export async function writeOwnDeviceManifest(arg1, arg2, arg3) {
   return { manifest, driveResult: result };
 }
 
+export const PEER_LINEAGE_STATUS = Object.freeze({
+  COMPATIBLE: 'COMPATIBLE',
+  RECOVERABLE_NEWER: 'RECOVERABLE_NEWER',
+  INCOMPATIBLE_BLOCKED: 'INCOMPATIBLE_BLOCKED'
+});
+
 /**
  * Discovers and validates all peer device manifests from Google Drive appDataFolder.
  */
 export async function listPeerManifests(arg1, arg2, arg3, arg4) {
+  const opts = (arg1 && typeof arg1 === 'object') ? arg1 : {};
   let ownDeviceId, accessToken, currentBaseSnapshotId, immediateParentSnapshotId, driveClient;
   if (arg1 && typeof arg1 === 'object') {
     ownDeviceId = arg1.ownDeviceId || arg1.localDeviceId || arg1.deviceId;
@@ -406,7 +413,10 @@ export async function listPeerManifests(arg1, arg2, arg3, arg4) {
     } catch {}
   }
 
-  const peerManifests = [];
+  const allDiscovered = [];
+  const compatibleManifests = [];
+  const recoverableManifests = [];
+  const blockedManifests = [];
   const reader = driveClient?.readFile
     ? async (id) => driveClient.readFile(id)
     : (driveClient?.readAppDataFile || readAppDataFile);
@@ -420,20 +430,100 @@ export async function listPeerManifests(arg1, arg2, arg3, arg4) {
       const manifest = typeof raw === 'string' ? JSON.parse(raw) : raw;
 
       if (!manifest || !manifest.device_id || manifest.device_id === 'local_device') continue;
-      if (manifest.base_snapshot_id) {
+
+      let lineageStatus = PEER_LINEAGE_STATUS.COMPATIBLE;
+      let lineageReason = 'BASELINE_MATCH';
+
+      if (manifest.lifecycle_state === 'BLOCKED' || manifest.lifecycle_state === 'TOMBSTONED') {
+        lineageStatus = PEER_LINEAGE_STATUS.INCOMPATIBLE_BLOCKED;
+        lineageReason = `PEER_LIFECYCLE_${manifest.lifecycle_state}`;
+      } else if (manifest.base_snapshot_id) {
         const peerBase = manifest.base_snapshot_id;
         const matchesActive = Boolean(currentBaseSnapshotId && peerBase === currentBaseSnapshotId);
         const matchesParent = Boolean(immediateParentSnapshotId && peerBase === immediateParentSnapshotId);
-        if (!matchesActive && !matchesParent) {
-          continue;
+
+        if (matchesActive) {
+          lineageStatus = PEER_LINEAGE_STATUS.COMPATIBLE;
+          lineageReason = 'ACTIVE_BASELINE_MATCH';
+        } else if (matchesParent) {
+          lineageStatus = PEER_LINEAGE_STATUS.COMPATIBLE;
+          lineageReason = 'PARENT_BASELINE_MATCH';
+        } else {
+          // Check if peer is on a verified descendant/newer baseline vs an incompatible baseline
+          const extractVersion = (val) => {
+            if (typeof val === 'number') return val;
+            if (!val) return 0;
+            const m = String(val).match(/(?:_v|^v)(\d+)/i);
+            return m ? parseInt(m[1], 10) : 0;
+          };
+
+          const localVer = Number(opts?.currentBaseCloudVersion || opts?.baseCloudVersion || 0) || extractVersion(currentBaseSnapshotId);
+          const peerVer = Number(manifest.base_cloud_version || 0) || extractVersion(peerBase);
+          const isDescendant = Boolean(
+            (manifest.parent_snapshot_id && manifest.parent_snapshot_id === currentBaseSnapshotId) ||
+            (peerVer > localVer && localVer > 0)
+          );
+
+          if (isDescendant) {
+            lineageStatus = PEER_LINEAGE_STATUS.RECOVERABLE_NEWER;
+            lineageReason = `PEER_ON_NEWER_SNAPSHOT_BASELINE_${peerBase}`;
+          } else {
+            lineageStatus = PEER_LINEAGE_STATUS.INCOMPATIBLE_BLOCKED;
+            lineageReason = `INCOMPATIBLE_SNAPSHOT_BASELINE_${peerBase}`;
+          }
         }
       }
 
-      peerManifests.push(manifest);
+      manifest.lineage_status = lineageStatus;
+      manifest.lineage_reason = lineageReason;
+
+      allDiscovered.push(manifest);
+
+      if (lineageStatus === PEER_LINEAGE_STATUS.COMPATIBLE) {
+        compatibleManifests.push(manifest);
+      } else if (lineageStatus === PEER_LINEAGE_STATUS.RECOVERABLE_NEWER) {
+        recoverableManifests.push(manifest);
+        if (typeof opts?.onIncompatibleBaseline === 'function') {
+          try {
+            opts.onIncompatibleBaseline({
+              peerDeviceId: manifest.device_id,
+              peerBaseSnapshotId: manifest.base_snapshot_id,
+              peerManifest: manifest,
+              lineage_status: lineageStatus,
+              lineage_reason: lineageReason
+            });
+          } catch {}
+        }
+      } else {
+        blockedManifests.push(manifest);
+        if (typeof opts?.onIncompatibleBaseline === 'function') {
+          try {
+            opts.onIncompatibleBaseline({
+              peerDeviceId: manifest.device_id,
+              peerBaseSnapshotId: manifest.base_snapshot_id,
+              peerManifest: manifest,
+              lineage_status: lineageStatus,
+              lineage_reason: lineageReason
+            });
+          } catch {}
+        }
+      }
+
+      if (typeof opts?.onPeerDiscovered === 'function') {
+        try {
+          opts.onPeerDiscovered(manifest);
+        } catch {}
+      }
     } catch (err) {
       console.warn(`[Manifest] Failed to load peer manifest ${f.name}:`, err.message);
     }
   }
 
-  return peerManifests;
+  const returnList = opts?.includeAll ? allDiscovered : compatibleManifests;
+  returnList.allPeers = allDiscovered;
+  returnList.compatiblePeers = compatibleManifests;
+  returnList.recoverablePeers = recoverableManifests;
+  returnList.blockedPeers = blockedManifests;
+
+  return returnList;
 }

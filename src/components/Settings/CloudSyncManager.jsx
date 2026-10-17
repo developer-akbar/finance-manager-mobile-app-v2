@@ -20,6 +20,8 @@ import {
   executeBootstrap,
   importSnapshotV10ToDevice,
   preflightSnapshotV10Import,
+  preflightSnapshotV12Reconciliation,
+  reconcileExistingDeviceWithSnapshot,
   verifyLocalRecoveryState,
   V10_TARGET_REFERENCE,
   SYNC_STATUS,
@@ -148,6 +150,40 @@ export default function CloudSyncManager({ onBack }) {
           ...options
         });
       };
+      window.__finmanPreflightSnapshotV12 = async (options = {}) => {
+        const token = await getValidAccessToken(true);
+        if (!token) throw new Error('Not authenticated with Google Drive. Please connect first.');
+        return preflightSnapshotV12Reconciliation({
+          accessToken: token,
+          ...options
+        });
+      };
+      window.__finmanVerifySequence16Compatibility = async (options = {}) => {
+        const token = await getValidAccessToken(true);
+        if (!token) throw new Error('Not authenticated with Google Drive. Please connect first.');
+        const report = await preflightSnapshotV12Reconciliation({
+          accessToken: token,
+          ...options
+        });
+        return report.sequence16Compatibility;
+      };
+      window.__finmanReconcileSnapshotV12 = async (options = {}) => {
+        const token = await getValidAccessToken(true);
+        if (!token) throw new Error('Not authenticated with Google Drive. Please connect first.');
+        return reconcileExistingDeviceWithSnapshot({
+          accessToken: token,
+          deviceId: 'dev_fa18ce0c9349',
+          targetSnapshotId: 'snap_1792067106302_gdxzub',
+          targetCloudVersion: 12,
+          confirmation: 'CONFIRM_RECONCILE_EXISTING_DEVICE',
+          replayInboundDeltas: false,
+          peerWatermarksOverride: {
+            'dev_a30fb118cec0': 16
+          },
+          onProgress: (p) => console.log(`[Recovery Progress] ${p.stage}: ${p.message}`),
+          ...options
+        });
+      };
       window.__finmanVerifyRollbackState = async () => {
         return verifyLocalRecoveryState();
       };
@@ -156,6 +192,9 @@ export default function CloudSyncManager({ onBack }) {
       if (typeof window !== 'undefined') {
         delete window.__finmanImportSnapshotV10;
         delete window.__finmanPreflightSnapshotV10;
+        delete window.__finmanPreflightSnapshotV12;
+        delete window.__finmanReconcileSnapshotV12;
+        delete window.__finmanVerifySequence16Compatibility;
         delete window.__finmanVerifyRollbackState;
       }
     };

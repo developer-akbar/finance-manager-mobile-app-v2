@@ -538,12 +538,26 @@ export async function pullPeerDeltas(opts) {
   const baseSnapshotId = dynamicBaseSnapshotId || 'snap_1790493064581_jbhnf8';
   const immediateParentSnapshotId = dynamicParentSnapshotId !== undefined && dynamicParentSnapshotId !== null ? dynamicParentSnapshotId : '';
 
+  let detectedNewerBaseline = null;
+  const blockedPeersList = [];
   const peerManifests = await listPeerManifests({
     ownDeviceId,
     accessToken,
     baseSnapshotId,
     immediateParentSnapshotId,
-    driveClient
+    driveClient,
+    onIncompatibleBaseline: ({ peerBaseSnapshotId, peerManifest, lineage_status, lineage_reason }) => {
+      if (lineage_status === 'RECOVERABLE_NEWER' || !lineage_status) {
+        detectedNewerBaseline = peerBaseSnapshotId;
+      }
+      if (lineage_status === 'INCOMPATIBLE_BLOCKED') {
+        blockedPeersList.push({
+          deviceId: peerManifest?.device_id || 'unknown',
+          baseSnapshotId: peerBaseSnapshotId,
+          reason: lineage_reason || 'INCOMPATIBLE_BASELINE'
+        });
+      }
+    }
   });
   const db = getDB();
   const reader = driveClient?.readFile 
@@ -672,10 +686,22 @@ export async function pullPeerDeltas(opts) {
     }
   }
 
+  const allBlocked = [
+    ...blockedPeersList,
+    ...(peerManifests.blockedPeers || []).map(p => ({
+      deviceId: p.device_id,
+      baseSnapshotId: p.base_snapshot_id,
+      reason: p.lineage_reason || 'INCOMPATIBLE_BASELINE'
+    }))
+  ];
+  const uniqueBlockedPeers = Array.from(new Map(allBlocked.map(b => [b.deviceId, b])).values());
+
   return {
     stagedPackagesCount,
     stagedEventsCount,
-    stagedPackageIds: Array.from(stagedPackageIds)
+    stagedPackageIds: Array.from(stagedPackageIds),
+    newerBaselineDetected: detectedNewerBaseline,
+    blockedPeers: uniqueBlockedPeers
   };
 }
 
@@ -698,6 +724,14 @@ export async function stagePeerPackageAtomically(arg1, arg2) {
     driveFileId = null;
   } else {
     throw new Error('Invalid arguments passed to stagePeerPackageAtomically.');
+  }
+
+  // Cryptographic integrity validation if explicitly requested for unencrypted payload
+  if (arg1.verifyChecksum && packageChecksum && packagePayload) {
+    const computedChecksum = await computePackageChecksum(packagePayload);
+    if (computedChecksum !== packageChecksum) {
+      throw new Error(`Checksum mismatch: Computed ${computedChecksum} does not match packageChecksum ${packageChecksum}`);
+    }
   }
 
   const db = getDB();

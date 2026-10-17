@@ -27,6 +27,7 @@ export async function executeAtomicMutation(options) {
   const bundleInfo = options.bundleInfo || null;
   const parentEventId = options.parentEventId || null;
   const buildEntityFn = options.buildEntityFn || null;
+  const expectedBaseEntity = options.expectedBaseEntity || null;
   const suppressDeltaQueue = !!options.suppressDeltaQueue;
 
   let attempt = 0;
@@ -38,6 +39,7 @@ export async function executeAtomicMutation(options) {
         entityId,
         operation,
         entityData,
+        expectedBaseEntity,
         tombstoneType,
         bundleInfo,
         parentEventId,
@@ -45,7 +47,7 @@ export async function executeAtomicMutation(options) {
         suppressDeltaQueue
       });
     } catch (err) {
-      if (err.message === 'PRECONDITION_FAILED' && attempt < MAX_PRECONDITION_RETRIES) {
+      if (err.message === 'PRECONDITION_FAILED' && attempt < MAX_PRECONDITION_RETRIES && !expectedBaseEntity) {
         console.warn(`[AtomicMutation] Precondition failed for ${storeName}/${entityId}, retrying (attempt ${attempt + 1})...`);
         continue;
       }
@@ -59,6 +61,7 @@ async function _executeSingleMutationAttempt({
   entityId,
   operation,
   entityData,
+  expectedBaseEntity = null,
   tombstoneType,
   bundleInfo,
   parentEventId,
@@ -68,8 +71,8 @@ async function _executeSingleMutationAttempt({
   const db = getDB();
 
   // 1. Stage 1: Async Pre-computation outside DB transaction
-  let preExistingEntity = null;
-  if (operation === DELTA_OPERATION.UPDATE || operation === DELTA_OPERATION.DELETE) {
+  let preExistingEntity = expectedBaseEntity || null;
+  if (!preExistingEntity && (operation === DELTA_OPERATION.UPDATE || operation === DELTA_OPERATION.DELETE)) {
     const res = await db.query(`SELECT * FROM ${storeName} WHERE id = ?`, [entityId]);
     preExistingEntity = res.values?.[0] || null;
     if (!preExistingEntity && operation === DELTA_OPERATION.UPDATE) {
@@ -174,13 +177,21 @@ export async function executeAtomicBatch({
     });
   }
 
-  const isWeb = Capacitor.getPlatform() === 'web';
-  if (isWeb) {
-    return await _executeAtomicIDB({ operations: preparedOps, suppressDeltaQueue });
-  } else {
-    return await _executeAtomicSQLite({ operations: preparedOps, suppressDeltaQueue });
-  }
+  const runMutation = async () => {
+    const isWeb = Capacitor.getPlatform() === 'web';
+    if (isWeb) {
+      return await _executeAtomicIDB({ operations: preparedOps, suppressDeltaQueue });
+    } else {
+      return await _executeAtomicSQLite({ operations: preparedOps, suppressDeltaQueue });
+    }
+  };
+
+  const currentRun = _atomicMutationChain.then(runMutation, runMutation);
+  _atomicMutationChain = currentRun.catch(() => {});
+  return await currentRun;
 }
+
+let _atomicMutationChain = Promise.resolve();
 
 /**
  * Native IndexedDB Atomic Multi-Store Transaction Executor
@@ -197,6 +208,7 @@ async function _executeAtomicIDB({ operations, suppressDeltaQueue = false }) {
   }
 
   return new Promise((resolve, reject) => {
+    let abortReason = null;
     const storeNames = Array.from(targetStores);
     let tx;
     try {
@@ -252,14 +264,32 @@ async function _executeAtomicIDB({ operations, suppressDeltaQueue = false }) {
             key: 'device_state',
             device_id: `dev_${uuid().replace(/-/g, '').slice(0, 12)}`,
             last_allocated_sequence: 0,
+            last_uploaded_sequence: 0,
             last_pushed_sequence: 0,
+            last_acked_sequence: 0,
             updated_at: new Date().toISOString()
           };
         }
 
-        const startSeq = state.last_allocated_sequence || 0;
-        const emittedEvents = [];
-        const now = new Date().toISOString();
+        const queueReq = queueStore.getAll();
+        queueReq.onerror = (e) => {
+          try { tx.abort(); } catch {}
+          reject(tx.error || e.target?.error || new Error('Failed to read sync_delta_queue'));
+        };
+
+        queueReq.onsuccess = () => {
+          try {
+            const queueItems = queueReq.result || [];
+            const queueMaxSeq = queueItems.reduce((max, r) => Math.max(max, Number(r.sequence) || 0), 0);
+            const startSeq = Math.max(
+              Number(state.last_allocated_sequence) || 0,
+              Number(state.last_uploaded_sequence) || 0,
+              Number(state.last_pushed_sequence) || 0,
+              Number(state.last_acked_sequence) || 0,
+              queueMaxSeq
+            );
+            const emittedEvents = [];
+            const now = new Date().toISOString();
 
         for (let i = 0; i < operations.length; i++) {
           const op = operations[i];
@@ -276,8 +306,9 @@ async function _executeAtomicIDB({ operations, suppressDeltaQueue = false }) {
                   const jsonInDb = toCanonicalJson(inDb);
                   const jsonExpected = toCanonicalJson(op.expectedBaseEntity);
                   if (jsonInDb !== jsonExpected) {
+                    abortReason = new Error('PRECONDITION_FAILED');
                     try { tx.abort(); } catch {}
-                    return reject(new Error('PRECONDITION_FAILED'));
+                    return reject(abortReason);
                   }
                 } catch (e) {
                   try { tx.abort(); } catch {}
@@ -340,13 +371,25 @@ async function _executeAtomicIDB({ operations, suppressDeltaQueue = false }) {
           resolve(emittedEvents);
         };
       } catch (err) {
+        abortReason = abortReason || err;
         try { tx.abort(); } catch {}
         reject(err);
       }
     };
+  } catch (err) {
+    abortReason = abortReason || err;
+    try { tx.abort(); } catch {}
+    reject(err);
+  }
+};
 
-    tx.onerror = (e) => reject(tx.error || e.target?.error || new Error('Transaction error'));
-    tx.onabort = (e) => reject(new Error('Transaction aborted'));
+    stateReq.onerror = (e) => {
+      try { tx.abort(); } catch {}
+      reject(tx.error || e.target?.error || new Error('Failed to read sync_local_state'));
+    };
+
+    tx.onerror = (e) => reject(abortReason || tx.error || e.target?.error || new Error('Transaction error'));
+    tx.onabort = (e) => reject(abortReason || new Error('Transaction aborted'));
   });
 }
 
@@ -410,7 +453,17 @@ async function _executeAtomicSQLite({ operations, suppressDeltaQueue = false }) 
     );
   }
 
-  const startSeq = Number(state.last_allocated_sequence) || 0;
+  // Self-healing sequence monotonicity: Ensure startSeq is strictly >= MAX(sequence in sync_delta_queue)
+  // This physically prevents counter rewinds or duplicate sequence allocation even after database restores or resets.
+  const queueRes = await db.query('SELECT sequence FROM sync_delta_queue');
+  const queueMaxSeq = (queueRes.values || []).reduce((max, r) => Math.max(max, Number(r.sequence) || 0), 0);
+  const startSeq = Math.max(
+    Number(state.last_allocated_sequence) || 0,
+    Number(state.last_uploaded_sequence) || 0,
+    Number(state.last_pushed_sequence) || 0,
+    Number(state.last_acked_sequence) || 0,
+    queueMaxSeq
+  );
   const statements = [];
   const emittedEvents = [];
 

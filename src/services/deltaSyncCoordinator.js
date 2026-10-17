@@ -104,7 +104,11 @@ export const SYNC_STATUS = Object.freeze({
   SUCCESS: 'SUCCESS',
   AUTH_REQUIRED: 'AUTH_REQUIRED',
   OFFLINE: 'OFFLINE',
-  ERROR: 'ERROR'
+  ERROR: 'ERROR',
+  BLOCKED_SEQUENCE_GAP: 'BLOCKED_SEQUENCE_GAP',
+  BLOCKED_DEPENDENCY: 'BLOCKED_DEPENDENCY',
+  BLOCKED_PEER_BASELINE: 'BLOCKED_PEER_BASELINE',
+  CONFLICTS_PENDING: 'CONFLICTS_PENDING'
 });
 
 export const SYNC_TRIGGER = Object.freeze({
@@ -139,10 +143,13 @@ let _syncConfig = {
   enabled: true
 };
 
+let _isReceivingBroadcast = false;
+let _isNotifyingListeners = false;
+
 /**
  * Initializes the broadcast channel for cross-tab sync coordination.
  */
-function getBroadcastChannel() {
+export function getBroadcastChannel() {
   if (typeof BroadcastChannel !== 'undefined') {
     if (!_syncBroadcastChannel) {
       try {
@@ -150,7 +157,17 @@ function getBroadcastChannel() {
         _syncBroadcastChannel.unref?.();
         _syncBroadcastChannel.onmessage = (evt) => {
           if (evt?.data?.type === 'SYNC_STATUS_CHANGE') {
-            _currentSyncStatus = evt.data.status;
+            const incomingStatus = evt.data.status;
+            const incomingDetails = evt.data.details || {};
+            _currentSyncStatus = incomingStatus;
+            _isReceivingBroadcast = true;
+            try {
+              _statusListeners.forEach(fn => {
+                try { fn(incomingStatus, incomingDetails); } catch {}
+              });
+            } finally {
+              _isReceivingBroadcast = false;
+            }
           }
         };
       } catch {}
@@ -177,6 +194,7 @@ const _statusListeners = new Set();
 export function subscribeSyncStatus(listener) {
   if (typeof listener !== 'function') return () => {};
   _statusListeners.add(listener);
+  getBroadcastChannel();
   return () => {
     _statusListeners.delete(listener);
   };
@@ -186,10 +204,19 @@ export function subscribeSyncStatus(listener) {
  * Broadcasts sync status updates to local subscribers and other open tabs.
  */
 export function broadcastSyncStatus(status, details = {}) {
+  if (_isReceivingBroadcast || _isNotifyingListeners) {
+    return;
+  }
   _currentSyncStatus = status;
-  _statusListeners.forEach(fn => {
-    try { fn(status, details); } catch {}
-  });
+  _isNotifyingListeners = true;
+  try {
+    _statusListeners.forEach(fn => {
+      try { fn(status, details); } catch {}
+    });
+  } finally {
+    _isNotifyingListeners = false;
+  }
+
   const ch = getBroadcastChannel();
   if (ch) {
     try {
@@ -597,6 +624,61 @@ export async function hydrateMissingSnapshotLineage(options = {}) {
   } catch (err) {
     // Read-only inspection failed; do not mutate or fabricate lineage
     return { hydrated: false, error: err.message };
+  }
+}
+
+/**
+ * Automatically checks whether the cloud snapshot repository has advanced to a newer
+ * baseline snapshot than this initialized device currently holds. If so, safely
+ * reconciles the existing device without losing local unpushed mutations or device identity.
+ */
+export async function checkAndAutoReconcileCloudSnapshot(options = {}) {
+  const driveClient = options.driveClient || _syncConfig.driveClient;
+  const accessToken = options.accessToken !== undefined
+    ? options.accessToken
+    : (_syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null);
+  const sessionKey = options.sessionKey !== undefined
+    ? options.sessionKey
+    : (_syncConfig.getSessionKey ? await _syncConfig.getSessionKey() : null);
+  const pin = options.pin || null;
+  const effectiveKey = sessionKey || pin;
+
+  try {
+    const { getSetting } = await import('../database/settings.js');
+    const localSnapshotId = await getSetting('last_snapshot_id');
+    const localCloudVersion = Number(await getSetting('last_cloud_version').catch(() => 0)) || 0;
+
+    if (!localSnapshotId) {
+      return { reconciled: false, reason: 'NO_LOCAL_SNAPSHOT_INITIALIZED' };
+    }
+
+    const discovery = await discoverCloudRepository({
+      accessToken,
+      driveClient,
+      sessionKey: effectiveKey
+    });
+
+    if (discovery?.status === 'EXISTING_REPOSITORY_FOUND' && discovery.snapshotPayload) {
+      const cloudPayload = discovery.snapshotPayload;
+      const cloudVersion = Number(cloudPayload.cloud_version || 0);
+
+      if (cloudPayload.snapshot_id && cloudPayload.snapshot_id !== localSnapshotId && cloudVersion >= localCloudVersion) {
+        const { reconcileExistingDeviceWithSnapshot } = await import('./snapshotDeviceImport.js');
+        const reconcileRes = await reconcileExistingDeviceWithSnapshot({
+          cloudPayload,
+          confirmation: 'CONFIRM_RECONCILE_EXISTING_DEVICE',
+          driveClient,
+          accessToken,
+          sessionKey: effectiveKey,
+          _hasMasterLock: Boolean(options._hasMasterLock)
+        });
+        return { reconciled: true, snapshotId: cloudPayload.snapshot_id, ...reconcileRes };
+      }
+    }
+    return { reconciled: false };
+  } catch (err) {
+    console.warn('[checkAndAutoReconcileCloudSnapshot] Auto-reconciliation check skipped:', err.message);
+    return { reconciled: false, error: err.message };
   }
 }
 
@@ -1331,33 +1413,80 @@ export async function executeFullSyncPass(options = {}) {
       });
 
       // 3. Inbound Pull: Discover peer manifests -> download new packages -> stage contiguously
-      const pullResult = await downloadAndStagePeerPackages({
+      let pullResult = await downloadAndStagePeerPackages({
         localDeviceId: deviceId,
         accessToken,
         driveClient,
         sessionKey
       });
 
+      // 3.5 Auto-reconcile newer cloud snapshot if detected from peer manifests
+      if (pullResult?.newerBaselineDetected) {
+        const autoRecon = await checkAndAutoReconcileCloudSnapshot({
+          deviceId,
+          accessToken,
+          driveClient,
+          sessionKey,
+          _hasMasterLock: true
+        });
+        if (autoRecon?.reconciled) {
+          // Re-run pull after upgrading baseline to ingest peer packages under the new baseline
+          pullResult = await downloadAndStagePeerPackages({
+            localDeviceId: deviceId,
+            accessToken,
+            driveClient,
+            sessionKey
+          });
+        }
+      }
+
       // 4. Reconciliation: Apply staged events deterministically to canonical store
       const reconResult = await reconcileStagedEvents({});
 
+      // Evaluate blocked conditions and unmerged conflicts with strict truthfulness
+      const blockedGaps = Number(reconResult?.blockedGapCount) || 0;
+      const blockedDeps = Number(reconResult?.blockedDependencyCount) || 0;
+      const blockedPeers = pullResult?.blockedPeers || [];
+      const hasUnresolvedNewerBaseline = Boolean(pullResult?.newerBaselineDetected);
+
+      let effectiveStatus = SYNC_STATUS.SUCCESS;
+      let isBlocked = false;
+
+      if (blockedGaps > 0) {
+        effectiveStatus = SYNC_STATUS.BLOCKED_SEQUENCE_GAP;
+        isBlocked = true;
+      } else if (blockedDeps > 0) {
+        effectiveStatus = SYNC_STATUS.BLOCKED_DEPENDENCY;
+        isBlocked = true;
+      } else if (blockedPeers.length > 0 || hasUnresolvedNewerBaseline) {
+        effectiveStatus = SYNC_STATUS.BLOCKED_PEER_BASELINE;
+        isBlocked = true;
+      } else if ((Number(reconResult?.conflictCount) || 0) > 0) {
+        effectiveStatus = SYNC_STATUS.CONFLICTS_PENDING;
+      }
+
       const nowIso = new Date().toISOString();
-      try {
-        const { setSetting } = await import('../database/settings.js');
-        await setSetting('last_delta_synced_at', nowIso);
-      } catch {}
+      if (!isBlocked && effectiveStatus === SYNC_STATUS.SUCCESS) {
+        try {
+          const { setSetting } = await import('../database/settings.js');
+          await setSetting('last_delta_synced_at', nowIso);
+        } catch {}
+      }
 
       const syncResult = {
-        success: true,
-        status: SYNC_STATUS.SUCCESS,
+        success: !isBlocked,
+        status: effectiveStatus,
         trigger,
         outbound: pushResult,
         inbound: pullResult,
         reconciliation: reconResult,
+        blockedGapCount: blockedGaps,
+        blockedDependencyCount: blockedDeps,
+        blockedPeers,
         timestamp: nowIso
       };
 
-      broadcastSyncStatus(SYNC_STATUS.SUCCESS, syncResult);
+      broadcastSyncStatus(effectiveStatus, syncResult);
       return syncResult;
     });
   } catch (err) {

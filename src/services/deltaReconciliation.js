@@ -914,10 +914,12 @@ export async function resolveConflict(conflictId, resolution, customData = null)
     let targetStatus = RECONCILIATION_STATUS.RESOLVED_KEEP_LOCAL;
     let localResolutionDelta = null;
 
-    // 1. Fetch current sequence allocation state
+    // 1. Fetch current sequence allocation state (enforcing strict monotonicity)
     const localStateRes = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']);
     const localState = localStateRes.values?.[0] || { last_allocated_sequence: 0, device_id: 'local_device' };
-    const nextSeq = (Number(localState.last_allocated_sequence) || 0) + 1;
+    const queueRes = await db.query('SELECT sequence FROM sync_delta_queue');
+    const queueMaxSeq = (queueRes.values || []).reduce((max, r) => Math.max(max, Number(r.sequence) || 0), 0);
+    const nextSeq = Math.max(Number(localState.last_allocated_sequence) || 0, queueMaxSeq) + 1;
     const localDevId = localState.device_id || 'local_device';
 
     // 2. Prepare Outbound Resolution Delta

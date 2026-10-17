@@ -21,6 +21,23 @@ const EXCLUDED_EPHEMERAL_KEYS = new Set([
   '_id',  // Alias of id
 ]);
 
+// Investment schema keys that must not pollute canonical representation of regular transactions
+const INVESTMENT_SCHEMA_KEYS = new Set([
+  'investment_account',
+  'actual_amount',
+  'total_charges',
+  'brokerage_charges',
+  'exchange_charges',
+  'stt_charges',
+  'sebi_charges',
+  'stamp_duty_charges',
+  'gst_charges',
+  'dp_charges',
+  'other_charges',
+  'security_display_name',
+  'settlement_mode'
+]);
+
 // Fields categorized as 2-decimal monetary currency amounts
 const MONETARY_FIELDS = new Set([
   'inr',
@@ -109,6 +126,15 @@ export function canonicalizeValue(val, key = '') {
   }
 
   if (typeof val === 'object') {
+    const isRegularTxn = Boolean(
+      val.id &&
+      (val.type !== undefined || val['Income/Expense'] !== undefined || val.date !== undefined) &&
+      !val.investment_transaction_type &&
+      !val.brokerage &&
+      !val.security_symbol &&
+      !val.security_isin
+    );
+
     const sortedObj = {};
     const keys = Object.keys(val).sort();
 
@@ -116,6 +142,11 @@ export function canonicalizeValue(val, key = '') {
       if (EXCLUDED_EPHEMERAL_KEYS.has(k)) continue;
       const childVal = val[k];
       if (childVal === undefined) continue; // Omit undefined keys
+
+      if (isRegularTxn && INVESTMENT_SCHEMA_KEYS.has(k)) {
+        const isDefaultVal = childVal === 0 || childVal === '0' || childVal === '' || childVal === null || childVal === 'ACTUAL';
+        if (isDefaultVal) continue;
+      }
 
       sortedObj[k] = canonicalizeValue(childVal, k);
     }

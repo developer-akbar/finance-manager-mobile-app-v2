@@ -14,6 +14,7 @@ export const UNIFIED_SYNC_STATUS_KEYS = Object.freeze({
   BOOTSTRAP_JOINING: 'BOOTSTRAP_JOINING',
   SYNCING: 'SYNCING',
   SYNC_ERROR: 'SYNC_ERROR',
+  BLOCKED_SYNC: 'BLOCKED_SYNC',
   PENDING_CHANGES: 'PENDING_CHANGES',
   SYNCED: 'SYNCED'
 });
@@ -234,6 +235,58 @@ export function deriveUnifiedSyncStatus(state = {}) {
       requiresAction: false,
       errorMessage: null,
       rawError: latestError
+    };
+  }
+
+  // 5.5 Blocked Sync State (Sequence gaps, unresolved dependencies, or incompatible peer baselines)
+  const isBlocked = 
+    syncStatus === 'BLOCKED_SEQUENCE_GAP' ||
+    syncStatus === 'BLOCKED_DEPENDENCY' ||
+    syncStatus === 'BLOCKED_PEER_BASELINE' ||
+    syncStatus === 'BLOCKED_INCOMPATIBLE_PEER' ||
+    Number(state.blockedGapCount) > 0 ||
+    Number(state.blockedDependencyCount) > 0 ||
+    (Array.isArray(state.blockedPeers) && state.blockedPeers.length > 0);
+
+  if (isBlocked) {
+    let title = 'Sync Blocked — Attention Required';
+    let explanation = 'Synchronization is waiting for missing prerequisite updates.';
+    let badgeText = 'Sync Blocked';
+
+    if (syncStatus === 'BLOCKED_SEQUENCE_GAP' || Number(state.blockedGapCount) > 0) {
+      title = 'Sync Blocked — Missing Sequence Updates';
+      explanation = 'A peer device has sequence updates that are missing locally. Sync will pause until the missing sequence packages are received.';
+      badgeText = 'Sequence Gap';
+    } else if (syncStatus === 'BLOCKED_DEPENDENCY' || Number(state.blockedDependencyCount) > 0) {
+      title = 'Sync Blocked — Missing Dependency';
+      explanation = 'Some updates depend on earlier changes that have not yet arrived. Waiting for dependency resolution.';
+      badgeText = 'Missing Dependency';
+    } else if (syncStatus === 'BLOCKED_PEER_BASELINE' || syncStatus === 'BLOCKED_INCOMPATIBLE_PEER' || (Array.isArray(state.blockedPeers) && state.blockedPeers.length > 0)) {
+      title = 'Sync Blocked — Incompatible Peer Baseline';
+      explanation = 'A peer device is using an incompatible snapshot baseline. Snapshot alignment or update is required.';
+      badgeText = 'Incompatible Peer';
+    }
+
+    return {
+      key: UNIFIED_SYNC_STATUS_KEYS.BLOCKED_SYNC,
+      title,
+      explanation,
+      badgeText,
+      badgeType: 'warning',
+      icon: '⏸️',
+      hasPendingConflicts: conflictsNum > 0,
+      conflictsCount: conflictsNum,
+      conflictBadgeText,
+      primaryActionKey: 'RETRY_SYNC',
+      primaryActionLabel: 'Retry Sync',
+      requiresAction: true,
+      errorMessage: null,
+      rawError: latestError,
+      diagnostics: {
+        blockedGapCount: Number(state.blockedGapCount) || 0,
+        blockedDependencyCount: Number(state.blockedDependencyCount) || 0,
+        blockedPeers: state.blockedPeers || []
+      }
     };
   }
 
