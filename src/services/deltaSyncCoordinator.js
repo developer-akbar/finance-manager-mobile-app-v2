@@ -168,6 +168,12 @@ export function getBroadcastChannel() {
             } finally {
               _isReceivingBroadcast = false;
             }
+          } else if (evt?.data?.type === 'DELTA_QUEUE_CHANGED') {
+            if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+              try {
+                window.dispatchEvent(new CustomEvent('finman:delta-queue-changed'));
+              } catch {}
+            }
           }
         };
       } catch {}
@@ -198,6 +204,27 @@ export function subscribeSyncStatus(listener) {
   return () => {
     _statusListeners.delete(listener);
   };
+}
+
+/**
+ * Notifies local subscribers and peer tabs that the local delta queue count or state changed.
+ * Decouples queue count visibility from full-sync status transition cycles.
+ */
+export function notifyDeltaQueueChanged() {
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    try {
+      window.dispatchEvent(new CustomEvent('finman:delta-queue-changed'));
+    } catch {}
+  }
+  const ch = getBroadcastChannel();
+  if (ch) {
+    try {
+      ch.postMessage({
+        type: 'DELTA_QUEUE_CHANGED',
+        timestamp: new Date().toISOString()
+      });
+    } catch {}
+  }
 }
 
 /**
@@ -1121,13 +1148,56 @@ export function isDeltaSyncRuntimeInitialized() {
   return _isRuntimeInitialized;
 }
 
+export const DEFAULT_MASTER_LOCK_TIMEOUT_MS = 45000;
+
 /**
- * Acquires the master sync lock across browser tabs.
+ * Acquires the master sync lock across browser tabs with bounded timeout protection.
+ * Guarantees prompt lock release on success, unhandled error, cancellation, or network stall.
  */
 export async function withMasterSyncLock(taskFn, lockOptions = {}) {
+  const timeoutMs = lockOptions.timeoutMs || DEFAULT_MASTER_LOCK_TIMEOUT_MS;
+  const controller = new AbortController();
+  const externalSignal = lockOptions.signal;
+
+  let externalAbortHandler = null;
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort(externalSignal.reason);
+    } else {
+      externalAbortHandler = () => controller.abort(externalSignal.reason);
+      externalSignal.addEventListener('abort', externalAbortHandler, { once: true });
+    }
+  }
+
+  const runWithTimeout = async (context = {}) => {
+    let timer = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const timeoutErr = new Error(`SYNC_PASS_TIMEOUT: Master sync pass timed out after ${timeoutMs}ms`);
+        timeoutErr.name = 'TimeoutError';
+        timeoutErr.isTimeout = true;
+        controller.abort(timeoutErr);
+        reject(timeoutErr);
+      }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+    });
+
+    try {
+      return await Promise.race([
+        taskFn({ ...context, signal: controller.signal }),
+        timeoutPromise
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (externalAbortHandler && externalSignal) {
+        externalSignal.removeEventListener('abort', externalAbortHandler);
+      }
+    }
+  };
+
   if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function' && !lockOptions.forceFallback) {
     return await navigator.locks.request(MASTER_SYNC_LOCK_NAME, { mode: 'exclusive' }, async () => {
-      return await taskFn();
+      return await runWithTimeout();
     });
   }
 
@@ -1176,7 +1246,14 @@ export async function withMasterSyncLock(taskFn, lockOptions = {}) {
       heartbeatTimer.unref();
     }
 
-    return await taskFn();
+    return await runWithTimeout({
+      assertStillOwner: async () => {
+        const check = await db.query('SELECT * FROM sync_process_locks WHERE lock_name = ?', [MASTER_SYNC_LOCK_NAME]);
+        if (check.values?.[0]?.owner_token !== ownerToken) {
+          throw new Error('[MasterLock] Fencing token mismatch: Lock ownership was lost.');
+        }
+      }
+    });
   } finally {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
@@ -1310,7 +1387,15 @@ export async function executeFullSyncPass(options = {}) {
   broadcastSyncStatus(SYNC_STATUS.SYNCING, { trigger });
 
   try {
-    return await withMasterSyncLock(async () => {
+    return await withMasterSyncLock(async (lockCtx = {}) => {
+      const { signal } = lockCtx;
+      const assertActive = () => {
+        if (signal?.aborted) {
+          throw signal.reason || new Error('SYNC_PASS_ABORTED: Sync pass timed out or was cancelled');
+        }
+      };
+
+      assertActive();
       const lifecycleState = await getDeviceLifecycleState(deviceId);
 
       // Block ordinary background sync and reconciliation while lifecycle is JOINING
@@ -1325,6 +1410,7 @@ export async function executeFullSyncPass(options = {}) {
 
       // Handle UNINITIALIZED new device bootstrap
       if (lifecycleState === DEVICE_LIFECYCLE.UNINITIALIZED) {
+        assertActive();
         const discovery = await discoverCloudRepository({
           accessToken,
           driveClient,
@@ -1332,6 +1418,7 @@ export async function executeFullSyncPass(options = {}) {
         });
 
         if (discovery.status === 'EXISTING_REPOSITORY_FOUND') {
+          assertActive();
           broadcastSyncStatus(SYNC_STATUS.SYNCING, { stage: 'BOOTSTRAP_DOWNLOADING', message: 'Downloading your FinMan data…' });
           const bootRes = await bootstrapNewDevice({
             accessToken,
@@ -1342,6 +1429,7 @@ export async function executeFullSyncPass(options = {}) {
             _hasMasterLock: true
           });
 
+          assertActive();
           const nowIso = new Date().toISOString();
           try {
             const { setSetting } = await import('../database/settings.js');
@@ -1360,6 +1448,7 @@ export async function executeFullSyncPass(options = {}) {
           broadcastSyncStatus(SYNC_STATUS.SUCCESS, syncResult);
           return syncResult;
         } else if (discovery.status === 'NO_REPOSITORY_EXISTS') {
+          assertActive();
           const nowIso = new Date().toISOString();
           try {
             const { setSetting } = await import('../database/settings.js');
@@ -1389,6 +1478,7 @@ export async function executeFullSyncPass(options = {}) {
       }
 
       // Normal ACTIVE sync pass:
+      assertActive();
       // 1. Recover unacknowledged queue events if manifest already updated
       await recoverQueueAckFromAuthoritativeManifest({
         deviceId,
@@ -1397,14 +1487,28 @@ export async function executeFullSyncPass(options = {}) {
         sessionKey
       });
 
+      assertActive();
       // 2. Outbound Push: Package pending deltas -> encrypt -> upload -> manifest RMW -> durable queue ACK
       const pushResult = await uploadPendingDeltas({
         deviceId,
         accessToken,
         driveClient,
-        sessionKey
+        sessionKey,
+        signal
       });
 
+      if (pushResult && pushResult.eventsUploaded > 0) {
+        notifyDeltaQueueChanged();
+        broadcastSyncStatus(SYNC_STATUS.SYNCING, {
+          stage: 'INBOUND_SYNC',
+          eventsUploaded: pushResult.eventsUploaded,
+          packagesUploaded: pushResult.packagesUploaded,
+          lastUploadedSequence: pushResult.lastUploadedSequence,
+          trigger
+        });
+      }
+
+      assertActive();
       // 2.5 Hydrate missing lineage metadata if this pre-existing active device lacks last_parent_snapshot_id
       await hydrateMissingSnapshotLineage({
         accessToken,
@@ -1412,14 +1516,17 @@ export async function executeFullSyncPass(options = {}) {
         sessionKey
       });
 
+      assertActive();
       // 3. Inbound Pull: Discover peer manifests -> download new packages -> stage contiguously
       let pullResult = await downloadAndStagePeerPackages({
         localDeviceId: deviceId,
         accessToken,
         driveClient,
-        sessionKey
+        sessionKey,
+        signal
       });
 
+      assertActive();
       // 3.5 Auto-reconcile newer cloud snapshot if detected from peer manifests
       if (pullResult?.newerBaselineDetected) {
         const autoRecon = await checkAndAutoReconcileCloudSnapshot({
@@ -1429,19 +1536,22 @@ export async function executeFullSyncPass(options = {}) {
           sessionKey,
           _hasMasterLock: true
         });
+        assertActive();
         if (autoRecon?.reconciled) {
           // Re-run pull after upgrading baseline to ingest peer packages under the new baseline
           pullResult = await downloadAndStagePeerPackages({
             localDeviceId: deviceId,
             accessToken,
             driveClient,
-            sessionKey
+            sessionKey,
+            signal
           });
         }
       }
 
+      assertActive();
       // 4. Reconciliation: Apply staged events deterministically to canonical store
-      const reconResult = await reconcileStagedEvents({});
+      const reconResult = await reconcileStagedEvents({ signal });
 
       // Evaluate blocked conditions and unmerged conflicts with strict truthfulness
       const blockedGaps = Number(reconResult?.blockedGapCount) || 0;
@@ -1467,6 +1577,7 @@ export async function executeFullSyncPass(options = {}) {
 
       const nowIso = new Date().toISOString();
       if (!isBlocked && effectiveStatus === SYNC_STATUS.SUCCESS) {
+        assertActive();
         try {
           const { setSetting } = await import('../database/settings.js');
           await setSetting('last_delta_synced_at', nowIso);
@@ -1488,8 +1599,9 @@ export async function executeFullSyncPass(options = {}) {
 
       broadcastSyncStatus(effectiveStatus, syncResult);
       return syncResult;
-    });
+    }, options.lockOptions || {});
   } catch (err) {
+    const isTimeout = Boolean(err?.isTimeout || err?.name === 'TimeoutError' || err?.message?.includes('SYNC_PASS_TIMEOUT') || err?.message?.includes('timed out'));
     const is401 = err?.status === 401 || err?.message?.includes('(401)') || err?.message?.includes('401');
     if (is401) {
       try {
@@ -1500,10 +1612,11 @@ export async function executeFullSyncPass(options = {}) {
     const isAuthError = is401 || err?.message?.includes('AUTH') || err?.message?.includes('No Google Drive credentials');
     const finalStatus = isAuthError ? SYNC_STATUS.AUTH_REQUIRED : SYNC_STATUS.ERROR;
 
-    broadcastSyncStatus(finalStatus, { error: err.message, trigger });
+    broadcastSyncStatus(finalStatus, { error: err.message, isTimeout, trigger });
     return {
       success: false,
       status: finalStatus,
+      isTimeout,
       error: err.message,
       trigger
     };
@@ -1587,6 +1700,7 @@ export async function recoverQueueAckFromAuthoritativeManifest({
             tx.oncomplete = () => res();
             tx.onerror = () => rej(tx.error);
           });
+          notifyDeltaQueueChanged();
         } else {
           await db.run(
             'UPDATE sync_delta_queue SET status = ?, acknowledged_at = ? WHERE sequence >= ? AND sequence <= ?',
@@ -1596,6 +1710,7 @@ export async function recoverQueueAckFromAuthoritativeManifest({
             'UPDATE sync_local_state SET last_uploaded_sequence = ?, last_pushed_sequence = ?, last_acked_sequence = ?, updated_at = ? WHERE device_id = ? OR key = ?',
             [Number(pkg.end_sequence), Number(pkg.end_sequence), Number(pkg.end_sequence), new Date().toISOString(), deviceId, 'device_state']
           );
+          notifyDeltaQueueChanged();
         }
       }
     }

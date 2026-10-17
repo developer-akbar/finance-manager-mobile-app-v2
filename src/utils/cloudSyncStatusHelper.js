@@ -55,7 +55,10 @@ export function translateSyncError(rawError) {
     return 'This domain is not authorized for Google Sign-In. Please check Google Cloud configuration.';
   }
 
-  // 3. Network & Connectivity Issues
+  // 3. Network & Connectivity Issues & Timeouts
+  if (lower.includes('timed out') || lower.includes('timeout') || lower.includes('time out') || lower.includes('sync_pass_timeout') || lower.includes('drive_request_timeout')) {
+    return 'Google Drive request timed out. Sync lock was released and FinMan will retry automatically.';
+  }
   if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('network request failed') || lower.includes('econnrefused')) {
     return 'Unable to reach Google Drive. Please check your internet connection.';
   }

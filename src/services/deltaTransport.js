@@ -299,6 +299,9 @@ export async function uploadPendingDeltas(opts) {
   const driveClient = opts.driveClient;
 
   return await withSameDeviceLock(deviceId, async () => {
+    if (opts.signal?.aborted) {
+      throw opts.signal.reason || new Error('SYNC_PASS_ABORTED: Upload aborted');
+    }
     const db = getDB();
 
     // 1. Read current local sequence watermarks
@@ -499,6 +502,12 @@ export async function uploadPendingDeltas(opts) {
       totalEventsUploaded += slice.events.length;
       packagesUploadedCount++;
       finalLastUploadedSequence = payload.end_sequence;
+    }
+
+    if (totalEventsUploaded > 0 && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      try {
+        window.dispatchEvent(new CustomEvent('finman:delta-queue-changed'));
+      } catch {}
     }
 
     return {

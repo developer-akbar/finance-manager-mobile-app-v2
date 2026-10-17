@@ -11,7 +11,7 @@ import { getDB, getRawIDB, openIDBInstance } from './db.js';
 import { createDeltaEvent, DELTA_STATUS, DELTA_OPERATION } from './deltaQueue.js';
 import { toCanonicalJson, computeCanonicalSha256 } from '../utils/canonicalEntity.js';
 import { v4 as uuid } from 'uuid';
-import { scheduleSync, SYNC_TRIGGER } from '../services/deltaSyncCoordinator.js';
+import { scheduleSync, SYNC_TRIGGER, notifyDeltaQueueChanged } from '../services/deltaSyncCoordinator.js';
 
 const MAX_PRECONDITION_RETRIES = 3;
 
@@ -364,6 +364,9 @@ async function _executeAtomicIDB({ operations, suppressDeltaQueue = false }) {
 
         tx.oncomplete = () => {
           try {
+            notifyDeltaQueueChanged();
+          } catch {}
+          try {
             scheduleSync(SYNC_TRIGGER.MUTATION);
           } catch (e) {
             console.warn('[AtomicMutation] Failed to schedule sync on mutation:', e);
@@ -541,6 +544,9 @@ async function _executeAtomicSQLite({ operations, suppressDeltaQueue = false }) 
     }
   }
 
+  try {
+    notifyDeltaQueueChanged();
+  } catch {}
   try {
     scheduleSync(SYNC_TRIGGER.MUTATION);
   } catch (e) {

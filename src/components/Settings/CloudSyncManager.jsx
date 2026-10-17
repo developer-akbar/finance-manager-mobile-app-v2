@@ -72,6 +72,8 @@ export { getFriendlyActionName, isNoOpPreview, getModalConfirmConfig };
 export default function CloudSyncManager({ onBack }) {
   const { state, load } = useApp();
   const refreshSeqRef = useRef(0);
+  const localTransactionsCount = state?.transactions?.length ?? 0;
+  const v10BaselineTxnCount = V10_TARGET_REFERENCE?.totalTransactionsCount ?? V10_TARGET_REFERENCE?.totalTransactions ?? 29158;
 
   // Authentication & Configuration State
   const [isAuthenticated, setIsAuthenticated] = useState(() => isGoogleLinked());
@@ -315,6 +317,15 @@ export default function CloudSyncManager({ onBack }) {
 
     refreshAll();
 
+    const handleQueueChanged = () => {
+      refreshDeltaMetrics({}, null, ++refreshSeqRef.current);
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('finman:delta-queue-changed', handleQueueChanged);
+      window.addEventListener('focus', handleQueueChanged);
+    }
+
     const unsubscribeDelta = subscribeSyncStatus((status, details) => {
       // 1. Immediately and synchronously update status to maintain real-time UI responsiveness
       if (mounted && status) {
@@ -331,6 +342,10 @@ export default function CloudSyncManager({ onBack }) {
     return () => {
       mounted = false;
       unsubscribeDelta();
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('finman:delta-queue-changed', handleQueueChanged);
+        window.removeEventListener('focus', handleQueueChanged);
+      }
     };
   }, [isUnlocked, isAuthenticated, load]);
 
@@ -1264,13 +1279,19 @@ export default function CloudSyncManager({ onBack }) {
               fontWeight: 700,
               color: !isUnlocked
                 ? 'var(--warning)'
-                : (isLiveDeltaSyncing ? 'var(--accent)' : 'var(--text-primary)')
+                : (isLiveDeltaSyncing
+                    ? 'var(--accent)'
+                    : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
+                        ? 'var(--expense)'
+                        : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)')))
             }}>
               {!isUnlocked
                 ? '🔒 Sync Locked (PIN Required)'
                 : (isLiveDeltaSyncing
                     ? 'Syncing...'
-                    : (deltaMetrics.pendingCount > 0 ? 'Changes Waiting' : 'All Changes Up to Date'))}
+                    : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
+                        ? (String(deltaMetrics.latestError || '').toLowerCase().includes('time') ? 'Sync Paused (Timed Out)' : 'Sync Paused (Needs Attention)')
+                        : (deltaMetrics.pendingCount > 0 ? 'Changes Waiting' : 'Up to Date')))}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
@@ -1280,14 +1301,28 @@ export default function CloudSyncManager({ onBack }) {
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last synced</span>
+            <span style={{ color: 'var(--text-muted)' }}>Last successful full sync</span>
             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
               {deltaMetrics.lastDeltaSyncedAt ? new Date(deltaMetrics.lastDeltaSyncedAt).toLocaleString() : 'Never'}
             </span>
           </div>
 
+          {deltaMetrics.latestError && deltaMetrics.status === DELTA_SYNC_STATUS.ERROR && (
+            <div style={{
+              marginTop: 10,
+              padding: '8px 12px',
+              borderRadius: 6,
+              background: 'rgba(255, 77, 106, 0.12)',
+              color: 'var(--expense)',
+              fontSize: '0.72rem',
+              fontWeight: 600
+            }}>
+              🛑 {translateSyncError(deltaMetrics.latestError)}
+            </div>
+          )}
+
           <button
-            className={!isUnlocked ? "btn btn-secondary" : "btn btn-primary"}
+            className={!isUnlocked ? "btn btn-secondary" : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR ? "btn btn-secondary" : "btn btn-primary")}
             onClick={!isUnlocked ? () => {
               const pinInput = document.querySelector('input[placeholder*="sync PIN"]');
               if (pinInput) pinInput.focus();
@@ -1303,7 +1338,9 @@ export default function CloudSyncManager({ onBack }) {
           >
             {!isUnlocked
               ? '🔒 Unlock Sync with PIN to Sync'
-              : (isLiveDeltaSyncing ? 'Syncing...' : '⚡ Sync Now')}
+              : (isLiveDeltaSyncing
+                  ? 'Syncing...'
+                  : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR ? '🔄 Retry Sync' : '⚡ Sync Now'))}
           </button>
 
           <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 8 }}>
@@ -1630,7 +1667,7 @@ export default function CloudSyncManager({ onBack }) {
 
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Local Records</span>
-            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{state.transactions.length.toLocaleString()} transactions</span>
+            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{localTransactionsCount.toLocaleString()} transactions</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Last Full Backup</span>
@@ -1756,7 +1793,7 @@ export default function CloudSyncManager({ onBack }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
               <span style={{ color: 'var(--text-muted)' }}>Local Transactions</span>
               <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                {state.transactions.length.toLocaleString()}
+                {localTransactionsCount.toLocaleString()}
               </span>
             </div>
             {deltaMetrics.latestError && (
@@ -1765,23 +1802,53 @@ export default function CloudSyncManager({ onBack }) {
               </div>
             )}
 
-            {/* Direct V10 Recovery / Replace Local Dataset */}
-            <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, marginTop: 12 }}>
-              <div style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
-                📥 Restore Verified Cloud Snapshot v10
+            {/* Disaster Recovery & Advanced Support Tools (Collapsed by Default) */}
+            <details style={{
+              marginTop: 14,
+              border: '1px solid rgba(255, 179, 0, 0.25)',
+              borderRadius: 8,
+              background: 'rgba(255, 179, 0, 0.04)',
+              padding: '10px 12px'
+            }}>
+              <summary style={{
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: '0.74rem',
+                color: 'var(--warning)',
+                userSelect: 'none',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <span>🛠️ Disaster Recovery &amp; Support Tools</span>
+                <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>Show / Hide</span>
+              </summary>
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(255, 179, 0, 0.2)' }}>
+                <div style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
+                  📥 Restore Verified Cloud Snapshot v10
+                </div>
+                <div style={{
+                  fontSize: '0.68rem',
+                  color: 'var(--text-primary)',
+                  marginBottom: 10,
+                  lineHeight: 1.45,
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  background: 'rgba(255, 77, 106, 0.08)',
+                  border: '1px solid rgba(255, 77, 106, 0.2)'
+                }}>
+                  ⚠️ <strong>Disaster Recovery Warning:</strong> Snapshot v10 contains baseline records ({v10BaselineTxnCount.toLocaleString()} txns). Your current device contains <strong>{localTransactionsCount.toLocaleString()} transactions</strong>. Restoring this snapshot replaces the local database and will overwrite newer local edits. An automatic backup is created before replacement, but this action should only be performed during guided recovery.
+                </div>
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleOpenV10Recovery}
+                  disabled={isLoading || isSyncing || !isGoogleLinked()}
+                  style={{ fontSize: '0.74rem', padding: '6px 12px', fontWeight: 700, color: 'var(--expense)', borderColor: 'rgba(255, 77, 106, 0.3)' }}
+                >
+                  📥 Open Snapshot v10 Recovery...
+                </button>
               </div>
-              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: 8, lineHeight: 1.4 }}>
-                Directly install verified Snapshot v10 (29,158 txns, 36 accounts, 732 inventory), replacing this device's local database. Takes an automatic local backup before replacement.
-              </div>
-              <button
-                className="btn btn-secondary"
-                onClick={handleOpenV10Recovery}
-                disabled={isLoading || isSyncing || !isGoogleLinked()}
-                style={{ fontSize: '0.74rem', padding: '6px 12px', fontWeight: 700 }}
-              >
-                📥 Restore Cloud Snapshot v10...
-              </button>
-            </div>
+            </details>
 
             {/* Client ID Configuration Toggle inside Advanced */}
             <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
@@ -2425,6 +2492,23 @@ export default function CloudSyncManager({ onBack }) {
                     </span>
                   </div>
                 </div>
+
+                {(v10RecoveryModal.preflightData?.localCounts?.totalTransactions || 0) > (v10RecoveryModal.preflightData?.incomingCounts?.totalTransactions || 0) && (
+                  <div style={{
+                    background: 'rgba(255, 77, 106, 0.1)',
+                    border: '1px solid rgba(255, 77, 106, 0.3)',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    fontSize: '0.72rem',
+                    color: 'var(--expense)',
+                    marginBottom: 12,
+                    lineHeight: 1.45,
+                    fontWeight: 600
+                  }}>
+                    ⚠️ <strong>Warning: Record Count Discrepancy!</strong><br />
+                    Your current local database contains <strong>{v10RecoveryModal.preflightData?.localCounts?.totalTransactions?.toLocaleString()} transactions</strong>, while this cloud snapshot contains only <strong>{v10RecoveryModal.preflightData?.incomingCounts?.totalTransactions?.toLocaleString()} transactions</strong>. Restoring this snapshot will replace newer transactions on this device.
+                  </div>
+                )}
 
                 <div style={{
                   background: 'rgba(255, 179, 0, 0.08)',

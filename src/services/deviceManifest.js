@@ -9,7 +9,7 @@
 
 import { v4 as uuid } from 'uuid';
 import { getDB, getRawIDB } from '../database/db.js';
-import { findAppDataFile, readAppDataFile, uploadAppDataFile } from './googleDriveSync.js';
+import { findAppDataFile, readAppDataFile, uploadAppDataFile, fetchWithTimeout } from './googleDriveSync.js';
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 
@@ -70,15 +70,53 @@ export function createEmptyDeviceManifest(arg1, arg2, arg3, arg4) {
  * Serializes same-device concurrent executions using Web Locks API or safe IDB fallback.
  * Guarantees that only ONE execution context on this device modifies manifest_dev_<deviceId>.json at a time.
  */
-export async function withSameDeviceLock(deviceId, taskFn) {
+export async function withSameDeviceLock(deviceId, taskFn, lockOptions = {}) {
   if (!deviceId) throw new Error('Device ID is required for same-device locking.');
 
   const lockName = `finman_sync_lock_${deviceId}`;
+  const timeoutMs = lockOptions.timeoutMs || 30000;
+
+  const externalSignal = lockOptions.signal;
+  let externalAbortHandler = null;
+
+  const runWithTimeout = async (context = {}) => {
+    let timer = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const timeoutErr = new Error(`DEVICE_LOCK_TIMEOUT: Same-device lock for ${deviceId} timed out after ${timeoutMs}ms`);
+        timeoutErr.name = 'TimeoutError';
+        timeoutErr.isTimeout = true;
+        reject(timeoutErr);
+      }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+
+      if (externalSignal) {
+        if (externalSignal.aborted) {
+          reject(externalSignal.reason || new Error('SYNC_PASS_ABORTED'));
+        } else {
+          externalAbortHandler = () => reject(externalSignal.reason || new Error('SYNC_PASS_ABORTED'));
+          externalSignal.addEventListener('abort', externalAbortHandler, { once: true });
+        }
+      }
+    });
+
+    try {
+      return await Promise.race([
+        taskFn(context),
+        timeoutPromise
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (externalAbortHandler && externalSignal) {
+        externalSignal.removeEventListener('abort', externalAbortHandler);
+      }
+    }
+  };
 
   // 1. Primary path: W3C Web Locks API (authoritative browser concurrency mechanism)
-  if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function') {
+  if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function' && !lockOptions.forceFallback) {
     return await navigator.locks.request(lockName, { mode: 'exclusive' }, async () => {
-      return await taskFn();
+      return await runWithTimeout();
     });
   }
 
@@ -90,7 +128,7 @@ export async function withSameDeviceLock(deviceId, taskFn) {
   }
 
   try {
-    const result = await taskFn({
+    const result = await runWithTimeout({
       assertStillOwner: async () => {
         const stillOwner = await _checkFallbackLockOwner(lockName, ownerToken);
         if (!stillOwner) {
@@ -403,10 +441,10 @@ export async function listPeerManifests(arg1, arg2, arg3, arg4) {
     files = await driveClient.listAppDataFiles(accessToken);
   } else {
     try {
-      const res = await fetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name contains 'manifest_dev_' and trashed = false&fields=files(id,name,modifiedTime,size)&pageSize=50`, {
+      const res = await fetchWithTimeout(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name contains 'manifest_dev_' and trashed = false&fields=files(id,name,modifiedTime,size)&pageSize=50`, {
         headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      if (res.ok) {
+      }, 25000);
+      if (res && res.ok) {
         const data = await res.json();
         files = data.files || [];
       }

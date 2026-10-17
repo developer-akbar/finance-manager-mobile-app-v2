@@ -11,17 +11,68 @@ import { invalidateStoredToken } from './googleAuth.js';
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
+export const DRIVE_REQUEST_TIMEOUT_MS = 25000;
+
+/**
+ * Fetch wrapper with bounded timeout and optional AbortSignal chaining.
+ */
+export async function fetchWithTimeout(url, options = {}, timeoutMs = DRIVE_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  let externalAbortHandler = null;
+
+  if (options.signal) {
+    if (options.signal.aborted) {
+      controller.abort(options.signal.reason);
+    } else {
+      externalAbortHandler = () => {
+        controller.abort(options.signal.reason);
+      };
+      options.signal.addEventListener('abort', externalAbortHandler, { once: true });
+    }
+  }
+
+  let timer = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const timeoutErr = new Error(`DRIVE_REQUEST_TIMEOUT: Request to ${url.split('?')[0]} timed out after ${timeoutMs}ms`);
+      timeoutErr.name = 'TimeoutError';
+      timeoutErr.isTimeout = true;
+      controller.abort(timeoutErr);
+      reject(timeoutErr);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([
+      fetch(url, { ...options, signal: controller.signal }),
+      timeoutPromise
+    ]);
+  } catch (err) {
+    if (controller.signal.aborted && controller.signal.reason instanceof Error) {
+      throw controller.signal.reason;
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (externalAbortHandler && options.signal) {
+      options.signal.removeEventListener('abort', externalAbortHandler);
+    }
+  }
+}
+
 /**
  * Fetch authenticated Google user identity (emailAddress and displayName) via Drive about.get
  * Uses the existing https://www.googleapis.com/auth/drive.appdata scope.
  */
-export async function fetchGoogleUserInfo(accessToken) {
+export async function fetchGoogleUserInfo(accessToken, options = {}) {
   if (!accessToken) throw new Error('Missing Google access token.');
 
+  const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
   const url = `${DRIVE_API_BASE}/about?fields=user(displayName,emailAddress,photoLink)`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
+  const res = await fetchWithTimeout(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: options.signal
+  }, timeoutMs);
 
   if (!res.ok) {
     const errText = await res.text();
@@ -47,15 +98,17 @@ export async function fetchGoogleUserInfo(accessToken) {
 /**
  * Find a file by name inside appDataFolder
  */
-export async function findAppDataFile(filename, accessToken) {
+export async function findAppDataFile(filename, accessToken, options = {}) {
   if (!accessToken) throw new Error('Missing Google access token.');
   
+  const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
   const query = encodeURIComponent(`name = '${filename}' and trashed = false`);
   const url = `${DRIVE_API_BASE}/files?spaces=appDataFolder&q=${query}&fields=files(id,name,modifiedTime,size,version)&pageSize=1`;
 
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
+  const res = await fetchWithTimeout(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: options.signal
+  }, timeoutMs);
 
   if (!res.ok) {
     const errText = await res.text();
@@ -74,14 +127,16 @@ export async function findAppDataFile(filename, accessToken) {
 /**
  * Read the full content of a file from Google Drive by File ID
  */
-export async function readAppDataFile(fileId, accessToken) {
+export async function readAppDataFile(fileId, accessToken, options = {}) {
   if (!accessToken) throw new Error('Missing Google access token.');
   if (!fileId) throw new Error('Missing File ID.');
 
+  const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
   const url = `${DRIVE_API_BASE}/files/${fileId}?alt=media`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
+  const res = await fetchWithTimeout(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: options.signal
+  }, timeoutMs);
 
   if (!res.ok) {
     const errText = await res.text();
@@ -99,11 +154,13 @@ export async function readAppDataFile(fileId, accessToken) {
 /**
  * Upload or update a file in appDataFolder using standard multipart upload
  */
-export async function uploadAppDataFile(filename, content, mimeType = 'application/json', accessToken) {
+export async function uploadAppDataFile(filename, content, mimeType = 'application/json', accessToken, options = {}) {
   if (!accessToken) throw new Error('Missing Google access token.');
 
+  const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
+
   // Check if file already exists in appDataFolder
-  const existingFile = await findAppDataFile(filename, accessToken);
+  const existingFile = await findAppDataFile(filename, accessToken, options);
   const boundary = '-------314159265358979323846';
   const delimiter = `\r\n--${boundary}\r\n`;
   const closeDelimiter = `\r\n--${boundary}--`;
@@ -127,14 +184,15 @@ export async function uploadAppDataFile(filename, content, mimeType = 'applicati
 
   const method = existingFile ? 'PATCH' : 'POST';
 
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': `multipart/related; boundary=${boundary}`
     },
-    body: multipartRequestBody
-  });
+    body: multipartRequestBody,
+    signal: options.signal
+  }, timeoutMs);
 
   if (!res.ok) {
     const errText = await res.text();
@@ -152,55 +210,63 @@ export async function uploadAppDataFile(filename, content, mimeType = 'applicati
 /**
  * Delete a file from appDataFolder
  */
-export async function deleteAppDataFile(fileId, accessToken) {
+export async function deleteAppDataFile(fileId, accessToken, options = {}) {
   if (!accessToken || !fileId) return;
 
+  const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
   const url = `${DRIVE_API_BASE}/files/${fileId}`;
-  await fetch(url, {
+  await fetchWithTimeout(url, {
     method: 'DELETE',
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: options.signal
+  }, timeoutMs).catch(() => {});
 }
 
 /**
  * List all files in appDataFolder (for diagnostics/debugging)
  */
-export async function listAppDataFiles(accessToken) {
+export async function listAppDataFiles(accessToken, options = {}) {
   if (!accessToken) return [];
 
+  const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
   const url = `${DRIVE_API_BASE}/files?spaces=appDataFolder&fields=files(id,name,modifiedTime,size)&pageSize=50`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
+  const res = await fetchWithTimeout(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: options.signal
+  }, timeoutMs).catch(() => null);
 
-  if (!res.ok) return [];
-  const data = await res.json();
+  if (!res || !res.ok) return [];
+  const data = await res.json().catch(() => ({}));
   return data.files || [];
 }
 
 /**
  * List all revisions of a file in Google Drive (READ-ONLY)
  */
-export async function listFileRevisions(fileId, accessToken) {
+export async function listFileRevisions(fileId, accessToken, options = {}) {
   if (!accessToken || !fileId) return [];
+  const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
   const url = `${DRIVE_API_BASE}/files/${fileId}/revisions?fields=revisions(id,mimeType,modifiedTime,keepForever,size)`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
-  if (!res.ok) return [];
-  const data = await res.json();
+  const res = await fetchWithTimeout(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: options.signal
+  }, timeoutMs).catch(() => null);
+  if (!res || !res.ok) return [];
+  const data = await res.json().catch(() => ({}));
   return data.revisions || [];
 }
 
 /**
  * Read the content of a specific file revision from Google Drive (READ-ONLY)
  */
-export async function readRevisionContent(fileId, revisionId, accessToken) {
+export async function readRevisionContent(fileId, revisionId, accessToken, options = {}) {
   if (!accessToken || !fileId || !revisionId) throw new Error('Missing parameters for reading revision.');
+  const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
   const url = `${DRIVE_API_BASE}/files/${fileId}/revisions/${revisionId}?alt=media`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
+  const res = await fetchWithTimeout(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: options.signal
+  }, timeoutMs);
   if (!res.ok) {
     const errText = await res.text();
     throw new Error(`Failed to read revision ${revisionId} from Drive (${res.status}): ${errText}`);

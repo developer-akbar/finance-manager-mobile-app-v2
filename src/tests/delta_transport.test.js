@@ -239,7 +239,7 @@ test('FinMan Phase 7.3 — Delta Transport & Peer Staging Comprehensive Suite (T
     // Corrupt ciphertext
     const corruptedCiphertext = {
       ...encryptedContainer,
-      ciphertext: encryptedContainer.ciphertext.substring(0, 10) + 'X' + encryptedContainer.ciphertext.substring(11)
+      ciphertext: encryptedContainer.ciphertext.substring(0, 10) + (encryptedContainer.ciphertext[10] === 'X' ? 'Y' : 'X') + encryptedContainer.ciphertext.substring(11)
     };
     await assert.rejects(
       async () => await decryptDeltaPackage(corruptedCiphertext, TEST_SESSION_KEY),
