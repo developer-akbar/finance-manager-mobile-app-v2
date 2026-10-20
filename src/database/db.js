@@ -47,6 +47,7 @@ export const closeDB = () => {
 };
 
 export const getRawIDB = () => _idb;
+export const setRawIDB = (val) => { _idb = val; };
 export const openIDBInstance = () => openIDB();
 
 const openIDB = () => new Promise((res, rej) => {
@@ -461,7 +462,8 @@ const applySchema = async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS sub_accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,account_id TEXT NOT NULL,sort_order INTEGER DEFAULT 0);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS budgets (id TEXT PRIMARY KEY,category TEXT NOT NULL,amount REAL NOT NULL,period TEXT DEFAULT 'Monthly',created_at TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT);`);
-  await db.execute(`CREATE TABLE IF NOT EXISTS recurring_rules (id TEXT PRIMARY KEY,rule_type TEXT NOT NULL,status TEXT DEFAULT 'active',txn_type TEXT DEFAULT 'Expense',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',base_note TEXT DEFAULT '',description TEXT DEFAULT '',currency TEXT DEFAULT 'INR',total_amount REAL DEFAULT 0,amount_per_part REAL DEFAULT 0,total_days INTEGER DEFAULT 0,total_parts INTEGER DEFAULT 0,completed_parts INTEGER DEFAULT 0,start_date TEXT DEFAULT '',next_date TEXT DEFAULT '',end_date TEXT DEFAULT '',schedule_mode TEXT DEFAULT 'on_date',frequency TEXT DEFAULT '',created_at TEXT DEFAULT '');`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS recurring_rules (id TEXT PRIMARY KEY,rule_type TEXT NOT NULL,status TEXT DEFAULT 'active',txn_type TEXT DEFAULT 'Expense',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',base_note TEXT DEFAULT '',description TEXT DEFAULT '',currency TEXT DEFAULT 'INR',total_amount REAL DEFAULT 0,amount_per_part REAL DEFAULT 0,total_days INTEGER DEFAULT 0,total_parts INTEGER DEFAULT 0,completed_parts INTEGER DEFAULT 0,start_date TEXT DEFAULT '',next_date TEXT DEFAULT '',end_date TEXT DEFAULT '',schedule_mode TEXT DEFAULT 'on_date',frequency TEXT DEFAULT '',created_at TEXT DEFAULT '',updated_at TEXT DEFAULT '');`);
+  try { await db.run(`ALTER TABLE recurring_rules ADD COLUMN updated_at TEXT DEFAULT ''`); } catch {}
   await db.execute(`CREATE TABLE IF NOT EXISTS inventory (id TEXT PRIMARY KEY,name TEXT NOT NULL,qty REAL DEFAULT 0,unit TEXT DEFAULT '',price REAL DEFAULT 0,discounted_price REAL DEFAULT 0,status TEXT DEFAULT 'available',purchased_date TEXT DEFAULT '',notes TEXT DEFAULT '',updated_at TEXT,sub_qty REAL DEFAULT 1,sub_unit TEXT DEFAULT '',original_qty REAL DEFAULT 0,pack_qty REAL DEFAULT 1,discount_type TEXT DEFAULT 'percentage',discount_value REAL DEFAULT 0,category TEXT DEFAULT '',brand TEXT DEFAULT '');`);
   try { await db.run(`ALTER TABLE inventory ADD COLUMN sub_qty REAL DEFAULT 1`); } catch {}
   try { await db.run(`ALTER TABLE inventory ADD COLUMN sub_unit TEXT DEFAULT ''`); } catch {}
@@ -581,12 +583,17 @@ const applySchema = async (db) => {
     tags TEXT DEFAULT '',
     next_due_date TEXT DEFAULT '',
     active INTEGER DEFAULT 1,
+    target_amount REAL DEFAULT 0,
+    current_value REAL DEFAULT 0,
     created_at TEXT DEFAULT '',
     updated_at TEXT DEFAULT ''
   );`);
   await db.execute(`CREATE TABLE IF NOT EXISTS sync_tombstones (
     id TEXT PRIMARY KEY,
     entity_type TEXT DEFAULT 'transaction',
+    entity_id TEXT,
+    generation INTEGER DEFAULT 0,
+    deleted_checksum TEXT,
     deleted_at TEXT NOT NULL
   );`);
   await db.execute(`CREATE TABLE IF NOT EXISTS sync_delta_queue (
@@ -609,18 +616,28 @@ const applySchema = async (db) => {
     parent_event_id TEXT,
     resolution_type TEXT,
     resolved_event_id TEXT,
-    resolved_conflict_id TEXT
+    resolved_conflict_id TEXT,
+    acknowledged_at TEXT,
+    created_at TEXT
   );`);
   await db.execute(`CREATE TABLE IF NOT EXISTS sync_local_state (
     key TEXT PRIMARY KEY,
     device_id TEXT NOT NULL,
+    base_snapshot_id TEXT,
+    base_cloud_version INTEGER DEFAULT 0,
+    last_parent_snapshot_id TEXT,
+    lifecycle_state TEXT DEFAULT 'UNINITIALIZED',
     last_allocated_sequence INTEGER DEFAULT 0,
+    last_uploaded_sequence INTEGER DEFAULT 0,
     last_pushed_sequence INTEGER DEFAULT 0,
+    last_acked_sequence INTEGER DEFAULT 0,
     updated_at TEXT NOT NULL
   );`);
   await db.execute(`CREATE TABLE IF NOT EXISTS sync_staged_packages (
     package_id TEXT PRIMARY KEY,
     device_id TEXT NOT NULL,
+    sequence_range TEXT,
+    base_snapshot_id TEXT,
     start_sequence INTEGER NOT NULL,
     end_sequence INTEGER NOT NULL,
     event_count INTEGER NOT NULL,
@@ -657,6 +674,7 @@ const applySchema = async (db) => {
     peer_device_id TEXT PRIMARY KEY,
     last_staged_sequence INTEGER DEFAULT 0,
     last_reconciled_sequence INTEGER DEFAULT 0,
+    base_snapshot_id TEXT,
     updated_at TEXT NOT NULL
   );`);
   await db.execute(`CREATE TABLE IF NOT EXISTS sync_process_locks (
@@ -667,22 +685,120 @@ const applySchema = async (db) => {
   );`);
   await db.execute(`CREATE TABLE IF NOT EXISTS sync_conflicts (
     conflict_id TEXT PRIMARY KEY,
-    collection TEXT NOT NULL,
+    collection TEXT DEFAULT '',
+    entity_type TEXT DEFAULT '',
     entity_id TEXT NOT NULL,
-    conflict_type TEXT NOT NULL,
-    peer_device_id TEXT NOT NULL,
-    event_id TEXT NOT NULL,
+    conflict_type TEXT DEFAULT '',
+    peer_device_id TEXT DEFAULT '',
+    event_id TEXT DEFAULT '',
     package_id TEXT,
     base_checksum TEXT,
     local_checksum TEXT,
     remote_checksum TEXT,
+    base_state TEXT,
+    local_state TEXT,
+    remote_state TEXT,
     local_payload TEXT,
     remote_payload TEXT,
     status TEXT DEFAULT 'PENDING',
     resolution TEXT,
-    created_at TEXT NOT NULL,
+    created_at TEXT DEFAULT '',
+    detected_at TEXT DEFAULT '',
     resolved_at TEXT
   );`);
+
+  await ensureSyncSchema(db);
+};
+
+/**
+ * Ensures all sync table columns exist on SQLite, safely handling both Capacitor SQLite db.run and db.execute.
+ */
+const _tableColumnsCache = new Map();
+
+export const getTableColumns = async (db, table) => {
+  if (!db || !table) return null;
+  const key = String(table).toLowerCase();
+  if (_tableColumnsCache.has(key)) return _tableColumnsCache.get(key);
+  const cols = new Set();
+  try {
+    if (typeof db.query === 'function') {
+      const info = await db.query(`PRAGMA table_info(${table})`);
+      for (const row of info.values || []) {
+        if (row.name) cols.add(row.name.toLowerCase());
+      }
+    }
+  } catch {}
+  if (cols.size > 0) {
+    _tableColumnsCache.set(key, cols);
+    return cols;
+  }
+  return null;
+};
+
+export const clearTableColumnsCache = () => {
+  _tableColumnsCache.clear();
+};
+
+export const ensureSyncSchema = async (db) => {
+  if (!db) return;
+
+  const safeAddCol = async (table, colDef) => {
+    try {
+      const colName = colDef.trim().split(/\s+/)[0].toLowerCase();
+      let existingCols = await getTableColumns(db, table);
+      if (existingCols && existingCols.has(colName)) {
+        return; // Column already exists, skip ALTER TABLE entirely
+      }
+      if (typeof db.run === 'function') {
+        await db.run(`ALTER TABLE ${table} ADD COLUMN ${colDef}`);
+      } else if (typeof db.execute === 'function') {
+        await db.execute(`ALTER TABLE ${table} ADD COLUMN ${colDef};`);
+      }
+      if (existingCols) {
+        existingCols.add(colName);
+      }
+    } catch {
+      // Ignore: column already exists or ALTER TABLE unsupported (e.g. IDB)
+    }
+  };
+
+  // sync_local_state migrations
+  await safeAddCol('sync_local_state', "lifecycle_state TEXT DEFAULT 'UNINITIALIZED'");
+  await safeAddCol('sync_local_state', 'base_snapshot_id TEXT');
+  await safeAddCol('sync_local_state', 'base_cloud_version INTEGER DEFAULT 0');
+  await safeAddCol('sync_local_state', 'last_parent_snapshot_id TEXT');
+  await safeAddCol('sync_local_state', 'last_uploaded_sequence INTEGER DEFAULT 0');
+  await safeAddCol('sync_local_state', 'last_acked_sequence INTEGER DEFAULT 0');
+
+  // sync_peer_state migrations
+  await safeAddCol('sync_peer_state', 'base_snapshot_id TEXT');
+
+  // sync_delta_queue migrations
+  await safeAddCol('sync_delta_queue', 'acknowledged_at TEXT');
+  await safeAddCol('sync_delta_queue', 'created_at TEXT');
+
+  // sync_tombstones migrations
+  await safeAddCol('sync_tombstones', 'entity_id TEXT');
+  await safeAddCol('sync_tombstones', 'generation INTEGER DEFAULT 0');
+  await safeAddCol('sync_tombstones', 'deleted_checksum TEXT');
+
+  // sync_staged_packages migrations
+  await safeAddCol('sync_staged_packages', 'sequence_range TEXT');
+  await safeAddCol('sync_staged_packages', 'base_snapshot_id TEXT');
+
+  // sync_conflicts migrations
+  await safeAddCol('sync_conflicts', "entity_type TEXT DEFAULT ''");
+  await safeAddCol('sync_conflicts', 'local_state TEXT');
+  await safeAddCol('sync_conflicts', 'remote_state TEXT');
+  await safeAddCol('sync_conflicts', 'base_state TEXT');
+  await safeAddCol('sync_conflicts', "detected_at TEXT DEFAULT ''");
+
+  // investment_plans migrations
+  await safeAddCol('investment_plans', 'target_amount REAL DEFAULT 0');
+  await safeAddCol('investment_plans', 'current_value REAL DEFAULT 0');
+
+  // recurring_rules migrations
+  await safeAddCol('recurring_rules', "updated_at TEXT DEFAULT ''");
 };
 
 let _db = null;

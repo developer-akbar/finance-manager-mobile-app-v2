@@ -389,8 +389,8 @@ export function calculateEntityDiff(localPayload, remotePayload, collection = 't
   // Transactions: Canonical high-priority financial fields
   if (coll.includes('trans')) {
     // 1. Amount
-    const localAmtVal = localPayload.amount !== undefined ? localPayload.amount : localPayload.Amount;
-    const remoteAmtVal = remotePayload.amount !== undefined ? remotePayload.amount : remotePayload.Amount;
+    const localAmtVal = localPayload.amount !== undefined ? localPayload.amount : (localPayload.Amount !== undefined ? localPayload.Amount : (localPayload.inr !== undefined ? localPayload.inr : localPayload.INR));
+    const remoteAmtVal = remotePayload.amount !== undefined ? remotePayload.amount : (remotePayload.Amount !== undefined ? remotePayload.Amount : (remotePayload.inr !== undefined ? remotePayload.inr : remotePayload.INR));
     const hasLocalAmt = localAmtVal !== undefined && localAmtVal !== null && localAmtVal !== '';
     const hasRemoteAmt = remoteAmtVal !== undefined && remoteAmtVal !== null && remoteAmtVal !== '';
 

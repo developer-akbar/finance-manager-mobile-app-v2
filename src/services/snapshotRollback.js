@@ -16,6 +16,7 @@
  */
 
 import { decryptBackupData } from '../utils/cryptoBackup.js';
+import { fetchWithTimeout } from './googleDriveSync.js';
 
 export const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 export const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
@@ -205,7 +206,7 @@ async function defaultFindFiles(filename, accessToken, pageSize = 10) {
   if (!accessToken) throw new RollbackError(ROLLBACK_ERROR_CODES.MISSING_PARAMETERS, 'Access token is required for Drive queries');
   const query = encodeURIComponent(`name = '${filename}' and trashed = false`);
   const url = `${DRIVE_API_BASE}/files?spaces=appDataFolder&q=${query}&fields=files(id,name,modifiedTime,size,version,md5Checksum)&pageSize=${pageSize}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } }, 25000);
   if (!res.ok) {
     const errText = await res.text();
     throw new RollbackError(ROLLBACK_ERROR_CODES.DRIVE_QUERY_FAILED, `Drive API error (${res.status}): ${errText}`);
@@ -220,7 +221,7 @@ async function defaultFindFiles(filename, accessToken, pageSize = 10) {
 async function defaultReadFile(fileId, accessToken) {
   if (!accessToken) throw new RollbackError(ROLLBACK_ERROR_CODES.MISSING_PARAMETERS, 'Access token is required to read Drive file');
   const url = `${DRIVE_API_BASE}/files/${fileId}?alt=media`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } }, 25000);
   if (!res.ok) {
     const errText = await res.text();
     throw new RollbackError(ROLLBACK_ERROR_CODES.ACTIVE_READ_FAILED, `Drive download failed (${res.status}): ${errText}`);
@@ -247,14 +248,14 @@ async function defaultUpdateFile(fileId, filename, content, mimeType = 'applicat
     closeDelimiter;
 
   const url = `${DRIVE_UPLOAD_BASE}/files/${fileId}?uploadType=multipart`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'PATCH',
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': `multipart/related; boundary=${boundary}`
     },
     body: multipartBody
-  });
+  }, 25000);
   if (!res.ok) {
     const errText = await res.text();
     throw new RollbackError(ROLLBACK_ERROR_CODES.UPLOAD_FAILED, `Drive PATCH upload failed (${res.status}): ${errText}`);

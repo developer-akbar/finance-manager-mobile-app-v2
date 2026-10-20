@@ -24,6 +24,7 @@
 
 import { encryptBackupData, decryptBackupData } from '../utils/cryptoBackup.js';
 import { validateCloudSnapshotPayload } from './cloudSyncEngine.js';
+import { fetchWithTimeout } from './googleDriveSync.js';
 import {
   DRIVE_API_BASE,
   DRIVE_UPLOAD_BASE,
@@ -218,7 +219,7 @@ export async function verifyCandidateV10(candidatePayload, rawCandidateBytesOrSt
 async function defaultReadFile(fileId, accessToken) {
   if (!accessToken) throw new PromotionError(PROMOTION_ERROR_CODES.MISSING_PARAMETERS, 'Access token is required to read Drive file');
   const url = `${DRIVE_API_BASE}/files/${fileId}?alt=media`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } }, 25000);
   if (!res.ok) {
     const errText = await res.text();
     throw new PromotionError(PROMOTION_ERROR_CODES.PRE_WRITE_READ_FAILED, `Drive download failed (${res.status}): ${errText}`);
@@ -245,14 +246,14 @@ async function defaultUpdateFile(fileId, filename, content, mimeType = 'applicat
     closeDelimiter;
 
   const url = `${DRIVE_UPLOAD_BASE}/files/${fileId}?uploadType=multipart`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'PATCH',
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': `multipart/related; boundary=${boundary}`
     },
     body: multipartBody
-  });
+  }, 25000);
   if (!res.ok) {
     const errText = await res.text();
     throw new PromotionError(PROMOTION_ERROR_CODES.UPLOAD_FAILED, `Drive PATCH upload failed (${res.status}): ${errText}`);

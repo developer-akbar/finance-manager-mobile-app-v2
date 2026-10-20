@@ -39,7 +39,10 @@ import {
   getSyncSessionKey,
   unlockSyncSession,
   lockSyncSession,
-  subscribeSyncSession
+  subscribeSyncSession,
+  encodePersistedToken,
+  decodePersistedToken,
+  getLegacyCorruptedPin
 } from '../services/syncSession.js';
 import {
   deriveKeyMaterial,
@@ -306,5 +309,37 @@ describe('Phase 6A: Session Unlock & In-Memory Derived Key', () => {
     assert.strictEqual(preview.plannedLocalChanges.inserts, 0);
     assert.strictEqual(preview.plannedLocalChanges.updates, 0);
     assert.strictEqual(preview.plannedLocalChanges.deletes, 0);
+  });
+
+  it('15. Token encoding and decoding handles prefixed format and legacy unmasked raw PINs', () => {
+    const rawPin = '211200';
+    const encoded = encodePersistedToken(rawPin);
+    assert.ok(encoded.startsWith('fnm_v1:'), 'Token must have fnm_v1: prefix');
+
+    // Decoding prefixed token restores exact PIN
+    const decoded = decodePersistedToken(encoded);
+    assert.strictEqual(decoded, rawPin, 'Prefixed token must decode back to exact PIN');
+
+    // Legacy unmasked raw PIN (e.g. from previous app versions) is safely preserved without corruption
+    const legacyRaw = '211200';
+    const decodedLegacy = decodePersistedToken(legacyRaw);
+    assert.strictEqual(decodedLegacy, '211200', 'Legacy raw PIN must not be corrupted by base64 decoding');
+  });
+
+  it('16. Migration fallback recovers packages encrypted during transient token bug', async () => {
+    const rawPin = '211200';
+    await unlockSyncSession(rawPin);
+
+    // Simulate transient corrupted PIN that occurred during the bug
+    const corruptedPin = getLegacyCorruptedPin(rawPin);
+    assert.ok(corruptedPin && corruptedPin !== rawPin, 'Corrupted PIN must be different from raw PIN');
+
+    // Encrypt payload with corrupted key
+    const testPayload = { items: [1, 2, 3], secret: 'migration_test' };
+    const encryptedWithCorrupted = await encryptBackupData(testPayload, corruptedPin);
+
+    // Decrypting with clean session key recovers transparently via migration fallback!
+    const recovered = await decryptBackupData(encryptedWithCorrupted, rawPin);
+    assert.deepStrictEqual(recovered, testPayload, 'Decryption must recover payload transparently via fallback');
   });
 });

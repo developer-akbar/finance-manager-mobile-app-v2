@@ -12,6 +12,7 @@ import InvestmentsPortfolio from '../Accounts/InvestmentsPortfolio.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
 import { useDueAlertState } from '../../hooks/useDueAlertState.js';
 import { calculateIncomeMilestones } from '../../utils/milestones.js';
+import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
 import './Dashboard.css';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -141,7 +142,8 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
 
   const hour = now.getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const name = settings?.name || '';
+  const rawName = settings?.name || '';
+  const name = rawName ? rawName.replace(/\b\w/g, c => c.toUpperCase()) : '';
   const monthLabel = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
   // ── Investment keywords & checker ──
@@ -500,6 +502,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
       <div className="dash-greeting" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="dash-hello">{greeting}{name ? `, ${name}` : ' 👋'}</div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <GlobalSyncBadge mobile />
           <button
             type="button"
             className="dash-milestones-btn"

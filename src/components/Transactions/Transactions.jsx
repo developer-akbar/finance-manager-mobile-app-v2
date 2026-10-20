@@ -4,6 +4,7 @@ import { parseDate, formatINR, calcTotals, calcReportingTotals, groupByDate, txn
 import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import TransactionSyncModal from './TransactionSyncModal.jsx';
+import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
 import { bundleRelatedTransactions, serializeTransactions } from '../../utils/finmanPayload.js';
 import { toast } from '../Common/Toast.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
@@ -1769,6 +1770,7 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
           <button className={`txn-view-tab ${viewMode==='monthly'?'active':''}`} onClick={()=>setViewMode('monthly')}>Monthly</button>
         </div>
         <div className="txn-header-actions">
+          <GlobalSyncBadge mobile />
           <button className="txn-paste-btn" onClick={handleOpenSyncModal} title="Paste Transactions (Cross-Environment Sync)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="15" height="15">
               <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>

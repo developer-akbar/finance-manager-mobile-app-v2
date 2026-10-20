@@ -19,6 +19,8 @@ export const formatINRCompact = (amount) => {
 };
 
 // ── Date / time helpers ───────────────────────────────────────────────────────
+const pad = (n) => String(n).padStart(2, '0');
+
 export const parseDate = (raw) => {
   if (!raw) return new Date(0);
   if (raw instanceof Date) return raw;
@@ -32,13 +34,77 @@ export const parseDate = (raw) => {
 };
 
 export const toDDMMYYYY = (raw) => {
+  if (!raw) return '';
+  if (raw instanceof Date) {
+    if (isNaN(raw.getTime())) return '';
+    return `${pad(raw.getDate())}/${pad(raw.getMonth() + 1)}/${raw.getFullYear()}`;
+  }
+  const s = String(raw).trim();
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmy) return `${pad(+dmy[1])}/${pad(+dmy[2])}/${dmy[3]}`;
+  const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymd) return `${ymd[3]}/${ymd[2]}/${ymd[1]}`;
   const d = parseDate(raw); if (d.getTime() === 0) return '';
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 };
 
 export const toInputDate = (raw) => {
+  if (!raw) return '';
+  if (raw instanceof Date) {
+    if (isNaN(raw.getTime())) return '';
+    return `${raw.getFullYear()}-${pad(raw.getMonth() + 1)}-${pad(raw.getDate())}`;
+  }
+  const s = String(raw).trim();
+  const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmy) return `${dmy[3]}-${pad(+dmy[2])}-${pad(+dmy[1])}`;
   const d = parseDate(raw); if (d.getTime() === 0) return '';
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+/**
+ * Normalizes time into valid HTML5 time input format "HH:mm" (24-hour).
+ * Handles: "12:58", "12:58:00", "1:30 pm", "09:05", decimal fractions, etc.
+ * Uses intentional documented fallback (defaults to '00:00') if missing or invalid.
+ */
+export const toInputTime = (raw, fallback = '00:00') => {
+  if (raw === null || raw === undefined) return fallback;
+  const s = String(raw).trim();
+  if (!s) return fallback;
+
+  // Check 12-hour format with am/pm: e.g. "1:30 pm", "01:30pm", "12:58 AM"
+  const ampmMatch = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]m)$/i);
+  if (ampmMatch) {
+    let hh = parseInt(ampmMatch[1], 10);
+    const mm = ampmMatch[2];
+    const ampm = ampmMatch[3].toLowerCase();
+    if (ampm === 'pm' && hh < 12) hh += 12;
+    if (ampm === 'am' && hh === 12) hh = 0;
+    return `${pad(hh)}:${mm}`;
+  }
+
+  // Check 24-hour format: e.g. "12:58", "09:05", "12:58:00"
+  const m24 = s.match(/^(\d{1,2}):(\d{2})/);
+  if (m24) {
+    const hh = parseInt(m24[1], 10);
+    const mm = m24[2];
+    if (hh >= 0 && hh <= 23 && parseInt(mm, 10) >= 0 && parseInt(mm, 10) <= 59) {
+      return `${pad(hh)}:${mm}`;
+    }
+  }
+
+  // If numeric excel fraction
+  const val = parseFloat(s);
+  if (!isNaN(val) && !s.includes(':')) {
+    const fraction = val - Math.floor(val);
+    const totalSeconds = Math.round(fraction * 86400);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    return `${pad(hours)}:${pad(minutes)}`;
+  }
+
+  return fallback;
 };
 
 export const inputToStorage = (v) => {
@@ -122,8 +188,6 @@ export const normaliseDate = (raw) => {
   }
   return s;
 };
-
-const pad = (n) => String(n).padStart(2, '0');
 
 export const formatDate = (raw, style = 'short') => {
   const d = parseDate(raw); if (d.getTime() === 0) return '—';

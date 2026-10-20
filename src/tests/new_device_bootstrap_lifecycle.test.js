@@ -748,20 +748,19 @@ test('FinMan Phase 7.6 — New Device / Existing Repository Bootstrap Lifecycle 
       content: encryptedSnapshot
     });
 
-    // Execute full sync pass
+    // Execute full sync pass — Fail-closed safeguard: Populated device MUST reject destructive bootstrap
     const syncRes = await executeFullSyncPass({
       deviceId: legacyDevId,
       driveClient: mockDrive,
       sessionKey: TEST_SESSION_KEY
     });
 
-    assert.strictEqual(syncRes.success, true);
-    assert.strictEqual(syncRes.bootstrapped, true, 'Bootstrap was executed');
-    assert.strictEqual(syncRes.snapshotId, 'snap_prod_master_123');
+    assert.strictEqual(syncRes.success, false, 'Populated device must reject destructive bootstrap');
+    assert.ok(syncRes.error?.includes('BOOTSTRAP_SAFEGUARD_REJECTED'), 'Safeguard rejection surfaced');
 
-    // Verify device transitioned to ACTIVE after successful bootstrap
-    const lifecycleAfter = await getDeviceLifecycleState(legacyDevId);
-    assert.strictEqual(lifecycleAfter, DEVICE_LIFECYCLE.ACTIVE, 'Device E is ACTIVE after bootstrap');
+    // Verify all 4 local transactions remain completely untouched
+    const txnsAfter = await getTransactions();
+    assert.strictEqual(txnsAfter.length, 4, 'Local transactions must remain 100% intact');
   });
 
   await t.test('REGRESSION TEST B: Existing healthy active device (C/D backward-compatible pattern) remains ACTIVE', async () => {
