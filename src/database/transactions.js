@@ -2,26 +2,36 @@ import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
 import { recordTombstone, recordTombstonesBatch } from './tombstones.js';
 import { executeAtomicMutation, executeAtomicBatch } from './atomicMutation.js';
+import { parseDescriptionStockInfo, parseStockLine } from '../utils/stockInventoryNormalization.js';
+
+export { parseDescriptionStockInfo };
 
 export const rowToTxn = (r) => {
   const base = {
     id: r.id, _id: r.id, ID: r.id,
-    Date: r.date, Time: r.time || '',
-    Account: r.account || '', FromAccount: r.from_account || '', ToAccount: r.to_account || '',
-    Category: r.category || '', Subcategory: r.subcategory || '',
-    Note: r.note || '', Description: r.description || '',
-    INR: parseFloat(r.inr) || 0, Amount: r.amount || String(r.inr || 0),
-    Currency: r.currency || 'INR', 'Income/Expense': r.type || 'Expense',
+    Date: r.date, date: r.date,
+    Time: r.time || '', time: r.time || '',
+    Account: r.account || '', account: r.account || '',
+    FromAccount: r.from_account || '', from_account: r.from_account || '',
+    ToAccount: r.to_account || '', to_account: r.to_account || '',
+    Category: r.category || '', category: r.category || '',
+    Subcategory: r.subcategory || '', subcategory: r.subcategory || '',
+    Note: r.note || '', note: r.note || '',
+    Description: r.description || '', description: r.description || '',
+    INR: parseFloat(r.inr) || 0, inr: parseFloat(r.inr) || 0,
+    Amount: r.amount || String(r.inr || 0), amount: r.amount || String(r.inr || 0),
+    Currency: r.currency || 'INR', currency: r.currency || 'INR',
+    'Income/Expense': r.type || 'Expense', type: r.type || 'Expense',
     created_at: r.created_at, updated_at: r.updated_at,
     recurring_rule_id: r.recurring_rule_id || '',
-    Tags: r.tags || '',
+    Tags: r.tags || '', tags: r.tags || '',
     split_group_id: r.split_group_id || '',
     receipt_image: r.receipt_image || '',
     warranty_expiry: r.warranty_expiry || '',
     serial_no: r.serial_no || '',
-    SubAccount: r.sub_account || '',
-    FromSubAccount: r.from_sub_account || '',
-    ToSubAccount: r.to_sub_account || '',
+    SubAccount: r.sub_account || '', sub_account: r.sub_account || '',
+    FromSubAccount: r.from_sub_account || '', from_sub_account: r.from_sub_account || '',
+    ToSubAccount: r.to_sub_account || '', to_sub_account: r.to_sub_account || '',
     InvestmentAccount: r.investment_account || '',
     ActualAmount: parseFloat(r.actual_amount || 0) || (r.actual_amount === 0 ? 0 : ''),
     TotalCharges: parseFloat(r.total_charges || 0) || 0,
@@ -241,7 +251,8 @@ export const addTransaction = async (data) => {
   const companionCharges = Array.isArray(data.companion_charges) ? data.companion_charges : (Array.isArray(data.charges) ? data.charges : []);
   let stockOps = [];
   if (rowObj.tags && rowObj.tags.includes('#stock_ref_')) {
-    stockOps = await computeStockOperationsOnTxnChange(null, rowObj);
+    const stockRes = await computeStockOperationsOnTxnChange(null, rowObj);
+    stockOps = stockRes.ops || [];
   }
 
   const allOps = [
@@ -306,56 +317,75 @@ export const addTransaction = async (data) => {
   return rowToTxn(rowObj);
 };
 
-const parseDescriptionStockInfo = (description) => {
-  if (!description) return null;
-  const match = description.match(/^(Used|Lent)\s+([\d\.\s\/]+)\s+(\w+)\s+of\s+/i);
-  if (!match) return null;
-
-  const type = match[1].toLowerCase();
-  const qtyStr = match[2].trim();
-  const unit = match[3].trim();
-
-  let qty = 0;
-  if (qtyStr.includes('/')) {
-    if (qtyStr.includes(' ')) {
-      const parts = qtyStr.split(/\s+/);
-      const whole = parseFloat(parts[0]) || 0;
-      const fracParts = parts[1].split('/');
-      const num = parseFloat(fracParts[0]) || 0;
-      const den = parseFloat(fracParts[1]) || 1;
-      qty = whole + (num / den);
-    } else {
-      const parts = qtyStr.split('/');
-      const num = parseFloat(parts[0]) || 0;
-      const den = parseFloat(parts[1]) || 1;
-      qty = num / den;
-    }
-  } else {
-    qty = parseFloat(qtyStr) || 0;
+export const parseStockRefTags = (tagsStr) => {
+  if (!tagsStr) return [];
+  const matches = [];
+  const regex = /#stock_ref_([^\s,;:]+)(?::([\d\.]+))?/g;
+  let m;
+  while ((m = regex.exec(tagsStr)) !== null) {
+    matches.push({
+      fullMatch: m[0],
+      id: m[1],
+      qty: m[2] !== undefined ? parseFloat(m[2]) : null
+    });
   }
-
-  return { type, qty, unit };
+  return matches;
 };
 
-const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
-  const parseStockRefs = (tagsStr) => {
-    return (tagsStr || '').split(' ').filter(t => t.startsWith('#stock_ref_')).map(tag => {
-      const content = tag.replace('#stock_ref_', '');
-      const parts = content.split(':');
-      return {
-        id: parts[0],
-        qty: parts.length > 1 ? parseFloat(parts[1]) || 0 : null
-      };
-    });
-  };
-
-  const oldRefs = parseStockRefs(oldTxn ? (oldTxn.tags || oldTxn.Tags) : '');
-  const newRefs = parseStockRefs(newTxn ? (newTxn.tags || newTxn.Tags) : '');
+export const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
+  const oldRefs = parseStockRefTags(oldTxn ? (oldTxn.tags || oldTxn.Tags) : '');
+  const newRefs = parseStockRefTags(newTxn ? (newTxn.tags || newTxn.Tags) : '');
   const oldIds = oldRefs.map(r => r.id);
   const newIds = newRefs.map(r => r.id);
   const ops = [];
   const db = getDB();
   const now = new Date().toISOString();
+  let updatedTags = newTxn ? (newTxn.tags || newTxn.Tags || '') : '';
+
+  // Synchronize stock-reference tags if quantity changed in description
+  if (oldTxn && newTxn) {
+    if (newRefs.length === 1) {
+      const targetRef = newRefs[0];
+      const newInfo = parseDescriptionStockInfo(newTxn.description);
+      if (newInfo && !isNaN(newInfo.qty) && newInfo.qty > 0) {
+        let newQtyInPacks = newInfo.qty;
+        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [targetRef.id]);
+        let item = res.values?.[0];
+        if (!item && /^\d{4}-\d{2}-\d{2}_.+_\d+$/.test(targetRef.id)) {
+          const parts = targetRef.id.split('_');
+          const pLineIdx = parseInt(parts[parts.length - 1], 10);
+          const pTxnId = parts.slice(1, parts.length - 1).join('_');
+          const pRes = await db.query('SELECT * FROM transactions WHERE id = ?', [pTxnId]);
+          const pTxn = pRes.values?.[0];
+          if (pTxn) {
+            const lines = (pTxn.description || pTxn.Description || '').split('\n');
+            if (lines[pLineIdx]) {
+              const parsed = parseStockLine(lines[pLineIdx], pTxn, pLineIdx);
+              if (parsed) {
+                item = parsed;
+              }
+            }
+          }
+        }
+        if (item && item.sub_unit && newInfo.unit && item.sub_unit.toLowerCase() === newInfo.unit.toLowerCase() && item.unit && item.unit.toLowerCase() !== newInfo.unit.toLowerCase()) {
+          const subQtyVal = parseFloat(item.sub_qty) || 1;
+          if (subQtyVal > 0) {
+            newQtyInPacks = newInfo.qty / subQtyVal;
+          }
+        }
+        const cleanQtyStr = Number.isInteger(newQtyInPacks) ? String(newQtyInPacks) : String(parseFloat(newQtyInPacks.toFixed(4)));
+
+        // Safely replace only the targetRef tag in updatedTags, preserving exact canonical batch ID and other tags
+        const escapedRef = targetRef.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const refRegex = new RegExp(`#stock_ref_${escapedRef}(?::[\\d\\.]+)?(?=[\\s,;]|$)`, 'g');
+        updatedTags = updatedTags.replace(refRegex, `#stock_ref_${targetRef.id}:${cleanQtyStr}`);
+      } else if (newTxn.description && (!newInfo || isNaN(newInfo.qty) || newInfo.qty <= 0)) {
+        console.warn('[computeStockOperationsOnTxnChange] Description does not contain a reliable explicit stock quantity; preserving existing stock-reference tags.');
+      }
+    } else if (newRefs.length > 1) {
+      console.warn('[computeStockOperationsOnTxnChange] Multiple stock-reference tags detected on edit; preserving distinct FIFO split tags.');
+    }
+  }
 
   // 1. Restore any old ref that is no longer present in newRefs
   const removedRefs = oldRefs.filter(r => !newIds.includes(r.id));
@@ -459,7 +489,7 @@ const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
     }
   }
 
-  return ops;
+  return { ops, updatedTags };
 };
 
 export const updateTransaction = async (idOrData, maybeData) => {
@@ -474,18 +504,30 @@ export const updateTransaction = async (idOrData, maybeData) => {
   const db = getDB();
   const now = new Date().toISOString();
   let stockOps = [];
+  let synchronizedTags = (data.Tags !== undefined ? data.Tags : data.tags);
+  let oldTxn = null;
   try {
     const res = await db.query('SELECT * FROM transactions WHERE id = ?', [id]);
-    const oldTxn = res.values?.[0];
+    oldTxn = res.values?.[0];
     if (oldTxn) {
+      if (synchronizedTags === undefined || synchronizedTags === null) {
+        synchronizedTags = oldTxn.tags || oldTxn.Tags || '';
+      }
       const newTxn = {
-        tags: data.Tags || data.tags || '',
-        description: data.Description || data.description || ''
+        tags: synchronizedTags,
+        description: data.Description !== undefined ? data.Description : (data.description !== undefined ? data.description : (oldTxn.description || oldTxn.Description || ''))
       };
-      stockOps = await computeStockOperationsOnTxnChange(oldTxn, newTxn);
+      const stockRes = await computeStockOperationsOnTxnChange(oldTxn, newTxn);
+      stockOps = stockRes.ops || [];
+      if (stockRes.updatedTags) {
+        synchronizedTags = stockRes.updatedTags;
+      }
     }
   } catch (err) {
     console.error('Failed to compute stock on transaction edit:', err);
+  }
+  if (synchronizedTags === undefined || synchronizedTags === null) {
+    synchronizedTags = '';
   }
 
   const isInv = !!(data.InvestmentTransactionType || data.Brokerage);
@@ -493,59 +535,91 @@ export const updateTransaction = async (idOrData, maybeData) => {
 
   let rowObj;
   if (isInv) {
-    const invAcct = data.InvestmentAccount || data.investment_account || data.Category || '';
-    const actualAmt = parseFloat(data.ActualAmount !== undefined && data.ActualAmount !== '' ? data.ActualAmount : (data.actual_amount !== undefined && data.actual_amount !== '' ? data.actual_amount : 0)) || 0;
-    const totCharges = parseFloat(data.TotalCharges !== undefined && data.TotalCharges !== '' ? data.TotalCharges : (data.total_charges !== undefined && data.total_charges !== '' ? data.total_charges : 0)) || 0;
-    const brokCharges = parseFloat(data.BrokerageCharges !== undefined && data.BrokerageCharges !== '' ? data.BrokerageCharges : (data.brokerage_charges !== undefined && data.brokerage_charges !== '' ? data.brokerage_charges : 0)) || 0;
-    const exCharges = parseFloat(data.ExchangeCharges !== undefined && data.ExchangeCharges !== '' ? data.ExchangeCharges : (data.exchange_charges !== undefined && data.exchange_charges !== '' ? data.exchange_charges : 0)) || 0;
-    const sttCh = parseFloat(data.STTCharges !== undefined && data.STTCharges !== '' ? data.STTCharges : (data.stt_charges !== undefined && data.stt_charges !== '' ? data.stt_charges : 0)) || 0;
-    const sebiCh = parseFloat(data.SEBICharges !== undefined && data.SEBICharges !== '' ? data.SEBICharges : (data.sebi_charges !== undefined && data.sebi_charges !== '' ? data.sebi_charges : 0)) || 0;
-    const stampCh = parseFloat(data.StampDutyCharges !== undefined && data.StampDutyCharges !== '' ? data.StampDutyCharges : (data.stamp_duty_charges !== undefined && data.stamp_duty_charges !== '' ? data.stamp_duty_charges : 0)) || 0;
-    const gstCh = parseFloat(data.GSTCharges !== undefined && data.GSTCharges !== '' ? data.gst_charges : (data.gst_charges !== undefined && data.gst_charges !== '' ? data.gst_charges : 0)) || 0;
-    const dpCh = parseFloat(data.DPCharges !== undefined && data.DPCharges !== '' ? data.DPCharges : (data.dp_charges !== undefined && data.dp_charges !== '' ? data.dp_charges : 0)) || 0;
-    const otherCh = parseFloat(data.OtherCharges !== undefined && data.OtherCharges !== '' ? data.OtherCharges : (data.other_charges !== undefined && data.other_charges !== '' ? data.other_charges : 0)) || 0;
-    const secDispName = String(data.SecurityDisplayName || data.security_display_name || data.Note || data.note || '');
-    const setMode = String(data.SettlementMode || data.settlement_mode || 'ACTUAL').toUpperCase();
+    const invAcct = data.InvestmentAccount || data.investment_account || data.Category || oldTxn?.investment_account || oldTxn?.InvestmentAccount || '';
+    const actualAmt = parseFloat(data.ActualAmount !== undefined && data.ActualAmount !== '' ? data.ActualAmount : (data.actual_amount !== undefined && data.actual_amount !== '' ? data.actual_amount : (oldTxn?.actual_amount || 0))) || 0;
+    const totCharges = parseFloat(data.TotalCharges !== undefined && data.TotalCharges !== '' ? data.TotalCharges : (data.total_charges !== undefined && data.total_charges !== '' ? data.total_charges : (oldTxn?.total_charges || 0))) || 0;
+    const brokCharges = parseFloat(data.BrokerageCharges !== undefined && data.BrokerageCharges !== '' ? data.BrokerageCharges : (data.brokerage_charges !== undefined && data.brokerage_charges !== '' ? data.brokerage_charges : (oldTxn?.brokerage_charges || 0))) || 0;
+    const exCharges = parseFloat(data.ExchangeCharges !== undefined && data.ExchangeCharges !== '' ? data.ExchangeCharges : (data.exchange_charges !== undefined && data.exchange_charges !== '' ? data.exchange_charges : (oldTxn?.exchange_charges || 0))) || 0;
+    const sttCh = parseFloat(data.STTCharges !== undefined && data.STTCharges !== '' ? data.STTCharges : (data.stt_charges !== undefined && data.stt_charges !== '' ? data.stt_charges : (oldTxn?.stt_charges || 0))) || 0;
+    const sebiCh = parseFloat(data.SEBICharges !== undefined && data.SEBICharges !== '' ? data.SEBICharges : (data.sebi_charges !== undefined && data.sebi_charges !== '' ? data.sebi_charges : (oldTxn?.sebi_charges || 0))) || 0;
+    const stampCh = parseFloat(data.StampDutyCharges !== undefined && data.StampDutyCharges !== '' ? data.StampDutyCharges : (data.stamp_duty_charges !== undefined && data.stamp_duty_charges !== '' ? data.stamp_duty_charges : (oldTxn?.stamp_duty_charges || 0))) || 0;
+    const gstCh = parseFloat(data.GSTCharges !== undefined && data.GSTCharges !== '' ? data.gst_charges : (data.gst_charges !== undefined && data.gst_charges !== '' ? data.gst_charges : (oldTxn?.gst_charges || 0))) || 0;
+    const dpCh = parseFloat(data.DPCharges !== undefined && data.DPCharges !== '' ? data.DPCharges : (data.dp_charges !== undefined && data.dp_charges !== '' ? data.dp_charges : (oldTxn?.dp_charges || 0))) || 0;
+    const otherCh = parseFloat(data.OtherCharges !== undefined && data.OtherCharges !== '' ? data.OtherCharges : (data.other_charges !== undefined && data.other_charges !== '' ? data.other_charges : (oldTxn?.other_charges || 0))) || 0;
+    const secDispName = String(data.SecurityDisplayName || data.security_display_name || data.Note || data.note || oldTxn?.security_display_name || oldTxn?.SecurityDisplayName || oldTxn?.note || oldTxn?.Note || '');
+    const setMode = String(data.SettlementMode || data.settlement_mode || oldTxn?.settlement_mode || oldTxn?.SettlementMode || 'ACTUAL').toUpperCase();
 
-    const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : 0)))) || 0;
-    const amtStr = String(data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : '0'))));
-    const typeVal = data['Income/Expense'] || data.type || (data.Type || 'Expense');
+    const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (oldTxn?.INR !== undefined ? oldTxn.INR : (oldTxn?.inr !== undefined ? oldTxn.inr : 0)))))) || 0;
+    const amtStr = String(data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (oldTxn?.Amount !== undefined ? oldTxn.Amount : (oldTxn?.amount !== undefined ? oldTxn.amount : String(inrVal)))))));
+    const typeVal = data['Income/Expense'] || data.type || (data.Type || (oldTxn?.['Income/Expense'] || oldTxn?.type || oldTxn?.Type || 'Expense'));
 
     rowObj = {
-      id, date:data.Date||data.date||'', time:data.Time||data.time||'', account:data.Account||data.account||'', from_account:data.FromAccount||data.from_account||'', to_account:data.ToAccount||data.to_account||'',
-      category:data.Category||data.category||'', subcategory:data.Subcategory||data.subcategory||'', note:data.Note||data.note||'', description:data.Description||data.description||'',
-      inr:inrVal, amount:amtStr, currency:data.Currency||data.currency||'INR',
-      type:typeVal, created_at:data.created_at||now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'',
-      tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'',
-      receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||'',
-      sub_account:data.SubAccount||data.sub_account||'',
-      from_sub_account:data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
-      to_sub_account:data.ToSubAccount||data.to_sub_account||'',
-      investment_transaction_type:data.InvestmentTransactionType||data.investment_transaction_type||'', brokerage:data.Brokerage||data.brokerage||'', security_symbol:data.SecuritySymbol||data.security_symbol||'', security_isin:data.SecurityISIN||data.security_isin||'',
-      quantity:parseFloat(data.Quantity||data.quantity||0), unit_price:parseFloat(data.UnitPrice||data.unit_price||0), trade_value:parseFloat(data.TradeValue||data.trade_value||0),
-      cost_basis:parseFloat(data.CostBasis||data.cost_basis||0), cash_impact:parseFloat(data.CashImpact||data.cash_impact||0), position_qty_change:parseFloat(data.PositionQuantityChange||data.position_qty_change||0),
-      realized_pnl:parseFloat(data.RealizedPnl||data.realized_pnl||0), trade_id:data.TradeId||data.trade_id||'', order_id:data.OrderId||data.order_id||'', exchange:data.Exchange||data.exchange||'', segment:data.Segment||data.segment||'', source:data.Source||data.source||'',
-      investment_account:invAcct,
-      actual_amount:actualAmt, total_charges:totCharges, brokerage_charges:brokCharges, exchange_charges:exCharges,
-      stt_charges:sttCh, sebi_charges:sebiCh, stamp_duty_charges:stampCh, gst_charges:gstCh, dp_charges:dpCh, other_charges:otherCh,
-      security_display_name:secDispName,
-      settlement_mode:setMode
+      id,
+      date: data.Date || data.date || oldTxn?.date || oldTxn?.Date || '',
+      time: data.Time || data.time || oldTxn?.time || oldTxn?.Time || '',
+      account: data.Account || data.account || oldTxn?.account || oldTxn?.Account || '',
+      from_account: data.FromAccount || data.from_account || oldTxn?.from_account || oldTxn?.FromAccount || '',
+      to_account: data.ToAccount || data.to_account || oldTxn?.to_account || oldTxn?.ToAccount || '',
+      category: data.Category || data.category || oldTxn?.category || oldTxn?.Category || '',
+      subcategory: data.Subcategory || data.subcategory || oldTxn?.subcategory || oldTxn?.Subcategory || '',
+      note: data.Note !== undefined ? data.Note : (data.note !== undefined ? data.note : (oldTxn?.note || oldTxn?.Note || '')),
+      description: data.Description !== undefined ? data.Description : (data.description !== undefined ? data.description : (oldTxn?.description || oldTxn?.Description || '')),
+      inr: inrVal, amount: amtStr, currency: data.Currency || data.currency || oldTxn?.currency || oldTxn?.Currency || 'INR',
+      type: typeVal, created_at: data.created_at || oldTxn?.created_at || now, updated_at: now, recurring_rule_id: data.recurring_rule_id || oldTxn?.recurring_rule_id || '',
+      tags: synchronizedTags, split_group_id: data.split_group_id || oldTxn?.split_group_id || '',
+      receipt_image: data.receipt_image !== undefined ? data.receipt_image : (oldTxn?.receipt_image || ''),
+      warranty_expiry: data.warranty_expiry !== undefined ? data.warranty_expiry : (oldTxn?.warranty_expiry || ''),
+      serial_no: data.serial_no !== undefined ? data.serial_no : (oldTxn?.serial_no || ''),
+      sub_account: data.SubAccount || data.sub_account || oldTxn?.sub_account || oldTxn?.SubAccount || '',
+      from_sub_account: data.FromSubAccount || data.from_sub_account || data.SubAccount || data.sub_account || oldTxn?.from_sub_account || oldTxn?.FromSubAccount || '',
+      to_sub_account: data.ToSubAccount || data.to_sub_account || oldTxn?.to_sub_account || oldTxn?.ToSubAccount || '',
+      investment_transaction_type: data.InvestmentTransactionType || data.investment_transaction_type || oldTxn?.investment_transaction_type || oldTxn?.InvestmentTransactionType || '',
+      brokerage: data.Brokerage || data.brokerage || oldTxn?.brokerage || oldTxn?.Brokerage || '',
+      security_symbol: data.SecuritySymbol || data.security_symbol || oldTxn?.security_symbol || oldTxn?.SecuritySymbol || '',
+      security_isin: data.SecurityISIN || data.security_isin || oldTxn?.security_isin || oldTxn?.SecurityISIN || '',
+      quantity: parseFloat(data.Quantity !== undefined ? data.Quantity : (data.quantity !== undefined ? data.quantity : (oldTxn?.quantity || 0))),
+      unit_price: parseFloat(data.UnitPrice !== undefined ? data.UnitPrice : (data.unit_price !== undefined ? data.unit_price : (oldTxn?.unit_price || 0))),
+      trade_value: parseFloat(data.TradeValue !== undefined ? data.TradeValue : (data.trade_value !== undefined ? data.trade_value : (oldTxn?.trade_value || 0))),
+      cost_basis: parseFloat(data.CostBasis !== undefined ? data.CostBasis : (data.cost_basis !== undefined ? data.cost_basis : (oldTxn?.cost_basis || 0))),
+      cash_impact: parseFloat(data.CashImpact !== undefined ? data.CashImpact : (data.cash_impact !== undefined ? data.cash_impact : (oldTxn?.cash_impact || 0))),
+      position_qty_change: parseFloat(data.PositionQuantityChange !== undefined ? data.PositionQuantityChange : (data.position_qty_change !== undefined ? data.position_qty_change : (oldTxn?.position_qty_change || 0))),
+      realized_pnl: parseFloat(data.RealizedPnl !== undefined ? data.RealizedPnl : (data.realized_pnl !== undefined ? data.realized_pnl : (oldTxn?.realized_pnl || 0))),
+      trade_id: data.TradeId || data.trade_id || oldTxn?.trade_id || oldTxn?.TradeId || '',
+      order_id: data.OrderId || data.order_id || oldTxn?.order_id || oldTxn?.OrderId || '',
+      exchange: data.Exchange || data.exchange || oldTxn?.exchange || oldTxn?.Exchange || '',
+      segment: data.Segment || data.segment || oldTxn?.segment || oldTxn?.Segment || '',
+      source: data.Source || data.source || oldTxn?.source || oldTxn?.Source || '',
+      investment_account: invAcct,
+      actual_amount: actualAmt, total_charges: totCharges, brokerage_charges: brokCharges, exchange_charges: exCharges,
+      stt_charges: sttCh, sebi_charges: sebiCh, stamp_duty_charges: stampCh, gst_charges: gstCh, dp_charges: dpCh, other_charges: otherCh,
+      security_display_name: secDispName,
+      settlement_mode: setMode
     };
   } else {
-    const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : 0)))) || 0;
-    const amtStr = String(data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : '0'))));
-    const typeVal = data['Income/Expense'] || data.type || (data.Type || 'Expense');
+    const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (oldTxn?.INR !== undefined ? oldTxn.INR : (oldTxn?.inr !== undefined ? oldTxn.inr : 0)))))) || 0;
+    const amtStr = String(data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (oldTxn?.Amount !== undefined ? oldTxn.Amount : (oldTxn?.amount !== undefined ? oldTxn.amount : String(inrVal)))))));
+    const typeVal = data['Income/Expense'] || data.type || (data.Type || (oldTxn?.['Income/Expense'] || oldTxn?.type || oldTxn?.Type || 'Expense'));
 
     rowObj = {
-      id, date:data.Date||data.date||'', time:data.Time||data.time||'', account:data.Account||data.account||'', from_account:data.FromAccount||data.from_account||'', to_account:data.ToAccount||data.to_account||'',
-      category:data.Category||data.category||'', subcategory:data.Subcategory||data.subcategory||'', note:data.Note||data.note||'', description:data.Description||data.description||'',
-      inr:inrVal, amount:amtStr, currency:data.Currency||data.currency||'INR',
-      type:typeVal, created_at:data.created_at||now, updated_at:now, recurring_rule_id:data.recurring_rule_id||'',
-      tags:data.Tags||data.tags||'', split_group_id:data.split_group_id||'',
-      receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||'',
-      sub_account:data.SubAccount||data.sub_account||'',
-      from_sub_account:data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
-      to_sub_account:data.ToSubAccount||data.to_sub_account||''
+      id,
+      date: data.Date || data.date || oldTxn?.date || oldTxn?.Date || '',
+      time: data.Time || data.time || oldTxn?.time || oldTxn?.Time || '',
+      account: data.Account || data.account || oldTxn?.account || oldTxn?.Account || '',
+      from_account: data.FromAccount || data.from_account || oldTxn?.from_account || oldTxn?.FromAccount || '',
+      to_account: data.ToAccount || data.to_account || oldTxn?.to_account || oldTxn?.ToAccount || '',
+      category: data.Category || data.category || oldTxn?.category || oldTxn?.Category || '',
+      subcategory: data.Subcategory || data.subcategory || oldTxn?.subcategory || oldTxn?.Subcategory || '',
+      note: data.Note !== undefined ? data.Note : (data.note !== undefined ? data.note : (oldTxn?.note || oldTxn?.Note || '')),
+      description: data.Description !== undefined ? data.Description : (data.description !== undefined ? data.description : (oldTxn?.description || oldTxn?.Description || '')),
+      inr: inrVal, amount: amtStr, currency: data.Currency || data.currency || oldTxn?.currency || oldTxn?.Currency || 'INR',
+      type: typeVal, created_at: data.created_at || oldTxn?.created_at || now, updated_at: now, recurring_rule_id: data.recurring_rule_id || oldTxn?.recurring_rule_id || '',
+      tags: synchronizedTags, split_group_id: data.split_group_id || oldTxn?.split_group_id || '',
+      receipt_image: data.receipt_image !== undefined ? data.receipt_image : (oldTxn?.receipt_image || ''),
+      warranty_expiry: data.warranty_expiry !== undefined ? data.warranty_expiry : (oldTxn?.warranty_expiry || ''),
+      serial_no: data.serial_no !== undefined ? data.serial_no : (oldTxn?.serial_no || ''),
+      sub_account: data.SubAccount || data.sub_account || oldTxn?.sub_account || oldTxn?.SubAccount || '',
+      from_sub_account: data.FromSubAccount || data.from_sub_account || data.SubAccount || data.sub_account || oldTxn?.from_sub_account || oldTxn?.FromSubAccount || '',
+      to_sub_account: data.ToSubAccount || data.to_sub_account || oldTxn?.to_sub_account || oldTxn?.ToSubAccount || ''
     };
   }
 
@@ -584,23 +658,14 @@ export const deleteTransaction = async (id) => {
       txn = resInv.values?.[0];
     }
     if (txn) {
-      const stockRefTags = (txn.tags || txn.Tags || '').split(' ').filter(t => t.startsWith('#stock_ref_'));
+      const stockRefTags = parseStockRefTags(txn.tags || txn.Tags || '');
       if (stockRefTags.length > 0) {
         const info = parseDescriptionStockInfo(txn.description);
         const now = new Date().toISOString();
         for (const tag of stockRefTags) {
-          const content = tag.replace('#stock_ref_', '');
-          let itemId = content;
-          let qtyToRestore = 0;
-          let unitMode = 'pack';
-          if (content.includes(':')) {
-            const parts = content.split(':');
-            itemId = parts[0];
-            qtyToRestore = parseFloat(parts[1]) || 0;
-          } else {
-            qtyToRestore = info ? info.qty : 0;
-            unitMode = info?.unit || 'pack';
-          }
+          let itemId = tag.id;
+          let qtyToRestore = tag.qty !== null ? tag.qty : (info ? info.qty : 0);
+          let unitMode = info?.unit || 'pack';
           if (qtyToRestore > 0) {
             const iRes = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
             const item = iRes.values?.[0];
@@ -626,7 +691,7 @@ export const deleteTransaction = async (id) => {
       }
     }
   } catch (err) {
-    console.error('Failed to compute stock restore on transaction delete:', err);
+    console.error('Failed to compute stock on transaction delete:', err);
   }
 
   // Fetch linked charge IDs before deleting to record companion tombstones

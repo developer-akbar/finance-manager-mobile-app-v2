@@ -214,6 +214,102 @@ export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeIt
   return { txnId, totalAmount: roundedTotal, items: inventoryRows };
 };
 
+export async function resolveBatchRefForInventoryRow(db, invRow) {
+  if (!invRow || !invRow.id) return null;
+  if (/^\d{4}-\d{2}-\d{2}_.+_\d+$/.test(invRow.id)) {
+    return invRow.id;
+  }
+  try {
+    const rawDate = invRow.purchased_date || '';
+    const formattedDate = rawDate.includes('-') ? rawDate.split('-').reverse().join('/') : rawDate;
+    const res = await db.query(
+      "SELECT * FROM transactions WHERE to_account = 'Stock' AND (date = ? OR date = ?) ORDER BY date ASC",
+      [rawDate, formattedDate]
+    );
+    const candidateTxns = res.values || [];
+    const invNameLower = (invRow.name || '').toLowerCase();
+    const candidateMatches = [];
+
+    for (const t of candidateTxns) {
+      const desc = t.description || t.Description || '';
+      const lines = desc.split('\n');
+      for (let lIdx = 0; lIdx < lines.length; lIdx++) {
+        const line = lines[lIdx];
+        if (!line.toLowerCase().includes('stock available') && !line.toLowerCase().includes('stock unavailable')) {
+          continue;
+        }
+        const parsed = parseStockLine(line, t, lIdx);
+        if (!parsed) continue;
+
+        const pCleaned = (parsed.cleanedName || parsed.rawName || '').toLowerCase();
+        const pCanon = (parsed.canonicalProduct || '').toLowerCase();
+        if (pCleaned.includes(invNameLower) || invNameLower.includes(pCleaned) || pCanon.includes(invNameLower) || invNameLower.includes(pCanon)) {
+          candidateMatches.push(parsed);
+        }
+      }
+    }
+
+    if (candidateMatches.length === 0) {
+      return invRow.id;
+    }
+
+    if (candidateMatches.length === 1) {
+      return candidateMatches[0].batchId;
+    }
+
+    // Multiple candidate lines found on this date: attempt disambiguation using invRow attributes
+    let narrowed = candidateMatches;
+
+    // Disambiguate by sub_qty if available
+    const invSubQty = parseFloat(invRow.sub_qty);
+    if (!isNaN(invSubQty) && invSubQty > 0) {
+      const matchesSubQty = narrowed.filter(c => Math.abs(c.sub_qty - invSubQty) < 0.001);
+      if (matchesSubQty.length > 0) {
+        narrowed = matchesSubQty;
+      }
+    }
+
+    // Disambiguate by sub_unit if available
+    if (narrowed.length > 1 && invRow.sub_unit) {
+      const matchesUnit = narrowed.filter(c => (c.sub_unit || '').toLowerCase() === invRow.sub_unit.toLowerCase());
+      if (matchesUnit.length > 0) {
+        narrowed = matchesUnit;
+      }
+    }
+
+    // Disambiguate by purchased pack quantity if available
+    const invPackQty = parseFloat(invRow.original_qty || invRow.pack_qty);
+    if (narrowed.length > 1 && !isNaN(invPackQty) && invPackQty > 0) {
+      const matchesPack = narrowed.filter(c => Math.abs(c.purchasedQty - invPackQty) < 0.001);
+      if (matchesPack.length > 0) {
+        narrowed = matchesPack;
+      }
+    }
+
+    // Disambiguate by price if available
+    const invPrice = parseFloat(invRow.discounted_price || invRow.price);
+    if (narrowed.length > 1 && !isNaN(invPrice) && invPrice > 0) {
+      const matchesPrice = narrowed.filter(c => Math.abs(c.paid - invPrice) < 0.01 || Math.abs(c.unitPrice - invPrice) < 0.01);
+      if (matchesPrice.length > 0) {
+        narrowed = matchesPrice;
+      }
+    }
+
+    // Strict safety guard: Only return canonical batchId if disambiguated to exactly ONE unique batch
+    if (narrowed.length === 1) {
+      return narrowed[0].batchId;
+    }
+
+    // Truly ambiguous duplicate lines on the same date (e.g. identical lines):
+    // Do NOT silently choose the first line. Return invRow.id and log a diagnostic warning.
+    console.warn(`[resolveBatchRefForInventoryRow] Ambiguous batch mapping for row ${invRow.id} (${invRow.name}) on date ${rawDate}: found ${narrowed.length} identical candidate lines.`);
+    return invRow.id;
+  } catch (err) {
+    console.warn('[resolveBatchRefForInventoryRow] Failed to resolve canonical batch for row:', invRow.id, err);
+  }
+  return invRow.id;
+}
+
 export const consumeInventoryItem = async (
   itemId,
   qtyToConsume,
@@ -231,8 +327,21 @@ export const consumeInventoryItem = async (
   const db = getDB();
   const now = new Date().toISOString();
 
-  const res = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
+  let res = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
   let item = res.values?.[0];
+
+  // If not found by itemId directly, check if a DB inventory row matches canonical name and purchase date
+  if (!item && batchMeta) {
+    const candidateName = (batchMeta.cleanedName || batchMeta.rawName || batchMeta.canonicalProduct || batchMeta.name || '').toLowerCase();
+    const batchDate = batchMeta.purchasedDate || batchMeta.purchased_date || '';
+    const allMatching = await db.query('SELECT * FROM inventory WHERE LOWER(name) = ?', [candidateName]);
+    const matches = (allMatching.values || []).filter(r => !batchDate || r.purchased_date === batchDate);
+    if (matches.length > 0) {
+      item = matches[0];
+      res = { values: [item] };
+    }
+  }
+
   if (!item && batchMeta) {
     const rawBatchId = batchMeta.batchId || batchMeta.id || itemId;
     item = {
@@ -297,7 +406,7 @@ export const consumeInventoryItem = async (
     };
     ops.push({
       storeName: 'inventory',
-      id: itemId,
+      id: item.id || itemId,
       operation: 'UPDATE',
       entity: updatedClickedItem,
       expectedBaseEntity: item
@@ -324,7 +433,7 @@ export const consumeInventoryItem = async (
 
   // Other batches next
   if (remainingToConsume > 0.0001) {
-    const otherBatches = (allRes.values || []).filter(b => (b.name || '').toLowerCase() === nameLower && b.id !== itemId && (parseFloat(b.qty) || 0) > 0.0001);
+    const otherBatches = (allRes.values || []).filter(b => (b.name || '').toLowerCase() === nameLower && b.id !== item.id && b.id !== itemId && (parseFloat(b.qty) || 0) > 0.0001);
     otherBatches.sort((a, b) => (a.purchased_date || '').localeCompare(b.purchased_date || '') || (a.updated_at || '').localeCompare(b.updated_at || ''));
 
     for (const other of otherBatches) {
@@ -358,7 +467,12 @@ export const consumeInventoryItem = async (
       remainingToConsume -= deductFromOther;
 
       if (deductFromOther > 0.0001) {
-        deductions.push({ id: other.id, qty: deductFromOther });
+        let otherBatchRef = other.id;
+        if (!/^\d{4}-\d{2}-\d{2}_.+_\d+$/.test(other.id)) {
+          const resolved = await resolveBatchRefForInventoryRow(db, other);
+          if (resolved) otherBatchRef = resolved;
+        }
+        deductions.push({ id: otherBatchRef, qty: deductFromOther });
         const otherSubQty = parseFloat(other.sub_qty) || 1;
         const otherDate = other.purchased_date
           ? new Date(other.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })

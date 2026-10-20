@@ -390,6 +390,7 @@ export const parseStockLine = (rawLine, txn = {}, lineIdx = 0) => {
     sub_unit: subUnit,
     purchasedQty,
     remainingQty,
+    explicitRemaining: explicitRemaining !== null ? explicitRemaining : null,
     consumedQty,
     unit: subUnit || 'pcs',
     mrp: derivedMRP,
@@ -407,9 +408,146 @@ export const parseStockLine = (rawLine, txn = {}, lineIdx = 0) => {
 };
 
 /**
+ * Verified canonical mapping for legacy database UUIDs to normalized purchase-batch IDs.
+ * These map historical stock references created prior to deterministic batchId tagging.
+ */
+export const LEGACY_HISTORICAL_REF_MAP = Object.freeze({
+  '9ba4ff10-0847-40dd-9398-d5903ba598ec': '2026-04-28_98e275ea-49da-4234-ab95-ccc78912f85b_4', // Santoor Soap (03/09/2026)
+  'e970fc35-b2a3-4bc9-856f-359e434b52a2': '2026-01-18_f3577d73-845b-4ba4-9059-6de68e1200ad_4', // Dabur Amla (02/09/2026)
+  '08279080-c81c-459e-a6a4-f83528defeab': '2026-07-04_37817ebc-60a3-4f8e-90ab-08f7a0455b75_4', // Cinthol (02/09/2026)
+  'de34ffd0-8639-4a05-81fd-f429eab188e4': '2026-08-07_6e3ffd37-3455-43c4-ab27-89d04f402aea_6', // Cooking Oil (22/08 & 30/08/2026)
+});
+
+/**
+ * Resolve target batch for a given reference ID safely.
+ * If reference is a legacy UUID, maps via canonical table or unambiguous contextual metadata.
+ * Never guesses by product name alone; returns null if ambiguous.
+ */
+export const resolveTargetBatch = (refId, txn = {}, batches = [], unresolvedLog = null) => {
+  if (!refId) return null;
+  const mappedRefId = LEGACY_HISTORICAL_REF_MAP[refId] || refId;
+
+  // 1. Direct exact match on canonical batch identifiers
+  const exactMatch = batches.find(b => b.batchId === mappedRefId || b.id === mappedRefId || b.altBatchId === mappedRefId);
+  if (exactMatch) return exactMatch;
+
+  // 2. Structured pattern matching: YYYY-MM-DD_<txnRef>_<lineIdx> (strictly validates date, txn, and line index)
+  const matchParts = mappedRefId.match(/^(\d{4}-\d{2}-\d{2})_(.+)_(\d+)$/);
+  if (matchParts) {
+    const [, pDate, pTxn, pLine] = matchParts;
+    const structuredMatch = batches.find(b =>
+      b.purchasedDate === pDate &&
+      String(b.lineIdx) === pLine &&
+      (b.txnUniqueId === pTxn || String(b.tIdx) === pTxn || (b.originalTxn && (b.originalTxn.ID === pTxn || b.originalTxn._id === pTxn || b.originalTxn.id === pTxn || b.originalTxn.TxnId === pTxn)))
+    );
+    if (structuredMatch) return structuredMatch;
+  }
+
+  // 3. Match by transaction ID only if the transaction contains exactly ONE batch
+  const txMatches = batches.filter(b =>
+    b.txnUniqueId === mappedRefId ||
+    (b.originalTxn && (b.originalTxn.ID === mappedRefId || b.originalTxn._id === mappedRefId || b.originalTxn.id === mappedRefId || b.originalTxn.TxnId === mappedRefId))
+  );
+  if (txMatches.length === 1) {
+    return txMatches[0];
+  }
+
+  // 2. Unambiguous contextual metadata resolution from transaction description
+  const desc = txn.Description || txn.description || '';
+  const boughtMatch = desc.match(/bought on ([\d\s\w]+?)(?:\s+from\s+([^)]+))?\)/i);
+  if (boughtMatch) {
+    const rawBoughtDate = boughtMatch[1].trim();
+    let isoBoughtDate = '';
+    const d = new Date(rawBoughtDate);
+    if (!isNaN(d.getTime())) {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      isoBoughtDate = `${year}-${month}-${day}`;
+    }
+
+    const boughtStore = (boughtMatch[2] || '').trim().toLowerCase();
+    const nameMatch = desc.match(/(?:Used|Lent|Instalment Use)\s+[\d\/\.\s\w]+\s+of\s+([^(]+)\s*\(/i);
+    const candidateName = nameMatch ? cleanRawItemName(nameMatch[1].trim()).toLowerCase() : '';
+
+    if (isoBoughtDate) {
+      const matchingBatches = batches.filter(b => {
+        if (b.purchasedDate !== isoBoughtDate) return false;
+        if (candidateName) {
+          const bName = (b.cleanedName || b.rawName || b.canonicalProduct || '').toLowerCase();
+          const bCanon = (b.canonicalProduct || '').toLowerCase();
+          if (!bName.includes(candidateName) && !candidateName.includes(bName) && !bCanon.includes(candidateName)) {
+            return false;
+          }
+        }
+        if (boughtStore && b.source) {
+          const bSource = b.source.toLowerCase();
+          if (!bSource.includes(boughtStore) && !boughtStore.includes(bSource)) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      // Strict requirement: Only match if unambiguously resolved to exactly 1 batch
+      if (matchingBatches.length === 1) {
+        return matchingBatches[0];
+      }
+    }
+  }
+
+  // Record unresolvable or ambiguous reference for diagnosis
+  if (Array.isArray(unresolvedLog)) {
+    unresolvedLog.push({
+      refId,
+      txnId: txn.id || txn.ID || txn._id || '',
+      date: txn.Date || txn.date || '',
+      description: desc
+    });
+  }
+
+  return null;
+};
+
+/**
+ * Parse stock consumption / usage information from transaction descriptions.
+ * Matches patterns like "Used 4 pcs of Oil...", "Lent 1 pcs of Dabur amla...", "Instalment Use 2 pcs..."
+ */
+export const parseDescriptionStockInfo = (description) => {
+  if (!description) return null;
+  const match = description.match(/^(Used|Lent|Instalment Use)\s+([\d\.\s\/]+)\s+(\w+)\s+of\s+/i);
+  if (!match) return null;
+
+  const type = match[1].toLowerCase();
+  const qtyStr = match[2].trim();
+  const unit = match[3].trim();
+
+  let qty = 0;
+  if (qtyStr.includes('/')) {
+    if (qtyStr.includes(' ')) {
+      const parts = qtyStr.split(/\s+/);
+      const whole = parseFloat(parts[0]) || 0;
+      const fracParts = parts[1].split('/');
+      const num = parseFloat(fracParts[0]) || 0;
+      const den = parseFloat(fracParts[1]) || 1;
+      qty = whole + (num / den);
+    } else {
+      const parts = qtyStr.split('/');
+      const num = parseFloat(parts[0]) || 0;
+      const den = parseFloat(parts[1]) || 1;
+      qty = num / den;
+    }
+  } else {
+    qty = parseFloat(qtyStr) || 0;
+  }
+
+  return { type, qty, unit };
+};
+
+/**
  * Extract all normalized batches from transactions list
  */
-export const extractNormalizedBatchesFromTransactions = (transactions = []) => {
+export const extractNormalizedBatchesFromTransactions = (transactions = [], diagnosticContext = null) => {
   const batches = [];
   transactions.forEach((txn, tIdx) => {
     const desc = txn.Description || txn.description || '';
@@ -417,57 +555,129 @@ export const extractNormalizedBatchesFromTransactions = (transactions = []) => {
     lines.forEach((l, lIdx) => {
       const parsed = parseStockLine(l, { ...txn, tIdx }, lIdx);
       if (parsed) {
-        batches.push(parsed);
+        batches.push({
+          ...parsed,
+          dynamicDeductions: []
+        });
       }
     });
   });
 
-  // Apply dynamic consumption transactions that reference batches via #stock_ref_<batchRef>:<qty>
-  // Note: The 5 historical baseline UUIDs (which existed in the canonical CSV) were already factored into the trailing ", <rem>" in the CSV purchase description lines.
-  const historicalBaselineRefIds = new Set([
-    '9ba4ff10-0847-40dd-9398-d5903ba598ec',
-    'e970fc35-b2a3-4bc9-856f-359e434b52a2',
-    '08279080-c81c-459e-a6a4-f83528defeab',
-    'de34ffd0-8639-4a05-81fd-f429eab188e4'
-  ]);
+  const unresolvedLog = [];
 
+  // Apply dynamic consumption transactions that reference batches via #stock_ref_<batchRef>:<qty>
   transactions.forEach((txn) => {
     const tags = txn.Tags || txn.tags || txn.Tag || '';
     if (!tags.includes('#stock_ref_')) return;
 
     // Extract all #stock_ref_<refId>:<qty> matches
-    const refRegex = /#stock_ref_([^\s:]+)(?::([\d\.]+))?/g;
+    const refRegex = /#stock_ref_([^\s,;:]+)(?::([\d\.]+))?/g;
     let match;
+    const refMatches = [];
     while ((match = refRegex.exec(tags)) !== null) {
       const refId = match[1];
       const qty = match[2] ? parseFloat(match[2]) : 1;
-
-      if (historicalBaselineRefIds.has(refId)) {
-        continue;
+      if (!isNaN(qty) && qty > 0) {
+        refMatches.push({ refId, qty });
       }
+    }
+    if (refMatches.length === 0) return;
 
-      // Find the referenced batch
-      const targetBatch = batches.find(b => {
-        if (b.batchId === refId || b.id === refId || b.altBatchId === refId || b.txnId === refId) return true;
-        if (b.txnUniqueId && (b.txnUniqueId === refId || refId.includes(b.txnUniqueId))) return true;
-        if (b.originalTxn && (b.originalTxn.ID === refId || b.originalTxn._id === refId || b.originalTxn.id === refId || b.originalTxn.TxnId === refId)) return true;
-        if (refId.startsWith(b.purchasedDate) && refId.endsWith(`_${b.lineIdx}`)) {
-          const parts = refId.split('_');
-          if (parts.length >= 3) {
-            const middle = parts.slice(1, -1).join('_');
-            if (middle === String(b.tIdx) || middle === b.txnUniqueId || (b.originalTxn && (b.originalTxn.ID === middle || b.originalTxn._id === middle))) {
-              return true;
+    // Safe fallback reconciliation for unambiguous, single-reference consumption transactions
+    let singleRefOverrideQty = null;
+    if (refMatches.length === 1) {
+      const desc = txn.Description || txn.description || '';
+      const descInfo = parseDescriptionStockInfo(desc);
+      if (descInfo && !isNaN(descInfo.qty) && descInfo.qty > 0) {
+        const candidateBatch = resolveTargetBatch(refMatches[0].refId, txn, batches, null);
+        if (candidateBatch) {
+          const descNameMatch = desc.match(/(?:Used|Lent|Instalment Use)\s+[\d\/\.\s\w]+\s+of\s+([^(]+?)(?:\s*\(|$)/i);
+          const descItemName = descNameMatch ? cleanRawItemName(descNameMatch[1].trim()).toLowerCase() : '';
+          const bClean = (candidateBatch.cleanedName || candidateBatch.rawName || candidateBatch.canonicalProduct || '').toLowerCase();
+          const isMatchingProduct = Boolean(descItemName) && (bClean.includes(descItemName) || descItemName.includes(bClean));
+
+          if (isMatchingProduct) {
+            const descUnit = (descInfo.unit || '').toLowerCase();
+            const batchUnit = (candidateBatch.unit || 'pcs').toLowerCase();
+            const batchSubUnit = (candidateBatch.sub_unit || '').toLowerCase();
+            const batchSubQty = parseFloat(candidateBatch.sub_qty) || 1;
+
+            if (descUnit === batchUnit) {
+              singleRefOverrideQty = descInfo.qty;
+            } else if (descUnit === batchSubUnit && batchSubUnit !== batchUnit && batchSubQty > 0) {
+              if (descInfo.qty !== refMatches[0].qty) {
+                singleRefOverrideQty = descInfo.qty / batchSubQty;
+              }
+            } else if (!descUnit || descUnit === 'pcs' || descUnit === 'pc') {
+              singleRefOverrideQty = descInfo.qty;
             }
+          } else if (Array.isArray(unresolvedLog)) {
+            unresolvedLog.push({
+              refId: refMatches[0].refId,
+              txnId: txn.id || txn.ID || txn._id || '',
+              date: txn.Date || txn.date || '',
+              reason: 'FALLBACK_PRODUCT_NAME_MISMATCH',
+              descItemName,
+              candidateBatchName: bClean
+            });
           }
         }
-        return false;
+      }
+    }
+
+    refMatches.forEach(({ refId, qty }) => {
+      const effectiveQty = (refMatches.length === 1 && singleRefOverrideQty !== null) ? singleRefOverrideQty : qty;
+      const targetBatch = resolveTargetBatch(refId, txn, batches, unresolvedLog);
+      if (targetBatch) {
+        const rawDate = txn.Date || txn.date || '';
+        let txnIsoDate = rawDate;
+        if (rawDate.includes('/')) {
+          const parts = rawDate.split('/');
+          if (parts.length === 3) {
+            txnIsoDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+          }
+        }
+        targetBatch.dynamicDeductions.push({ qty: effectiveQty, txnIsoDate, refId, txnId: txn.id || txn.ID });
+      }
+    });
+  });
+
+  if (diagnosticContext && Array.isArray(diagnosticContext.unresolvedRefs)) {
+    diagnosticContext.unresolvedRefs.push(...unresolvedLog);
+  }
+
+  // Apply deductions safely to each batch
+  batches.forEach(b => {
+    if (!b.dynamicDeductions || b.dynamicDeductions.length === 0) {
+      return;
+    }
+
+    if (b.explicitRemaining === null || b.explicitRemaining === undefined) {
+      // Standard purchase without manual baseline: deduct all dynamic consumptions from purchasedQty
+      const totalDynamic = b.dynamicDeductions.reduce((sum, d) => sum + d.qty, 0);
+      b.remainingQty = Math.max(0, b.purchasedQty - totalDynamic);
+      b.consumedQty = Math.max(0, b.purchasedQty - b.remainingQty);
+      b.status = b.remainingQty > 0 ? 'available' : 'unavailable';
+    } else {
+      // Purchase with manual remaining baseline (e.g. ", 7"):
+      // Note: The CSV does not establish an exact physical stock-count date. 2026-08-31 is an inferred
+      // operational migration boundary between legacy manually annotated stock counts (last edited in
+      // August 2026) and dynamic #stock_ref_ deductions (introduced in September 2026).
+      // For historical records prior to September 2026, dynamic consumptions <= 2026-08-31 are recognized
+      // as satisfying the manual baseline count, while post-cutoff consumptions deduct from the baseline.
+      // For modern purchases dated after 2026-08-31, cutoffDate defaults dynamically to purchasedDate itself.
+      const cutoffDate = b.purchasedDate && b.purchasedDate > '2026-08-31' ? b.purchasedDate : '2026-08-31';
+      let postCutoffDynamic = 0;
+
+      b.dynamicDeductions.forEach(d => {
+        if (!d.txnIsoDate || d.txnIsoDate > cutoffDate) {
+          postCutoffDynamic += d.qty;
+        }
       });
 
-      if (targetBatch && !isNaN(qty) && qty > 0) {
-        targetBatch.remainingQty = Math.max(0, targetBatch.remainingQty - qty);
-        targetBatch.consumedQty = Math.max(0, targetBatch.purchasedQty - targetBatch.remainingQty);
-        targetBatch.status = targetBatch.remainingQty > 0 ? 'available' : 'unavailable';
-      }
+      b.remainingQty = Math.max(0, b.explicitRemaining - postCutoffDynamic);
+      b.consumedQty = Math.max(0, b.purchasedQty - b.remainingQty);
+      b.status = b.remainingQty > 0 ? 'available' : 'unavailable';
     }
   });
 

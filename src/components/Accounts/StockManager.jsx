@@ -698,8 +698,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
 
   const handleOpenConsume = (batch) => {
     const targetName = (batch.cleanedName || batch.name || '').toLowerCase();
-    const dbItem = items.find(i => i.id === batch.id) || items.find(i => (i.name || '').toLowerCase() === targetName);
-    const itemId = dbItem ? dbItem.id : (batch.id || batch.txnId);
+    const dbItem = items.find(i => i.id === batch.id || i.id === batch.batchId) || items.find(i => (i.name || '').toLowerCase() === targetName);
+    const itemId = batch.batchId || batch.id || (dbItem ? dbItem.id : batch.txnId);
 
     setConsumingItemId(itemId);
     setConsumingBatch(batch);
