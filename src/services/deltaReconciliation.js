@@ -14,8 +14,9 @@
 import { v4 as uuid } from 'uuid';
 import { getDB, getRawIDB } from '../database/db.js';
 import { toCanonicalJson, computeCanonicalSha256 } from '../utils/canonicalEntity.js';
-import { saveConflictRecord, CONFLICT_STATUS, CONFLICT_RESOLUTION, CONFLICT_TYPE } from '../database/conflicts.js';
+import { saveConflictRecord, getPendingConflicts, CONFLICT_STATUS, CONFLICT_RESOLUTION, CONFLICT_TYPE } from '../database/conflicts.js';
 import { createDeltaEvent, DELTA_STATUS, DELTA_OPERATION } from '../database/deltaQueue.js';
+import { calculateEntityDiff } from '../utils/conflictFormatter.js';
 
 export const RECONCILIATION_STATUS = Object.freeze({
   STAGED: 'STAGED',
@@ -547,11 +548,12 @@ async function _reconcileBundleAtomically(bundle) {
     }
 
     if (op === DELTA_OPERATION.INSERT) {
+      const isIdentical = (localChecksum === hRemote) || (localEntity && event.payload && !calculateEntityDiff(localEntity, event.payload, storeName).hasChanges);
       if (!localEntity && !localTombstone) {
         // Clean remote insert
         item.decision = 'APPLY_INSERT';
         allIdempotent = false;
-      } else if (localEntity && localChecksum === hRemote) {
+      } else if (localEntity && isIdentical) {
         // Idempotent insert
         item.decision = 'NOOP_IDEMPOTENT';
         allClean = false;
@@ -582,11 +584,12 @@ async function _reconcileBundleAtomically(bundle) {
         });
       }
     } else if (op === DELTA_OPERATION.UPDATE) {
+      const isIdentical = (localChecksum === hRemote) || (localEntity && event.payload && !calculateEntityDiff(localEntity, event.payload, storeName).hasChanges);
       if (localEntity && localChecksum === hBase) {
         // Clean remote update
         item.decision = 'APPLY_UPDATE';
         allIdempotent = false;
-      } else if (localEntity && localChecksum === hRemote) {
+      } else if (localEntity && isIdentical) {
         // Idempotent identical update
         item.decision = 'NOOP_IDEMPOTENT';
         allClean = false;
@@ -902,7 +905,11 @@ export async function resolveConflict(conflictId, resolution, customData = null)
   const liveLocalEntity = localRes.values?.[0] || null;
   const liveLocalChecksum = liveLocalEntity ? await computeCanonicalSha256(liveLocalEntity) : null;
 
-  if (liveLocalChecksum !== confRow.local_checksum) {
+  const localPayloadParsed = typeof confRow.local_payload === 'string' ? JSON.parse(confRow.local_payload || 'null') : confRow.local_payload;
+  const hasLocalDrift = liveLocalChecksum !== confRow.local_checksum &&
+    (!liveLocalEntity || !localPayloadParsed || calculateEntityDiff(liveLocalEntity, localPayloadParsed, storeName).hasChanges);
+
+  if (hasLocalDrift) {
     throw new Error('STALE_CONFLICT_ERROR: Local entity was modified after conflict was logged.');
   }
 
@@ -1037,73 +1044,86 @@ export async function resolveConflict(conflictId, resolution, customData = null)
         tx.onabort = () => rej(new Error('Transaction aborted during conflict resolution'));
       });
     } else {
-      // SQLite: wrap all statements in BEGIN TRANSACTION ... COMMIT with ROLLBACK on error
-      try {
-        await db.execute('BEGIN TRANSACTION');
+      // SQLite: execute statements atomically using db.executeSet if available (Capacitor SQLite), or db.run
+      const statements = [];
 
-        // A. Canonical Entity Mutation / Tombstone
-        if (resolution === CONFLICT_RESOLUTION.ACCEPT_REMOTE) {
-          if (remotePayload) {
-            const cols = Object.keys(remotePayload);
-            const placeholders = cols.map(() => '?').join(',');
-            const vals = cols.map(c => typeof remotePayload[c] === 'object' && remotePayload[c] !== null ? JSON.stringify(remotePayload[c]) : remotePayload[c]);
-            await db.run(`INSERT OR REPLACE INTO ${storeName} (${cols.join(',')}) VALUES (${placeholders})`, vals);
-          } else {
-            await db.run(`DELETE FROM ${storeName} WHERE ${keyField} = ?`, [entityId]);
-            await db.run('INSERT OR REPLACE INTO sync_tombstones (id, entity_type, deleted_at) VALUES (?, ?, ?)', [entityId, storeName, now]);
-          }
-        } else if (resolution === CONFLICT_RESOLUTION.CUSTOM_STATE) {
-          const cols = Object.keys(customData);
+      // A. Canonical Entity Mutation / Tombstone
+      if (resolution === CONFLICT_RESOLUTION.ACCEPT_REMOTE) {
+        if (remotePayload) {
+          const cols = Object.keys(remotePayload);
           const placeholders = cols.map(() => '?').join(',');
-          const vals = cols.map(c => typeof customData[c] === 'object' && customData[c] !== null ? JSON.stringify(customData[c]) : customData[c]);
-          await db.run(`INSERT OR REPLACE INTO ${storeName} (${cols.join(',')}) VALUES (${placeholders})`, vals);
+          const vals = cols.map(c => typeof remotePayload[c] === 'object' && remotePayload[c] !== null ? JSON.stringify(remotePayload[c]) : (remotePayload[c] ?? null));
+          statements.push({
+            statement: `INSERT OR REPLACE INTO ${storeName} (${cols.join(',')}) VALUES (${placeholders})`,
+            values: vals
+          });
+        } else {
+          statements.push({
+            statement: `DELETE FROM ${storeName} WHERE ${keyField} = ?`,
+            values: [entityId]
+          });
+          statements.push({
+            statement: 'INSERT OR REPLACE INTO sync_tombstones (id, entity_type, deleted_at) VALUES (?, ?, ?)',
+            values: [entityId, storeName, now]
+          });
         }
+      } else if (resolution === CONFLICT_RESOLUTION.CUSTOM_STATE) {
+        const cols = Object.keys(customData);
+        const placeholders = cols.map(() => '?').join(',');
+        const vals = cols.map(c => typeof customData[c] === 'object' && customData[c] !== null ? JSON.stringify(customData[c]) : (customData[c] ?? null));
+        statements.push({
+          statement: `INSERT OR REPLACE INTO ${storeName} (${cols.join(',')}) VALUES (${placeholders})`,
+          values: vals
+        });
+      }
 
-        // B. Conflict Status Update
-        await db.run(
-          'UPDATE sync_conflicts SET status = ?, resolution = ?, resolved_at = ? WHERE conflict_id = ?',
-          [CONFLICT_STATUS.RESOLVED, resolution, now, conflictId]
-        );
+      // B. Conflict Status Update
+      statements.push({
+        statement: 'UPDATE sync_conflicts SET status = ?, resolution = ?, resolved_at = ? WHERE conflict_id = ?',
+        values: [CONFLICT_STATUS.RESOLVED, resolution, now, conflictId]
+      });
 
-        // C. Staged Event Status Update
-        await db.run(
-          'UPDATE sync_staged_events SET status = ? WHERE event_id = ?',
-          [targetStatus, eventId]
-        );
+      // C. Staged Event Status Update
+      statements.push({
+        statement: 'UPDATE sync_staged_events SET status = ? WHERE event_id = ?',
+        values: [targetStatus, eventId]
+      });
 
-        // D. Outbound Delta Queue Insertion
-        await db.run(
-          `INSERT OR REPLACE INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, base_checksum, new_checksum, tombstone_generation, payload, status, resolution_type, resolved_event_id, resolved_conflict_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            resolutionDelta.event_id,
-            resolutionDelta.device_id,
-            resolutionDelta.sequence,
-            resolutionDelta.timestamp,
-            resolutionDelta.collection,
-            resolutionDelta.entity_id,
-            resolutionDelta.operation,
-            resolutionDelta.base_checksum,
-            resolutionDelta.new_checksum,
-            resolutionDelta.tombstone_generation,
-            typeof resolutionDelta.payload === 'object' && resolutionDelta.payload !== null ? JSON.stringify(resolutionDelta.payload) : resolutionDelta.payload,
-            resolutionDelta.status,
-            resolutionDelta.resolution_type,
-            resolutionDelta.resolved_event_id,
-            resolutionDelta.resolved_conflict_id
-          ]
-        );
+      // D. Outbound Delta Queue Insertion
+      statements.push({
+        statement: `INSERT OR REPLACE INTO sync_delta_queue (event_id, device_id, sequence, timestamp, collection, entity_id, operation, base_checksum, new_checksum, tombstone_generation, payload, status, resolution_type, resolved_event_id, resolved_conflict_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        values: [
+          resolutionDelta.event_id,
+          resolutionDelta.device_id,
+          resolutionDelta.sequence,
+          resolutionDelta.timestamp,
+          resolutionDelta.collection,
+          resolutionDelta.entity_id,
+          resolutionDelta.operation,
+          resolutionDelta.base_checksum,
+          resolutionDelta.new_checksum,
+          resolutionDelta.tombstone_generation,
+          typeof resolutionDelta.payload === 'object' && resolutionDelta.payload !== null ? JSON.stringify(resolutionDelta.payload) : resolutionDelta.payload,
+          resolutionDelta.status,
+          resolutionDelta.resolution_type,
+          resolutionDelta.resolved_event_id,
+          resolutionDelta.resolved_conflict_id
+        ]
+      });
 
-        // E. Sequence Allocation Update
-        await db.run(
-          'UPDATE sync_local_state SET last_allocated_sequence = ?, updated_at = ? WHERE key = ?',
-          [nextSeq, now, 'device_state']
-        );
+      // E. Sequence Allocation Update
+      statements.push({
+        statement: 'UPDATE sync_local_state SET last_allocated_sequence = ?, updated_at = ? WHERE key = ?',
+        values: [nextSeq, now, 'device_state']
+      });
 
-        await db.execute('COMMIT');
-      } catch (txErr) {
-        try { await db.execute('ROLLBACK'); } catch {}
-        throw txErr;
+      if (typeof db.executeSet === 'function') {
+        await db.executeSet(statements);
+      } else {
+        for (const s of statements) {
+          await db.run(s.statement, s.values);
+        }
       }
     }
 
@@ -1118,4 +1138,54 @@ export async function resolveConflict(conflictId, resolution, customData = null)
       resolution_event_id: resolutionEventId
     };
   });
+}
+
+/**
+ * Resolves all pending conflicts with the specified resolution strategy (KEEP_LOCAL or ACCEPT_REMOTE).
+ */
+export async function resolveAllConflicts(resolution = CONFLICT_RESOLUTION.KEEP_LOCAL) {
+  const pending = await getPendingConflicts();
+  if (!pending.length) {
+    return { total: 0, resolved: 0, failed: 0, errors: [] };
+  }
+
+  let resolved = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (const c of pending) {
+    try {
+      await resolveConflict(c.conflict_id, resolution);
+      resolved++;
+    } catch (err) {
+      console.warn(`[resolveAllConflicts] Failed to resolve conflict ${c.conflict_id}:`, err);
+      errors.push({ conflict_id: c.conflict_id, error: err.message });
+      failed++;
+    }
+  }
+
+  return { total: pending.length, resolved, failed, errors };
+}
+
+/**
+ * Automatically detects and resolves pending conflicts where the local and remote payloads
+ * have no functional or business differences (diff.hasChanges === false).
+ */
+export async function autoResolveIdenticalConflicts() {
+  const pending = await getPendingConflicts();
+  if (!pending.length) return { resolved: 0 };
+
+  let resolved = 0;
+  for (const c of pending) {
+    const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
+    if (!diff.hasChanges) {
+      try {
+        await resolveConflict(c.conflict_id, CONFLICT_RESOLUTION.KEEP_LOCAL);
+        resolved++;
+      } catch (e) {
+        console.warn(`[autoResolveIdenticalConflicts] Failed to auto-resolve identical conflict ${c.conflict_id}:`, e);
+      }
+    }
+  }
+  return { resolved };
 }

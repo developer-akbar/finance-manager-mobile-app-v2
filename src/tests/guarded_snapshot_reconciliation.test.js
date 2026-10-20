@@ -1,6 +1,6 @@
 /**
  * guarded_snapshot_reconciliation.test.js
- * 
+ *
  * Comprehensive Isolated Test Suite for Guarded Existing-Device Snapshot Reconciliation:
  * 1. Snapshot v11 to v12 reconciliation
  * 2. Successful application of sequence 16 (Expense to Transfer-Out)
@@ -692,5 +692,38 @@ test('FinMan Phase 13 — Guarded Snapshot Reconciliation Test Suite', async (t)
     // Peer reconciled watermark must NOT advance past 15
     const peerStateAfterConflict = (await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', [DEVICE_D_ID])).values[0];
     assert.equal(Number(peerStateAfterConflict.last_reconciled_sequence), 15);
+  });
+
+  await t.test('SCENARIO 9: Snapshot with sync_tombstones entities reconciles cleanly without canonical integrity mismatch rollback', async () => {
+    await seedDeviceABaseline(db);
+
+    const v14 = createSyntheticV12Fixture();
+    v14.snapshot_id = 'snap_1792347402727_c7e45442';
+    v14.cloud_version = 14;
+    v14.entities.sync_tombstones = [
+      {
+        id: '1fe468c8-0b8f-4221-a9cd-5caf5ea39569',
+        entity_type: 'transaction',
+        entity_id: '1fe468c8-0b8f-4221-a9cd-5caf5ea39569',
+        deleted_at: '2026-10-18T10:00:00.000Z'
+      }
+    ];
+
+    const result = await reconcileExistingDeviceWithSnapshot({
+      dbInstance: db,
+      deviceId: DEVICE_A_ID,
+      snapshotPayload: v14,
+      confirmation: 'CONFIRM_RECONCILE_EXISTING_DEVICE',
+      replayInboundDeltas: false
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.status, 'RECONCILIATION_SUCCESS');
+    assert.equal(result.cloudVersion, 14);
+
+    // Verify tombstone is installed in local database
+    const tombstones = (await db.query('SELECT * FROM sync_tombstones')).values || [];
+    assert.equal(tombstones.length, 1);
+    assert.equal(tombstones[0].id, '1fe468c8-0b8f-4221-a9cd-5caf5ea39569');
   });
 });

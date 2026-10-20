@@ -34,7 +34,8 @@ import {
   isSyncUnlocked,
   unlockSyncSession,
   lockSyncSession,
-  subscribeSyncSession
+  subscribeSyncSession,
+  getSyncSessionKey
 } from '../../services/syncSession.js';
 import {
   getDeltaSyncMetrics,
@@ -43,10 +44,14 @@ import {
   SYNC_TRIGGER,
   triggerAutomaticSync,
   resolveConflict,
+  resolveAllConflicts,
+  autoResolveIdenticalConflicts,
   getDeviceLifecycleState,
   discoverCloudRepository,
   bootstrapNewDevice,
-  DEVICE_LIFECYCLE
+  DEVICE_LIFECYCLE,
+  isDatabasePopulatedWithUserData,
+  publishAuthoritativeDeviceSnapshot
 } from '../../services/deltaSyncCoordinator.js';
 import {
   getPendingConflicts,
@@ -66,8 +71,19 @@ import {
   formatConflictEntity,
   calculateEntityDiff
 } from '../../utils/conflictFormatter.js';
+import ConnectedDevicesCard from './ConnectedDevicesCard.jsx';
+import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
+import { setKeepScreenOn } from '../../utils/wakeLockHelper.js';
 
 export { getFriendlyActionName, isNoOpPreview, getModalConfirmConfig };
+
+/**
+ * Capitalizes the first letter of each word in a string.
+ */
+export function formatTitleCase(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str.replace(/\b\w/g, c => c.toUpperCase());
+}
 
 export default function CloudSyncManager({ onBack }) {
   const { state, load } = useApp();
@@ -84,6 +100,7 @@ export default function CloudSyncManager({ onBack }) {
   const [showConfig, setShowConfig] = useState(false);
   const [authError, setAuthError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const authAbortControllerRef = useRef(null);
 
   // New-Device Restore Backup Modal State (WhatsApp-style flow)
   const [restorePromptState, setRestorePromptState] = useState(null);
@@ -129,9 +146,14 @@ export default function CloudSyncManager({ onBack }) {
   const [resolvingId, setResolvingId] = useState(null);
   const [resolutionMsg, setResolutionMsg] = useState(null);
   const [confirmResolutionModal, setConfirmResolutionModal] = useState(null);
+  const [confirmResolveAllModal, setConfirmResolveAllModal] = useState(null);
+  const [isResolvingAll, setIsResolvingAll] = useState(false);
 
-  // Controlled V10 Cloud Snapshot Direct Recovery State
-  const [v10RecoveryModal, setV10RecoveryModal] = useState(null);
+  // Authoritative Master Setup State (for Populated Uninitialized Devices)
+  const [showPublishMasterModal, setShowPublishMasterModal] = useState(false);
+  const [isPublishingMaster, setIsPublishingMaster] = useState(false);
+  const [publishMasterProgress, setPublishMasterProgress] = useState('');
+  const [publishMasterError, setPublishMasterError] = useState('');
 
   // Register global window helper for programmatic or console invocation
   useEffect(() => {
@@ -189,6 +211,17 @@ export default function CloudSyncManager({ onBack }) {
       window.__finmanVerifyRollbackState = async () => {
         return verifyLocalRecoveryState();
       };
+      window.__finmanPublishSnapshotV13 = async (options = {}) => {
+        const token = await getValidAccessToken(true);
+        if (!token) throw new Error('Not authenticated with Google Drive. Please connect first.');
+        const sessionKey = getSyncSessionKey();
+        return publishAuthoritativeDeviceSnapshot({
+          accessToken: token,
+          sessionKey,
+          deviceId: deltaMetrics.deviceId !== 'local_device' ? deltaMetrics.deviceId : null,
+          ...options
+        });
+      };
     }
     return () => {
       if (typeof window !== 'undefined') {
@@ -198,9 +231,10 @@ export default function CloudSyncManager({ onBack }) {
         delete window.__finmanReconcileSnapshotV12;
         delete window.__finmanVerifySequence16Compatibility;
         delete window.__finmanVerifyRollbackState;
+        delete window.__finmanPublishSnapshotV13;
       }
     };
-  }, []);
+  }, [deltaMetrics.deviceId]);
 
   // Subscribe to Session Key state changes
   useEffect(() => {
@@ -247,7 +281,7 @@ export default function CloudSyncManager({ onBack }) {
               if (mounted && u?.emailAddress) {
                 setGoogleUser({ email: u.emailAddress, displayName: u.displayName || '' });
               }
-            }).catch(() => {});
+            }).catch(() => { });
           }
 
           if (isGoogleLinked() && !token) {
@@ -259,10 +293,10 @@ export default function CloudSyncManager({ onBack }) {
                     if (mounted && u?.emailAddress) {
                       setGoogleUser({ email: u.emailAddress, displayName: u.displayName || '' });
                     }
-                  }).catch(() => {});
+                  }).catch(() => { });
                 }
               }
-            }).catch(() => {});
+            }).catch(() => { });
           }
         }
       } catch (err) {
@@ -288,7 +322,7 @@ export default function CloudSyncManager({ onBack }) {
             };
           });
         }
-      } catch {}
+      } catch { }
     }
 
     async function refreshConflicts() {
@@ -297,7 +331,7 @@ export default function CloudSyncManager({ onBack }) {
         if (mounted) {
           setPendingConflicts(list || []);
         }
-      } catch {}
+      } catch { }
     }
 
     async function refreshAll(details = {}, status = null) {
@@ -310,7 +344,7 @@ export default function CloudSyncManager({ onBack }) {
       if (currentSeq !== refreshSeqRef.current || !mounted) return;
       if (status === DELTA_SYNC_STATUS.SUCCESS || details?.bootstrapped || details?.status === 'BOOTSTRAP_SUCCESS' || details?.operation === 'BOOTSTRAP') {
         if (typeof load === 'function') {
-          try { await load(); } catch {}
+          try { await load(); } catch { }
         }
       }
     }
@@ -352,6 +386,13 @@ export default function CloudSyncManager({ onBack }) {
   // Check if an UNINITIALIZED / new device should offer cloud restore
   const checkNewDeviceBackup = async (token) => {
     try {
+      // Fail-closed safeguard: Never offer Restore Backup on a populated device
+      const isPopulated = await isDatabasePopulatedWithUserData();
+      if (isPopulated) {
+        console.log('[CloudSyncManager] Device contains local financial or user data, or emptiness cannot be verified. Suppressing cloud restore prompt.');
+        return;
+      }
+
       const lifecycle = await getDeviceLifecycleState();
       if (lifecycle === DEVICE_LIFECYCLE.UNINITIALIZED || lifecycle === DEVICE_LIFECYCLE.JOINING) {
         const discovery = await discoverCloudRepository({ accessToken: token });
@@ -371,15 +412,30 @@ export default function CloudSyncManager({ onBack }) {
     }
   };
 
+  // Handle Google Sign-In Cancellation
+  const handleCancelConnect = () => {
+    if (authAbortControllerRef.current) {
+      try {
+        authAbortControllerRef.current.abort();
+      } catch { }
+      authAbortControllerRef.current = null;
+    }
+    setIsAuthenticating(false);
+    setAuthError('Sign-in cancelled.');
+  };
+
   // Handle Google Sign-In
   const handleConnect = async () => {
     setAuthError('');
     setIsAuthenticating(true);
+    const controller = new AbortController();
+    authAbortControllerRef.current = controller;
+
     try {
       if (clientId.trim()) {
         await setGoogleClientId(clientId.trim());
       }
-      const res = await signInWithGoogle({ prompt: 'consent' });
+      const res = await signInWithGoogle({ prompt: 'consent', signal: controller.signal });
       if (res && res.accessToken) {
         setIsAuthenticated(true);
         const user = await syncGoogleUserInfo(res.accessToken);
@@ -391,6 +447,7 @@ export default function CloudSyncManager({ onBack }) {
     } catch (err) {
       setAuthError(err.message || 'Google authentication failed.');
     } finally {
+      authAbortControllerRef.current = null;
       setIsAuthenticating(false);
     }
   };
@@ -498,6 +555,74 @@ export default function CloudSyncManager({ onBack }) {
     setSuccessMsg('Starting fresh with a new local ledger. Your Google Drive backup was left untouched.');
   };
 
+  // Handle Authoritative Master Setup for Populated Uninitialized Devices
+  const handlePublishMasterClick = async () => {
+    setPublishMasterError('');
+    setPublishMasterProgress('');
+    if (!isUnlocked) {
+      if (!pin || pin.trim().length < 4) {
+        setPinError('Please enter your 4+ digit PIN to unlock sync.');
+        return;
+      }
+      const ok = await handleUnlock();
+      if (!ok) return;
+    }
+
+    const token = await getValidAccessToken(true);
+    if (!token) {
+      setAuthError('Please connect your Google Drive account first.');
+      return;
+    }
+
+    setShowPublishMasterModal(true);
+  };
+
+  const handleExecutePublishMaster = async () => {
+    setIsPublishingMaster(true);
+    setPublishMasterError('');
+    setPublishMasterProgress('Connecting to Google Drive…');
+    setErrorMsg('');
+    setSuccessMsg('');
+    await setKeepScreenOn(true).catch(() => { });
+    try {
+      const token = await getValidAccessToken(true);
+      if (!token) throw new Error('Google Drive account is not connected or token expired.');
+      const sessionKey = getSyncSessionKey();
+      if (!sessionKey) throw new Error('Sync session is locked. Please enter your Sync PIN first.');
+
+      const result = await publishAuthoritativeDeviceSnapshot({
+        accessToken: token,
+        sessionKey,
+        deviceId: deltaMetrics.deviceId !== 'local_device' ? deltaMetrics.deviceId : null,
+        timeoutMs: 300000,
+        onProgress: (stageInfo) => {
+          const msg = typeof stageInfo === 'string' ? stageInfo : (stageInfo?.message || stageInfo?.stage || '');
+          setPublishMasterProgress(msg);
+        }
+      });
+
+      setPublishMasterProgress('✓ Snapshot v13 published successfully!');
+      setSuccessMsg(`✓ Snapshot v13 published (${result.totalTxnCount.toLocaleString()} transactions)! This device is now your active cloud master.`);
+      setShowPublishMasterModal(false);
+      if (typeof load === 'function') {
+        try { await load(); } catch { }
+      }
+      const m = await getDeltaSyncMetrics();
+      setDeltaMetrics(prev => ({ ...prev, ...m }));
+    } catch (err) {
+      console.error('[CloudSyncManager] Master publish failed:', err);
+      const isFetchErr = String(err?.message || '').toLowerCase().includes('failed to fetch');
+      const displayErr = isFetchErr
+        ? 'Connection lost during upload (Failed to fetch). This happens when the device screen locks or sleeps during upload. Screen lock has now been prevented — please keep your phone awake and tap Retry.'
+        : (err.message || 'Failed to publish authoritative snapshot.');
+      setPublishMasterError(displayErr);
+      setErrorMsg(displayErr);
+    } finally {
+      setIsPublishingMaster(false);
+      await setKeepScreenOn(false).catch(() => { });
+    }
+  };
+
 
 
   // Handle Custom Client ID Save
@@ -532,8 +657,15 @@ export default function CloudSyncManager({ onBack }) {
     setPinError('');
     setIsUnlocking(true);
     try {
-      await unlockSyncSession(pin.trim());
+      const cleanPin = pin.trim();
+      await unlockSyncSession(cleanPin);
       setPin(''); // Immediately clear raw PIN from component input state
+      setErrorMsg('');
+      setAuthError('');
+      setDeltaMetrics(prev => ({ ...prev, latestError: null }));
+      setTimeout(() => {
+        handleSyncChangesNow();
+      }, 50);
       return true;
     } catch (err) {
       setPinError(err.message || 'Failed to unlock with PIN.');
@@ -550,6 +682,7 @@ export default function CloudSyncManager({ onBack }) {
     setPreviewResult(null);
     setShowConfirmModal(false);
     setConfirmResolutionModal(null);
+    setDeltaMetrics(prev => ({ ...prev, latestError: null }));
   };
 
   // Open Conflict Resolution Confirmation Modal
@@ -587,8 +720,13 @@ export default function CloudSyncManager({ onBack }) {
       setDeltaMetrics(prev => ({ ...prev, ...updatedMetrics }));
 
       if (typeof load === 'function') {
-        load().catch(() => {});
+        load().catch(() => { });
       }
+
+      // Automatically unblock sync by triggering live sync
+      setTimeout(() => {
+        handleSyncChangesNow();
+      }, 100);
     } catch (err) {
       setResolutionMsg({
         type: 'error',
@@ -597,6 +735,53 @@ export default function CloudSyncManager({ onBack }) {
     } finally {
       setResolvingId(null);
       setConfirmResolutionModal(null);
+    }
+  };
+
+  // Open Bulk Conflict Resolution Confirmation Modal
+  const handleOpenResolveAllConfirm = (resolution) => {
+    setResolutionMsg(null);
+    setConfirmResolveAllModal({
+      resolution,
+      count: pendingConflicts.length
+    });
+  };
+
+  // Execute Bulk Conflict Resolution
+  const handleExecuteResolveAll = async () => {
+    if (!confirmResolveAllModal) return;
+    const { resolution } = confirmResolveAllModal;
+    setIsResolvingAll(true);
+    setResolutionMsg(null);
+    try {
+      const res = await resolveAllConflicts(resolution);
+      const isKeepLocal = resolution === CONFLICT_RESOLUTION.KEEP_LOCAL;
+      setResolutionMsg({
+        type: res.failed > 0 ? 'warning' : 'success',
+        text: `Resolved ${res.resolved} conflict${res.resolved === 1 ? '' : 's'} (${isKeepLocal ? "Kept This Device's Versions" : "Accepted Other Device's Versions"}).${res.failed > 0 ? ` (${res.failed} failed)` : ''}`
+      });
+
+      const updatedList = await getPendingConflicts();
+      setPendingConflicts(updatedList || []);
+      const updatedMetrics = await getDeltaSyncMetrics();
+      setDeltaMetrics(prev => ({ ...prev, ...updatedMetrics }));
+
+      if (typeof load === 'function') {
+        load().catch(() => { });
+      }
+
+      // Automatically unblock sync by triggering live sync
+      setTimeout(() => {
+        handleSyncChangesNow();
+      }, 100);
+    } catch (err) {
+      setResolutionMsg({
+        type: 'error',
+        text: `Bulk resolution failed: ${err.message}`
+      });
+    } finally {
+      setIsResolvingAll(false);
+      setConfirmResolveAllModal(null);
     }
   };
 
@@ -620,17 +805,53 @@ export default function CloudSyncManager({ onBack }) {
     setIsDeltaSyncing(true);
     setErrorMsg('');
     setSuccessMsg('');
+    setDeltaMetrics(prev => ({ ...prev, latestError: null }));
 
     try {
-      const result = await triggerAutomaticSync(SYNC_TRIGGER.MANUAL);
+      // Auto-resolve any pending conflicts whose local and remote payloads are already 100% identical
+      await autoResolveIdenticalConflicts().catch(() => { });
+      const { getSyncSessionKey } = await import('../../services/syncSession.js');
+      const sessionKey = getSyncSessionKey();
+      const result = await triggerAutomaticSync(SYNC_TRIGGER.MANUAL, {
+        accessToken: token,
+        sessionKey
+      });
       if (result && result.status === 'ERROR') {
         setErrorMsg(result.error || 'Live delta sync failed.');
       } else if (result && result.status === 'AUTH_REQUIRED') {
         setErrorMsg('Authentication or session unlock required.');
+      } else if (result && (result.status === 'BLOCKED_PEER_BASELINE' || result.status === 'BLOCKED_SYNC')) {
+        const newerBaseline = result.newerBaselineDetected || result.hasNewerBaseline || result.inbound?.newerBaselineDetected;
+        if (newerBaseline) {
+          setSuccessMsg('Aligning with newer cloud snapshot baseline…');
+          const { checkAndAutoReconcileCloudSnapshot } = await import('../../services/deltaSyncCoordinator.js');
+          const autoRes = await checkAndAutoReconcileCloudSnapshot({
+            accessToken: token,
+            sessionKey,
+            targetSnapshotId: typeof newerBaseline === 'string' ? newerBaseline : newerBaseline?.snapshotId,
+            targetCloudVersion: typeof newerBaseline === 'object' ? newerBaseline?.cloudVersion : null
+          });
+          if (autoRes?.reconciled) {
+            await triggerAutomaticSync(SYNC_TRIGGER.MANUAL, { accessToken: token, sessionKey });
+            setErrorMsg('');
+            setSuccessMsg('✓ Baseline aligned and synchronized with latest cloud records.');
+          } else if (autoRes?.error) {
+            setErrorMsg(`Baseline alignment failed: ${autoRes.error}`);
+          } else {
+            setSuccessMsg('Aligning with newer cloud snapshot baseline…');
+          }
+        } else {
+          setErrorMsg('Sync paused: incompatible peer baseline detected.');
+        }
+        if (typeof load === 'function') {
+          load().catch(() => { });
+        }
+        const updatedMetrics = await getDeltaSyncMetrics();
+        setDeltaMetrics(prev => ({ ...prev, ...updatedMetrics }));
       } else {
         setSuccessMsg('✓ Live sync completed — all changes synchronized.');
         if (typeof load === 'function') {
-          load().catch(() => {});
+          load().catch(() => { });
         }
         const updatedMetrics = await getDeltaSyncMetrics();
         setDeltaMetrics(prev => ({ ...prev, ...updatedMetrics }));
@@ -757,10 +978,10 @@ export default function CloudSyncManager({ onBack }) {
         });
       }
 
-      const isSuccess = syncResult.status === SYNC_STATUS.SUCCESS || 
-                        syncResult.status === SYNC_STATUS.NO_CHANGES || 
-                        syncResult.status === BOOTSTRAP_STATUS.SUCCESS ||
-                        syncResult.status === 'BOOTSTRAP_SUCCESS';
+      const isSuccess = syncResult.status === SYNC_STATUS.SUCCESS ||
+        syncResult.status === SYNC_STATUS.NO_CHANGES ||
+        syncResult.status === BOOTSTRAP_STATUS.SUCCESS ||
+        syncResult.status === 'BOOTSTRAP_SUCCESS';
 
       if (isSuccess) {
         if (typeof load === 'function') {
@@ -806,85 +1027,6 @@ export default function CloudSyncManager({ onBack }) {
     }
   };
 
-  // Controlled V10 Direct Recovery Handlers
-  const handleOpenV10Recovery = async () => {
-    if (!isUnlocked) {
-      if (!pin || pin.trim().length < 4) {
-        setPinError('Please enter your 4+ digit PIN to unlock sync first.');
-        return;
-      }
-      const ok = await handleUnlock();
-      if (!ok) return;
-    }
-
-    const token = await getValidAccessToken(true);
-    if (!token) {
-      setAuthError('Please connect your Google Drive account first.');
-      return;
-    }
-
-    setV10RecoveryModal({ step: 'PREFLIGHT_LOADING', preflightData: null, confirmed: false, error: null });
-
-    try {
-      const preflight = await preflightSnapshotV10Import({
-        accessToken: token
-      });
-      setV10RecoveryModal({
-        step: 'PREFLIGHT_READY',
-        preflightData: preflight,
-        confirmed: false,
-        error: null
-      });
-    } catch (err) {
-      setV10RecoveryModal({
-        step: 'ERROR',
-        preflightData: null,
-        confirmed: false,
-        error: err.message
-      });
-    }
-  };
-
-  const handleExecuteV10Recovery = async () => {
-    if (!v10RecoveryModal?.confirmed) return;
-    const token = await getValidAccessToken(true);
-    if (!token) {
-      setV10RecoveryModal(prev => ({ ...prev, step: 'ERROR', error: 'Google session lost. Please reconnect.' }));
-      return;
-    }
-
-    setV10RecoveryModal(prev => ({ ...prev, step: 'IMPORTING', error: null }));
-
-    try {
-      const res = await importSnapshotV10ToDevice({
-        accessToken: token,
-        confirmation: 'CONFIRM_REPLACE_LOCAL_DATA'
-      });
-
-      if (typeof load === 'function') {
-        try { await load(); } catch {}
-      }
-
-      const nowIso = new Date().toISOString();
-      setLastSyncInfo({
-        lastSyncedAt: nowIso,
-        lastSnapshotId: res.snapshotId
-      });
-
-      setV10RecoveryModal({
-        step: 'SUCCESS',
-        result: res
-      });
-      setSuccessMsg('✓ Successfully imported Cloud Snapshot v10! Local dataset updated cleanly.');
-    } catch (err) {
-      setV10RecoveryModal({
-        step: 'ERROR',
-        error: err.message,
-        details: err.details
-      });
-    }
-  };
-
   // Authoritative live delta sync state across the entire component (Strictly isolates full snapshot isSyncing)
   const isLiveDeltaSyncing = isDeltaSyncing || deltaMetrics.status === DELTA_SYNC_STATUS.SYNCING;
 
@@ -915,7 +1057,7 @@ export default function CloudSyncManager({ onBack }) {
             <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
         </button>
-        <div>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div className="page-hdr-title" style={{ fontSize: '1.2rem', fontWeight: 800 }}>
             Cloud Sync (Google Drive)
           </div>
@@ -923,26 +1065,26 @@ export default function CloudSyncManager({ onBack }) {
             Zero-Knowledge 3-Way Sync · Sandboxed Storage
           </div>
         </div>
+        <GlobalSyncBadge mobile />
       </div>
 
-      <div style={{ padding: '0 var(--page-px)', maxWidth: 640, margin: '0 auto' }}>
+      <div className="cloud-sync-container">
         {/* Security & Privacy Notice */}
         <div style={{
           background: 'rgba(0, 229, 160, 0.08)',
           border: '1px solid rgba(0, 229, 160, 0.25)',
-          borderRadius: 10,
-          padding: '12px 14px',
-          marginBlock: 14,
-          fontSize: '0.75rem',
-          lineHeight: 1.45,
-          color: 'var(--text-primary)'
+          borderRadius: 8,
+          padding: '6px 12px',
+          margin: '8px 0',
+          fontSize: '0.72rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          color: 'var(--text-primary)',
+          flexDirection: 'column'
         }}>
-          <div style={{ fontWeight: 800, color: 'var(--green)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span>🔒 Your Data Is Protected</span>
-          </div>
-          <div>
-            Your financial data is encrypted before it leaves your device. Your private Sync PIN protects access to your synced data.
-          </div>
+          <span style={{ fontWeight: 800, color: 'var(--green)', whiteSpace: 'nowrap' }}>🔒 Your Data Is Protected</span>
+          <span style={{ color: 'var(--text-secondary)' }}>Your financial data is encrypted before it leaves your device.</span>
         </div>
 
         {/* --- UNIFIED PRIMARY STATUS BANNER (Stage B1) --- */}
@@ -957,7 +1099,12 @@ export default function CloudSyncManager({ onBack }) {
             lastDeltaSyncedAt: deltaMetrics.lastDeltaSyncedAt,
             pendingConflictsCount: pendingConflicts.length,
             latestError: deltaMetrics.latestError || authError,
-            isDeltaSyncing: isLiveDeltaSyncing
+            isDeltaSyncing: isLiveDeltaSyncing,
+            hasLocalRecords: localTransactionsCount > 0,
+            localTransactionsCount,
+            hasNewerBaseline: Boolean(deltaMetrics.hasNewerBaseline || deltaMetrics.newerBaselineDetected),
+            newerBaselineDetected: deltaMetrics.newerBaselineDetected || null,
+            blockedPeers: deltaMetrics.blockedPeers || []
           });
 
           const bannerStyles = {
@@ -1080,14 +1227,17 @@ export default function CloudSyncManager({ onBack }) {
           );
         })()}
 
-        {/* Card 1: Sync Security */}
-        <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>🔐 Sync Security</span>
-          <span style={{ fontSize: '0.72rem', fontWeight: 800, color: isUnlocked ? 'var(--green)' : 'var(--warning)' }}>
-            {isUnlocked ? 'Protected · Unlocked' : '🔒 Sync Locked'}
-          </span>
-        </div>
-        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px' }}>
+        {/* ── 2-Column Responsive Layout Grid (Desktop: 2 Columns, Mobile: 1 Column) ── */}
+        <div className="cloud-sync-grid">
+          {/* Card 1: Sync Security */}
+          <div className="cs-section cs-section-security">
+            <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>🔐 Sync Security</span>
+              <span style={{ fontSize: '0.72rem', fontWeight: 800, color: isUnlocked ? 'var(--green)' : 'var(--warning)' }}>
+                {isUnlocked ? 'Protected · Unlocked' : '🔒 Sync Locked'}
+              </span>
+            </div>
+            <div className="settings-card" style={{ padding: 14, margin: '0 0 14px' }}>
           {isUnlocked ? (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
               <div>
@@ -1163,8 +1313,12 @@ export default function CloudSyncManager({ onBack }) {
             </>
           )}
         </div>
+      </div>
 
+      {/* Column 1 on desktop: Cloud Operations (Sync & Backup) */}
+      <div className="cs-col cs-col-left">
         {/* Card 2: Cloud Sync */}
+        <div className="cs-section cs-section-sync">
         <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>☁️ Cloud Sync</span>
           <span style={{
@@ -1175,19 +1329,19 @@ export default function CloudSyncManager({ onBack }) {
             background: !isUnlocked
               ? 'rgba(255, 179, 0, 0.15)'
               : (isLiveDeltaSyncing
-                  ? 'rgba(74, 144, 226, 0.15)'
-                  : (deltaMetrics.pendingCount > 0 ? 'rgba(255, 179, 0, 0.15)' : 'rgba(0, 229, 160, 0.15)')),
+                ? 'rgba(74, 144, 226, 0.15)'
+                : (deltaMetrics.pendingCount > 0 ? 'rgba(255, 179, 0, 0.15)' : 'rgba(0, 229, 160, 0.15)')),
             color: !isUnlocked
               ? 'var(--warning)'
               : (isLiveDeltaSyncing
-                  ? 'var(--accent)'
-                  : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)'))
+                ? 'var(--accent)'
+                : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)'))
           }}>
             {!isUnlocked
               ? 'Sync Locked'
               : (isLiveDeltaSyncing
-                  ? 'Syncing…'
-                  : (deltaMetrics.pendingCount > 0 ? `${deltaMetrics.pendingCount} Waiting` : 'All Changes Up to Date'))}
+                ? 'Syncing…'
+                : (deltaMetrics.pendingCount > 0 ? `${deltaMetrics.pendingCount} Waiting` : 'All Changes Up to Date'))}
           </span>
         </div>
         <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
@@ -1214,7 +1368,9 @@ export default function CloudSyncManager({ onBack }) {
                     </div>
                     {googleUser.email && (
                       <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--accent)', marginTop: 1 }}>
-                        {googleUser.displayName ? `${googleUser.displayName} <${googleUser.email}>` : googleUser.email}
+                        {googleUser.displayName
+                          ? `${formatTitleCase(googleUser.displayName)} <${googleUser.email}>`
+                          : (googleUser.email ? `${formatTitleCase(googleUser.email.split('@')[0])} <${googleUser.email}>` : '')}
                       </div>
                     )}
                   </div>
@@ -1238,6 +1394,15 @@ export default function CloudSyncManager({ onBack }) {
                     {isAuthenticating ? 'Connecting...' : 'Reconnect'}
                   </button>
                 )}
+                {isAuthenticating && (
+                  <button
+                    className="btn btn-ghost"
+                    onClick={handleCancelConnect}
+                    style={{ fontSize: '0.75rem', padding: '4px 8px', color: 'var(--text-muted)' }}
+                  >
+                    Cancel
+                  </button>
+                )}
                 <button
                   className="btn btn-ghost"
                   onClick={handleDisconnect}
@@ -1247,14 +1412,25 @@ export default function CloudSyncManager({ onBack }) {
                 </button>
               </div>
             ) : (
-              <button
-                className="btn btn-primary"
-                onClick={handleConnect}
-                disabled={isAuthenticating}
-                style={{ fontSize: '0.78rem', padding: '6px 14px', flexShrink: 0 }}
-              >
-                {isAuthenticating ? 'Connecting...' : 'Connect Google'}
-              </button>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleConnect}
+                  disabled={isAuthenticating}
+                  style={{ fontSize: '0.78rem', padding: '6px 14px', flexShrink: 0 }}
+                >
+                  {isAuthenticating ? 'Connecting...' : 'Connect Google'}
+                </button>
+                {isAuthenticating && (
+                  <button
+                    className="btn btn-ghost"
+                    onClick={handleCancelConnect}
+                    style={{ fontSize: '0.78rem', padding: '6px 10px', color: 'var(--text-muted)' }}
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
@@ -1280,18 +1456,24 @@ export default function CloudSyncManager({ onBack }) {
               color: !isUnlocked
                 ? 'var(--warning)'
                 : (isLiveDeltaSyncing
-                    ? 'var(--accent)'
-                    : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
-                        ? 'var(--expense)'
-                        : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)')))
+                  ? 'var(--accent)'
+                  : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
+                    ? 'var(--expense)'
+                    : (String(deltaMetrics.status || '').startsWith('BLOCKED')
+                      ? 'var(--warning)'
+                      : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)'))))
             }}>
               {!isUnlocked
                 ? '🔒 Sync Locked (PIN Required)'
                 : (isLiveDeltaSyncing
-                    ? 'Syncing...'
-                    : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
-                        ? (String(deltaMetrics.latestError || '').toLowerCase().includes('time') ? 'Sync Paused (Timed Out)' : 'Sync Paused (Needs Attention)')
-                        : (deltaMetrics.pendingCount > 0 ? 'Changes Waiting' : 'Up to Date')))}
+                  ? 'Syncing...'
+                  : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
+                    ? (String(deltaMetrics.latestError || '').toLowerCase().includes('time') ? 'Sync Paused (Timed Out)' : 'Sync Paused (Needs Attention)')
+                    : (deltaMetrics.status === 'BLOCKED_PEER_BASELINE'
+                      ? (deltaMetrics.hasNewerBaseline || deltaMetrics.newerBaselineDetected ? 'Aligning Baseline…' : 'Baseline Alignment Required')
+                      : (deltaMetrics.status === 'BLOCKED_SEQUENCE_GAP' || deltaMetrics.status === 'BLOCKED_DEPENDENCY'
+                        ? 'Sync Paused (Waiting for Updates)'
+                        : (deltaMetrics.pendingCount > 0 ? 'Changes Waiting' : 'Up to Date')))))}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
@@ -1321,27 +1503,52 @@ export default function CloudSyncManager({ onBack }) {
             </div>
           )}
 
-          <button
-            className={!isUnlocked ? "btn btn-secondary" : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR ? "btn btn-secondary" : "btn btn-primary")}
-            onClick={!isUnlocked ? () => {
-              const pinInput = document.querySelector('input[placeholder*="sync PIN"]');
-              if (pinInput) pinInput.focus();
-            } : handleSyncChangesNow}
-            disabled={!isUnlocked ? false : (isLiveDeltaSyncing || isLoading || isSyncing || !isGoogleLinked())}
-            style={{
-              width: '100%',
+          {deltaMetrics.lifecycleState === 'UNINITIALIZED' && localTransactionsCount > 0 ? (
+            <div style={{
               marginTop: 12,
-              padding: '10px 14px',
-              fontSize: '0.82rem',
-              fontWeight: 800
-            }}
-          >
-            {!isUnlocked
-              ? '🔒 Unlock Sync with PIN to Sync'
-              : (isLiveDeltaSyncing
+              padding: '12px 14px',
+              borderRadius: 8,
+              background: 'rgba(74, 144, 226, 0.1)',
+              border: '1px solid rgba(74, 144, 226, 0.3)'
+            }}>
+              <div style={{ fontWeight: 800, fontSize: '0.82rem', color: 'var(--accent)', marginBottom: 4 }}>
+                📱 Offline Records Ready to Sync
+              </div>
+              <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.45, marginBottom: 10 }}>
+                This device contains <strong>{localTransactionsCount.toLocaleString()} offline records</strong>. Publish this device as your authoritative cloud master to establish Snapshot v13 and activate automatic sync across all devices.
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={handlePublishMasterClick}
+                disabled={isPublishingMaster || !isGoogleLinked()}
+                style={{ width: '100%', padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
+              >
+                {isPublishingMaster ? 'Publishing Snapshot v13...' : '📱 Set as Master Device & Enable Sync'}
+              </button>
+            </div>
+          ) : (
+            <button
+              className={!isUnlocked ? "btn btn-secondary" : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR ? "btn btn-secondary" : "btn btn-primary")}
+              onClick={!isUnlocked ? () => {
+                const pinInput = document.querySelector('input[placeholder*="sync PIN"]');
+                if (pinInput) pinInput.focus();
+              } : handleSyncChangesNow}
+              disabled={!isUnlocked ? false : (isLiveDeltaSyncing || isLoading || isSyncing || !isGoogleLinked())}
+              style={{
+                width: '100%',
+                marginTop: 12,
+                padding: '10px 14px',
+                fontSize: '0.82rem',
+                fontWeight: 800
+              }}
+            >
+              {!isUnlocked
+                ? '🔒 Unlock Sync with PIN to Sync'
+                : (isLiveDeltaSyncing
                   ? 'Syncing...'
                   : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR ? '🔄 Retry Sync' : '⚡ Sync Now'))}
-          </button>
+            </button>
+          )}
 
           <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 8 }}>
             {!isUnlocked ? (
@@ -1351,8 +1558,96 @@ export default function CloudSyncManager({ onBack }) {
             )}
           </div>
         </div>
+      </div>
 
-        {/* Card 3: Sync Conflicts */}
+      {/* Card 4: Cloud Backup */}
+      <div className="cs-section cs-section-backup">
+        <div className="settings-group-label" style={{ padding: '8px 0 6px', color: 'var(--text-primary, #ffffff)', fontWeight: 700 }}>📦 Cloud Backup</div>
+        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 10 }}>
+            Create a complete encrypted backup of your FinMan data in Google Drive.
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Local Records</span>
+            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{localTransactionsCount.toLocaleString()} transactions</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Last Full Backup</span>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+              {lastSyncInfo.lastSyncedAt ? new Date(lastSyncInfo.lastSyncedAt).toLocaleString() : 'Never'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 12 }}>
+            <button
+              className="btn btn-primary"
+              onClick={handleSyncNowClick}
+              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
+              style={{ flex: '1 1 180px', padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
+            >
+              {isLoading && operationType === 'sync_now' ? 'Preparing...' : '📦 Create Cloud Backup'}
+            </button>
+
+            <button
+              className="btn btn-secondary"
+              onClick={handlePreview}
+              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
+              style={{ flex: '1 1 180px', padding: '9px 14px', fontSize: '0.8rem', fontWeight: 600 }}
+            >
+              {isLoading && operationType === 'preview' ? 'Inspecting...' : '🔍 Preview Cloud Backup'}
+            </button>
+          </div>
+
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+            • <strong>Create Cloud Backup</strong>: Encrypts and saves your entire database as a complete cloud backup.<br />
+            • <strong>Preview Cloud Backup</strong>: Performs a 100% read-only inspection. Zero database changes, zero Drive writes.
+          </div>
+
+          {errorMsg && (
+            <div style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: 'rgba(255, 77, 106, 0.12)',
+              color: 'var(--expense)',
+              fontSize: '0.74rem',
+              fontWeight: 600
+            }}>
+              🛑 {translateSyncError(errorMsg)}
+            </div>
+          )}
+
+          {successMsg && (
+            <div style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: 'rgba(0, 229, 160, 0.12)',
+              color: 'var(--green)',
+              fontSize: '0.74rem',
+              fontWeight: 700
+            }}>
+              {successMsg}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+
+    {/* Column 2 on desktop: Devices & Conflicts */}
+    <div className="cs-col cs-col-right">
+      {/* Card: Connected Devices */}
+      <div className="cs-section cs-section-devices">
+        <ConnectedDevicesCard
+          isAuthenticated={isAuthenticated}
+          localDeviceId={deltaMetrics.deviceId !== 'local_device' ? deltaMetrics.deviceId : null}
+          lastLocalSyncAt={deltaMetrics.lastDeltaSyncedAt}
+        />
+      </div>
+
+      {/* Card 3: Sync Conflicts */}
+      <div className="cs-section cs-section-conflicts">
         <div id="sync-conflicts-section" className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>⚖️ Sync Conflicts</span>
           <span style={{
@@ -1408,6 +1703,70 @@ export default function CloudSyncManager({ onBack }) {
                   This conflict affects only this record. Other transactions and accounts continue syncing normally. Choose which version should become authoritative.
                 </div>
               </div>
+
+              {pendingConflicts.length > 1 && (() => {
+                const allIdentical = pendingConflicts.every(c => {
+                  const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
+                  return !diff.hasChanges;
+                });
+
+                return (
+                  <div style={{
+                    padding: '12px 14px',
+                    borderRadius: 10,
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border-light)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                      <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                        ⚡ Bulk Resolution ({pendingConflicts.length} Pending)
+                      </div>
+                      {allIdentical && (
+                        <span style={{
+                          fontSize: '0.66rem',
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          background: 'rgba(0, 229, 160, 0.15)',
+                          color: 'var(--green)',
+                          fontWeight: 700
+                        }}>
+                          ✓ All records have identical data
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {allIdentical
+                        ? 'All pending records have identical values on both devices. You can resolve all of them with one tap to clear the conflict banner and resume automatic synchronization.'
+                        : 'Quickly resolve all pending conflicts across all affected collections in a single step.'}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => handleOpenResolveAllConfirm(CONFLICT_RESOLUTION.KEEP_LOCAL)}
+                        disabled={!isUnlocked || isResolvingAll || Boolean(resolvingId)}
+                        style={{ padding: '9px 10px', fontSize: '0.74rem', fontWeight: 700, textAlign: 'center' }}
+                      >
+                        {isResolvingAll ? 'Resolving All…' : "📱 Keep This Device's Versions"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => handleOpenResolveAllConfirm(CONFLICT_RESOLUTION.ACCEPT_REMOTE)}
+                        disabled={!isUnlocked || isResolvingAll || Boolean(resolvingId)}
+                        style={{ padding: '9px 10px', fontSize: '0.74rem', fontWeight: 700, textAlign: 'center' }}
+                      >
+                        {isResolvingAll ? 'Resolving All…' : "☁️ Accept Other Device's Versions"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {pendingConflicts.map((c) => {
                 const isCurrentResolving = resolvingId === c.conflict_id;
@@ -1657,80 +2016,11 @@ export default function CloudSyncManager({ onBack }) {
             </div>
           )}
         </div>
+      </div>
+    </div>
 
-        {/* Card 4: Cloud Backup */}
-        <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>📦 Cloud Backup</div>
-        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
-          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 10 }}>
-            Create a complete encrypted backup of your FinMan data in Google Drive.
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Local Records</span>
-            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{localTransactionsCount.toLocaleString()} transactions</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last Full Backup</span>
-            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-              {lastSyncInfo.lastSyncedAt ? new Date(lastSyncInfo.lastSyncedAt).toLocaleString() : 'Never'}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 12 }}>
-            <button
-              className="btn btn-primary"
-              onClick={handleSyncNowClick}
-              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
-              style={{ flex: '1 1 180px', padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
-            >
-              {isLoading && operationType === 'sync_now' ? 'Preparing...' : '📦 Create Cloud Backup'}
-            </button>
-
-            <button
-              className="btn btn-secondary"
-              onClick={handlePreview}
-              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
-              style={{ flex: '1 1 180px', padding: '9px 14px', fontSize: '0.8rem', fontWeight: 600 }}
-            >
-              {isLoading && operationType === 'preview' ? 'Inspecting...' : '🔍 Preview Cloud Backup'}
-            </button>
-          </div>
-
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-            • <strong>Create Cloud Backup</strong>: Encrypts and saves your entire database as a complete cloud backup.<br />
-            • <strong>Preview Cloud Backup</strong>: Performs a 100% read-only inspection. Zero database changes, zero Drive writes.
-          </div>
-
-          {errorMsg && (
-            <div style={{
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: 'rgba(255, 77, 106, 0.12)',
-              color: 'var(--expense)',
-              fontSize: '0.74rem',
-              fontWeight: 600
-            }}>
-              🛑 {translateSyncError(errorMsg)}
-            </div>
-          )}
-
-          {successMsg && (
-            <div style={{
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: 'rgba(0, 229, 160, 0.12)',
-              color: 'var(--green)',
-              fontSize: '0.74rem',
-              fontWeight: 700
-            }}>
-              {successMsg}
-            </div>
-          )}
-        </div>
-
-        {/* Card 5: Advanced Settings & Diagnostics */}
+      {/* Card 5: Advanced Settings & Diagnostics */}
+      <div className="cs-section cs-section-advanced">
         <details className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem', cursor: 'pointer' }}>
           <summary style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
             <div>
@@ -1801,54 +2091,6 @@ export default function CloudSyncManager({ onBack }) {
                 Diagnostic Log: {deltaMetrics.latestError}
               </div>
             )}
-
-            {/* Disaster Recovery & Advanced Support Tools (Collapsed by Default) */}
-            <details style={{
-              marginTop: 14,
-              border: '1px solid rgba(255, 179, 0, 0.25)',
-              borderRadius: 8,
-              background: 'rgba(255, 179, 0, 0.04)',
-              padding: '10px 12px'
-            }}>
-              <summary style={{
-                cursor: 'pointer',
-                fontWeight: 700,
-                fontSize: '0.74rem',
-                color: 'var(--warning)',
-                userSelect: 'none',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}>
-                <span>🛠️ Disaster Recovery &amp; Support Tools</span>
-                <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>Show / Hide</span>
-              </summary>
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(255, 179, 0, 0.2)' }}>
-                <div style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
-                  📥 Restore Verified Cloud Snapshot v10
-                </div>
-                <div style={{
-                  fontSize: '0.68rem',
-                  color: 'var(--text-primary)',
-                  marginBottom: 10,
-                  lineHeight: 1.45,
-                  padding: '8px 10px',
-                  borderRadius: 6,
-                  background: 'rgba(255, 77, 106, 0.08)',
-                  border: '1px solid rgba(255, 77, 106, 0.2)'
-                }}>
-                  ⚠️ <strong>Disaster Recovery Warning:</strong> Snapshot v10 contains baseline records ({v10BaselineTxnCount.toLocaleString()} txns). Your current device contains <strong>{localTransactionsCount.toLocaleString()} transactions</strong>. Restoring this snapshot replaces the local database and will overwrite newer local edits. An automatic backup is created before replacement, but this action should only be performed during guided recovery.
-                </div>
-                <button
-                  className="btn btn-secondary"
-                  onClick={handleOpenV10Recovery}
-                  disabled={isLoading || isSyncing || !isGoogleLinked()}
-                  style={{ fontSize: '0.74rem', padding: '6px 12px', fontWeight: 700, color: 'var(--expense)', borderColor: 'rgba(255, 77, 106, 0.3)' }}
-                >
-                  📥 Open Snapshot v10 Recovery...
-                </button>
-              </div>
-            </details>
 
             {/* Client ID Configuration Toggle inside Advanced */}
             <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
@@ -1936,12 +2178,13 @@ export default function CloudSyncManager({ onBack }) {
             </div>
           </div>
         </details>
+      </div>
 
-        {/* Preview Results Display */}
-        {previewResult && (
-          <>
-            <div className="settings-group-label" style={{ padding: '8px 0 6px' }}>Sync Preview Results (Dry-Run)</div>
-            <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', border: '1px solid var(--green)' }}>
+      {/* Preview Results Display */}
+      {previewResult && (
+        <div className="cs-section cs-section-preview">
+          <div className="settings-group-label" style={{ padding: '8px 0 6px', color: 'var(--text-primary, #ffffff)', fontWeight: 700 }}>Sync Preview Results (Dry-Run)</div>
+          <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', border: '1px solid var(--green)' }}>
               {/* Safety Badge */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-primary)' }}>
@@ -2063,9 +2306,10 @@ export default function CloudSyncManager({ onBack }) {
                 </div>
               )}
             </div>
-          </>
+          </div>
         )}
-      </div>
+      </div> {/* end of cloud-sync-grid */}
+    </div> {/* end of cloud-sync-container */}
 
       {/* Confirmation Bottom-Sheet Modal */}
       {showConfirmModal && previewResult && (() => {
@@ -2208,6 +2452,73 @@ export default function CloudSyncManager({ onBack }) {
                     : (modalRes === CONFLICT_RESOLUTION.KEEP_LOCAL
                       ? 'Yes, Keep This Version'
                       : 'Yes, Accept Remote Version')}
+                </button>
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* Bulk Conflict Resolution Confirmation Bottom-Sheet Modal */}
+      {confirmResolveAllModal && (() => {
+        const { resolution, count } = confirmResolveAllModal;
+        const isKeepLocal = resolution === CONFLICT_RESOLUTION.KEEP_LOCAL;
+
+        return (
+          <>
+            <div
+              className="dash-popup-overlay"
+              onClick={() => !isResolvingAll && setConfirmResolveAllModal(null)}
+              style={{ zIndex: 10000 }}
+            />
+            <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px calc(var(--safe-bottom) + 20px)' }}>
+              <div className="dash-popup-sheet-handle" />
+              <div style={{ fontSize: '2.5rem', marginBottom: 8, textAlign: 'center' }}>
+                ⚖️
+              </div>
+              <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 4, textAlign: 'center' }}>
+                Resolve All {count} Conflicts
+              </div>
+
+              <div style={{
+                background: 'rgba(255, 179, 0, 0.08)',
+                border: '1px solid rgba(255, 179, 0, 0.25)',
+                borderRadius: 8,
+                padding: '12px 14px',
+                fontSize: '0.75rem',
+                color: 'var(--text-primary)',
+                marginBottom: 16,
+                lineHeight: 1.5,
+                textAlign: 'center'
+              }}>
+                <div style={{ fontWeight: 800, color: 'var(--warning)', marginBottom: 6, fontSize: '0.82rem' }}>
+                  {isKeepLocal ? "📱 Keep This Device's Version for All" : "☁️ Accept Other Device's Version for All"}
+                </div>
+                <div>
+                  {isKeepLocal
+                    ? `You are choosing to keep the current version on this device for all ${count} records. Synced changes will be published to your cloud vault and dependency blocks will be cleared.`
+                    : `You are choosing to accept incoming cloud versions for all ${count} records. Local records will be updated to match incoming cloud data.`}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ flex: 1 }}
+                  onClick={() => setConfirmResolveAllModal(null)}
+                  disabled={isResolvingAll}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ flex: 1.5, fontWeight: 800 }}
+                  onClick={handleExecuteResolveAll}
+                  disabled={isResolvingAll}
+                >
+                  {isResolvingAll ? 'Resolving All...' : `Confirm (${count})`}
                 </button>
               </div>
             </div>
@@ -2418,211 +2729,147 @@ export default function CloudSyncManager({ onBack }) {
         </>
       )}
 
-      {/* Controlled V10 Cloud Snapshot Recovery Modal */}
-      {v10RecoveryModal && (
+      {/* Authoritative Master Publication Modal */}
+      {showPublishMasterModal && (
         <>
           <div
             className="dash-popup-overlay"
-            onClick={() => v10RecoveryModal.step !== 'IMPORTING' && setV10RecoveryModal(null)}
-            style={{ zIndex: 10000 }}
+            onClick={() => !isPublishingMaster && setShowPublishMasterModal(false)}
+            style={{ zIndex: 10004 }}
           />
-          <div className="dash-popup-sheet" style={{ zIndex: 10001, padding: '20px 24px calc(var(--safe-bottom) + 20px)' }}>
+          <div
+            className="dash-popup-sheet"
+            style={{
+              zIndex: 10005,
+              padding: '24px 24px calc(var(--safe-bottom) + 24px)',
+              maxWidth: 480,
+              margin: '0 auto'
+            }}
+          >
             <div className="dash-popup-sheet-handle" />
+            <div style={{ textAlign: 'center', marginBottom: 14 }}>
+              <div style={{ fontSize: '2.4rem', marginBottom: 6 }}>📱</div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                Publish as Authoritative Master
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                Establish Snapshot v13 from this device's records
+              </div>
+            </div>
 
-            {v10RecoveryModal.step === 'PREFLIGHT_LOADING' && (
-              <div style={{ textAlign: 'center', padding: '20px 0' }}>
-                <div style={{ fontSize: '2.2rem', marginBottom: 8 }}>⏳</div>
-                <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 4 }}>
-                  Validating Cloud Snapshot v10
+            <div style={{
+              background: 'rgba(74, 144, 226, 0.08)',
+              border: '1px solid rgba(74, 144, 226, 0.25)',
+              borderRadius: 10,
+              padding: '14px 16px',
+              marginBottom: 16,
+              fontSize: '0.78rem',
+              color: 'var(--text-primary)',
+              lineHeight: 1.5
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Local Records:</span>
+                <span style={{ fontWeight: 800 }}>{localTransactionsCount.toLocaleString()} transactions</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Waiting Changes:</span>
+                <span style={{ fontWeight: 800 }}>{deltaMetrics.pendingCount} queued edits</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Target Baseline:</span>
+                <span style={{ fontWeight: 800, color: 'var(--accent)' }}>Snapshot v13 (Schema 13)</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-muted)' }}>Peer Coverage:</span>
+                <span style={{ fontWeight: 800 }}>Device C (#16), Device D (#10)</span>
+              </div>
+            </div>
+
+            <div style={{
+              background: 'rgba(255, 179, 0, 0.1)',
+              border: '1px solid rgba(255, 179, 0, 0.28)',
+              borderRadius: 8,
+              padding: '10px 12px',
+              marginBottom: 16,
+              fontSize: '0.73rem',
+              color: 'var(--text-primary)',
+              lineHeight: 1.45,
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8
+            }}>
+              <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>💡</span>
+              <span><strong>Keep Screen Unlocked:</strong> Uploading 29k records takes ~45–60s. FinMan keeps the screen awake automatically, but please do not lock your screen or switch apps until complete.</span>
+            </div>
+
+            {isPublishingMaster && (
+              <div style={{
+                background: 'rgba(74, 144, 226, 0.1)',
+                border: '1px solid rgba(74, 144, 226, 0.3)',
+                borderRadius: 8,
+                padding: '14px 16px',
+                marginBottom: 16,
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '1.6rem', marginBottom: 6 }}>⏳</div>
+                <div style={{ fontWeight: 800, fontSize: '0.85rem', color: 'var(--accent)', marginBottom: 4 }}>
+                  {publishMasterProgress || 'Publishing Snapshot v13…'}
                 </div>
-                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                  Downloading snapshot metadata and verifying against verified baseline...
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  Processing {localTransactionsCount.toLocaleString()} records. Please keep FinMan open.
                 </div>
               </div>
             )}
 
-            {v10RecoveryModal.step === 'PREFLIGHT_READY' && (
-              <>
-                <div style={{ textAlign: 'center', marginBottom: 12 }}>
-                  <div style={{ fontSize: '2.2rem', marginBottom: 4 }}>📥</div>
-                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                    Restore Cloud Snapshot v10
-                  </div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                    Replaces local browser dataset with verified cloud data
-                  </div>
-                </div>
-
-                <div style={{
-                  background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-light)',
-                  borderRadius: 8,
-                  padding: '12px 14px',
-                  marginBottom: 12,
-                  fontSize: '0.72rem'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Cloud Snapshot ID:</span>
-                    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {v10RecoveryModal.preflightData?.targetSnapshotId}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Incoming Transactions:</span>
-                    <span style={{ fontWeight: 700, color: 'var(--green)' }}>
-                      {v10RecoveryModal.preflightData?.incomingCounts?.totalTransactions?.toLocaleString()}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Incoming Accounts:</span>
-                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {v10RecoveryModal.preflightData?.incomingCounts?.accounts}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Incoming Inventory Items:</span>
-                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {v10RecoveryModal.preflightData?.incomingCounts?.inventory}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderTop: '1px solid var(--border-light)', marginTop: 4, paddingTop: 4 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Current Local Records:</span>
-                    <span style={{ color: 'var(--expense)', fontWeight: 600 }}>
-                      {v10RecoveryModal.preflightData?.localCounts?.totalTransactions?.toLocaleString()} (to be replaced)
-                    </span>
-                  </div>
-                </div>
-
-                {(v10RecoveryModal.preflightData?.localCounts?.totalTransactions || 0) > (v10RecoveryModal.preflightData?.incomingCounts?.totalTransactions || 0) && (
-                  <div style={{
-                    background: 'rgba(255, 77, 106, 0.1)',
-                    border: '1px solid rgba(255, 77, 106, 0.3)',
-                    borderRadius: 8,
-                    padding: '10px 12px',
-                    fontSize: '0.72rem',
-                    color: 'var(--expense)',
-                    marginBottom: 12,
-                    lineHeight: 1.45,
-                    fontWeight: 600
-                  }}>
-                    ⚠️ <strong>Warning: Record Count Discrepancy!</strong><br />
-                    Your current local database contains <strong>{v10RecoveryModal.preflightData?.localCounts?.totalTransactions?.toLocaleString()} transactions</strong>, while this cloud snapshot contains only <strong>{v10RecoveryModal.preflightData?.incomingCounts?.totalTransactions?.toLocaleString()} transactions</strong>. Restoring this snapshot will replace newer transactions on this device.
-                  </div>
-                )}
-
-                <div style={{
-                  background: 'rgba(255, 179, 0, 0.08)',
-                  border: '1px solid rgba(255, 179, 0, 0.25)',
-                  borderRadius: 8,
-                  padding: '10px 12px',
-                  fontSize: '0.7rem',
-                  color: 'var(--text-primary)',
-                  marginBottom: 14,
-                  lineHeight: 1.45
-                }}>
-                  🛡️ <strong>Safety Guarantee:</strong> An automatic recoverable backup of your current local data will be saved before replacement. If anything fails, changes will be rolled back automatically.
-                </div>
-
-                <label style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 8,
-                  fontSize: '0.74rem',
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer',
-                  marginBottom: 16
-                }}>
-                  <input
-                    type="checkbox"
-                    checked={v10RecoveryModal.confirmed || false}
-                    onChange={(e) => setV10RecoveryModal(prev => ({ ...prev, confirmed: e.target.checked }))}
-                    style={{ marginTop: 2 }}
-                  />
-                  <span>
-                    I confirm replacing this device's local database with verified Cloud Snapshot v10.
-                  </span>
-                </label>
-
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <button
-                    className="btn btn-secondary"
-                    style={{ flex: 1, padding: '10px' }}
-                    onClick={() => setV10RecoveryModal(null)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="btn btn-primary"
-                    style={{ flex: 1.6, padding: '10px', fontWeight: 800 }}
-                    onClick={handleExecuteV10Recovery}
-                    disabled={!v10RecoveryModal.confirmed}
-                  >
-                    📥 Confirm & Replace
-                  </button>
-                </div>
-              </>
-            )}
-
-            {v10RecoveryModal.step === 'IMPORTING' && (
-              <div style={{ textAlign: 'center', padding: '24px 0' }}>
-                <div style={{ fontSize: '2.4rem', marginBottom: 8 }}>🔄</div>
-                <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 4 }}>
-                  Importing Verified Snapshot v10...
-                </div>
-                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                  Populating local tables and verifying canonical integrity...
-                </div>
+            {publishMasterError && (
+              <div style={{
+                background: 'rgba(255, 77, 106, 0.1)',
+                border: '1px solid rgba(255, 77, 106, 0.3)',
+                borderRadius: 8,
+                padding: '12px 14px',
+                fontSize: '0.75rem',
+                color: 'var(--expense)',
+                marginBottom: 16,
+                textAlign: 'left',
+                lineHeight: 1.45
+              }}>
+                🛑 <strong>Publishing Error:</strong> {publishMasterError}
               </div>
             )}
 
-            {v10RecoveryModal.step === 'SUCCESS' && (
-              <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>✅</div>
-                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--green)', marginBottom: 6 }}>
-                  Import Complete!
-                </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-primary)', marginBottom: 14 }}>
-                  Successfully installed {v10RecoveryModal.result?.recordsImported?.totalTransactions?.toLocaleString()} transactions, {v10RecoveryModal.result?.recordsImported?.accounts} accounts, and {v10RecoveryModal.result?.recordsImported?.inventory} inventory items.
-                </div>
-                <button
-                  className="btn btn-primary"
-                  style={{ width: '100%', padding: '10px', fontWeight: 800 }}
-                  onClick={() => setV10RecoveryModal(null)}
-                >
-                  Done
-                </button>
-              </div>
-            )}
+            <div style={{
+              fontSize: '0.72rem',
+              color: 'var(--text-muted)',
+              lineHeight: 1.45,
+              marginBottom: 18,
+              textAlign: 'center'
+            }}>
+              Your local records will become the cloud master baseline. All queued changes will be incorporated and acknowledged. Other connected devices will safely fast-forward to this baseline.
+            </div>
 
-            {v10RecoveryModal.step === 'ERROR' && (
-              <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>❌</div>
-                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--expense)', marginBottom: 6 }}>
-                  Import Failed
-                </div>
-                <div style={{
-                  background: 'rgba(255, 77, 106, 0.08)',
-                  border: '1px solid rgba(255, 77, 106, 0.25)',
-                  borderRadius: 8,
-                  padding: '10px 12px',
-                  fontSize: '0.72rem',
-                  color: 'var(--expense)',
-                  marginBottom: 16,
-                  textAlign: 'left',
-                  wordBreak: 'break-word'
-                }}>
-                  {v10RecoveryModal.error}
-                </div>
-                <button
-                  className="btn btn-secondary"
-                  style={{ width: '100%', padding: '10px' }}
-                  onClick={() => setV10RecoveryModal(null)}
-                >
-                  Close
-                </button>
-              </div>
-            )}
-
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ flex: 1, padding: '12px 14px' }}
+                onClick={() => {
+                  setPublishMasterError('');
+                  setShowPublishMasterModal(false);
+                }}
+                disabled={isPublishingMaster}
+              >
+                {publishMasterError ? 'Close' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ flex: 1.5, padding: '12px 14px', fontWeight: 800 }}
+                onClick={handleExecutePublishMaster}
+                disabled={isPublishingMaster}
+              >
+                {isPublishingMaster ? 'Publishing Snapshot v13...' : (publishMasterError ? 'Retry Publish v13' : 'Confirm & Publish v13')}
+              </button>
+            </div>
           </div>
         </>
       )}

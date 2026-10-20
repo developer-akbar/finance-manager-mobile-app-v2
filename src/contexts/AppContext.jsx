@@ -629,7 +629,7 @@ export function AppProvider({ children }) {
     import('../services/deltaSyncCoordinator.js').then(({ initializeDeltaSyncRuntime, subscribeSyncStatus, SYNC_STATUS }) => {
       cleanupRuntime = initializeDeltaSyncRuntime();
       unsubscribeSync = subscribeSyncStatus((status, details) => {
-        if (status === SYNC_STATUS.SUCCESS || details?.bootstrapped || details?.status === 'BOOTSTRAP_SUCCESS' || details?.operation === 'BOOTSTRAP') {
+        if (status === SYNC_STATUS.SUCCESS || details?.bootstrapped || details?.status === 'BOOTSTRAP_SUCCESS' || details?.operation === 'BOOTSTRAP' || details?.reconciled || details?.stage === 'COMPLETED') {
           load();
         }
       });

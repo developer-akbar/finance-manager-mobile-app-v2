@@ -561,3 +561,106 @@ input:checked+.toggle-slider:before {
     transform: scale(1) translateY(0);
   }
 }
+
+/* ── Cloud Sync Manager 2-Column Responsive Layout ── */
+.cloud-sync-container {
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 var(--page-px, 16px);
+  box-sizing: border-box;
+  transition: max-width 0.2s ease;
+}
+
+.cloud-sync-container .settings-group-label {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 6px 2px 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cloud-sync-container .settings-group-label > span {
+  color: var(--text-primary);
+}
+
+.cloud-sync-container .settings-card {
+  margin: 0 0 14px;
+}
+
+.cloud-sync-container .cs-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Mobile & Tablet Portrait (< 1000px): Pure single-column flow */
+@media (max-width: 999px) {
+  .cloud-sync-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .cs-col {
+    display: contents;
+  }
+
+  .cs-section-security { order: 1; }
+  .cs-section-sync { order: 2; }
+  .cs-section-devices { order: 3; }
+  .cs-section-conflicts { order: 4; }
+  .cs-section-backup { order: 5; }
+  .cs-section-advanced { order: 6; }
+  .cs-section-preview { order: 7; }
+}
+
+/* Desktop (>= 1000px): Balanced 2-Column Grid */
+@media (min-width: 1000px) {
+  .cloud-sync-container {
+    max-width: 1200px;
+  }
+
+  .cloud-sync-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 20px;
+    row-gap: 16px;
+    align-items: start;
+  }
+
+  .cloud-sync-grid .settings-card {
+    margin: 0 !important;
+  }
+
+  .cs-section-security {
+    grid-column: 1 / -1;
+  }
+
+  .cs-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .cs-col-left {
+    grid-column: 1;
+  }
+
+  .cs-col-right {
+    grid-column: 2;
+  }
+
+  .cs-section-advanced {
+    grid-column: 1 / -1;
+  }
+
+  .cs-section-preview {
+    grid-column: 1 / -1;
+  }
+}

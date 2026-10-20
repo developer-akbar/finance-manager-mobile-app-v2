@@ -42,9 +42,15 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = DRIVE_REQU
     }, timeoutMs);
   });
 
+  const headers = {
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    Pragma: 'no-cache',
+    ...(options.headers || {})
+  };
+
   try {
     return await Promise.race([
-      fetch(url, { ...options, signal: controller.signal }),
+      fetch(url, { cache: 'no-store', ...options, headers, signal: controller.signal }),
       timeoutPromise
     ]);
   } catch (err) {
@@ -96,14 +102,18 @@ export async function fetchGoogleUserInfo(accessToken, options = {}) {
 
 
 /**
- * Find a file by name inside appDataFolder
+ * Find all files matching name or custom query inside appDataFolder
  */
-export async function findAppDataFile(filename, accessToken, options = {}) {
+export async function findAppDataFiles(filenameOrQuery, accessToken, options = {}) {
   if (!accessToken) throw new Error('Missing Google access token.');
   
   const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
-  const query = encodeURIComponent(`name = '${filename}' and trashed = false`);
-  const url = `${DRIVE_API_BASE}/files?spaces=appDataFolder&q=${query}&fields=files(id,name,modifiedTime,size,version)&pageSize=1`;
+  const qStr = (filenameOrQuery && (filenameOrQuery.includes('=') || filenameOrQuery.includes('contains')))
+    ? filenameOrQuery
+    : `name = '${filenameOrQuery}' and trashed = false`;
+  const query = encodeURIComponent(qStr);
+  const pageSize = options.pageSize || 50;
+  const url = `${DRIVE_API_BASE}/files?spaces=appDataFolder&q=${query}&fields=files(id,name,modifiedTime,size,version)&orderBy=modifiedTime desc&pageSize=${pageSize}&_cb=${Date.now()}`;
 
   const res = await fetchWithTimeout(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -121,7 +131,15 @@ export async function findAppDataFile(filename, accessToken, options = {}) {
   }
 
   const data = await res.json();
-  return (data.files && data.files.length > 0) ? data.files[0] : null;
+  return (data.files && Array.isArray(data.files)) ? data.files : [];
+}
+
+/**
+ * Find a file by name inside appDataFolder (returns newest match)
+ */
+export async function findAppDataFile(filename, accessToken, options = {}) {
+  const files = await findAppDataFiles(filename, accessToken, options);
+  return files.length > 0 ? files[0] : null;
 }
 
 /**
@@ -132,7 +150,7 @@ export async function readAppDataFile(fileId, accessToken, options = {}) {
   if (!fileId) throw new Error('Missing File ID.');
 
   const timeoutMs = options.timeoutMs || DRIVE_REQUEST_TIMEOUT_MS;
-  const url = `${DRIVE_API_BASE}/files/${fileId}?alt=media`;
+  const url = `${DRIVE_API_BASE}/files/${fileId}?alt=media&_cb=${Date.now()}`;
   const res = await fetchWithTimeout(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: options.signal
@@ -184,27 +202,47 @@ export async function uploadAppDataFile(filename, content, mimeType = 'applicati
 
   const method = existingFile ? 'PATCH' : 'POST';
 
-  const res = await fetchWithTimeout(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': `multipart/related; boundary=${boundary}`
-    },
-    body: multipartRequestBody,
-    signal: options.signal
-  }, timeoutMs);
+  const maxAttempts = options.maxAttempts || 3;
+  let lastErr = null;
 
-  if (!res.ok) {
-    const errText = await res.text();
-    if (res.status === 401) {
-      invalidateStoredToken();
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetchWithTimeout(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`
+        },
+        body: multipartRequestBody,
+        signal: options.signal
+      }, timeoutMs);
+
+      if (!res.ok) {
+        const errText = await res.text();
+        if (res.status === 401) {
+          invalidateStoredToken();
+        }
+        const err = new Error(`Failed to upload file to Drive (${res.status}): ${errText}`);
+        err.status = res.status;
+        throw err;
+      }
+
+      return await res.json();
+    } catch (err) {
+      lastErr = err;
+      const isTransient = String(err?.message || '').toLowerCase().includes('failed to fetch') ||
+                          String(err?.message || '').toLowerCase().includes('network') ||
+                          err?.name === 'TimeoutError';
+      if (isTransient && attempt < maxAttempts && !options.signal?.aborted) {
+        console.warn(`[googleDriveSync] Upload attempt ${attempt} failed (${err.message}). Retrying in 2s...`);
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+      throw err;
     }
-    const err = new Error(`Failed to upload file to Drive (${res.status}): ${errText}`);
-    err.status = res.status;
-    throw err;
   }
 
-  return await res.json();
+  throw lastErr;
 }
 
 /**

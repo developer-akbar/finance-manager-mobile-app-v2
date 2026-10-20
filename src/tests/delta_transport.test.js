@@ -1964,4 +1964,82 @@ test('FinMan Phase 7.3 — Delta Transport & Peer Staging Comprehensive Suite (T
     assert.equal(state.last_pushed_sequence, 3);
     assert.equal(state.last_acked_sequence, 3);
   });
+
+  await t.test('T53: Overlapping Package Staging — Safely stages deltas when package starts <= watermark and ends > watermark', async () => {
+    await initDB();
+    const rawIdb = getRawIDB();
+    const localDeviceId = 'dev_android_local';
+    const peerDeviceId = 'dev_browser_peer';
+    await initLocalSyncState(localDeviceId, BASE_SNAPSHOT_ID, BASE_CLOUD_VERSION);
+
+    // 1. Seed peer state with watermark at 10 (as established by snapshot baseline)
+    const tx = rawIdb.transaction(['sync_peer_state'], 'readwrite');
+    tx.objectStore('sync_peer_state').put({
+      peer_device_id: peerDeviceId,
+      last_staged_sequence: 10,
+      last_reconciled_sequence: 10,
+      base_snapshot_id: BASE_SNAPSHOT_ID,
+      updated_at: new Date().toISOString()
+    });
+    await new Promise(r => tx.oncomplete = r);
+
+    // 2. Peer uploaded an overlapping package covering sequences 1 to 15
+    const peerEvents = createSampleEvents(peerDeviceId, 1, 15);
+    const packagePayload = buildDeterministicPackagePayload({
+      deviceId: peerDeviceId,
+      startSequence: 1,
+      endSequence: 15,
+      baseSnapshotId: BASE_SNAPSHOT_ID,
+      baseCloudVersion: BASE_CLOUD_VERSION,
+      events: peerEvents
+    });
+
+    const encryptedContainer = await encryptDeltaPackage(packagePayload, TEST_SESSION_KEY);
+    const driveUpload = new MockGoogleDriveTransportStorage();
+    const uploadRes = await driveUpload.uploadFile({
+      name: `${packagePayload.package_id}.pkg`,
+      content: JSON.stringify(encryptedContainer)
+    });
+
+    // 3. Peer manifest contains this package
+    const peerManifest = createEmptyDeviceManifest({
+      deviceId: peerDeviceId,
+      baseSnapshotId: BASE_SNAPSHOT_ID,
+      baseCloudVersion: BASE_CLOUD_VERSION
+    });
+    peerManifest.packages.push({
+      package_id: packagePayload.package_id,
+      drive_file_id: uploadRes.id,
+      start_sequence: 1,
+      end_sequence: 15,
+      event_count: 15,
+      package_checksum: encryptedContainer.package_checksum
+    });
+    await driveUpload.uploadFile({
+      name: `manifest_dev_${peerDeviceId}.json`,
+      content: JSON.stringify(peerManifest)
+    });
+
+    // 4. Pull peer deltas on local device
+    const pullRes = await pullPeerDeltas({
+      localDeviceId,
+      accessToken: 'mock_token',
+      sessionKey: TEST_SESSION_KEY,
+      driveClient: driveUpload,
+      baseSnapshotId: BASE_SNAPSHOT_ID
+    });
+
+    assert.equal(pullRes.stagedPackagesCount, 1);
+    assert.equal(pullRes.stagedEventsCount, 5, 'Must ONLY stage the 5 post-watermark events (sequences 11..15)');
+
+    // 5. Verify sync_peer_state advanced to sequence 15
+    const db = getDB();
+    const peerRes = await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', [peerDeviceId]);
+    assert.equal(peerRes.values[0].last_staged_sequence, 15);
+
+    // 6. Verify sync_staged_events only contains sequences 11 through 15
+    const stagedEventsRes = await db.query('SELECT sequence FROM sync_staged_events WHERE device_id = ? ORDER BY sequence ASC', [peerDeviceId]);
+    assert.equal(stagedEventsRes.values.length, 5);
+    assert.deepEqual(stagedEventsRes.values.map(r => r.sequence), [11, 12, 13, 14, 15]);
+  });
 });

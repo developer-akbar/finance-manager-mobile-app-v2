@@ -21,6 +21,7 @@ import { encryptBackupData, decryptBackupData } from '../utils/cryptoBackup.js';
 import { findAppDataFile, readAppDataFile, uploadAppDataFile, listFileRevisions, readRevisionContent, listAppDataFiles } from './googleDriveSync.js';
 import { bundleRelatedTransactions, findTransactionDifferences } from '../utils/finmanPayload.js';
 import { getSyncSessionKey } from './syncSession.js';
+import { DEFAULT_ACCOUNTS } from '../database/defaults.js';
 
 export const SNAPSHOT_FILENAME = 'finman_cloud_sync_snapshot.finman';
 export const CURRENT_ENGINE_VERSION = 1;
@@ -199,6 +200,13 @@ export function canonicalizeEntity(entity, entityType = 'transaction') {
     return `${key}:${value}`;
   }
 
+  if (entityType === 'sync_tombstone' || entityType === 'sync_tombstones' || entityType === 'tombstone' || entityType === 'tombstones') {
+    const tombId = String(entity.id || entity.entity_id || id || '').trim();
+    const eType = String(entity.entity_type || 'transaction').trim();
+    const delAt = String(entity.deleted_at || '').trim();
+    return `${tombId}|${eType}|${delAt}`;
+  }
+
   // Generic fallback: sort keys
   const sortedKeys = Object.keys(entity).sort();
   return sortedKeys.map(k => `${k}:${String(entity[k] ?? '')}`).join('|');
@@ -300,7 +308,8 @@ export async function readLocalEntities(dbInstance = null) {
     accountMappingRes,
     brokeragesRes,
     tombstonesRes,
-    settingsRes
+    settingsRes,
+    queueRes
   ] = await Promise.all([
     db.query('SELECT * FROM transactions').catch(() => ({ values: [] })),
     db.query('SELECT * FROM investment_transactions').catch(() => ({ values: [] })),
@@ -2206,6 +2215,13 @@ export async function executeCloudSync({
     await setSetting('last_synced_at', new Date().toISOString());
     await setSetting('last_snapshot_id', newSnapshotId);
     await setSetting('last_parent_snapshot_id', readSnapshotId || '');
+    await setSetting('last_cloud_version', String(newCloudVersion));
+    try {
+      await db.run(
+        'UPDATE sync_local_state SET base_snapshot_id = ?, base_cloud_version = ? WHERE key = ?',
+        [newSnapshotId, newCloudVersion, 'device_state']
+      );
+    } catch {}
     tManifestSaveMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tSave0);
 
     const tTotal = (typeof performance !== 'undefined' && performance.now) ? performance.now() - tStart : Date.now() - tStart;
@@ -2245,10 +2261,11 @@ function planIsNoOp(baseManifest, localEntities) {
 }
 
 /**
- * Check if local database is genuinely empty of user financial data for clean bootstrap
+ * Check if local database is genuinely empty of user financial data for clean bootstrap.
+ * Fails closed if localEntities is missing or not an object.
  */
 export function isDatabaseBootstrapEmpty(localEntities) {
-  if (!localEntities || typeof localEntities !== 'object') return true;
+  if (!localEntities || typeof localEntities !== 'object') return false;
   const txnCount = (localEntities.transactions || []).length;
   const invTxnCount = (localEntities.investment_transactions || []).length;
   const inventoryCount = (localEntities.inventory || []).length;
@@ -2256,8 +2273,131 @@ export function isDatabaseBootstrapEmpty(localEntities) {
   const recurringCount = (localEntities.recurring_rules || []).length;
   const tombstoneCount = (localEntities.sync_tombstones || []).length;
   const planCount = (localEntities.investment_plans || []).length;
+  const queueCount = (localEntities.sync_delta_queue || []).length;
+  const brokerageCount = (localEntities.brokerages || []).length;
+  const accountsList = localEntities.accounts || [];
 
-  return (txnCount === 0 && invTxnCount === 0 && inventoryCount === 0 && budgetCount === 0 && recurringCount === 0 && tombstoneCount === 0 && planCount === 0);
+  const hasCustomAccounts = (() => {
+    if (!Array.isArray(accountsList) || accountsList.length === 0) return false;
+    const defaultNames = new Set([
+      'cash', 'bank account', 'bank accounts',
+      'hdfc savings', 'sbi savings', 'icici current', 'cash wallet',
+      'hdfc credit card', 'sbi credit card', 'share market',
+      'liquid mutual funds', 'mutual funds tax saver', 'ppf',
+      'home loan', 'car loan'
+    ]);
+    if (accountsList.length > 14) return true;
+    return accountsList.some(a => !a || !a.name || !defaultNames.has(String(a.name).trim().toLowerCase()));
+  })();
+
+  return (
+    txnCount === 0 &&
+    invTxnCount === 0 &&
+    inventoryCount === 0 &&
+    budgetCount === 0 &&
+    recurringCount === 0 &&
+    tombstoneCount === 0 &&
+    planCount === 0 &&
+    queueCount === 0 &&
+    !hasCustomAccounts
+  );
+}
+
+/**
+ * Fail-Closed Assertion: Verifies that the physical database has ZERO user financial or account data before destructive bootstrap.
+ * Queries transactions, investment_transactions, inventory, recurring_rules, budgets,
+ * investment_plans, sync_tombstones, sync_delta_queue, and user accounts.
+ * Throws BOOTSTRAP_SAFEGUARD_FAILED on query failure, and BOOTSTRAP_SAFEGUARD_REJECTED on populated data.
+ */
+export async function assertDatabaseBootstrapEmpty(dbInstance = null, options = {}) {
+  const db = dbInstance || getDB();
+  if (!db) {
+    throw new Error('BOOTSTRAP_SAFEGUARD_FAILED: Database handle is unavailable. Failing closed to protect local data.');
+  }
+
+  const checkQueue = options.checkQueue !== false;
+
+  let txnsRes, invTxnsRes, invRes, rulesRes, budgetsRes, plansRes, tombstonesRes, queueRes, acctsRes;
+  try {
+    [
+      txnsRes,
+      invTxnsRes,
+      invRes,
+      rulesRes,
+      budgetsRes,
+      plansRes,
+      tombstonesRes,
+      queueRes,
+      acctsRes
+    ] = await Promise.all([
+      db.query('SELECT count(*) as count FROM transactions'),
+      db.query('SELECT count(*) as count FROM investment_transactions'),
+      db.query('SELECT count(*) as count FROM inventory'),
+      db.query('SELECT count(*) as count FROM recurring_rules'),
+      db.query('SELECT count(*) as count FROM budgets'),
+      db.query('SELECT count(*) as count FROM investment_plans'),
+      db.query('SELECT count(*) as count FROM sync_tombstones'),
+      checkQueue ? db.query('SELECT count(*) as count FROM sync_delta_queue') : Promise.resolve({ values: [{ count: 0 }] }),
+      db.query('SELECT * FROM accounts')
+    ]);
+  } catch (err) {
+    // FAIL CLOSED: If any database query fails or table state cannot be proven empty, strictly reject bootstrap
+    throw new Error(`BOOTSTRAP_SAFEGUARD_FAILED: Database emptiness query failed (${err.message}). Failing closed to protect local data.`);
+  }
+
+  const txnCount = Number(txnsRes?.values?.[0]?.count ?? txnsRes?.values?.length ?? 0);
+  const invTxnCount = Number(invTxnsRes?.values?.[0]?.count ?? invTxnsRes?.values?.length ?? 0);
+  const inventoryCount = Number(invRes?.values?.[0]?.count ?? invRes?.values?.length ?? 0);
+  const recurringCount = Number(rulesRes?.values?.[0]?.count ?? rulesRes?.values?.length ?? 0);
+  const budgetCount = Number(budgetsRes?.values?.[0]?.count ?? budgetsRes?.values?.length ?? 0);
+  const planCount = Number(plansRes?.values?.[0]?.count ?? plansRes?.values?.length ?? 0);
+  const tombstoneCount = Number(tombstonesRes?.values?.[0]?.count ?? tombstonesRes?.values?.length ?? 0);
+  const queueCount = Number(queueRes?.values?.[0]?.count ?? queueRes?.values?.length ?? 0);
+  const accountsList = acctsRes?.values || [];
+
+  const hasCustomAccounts = (() => {
+    if (!Array.isArray(accountsList) || accountsList.length === 0) return false;
+    const defaultNames = new Set([
+      'cash', 'bank account', 'bank accounts',
+      'hdfc savings', 'sbi savings', 'icici current', 'cash wallet',
+      'hdfc credit card', 'sbi credit card', 'share market',
+      'liquid mutual funds', 'mutual funds tax saver', 'ppf',
+      'home loan', 'car loan'
+    ]);
+    if (accountsList.length > 14) return true;
+    return accountsList.some(a => !a || !a.name || !defaultNames.has(String(a.name).trim().toLowerCase()));
+  })();
+
+  const reasons = [];
+  if (txnCount > 0) reasons.push(`${txnCount} transactions`);
+  if (invTxnCount > 0) reasons.push(`${invTxnCount} investment transactions`);
+  if (inventoryCount > 0) reasons.push(`${inventoryCount} inventory items`);
+  if (recurringCount > 0) reasons.push(`${recurringCount} recurring rules`);
+  if (budgetCount > 0) reasons.push(`${budgetCount} budgets`);
+  if (planCount > 0) reasons.push(`${planCount} investment plans`);
+  if (tombstoneCount > 0) reasons.push(`${tombstoneCount} sync tombstones`);
+  if (checkQueue && queueCount > 0) reasons.push(`${queueCount} pending sync queue entries`);
+  if (hasCustomAccounts) reasons.push(`${accountsList.length} user accounts`);
+
+  if (reasons.length > 0) {
+    throw new Error(`BOOTSTRAP_SAFEGUARD_REJECTED: BOOTSTRAP_VERIFICATION_FAILED: Local database is populated with ${reasons.join(', ')}. Destructive bootstrap rejected to prevent data loss.`);
+  }
+
+  return true;
+}
+
+/**
+ * Fail-Closed Boolean Helper: Returns true if database is populated with any user data OR if query fails.
+ * Returns false ONLY when database is verified genuinely empty.
+ */
+export async function isDatabasePopulatedWithUserData(dbInstance = null) {
+  try {
+    await assertDatabaseBootstrapEmpty(dbInstance);
+    return false; // Verified genuinely empty
+  } catch {
+    // Fail Closed: Treat populated or unverified state as populated (do not offer restore)
+    return true;
+  }
 }
 
 /**
@@ -2583,7 +2723,12 @@ export async function applyLocalEntityDelete(db, del) {
 /**
  * Populate local database with cloud entities during bootstrap
  */
-export async function populateLocalEntitiesBootstrap(db, entities) {
+export async function populateLocalEntitiesBootstrap(db, entities, options = {}) {
+  // Defensive Guard: Reject populated databases immediately before any DELETE or replacement operation
+  if (!options?.allowRecoveryReplacement) {
+    await assertDatabaseBootstrapEmpty(db, options);
+  }
+
   // 1. Clear default seed tables if present
   await db.run('DELETE FROM accounts').catch(() => {});
   await db.run('DELETE FROM account_groups').catch(() => {});
@@ -2770,9 +2915,25 @@ export async function populateLocalEntitiesBootstrap(db, entities) {
   }
 
   // 15. Tombstones
-  if (Array.isArray(entities.sync_tombstones)) {
+  if (typeof db.batchReplace === 'function' && Array.isArray(entities.sync_tombstones)) {
+    const tombRows = entities.sync_tombstones.map(tomb => ({
+      id: String(tomb.id || tomb.entity_id || ''),
+      entity_type: String(tomb.entity_type || 'transaction'),
+      entity_id: String(tomb.entity_id || tomb.id || ''),
+      deleted_at: String(tomb.deleted_at || new Date().toISOString())
+    }));
+    await db.batchReplace('sync_tombstones', tombRows);
+  } else if (Array.isArray(entities.sync_tombstones)) {
     for (const tomb of entities.sync_tombstones) {
-      await db.run(`INSERT INTO sync_tombstones (id,entity_type,deleted_at) VALUES (?,?,?)`, [tomb.id, tomb.entity_type || 'transaction', tomb.deleted_at || new Date().toISOString()]);
+      await db.run(
+        `INSERT OR REPLACE INTO sync_tombstones (id,entity_type,entity_id,deleted_at) VALUES (?,?,?,?)`,
+        [
+          String(tomb.id || tomb.entity_id || ''),
+          String(tomb.entity_type || 'transaction'),
+          String(tomb.entity_id || tomb.id || ''),
+          String(tomb.deleted_at || new Date().toISOString())
+        ]
+      );
     }
   }
 

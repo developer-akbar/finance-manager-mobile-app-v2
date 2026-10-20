@@ -383,3 +383,35 @@
     padding: 0;
   }
 }
+
+/* ── GlobalSyncBadge Aesthetics ── */
+.global-sync-badge-expanded:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.global-sync-badge-expanded:active {
+  transform: translateY(0);
+}
+
+.global-sync-badge-collapsed:hover {
+  filter: brightness(1.15);
+  transform: scale(1.05);
+}
+
+.global-sync-badge-collapsed:active {
+  transform: scale(0.95);
+}
+
+.global-sync-badge-mobile:hover {
+  filter: brightness(1.12);
+}
+
+.global-sync-badge-mobile:active {
+  transform: scale(0.96);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

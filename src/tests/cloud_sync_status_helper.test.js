@@ -215,6 +215,12 @@ test('Cloud Sync Status & Error Translation Helper Test Suite (Stage B1)', async
       'Unable to reach Google Drive. Please check your internet connection.'
     );
 
+    // Developer / SHA-1 Configuration Error
+    assert.equal(
+      translateSyncError('Developer configuration error (verify SHA-1 fingerprint and package name in Google Cloud Console)'),
+      'Google Sign-In configuration error: Verify that package com.akbar.finman and your debug SHA-1 fingerprint are registered in Google Cloud Console.'
+    );
+
     // Auth 401
     assert.equal(
       translateSyncError('HTTP 401 Unauthorized: Invalid Credentials'),

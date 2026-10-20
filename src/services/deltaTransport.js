@@ -199,7 +199,28 @@ export async function decryptDeltaPackage(container, keyMaterialOrPassword) {
       combined
     );
   } catch (err) {
-    throw new Error(`Failed to decrypt transport package: Authentication tag mismatch or invalid key (${err.message})`);
+    let altDecrypted = null;
+    try {
+      const { getPersistedPin, getLegacyCorruptedPin } = await import('./syncSession.js');
+      const rawPin = getPersistedPin() || (typeof keyMaterialOrPassword === 'string' ? keyMaterialOrPassword : null);
+      if (rawPin) {
+        const altPin = getLegacyCorruptedPin(rawPin);
+        if (altPin && altPin !== rawPin) {
+          const altKey = await deriveKey(altPin, salt);
+          altDecrypted = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv },
+            altKey,
+            combined
+          );
+        }
+      }
+    } catch {}
+
+    if (altDecrypted) {
+      decryptedBuf = altDecrypted;
+    } else {
+      throw new Error(`Failed to decrypt transport package: Authentication tag mismatch or invalid key (${err.message})`);
+    }
   }
 
   const dec = new TextDecoder();
@@ -360,6 +381,12 @@ export async function uploadPendingDeltas(opts) {
       }));
 
     if (pendingEvents.length === 0) {
+      // Even if there are no pending events to push, ensure our device manifest on Google Drive
+      // is fully aligned with our active local baseline snapshot and version
+      try {
+        const { ensureOwnDeviceManifestSynced } = await import('./deviceManifest.js');
+        await ensureOwnDeviceManifestSynced({ deviceId, accessToken, driveClient });
+      } catch {}
       return { packagesUploaded: 0, eventsUploaded: 0, lastUploadedSequence: lastUploadedSeq };
     }
 
@@ -449,6 +476,8 @@ export async function uploadPendingDeltas(opts) {
         });
       }
 
+      manifest.base_snapshot_id = baseSnapshotId;
+      manifest.base_cloud_version = baseCloudVersion;
       manifest.watermarks = manifest.watermarks || {};
       manifest.watermarks.last_uploaded_sequence = payload.end_sequence;
       manifest.last_sequence = payload.end_sequence;
@@ -515,7 +544,7 @@ export async function uploadPendingDeltas(opts) {
       eventsUploaded: totalEventsUploaded,
       lastUploadedSequence: finalLastUploadedSequence
     };
-  });
+  }, { signal: opts.signal, timeoutMs: opts.timeoutMs });
 }
 
 /**
@@ -529,17 +558,35 @@ export async function pullPeerDeltas(opts) {
 
   let dynamicBaseSnapshotId = opts.baseSnapshotId;
   let dynamicParentSnapshotId = opts.parentSnapshotId || opts.immediateParentSnapshotId;
-  if (!dynamicBaseSnapshotId || dynamicParentSnapshotId === undefined || dynamicParentSnapshotId === null) {
+  let dynamicBaseCloudVersion = Number(opts.baseCloudVersion || opts.currentBaseCloudVersion || 0);
+
+  if (!dynamicBaseSnapshotId || dynamicParentSnapshotId === undefined || dynamicParentSnapshotId === null || !dynamicBaseCloudVersion) {
     try {
       const db = getDB();
       if (!dynamicBaseSnapshotId) {
         const snapRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_id']);
         dynamicBaseSnapshotId = snapRes.values?.[0]?.value || null;
+        if (!dynamicBaseSnapshotId) {
+          const stateRes = await db.query('SELECT base_snapshot_id FROM sync_local_state WHERE key = ?', ['device_state']);
+          dynamicBaseSnapshotId = stateRes.values?.[0]?.base_snapshot_id || null;
+        }
       }
       if (dynamicParentSnapshotId === undefined || dynamicParentSnapshotId === null) {
         const parentRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_parent_snapshot_id']);
         if (parentRes.values?.[0]?.value !== undefined && parentRes.values?.[0]?.value !== null) {
           dynamicParentSnapshotId = parentRes.values[0].value;
+        }
+      }
+      if (!dynamicBaseCloudVersion) {
+        const verRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_cloud_version']);
+        if (verRes.values?.[0]?.value) {
+          dynamicBaseCloudVersion = Number(verRes.values[0].value) || 0;
+        }
+        if (!dynamicBaseCloudVersion) {
+          const stateRes = await db.query('SELECT base_cloud_version FROM sync_local_state WHERE key = ?', ['device_state']);
+          if (stateRes.values?.[0]?.base_cloud_version) {
+            dynamicBaseCloudVersion = Number(stateRes.values[0].base_cloud_version) || 0;
+          }
         }
       }
     } catch {}
@@ -554,9 +601,10 @@ export async function pullPeerDeltas(opts) {
     accessToken,
     baseSnapshotId,
     immediateParentSnapshotId,
+    currentBaseCloudVersion: dynamicBaseCloudVersion,
     driveClient,
     onIncompatibleBaseline: ({ peerBaseSnapshotId, peerManifest, lineage_status, lineage_reason }) => {
-      if (lineage_status === 'RECOVERABLE_NEWER' || !lineage_status) {
+      if (lineage_status === 'RECOVERABLE_NEWER') {
         detectedNewerBaseline = peerBaseSnapshotId;
       }
       if (lineage_status === 'INCOMPATIBLE_BLOCKED') {
@@ -647,8 +695,8 @@ export async function pullPeerDeltas(opts) {
       const endSeq = pkg.end_sequence || pkg.endSequence;
       const pkgChecksum = pkg.package_checksum || pkg.checksum;
 
-      // 3. Verify sequence continuity
-      if (startSeq !== lastStagedSeq + 1) {
+      // 3. Verify sequence continuity (fail closed ONLY on true sequence gap)
+      if (startSeq > lastStagedSeq + 1) {
         throw new Error(`SEQUENCE_GAP_DETECTED: Peer ${peerDeviceId} package starts at ${startSeq}, but expected ${lastStagedSeq + 1}. Halting staging.`);
       }
 
@@ -683,7 +731,7 @@ export async function pullPeerDeltas(opts) {
 
       if (stageRes.staged) {
         stagedPackagesCount++;
-        stagedEventsCount += payload.events.length;
+        stagedEventsCount += (stageRes.eventCount ?? payload.events.length);
         stagedPackageIds.add(payload.package_id);
         if (typeof opts.onPackageStaged === 'function') {
           try {
@@ -704,13 +752,23 @@ export async function pullPeerDeltas(opts) {
     }))
   ];
   const uniqueBlockedPeers = Array.from(new Map(allBlocked.map(b => [b.deviceId, b])).values());
+  const recoverableIds = new Set((peerManifests.recoverablePeers || []).map(p => p.device_id));
+  const trulyBlocked = uniqueBlockedPeers.filter(b => {
+    if (recoverableIds.has(b.deviceId)) return false;
+    const reasonStr = String(b.reason || '').toUpperCase();
+    if (reasonStr.includes('NEWER')) return false;
+    return true;
+  });
+
+  const effectiveNewerBaseline = detectedNewerBaseline ||
+    (peerManifests.recoverablePeers && peerManifests.recoverablePeers.length > 0 ? peerManifests.recoverablePeers[0]?.base_snapshot_id : null);
 
   return {
     stagedPackagesCount,
     stagedEventsCount,
     stagedPackageIds: Array.from(stagedPackageIds),
-    newerBaselineDetected: detectedNewerBaseline,
-    blockedPeers: uniqueBlockedPeers
+    newerBaselineDetected: effectiveNewerBaseline,
+    blockedPeers: trulyBlocked
   };
 }
 
@@ -757,9 +815,13 @@ export async function stagePeerPackageAtomically(arg1, arg2) {
   const peerStateRes = await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', [packagePayload.device_id]);
   const currentWatermark = Number(peerStateRes.values?.[0]?.last_staged_sequence) || 0;
 
-  if (packagePayload.start_sequence !== currentWatermark + 1) {
+  if (packagePayload.start_sequence > currentWatermark + 1) {
     throw new Error(`Sequence gap detected: expected start_sequence ${currentWatermark + 1}, received ${packagePayload.start_sequence}`);
   }
+
+  // Filter events to only stage new events that exceed the current watermark
+  // (Prevents duplicate staging of events already covered by the snapshot baseline or prior packages)
+  const eventsToStage = (packagePayload.events || []).filter(e => Number(e.sequence) > currentWatermark);
 
   // Atomic single-transaction staging across all 3 stores
   if (rawIdb) {
@@ -788,8 +850,8 @@ export async function stagePeerPackageAtomically(arg1, arg2) {
         status: 'STAGED'
       });
 
-      // 2. Insert all events
-      for (const e of packagePayload.events) {
+      // 2. Insert all events that exceed currentWatermark
+      for (const e of eventsToStage) {
         const stagedEvt = {
           event_id: e.event_id,
           package_id: packagePayload.package_id,
@@ -821,43 +883,46 @@ export async function stagePeerPackageAtomically(arg1, arg2) {
       // 3. Update peer watermark
       peerStore.put({
         peer_device_id: packagePayload.device_id,
-        last_staged_sequence: packagePayload.end_sequence,
+        last_staged_sequence: Math.max(currentWatermark, packagePayload.end_sequence),
         last_reconciled_sequence: peerStateRes.values?.[0]?.last_reconciled_sequence || 0,
         base_snapshot_id: packagePayload.base_snapshot_id,
         updated_at: now
       });
 
       tx.oncomplete = () => {
-        resolve({ staged: true, package_id: packagePayload.package_id, eventCount: packagePayload.events.length });
+        resolve({ staged: true, package_id: packagePayload.package_id, eventCount: eventsToStage.length });
       };
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(new Error('Transaction aborted during atomic peer staging'));
     });
   } else {
-    try {
-      await db.execute?.('BEGIN TRANSACTION').catch(() => {});
-      await db.run(
-        'INSERT OR REPLACE INTO sync_staged_packages (package_id, device_id, start_sequence, end_sequence, event_count, package_checksum, drive_file_id, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [packagePayload.package_id, packagePayload.device_id, packagePayload.start_sequence, packagePayload.end_sequence, packagePayload.event_count, packageChecksum, driveFileId, now, 'STAGED']
-      );
-
-      for (const e of packagePayload.events) {
-        await db.run(
-          'INSERT OR REPLACE INTO sync_staged_events (event_id, package_id, device_id, sequence, timestamp, collection, entity_id, operation, base_checksum, new_checksum, tombstone_generation, payload, bundle_id, bundle_index, bundle_total, bundle_checksum, parent_event_id, resolution_type, resolved_event_id, resolved_conflict_id, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [e.event_id, packagePayload.package_id, packagePayload.device_id, e.sequence, e.timestamp, e.collection, e.entity_id, e.operation, e.base_checksum, e.new_checksum, e.tombstone_generation || 0, typeof e.payload === 'object' ? JSON.stringify(e.payload) : e.payload, e.bundle_id, e.bundle_index, e.bundle_total, e.bundle_checksum, e.parent_event_id, e.resolution_type || null, e.resolved_event_id || null, e.resolved_conflict_id || null, now, 'STAGED']
-        );
+    const statements = [
+      {
+        statement: 'INSERT OR REPLACE INTO sync_staged_packages (package_id, device_id, start_sequence, end_sequence, event_count, package_checksum, drive_file_id, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        values: [packagePayload.package_id, packagePayload.device_id, packagePayload.start_sequence, packagePayload.end_sequence, packagePayload.event_count, packageChecksum, driveFileId, now, 'STAGED']
       }
+    ];
 
-      await db.run(
-        'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
-        [packagePayload.device_id, packagePayload.end_sequence, peerStateRes.values?.[0]?.last_reconciled_sequence || 0, packagePayload.base_snapshot_id, now]
-      );
-      await db.execute?.('COMMIT').catch(() => {});
-    } catch (err) {
-      await db.execute?.('ROLLBACK').catch(() => {});
-      throw err;
+    for (const e of eventsToStage) {
+      statements.push({
+        statement: 'INSERT OR REPLACE INTO sync_staged_events (event_id, package_id, device_id, sequence, timestamp, collection, entity_id, operation, base_checksum, new_checksum, tombstone_generation, payload, bundle_id, bundle_index, bundle_total, bundle_checksum, parent_event_id, resolution_type, resolved_event_id, resolved_conflict_id, staged_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        values: [e.event_id, packagePayload.package_id, packagePayload.device_id, e.sequence, e.timestamp, e.collection, e.entity_id, e.operation, e.base_checksum, e.new_checksum, e.tombstone_generation || 0, typeof e.payload === 'object' ? JSON.stringify(e.payload) : e.payload, e.bundle_id, e.bundle_index, e.bundle_total, e.bundle_checksum, e.parent_event_id, e.resolution_type || null, e.resolved_event_id || null, e.resolved_conflict_id || null, now, 'STAGED']
+      });
     }
 
-    return { staged: true, package_id: packagePayload.package_id, eventCount: packagePayload.events.length };
+    statements.push({
+      statement: 'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+      values: [packagePayload.device_id, Math.max(currentWatermark, packagePayload.end_sequence), peerStateRes.values?.[0]?.last_reconciled_sequence || 0, packagePayload.base_snapshot_id, now]
+    });
+
+    if (typeof db.executeSet === 'function') {
+      await db.executeSet(statements);
+    } else {
+      for (const s of statements) {
+        await db.run(s.statement, s.values);
+      }
+    }
+
+    return { staged: true, package_id: packagePayload.package_id, eventCount: eventsToStage.length };
   }
 }

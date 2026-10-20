@@ -12,6 +12,23 @@
  */
 
 import { getSetting, setSetting } from '../database/settings.js';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+
+export const GoogleAuthBridge = registerPlugin('GoogleAuthBridge');
+let _authBridge = GoogleAuthBridge;
+
+/**
+ * Configure or override the native auth bridge instance (useful for test isolation)
+ */
+export function setNativeAuthBridge(bridge) {
+  _authBridge = bridge || GoogleAuthBridge;
+}
+
+export function getNativeAuthBridge() {
+  return _authBridge;
+}
+
+export const AUTH_WATCHDOG_TIMEOUT_MS = 60000; // 60 seconds
 
 export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 export const STORAGE_KEY_TOKEN = 'finman_gdrive_token';
@@ -25,6 +42,17 @@ export const SILENT_REFRESH_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
 let _tokenClient = null;
 let _gisLoadedPromise = null;
 let _lastSilentRefreshFailureTime = 0;
+
+/**
+ * Check if the active runtime platform supports native Google Play Services Auth
+ */
+export function isNativeAuthSupported() {
+  try {
+    return typeof Capacitor !== 'undefined' && typeof Capacitor.isNativePlatform === 'function' && Capacitor.isNativePlatform();
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Reset the silent refresh failure cooldown timer (useful for testing and user-initiated auth resets)
@@ -110,7 +138,7 @@ export async function getGoogleClientId() {
     const saved = await getSetting('google_client_id');
     if (saved && saved.trim()) return saved.trim();
   } catch { }
-  return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID) || '';
+  return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID) || (typeof process !== 'undefined' && process.env?.VITE_GOOGLE_CLIENT_ID) || '';
 }
 
 /**
@@ -127,7 +155,7 @@ export async function getGoogleClientIdSource() {
       };
     }
   } catch { }
-  const envId = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID) || '';
+  const envId = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID) || (typeof process !== 'undefined' && process.env?.VITE_GOOGLE_CLIENT_ID) || '';
   return {
     isCustom: false,
     source: envId ? 'ENV_DEFAULT' : 'NONE'
@@ -254,6 +282,9 @@ export async function syncGoogleUserInfo(accessToken) {
  * Store access token, expiry timestamp, and mark account as linked
  */
 export function saveTokenData(accessToken, expiresInSeconds) {
+  if (!accessToken || typeof accessToken !== 'string' || !accessToken.trim()) {
+    throw new Error('Refusing to save invalid or empty access token.');
+  }
   try {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem(STORAGE_KEY_TOKEN, accessToken);
@@ -299,7 +330,12 @@ export function clearGoogleAuth() {
     _lastSilentRefreshFailureTime = 0;
     setGoogleLinked(false);
     notifyAuthListeners(false, null);
-    if (typeof window !== 'undefined' && window.google?.accounts?.oauth2?.revoke && token) {
+
+    if (isNativeAuthSupported()) {
+      getGoogleClientId().then(cid => {
+        _authBridge.signOut({ clientId: cid }).catch(() => {});
+      }).catch(() => {});
+    } else if (typeof window !== 'undefined' && window.google?.accounts?.oauth2?.revoke && token) {
       window.google.accounts.oauth2.revoke(token, () => { });
     }
   } catch (err) {
@@ -307,57 +343,132 @@ export function clearGoogleAuth() {
   }
 }
 
+/**
+ * Native Android Google Sign-In via Google Play Services
+ */
+export async function signInWithGoogleNative(clientId, prompt = 'consent') {
+  const res = await _authBridge.signIn({ clientId });
+  const token = res?.accessToken;
+  if (!token || typeof token !== 'string' || !token.trim()) {
+    throw new Error('Native Google Sign-In returned invalid access token.');
+  }
+  saveTokenData(token, res.expiresIn || 3500);
+  if (res.email) {
+    saveGoogleUserData(res.email, res.displayName || '');
+  }
+  return {
+    accessToken: token
+  };
+}
+
+/**
+ * Native Android silent token refresh via Google Play Services
+ */
+export async function refreshNativeToken() {
+  const oldToken = (typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY_TOKEN)) || '';
+  const clientId = await getGoogleClientId();
+  const res = await _authBridge.refresh({ clientId, oldToken });
+  const token = res?.accessToken;
+  if (!token || typeof token !== 'string' || !token.trim()) {
+    throw new Error('Native silent refresh returned invalid access token.');
+  }
+  saveTokenData(token, res.expiresIn || 3500);
+  if (res.email) {
+    saveGoogleUserData(res.email, res.displayName || '');
+  }
+  return token;
+}
 
 /**
  * Trigger Google Sign-In & Authorization
  * Requests strictly drive.appdata scope.
+ * Automatically delegates to native Google Play Services on Android or GIS on Web.
  */
-export async function signInWithGoogle({ prompt = 'consent' } = {}) {
+export async function signInWithGoogle({ prompt = 'consent', signal } = {}) {
+  if (signal?.aborted) {
+    throw new Error('Authentication was cancelled.');
+  }
+
   const clientId = await getGoogleClientId();
   if (!clientId) {
     throw new Error('Google OAuth Client ID is not configured. Please enter your Client ID in Cloud Sync settings.');
   }
 
-  // Web / GIS flow
-  await loadGisScript();
-
-  return new Promise((resolve, reject) => {
-    try {
-      _tokenClient = window.google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: GOOGLE_DRIVE_APPDATA_SCOPE,
-        prompt: prompt,
-        callback: async (response) => {
-          if (response.error) {
-            reject(new Error(response.error_description || response.error));
-            return;
-          }
-          if (response.access_token) {
-            saveTokenData(response.access_token, response.expires_in);
-            resolve({
-              accessToken: response.access_token
-            });
-          } else {
-            reject(new Error('No access token received from Google.'));
-          }
-        },
-        error_callback: (err) => {
-          reject(new Error(err.message || 'Google Sign-In failed or popup was closed.'));
-        }
-      });
-
-      _tokenClient.requestAccessToken({ prompt: prompt });
-    } catch (err) {
-      reject(err);
-    }
+  let timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error('Authentication timed out. Please try again.'));
+    }, AUTH_WATCHDOG_TIMEOUT_MS);
   });
+
+  const abortPromise = signal ? new Promise((_, reject) => {
+    if (signal.aborted) {
+      reject(new Error('Authentication was cancelled.'));
+      return;
+    }
+    signal.addEventListener('abort', () => {
+      reject(new Error('Authentication was cancelled.'));
+    }, { once: true });
+  }) : null;
+
+  const authPromise = (async () => {
+    if (isNativeAuthSupported()) {
+      return signInWithGoogleNative(clientId, prompt);
+    }
+
+    // Web / GIS flow
+    await loadGisScript();
+
+    return new Promise((resolve, reject) => {
+      try {
+        _tokenClient = window.google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: GOOGLE_DRIVE_APPDATA_SCOPE,
+          prompt: prompt,
+          callback: async (response) => {
+            if (response.error) {
+              reject(new Error(response.error_description || response.error));
+              return;
+            }
+            if (response.access_token && typeof response.access_token === 'string' && response.access_token.trim().length >= 20) {
+              saveTokenData(response.access_token, response.expires_in);
+              resolve({
+                accessToken: response.access_token
+              });
+            } else {
+              reject(new Error('No valid access token received from Google.'));
+            }
+          },
+          error_callback: (err) => {
+            reject(new Error(err.message || 'Google Sign-In failed or popup was closed.'));
+          }
+        });
+
+        _tokenClient.requestAccessToken({ prompt: prompt });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  })();
+
+  const raceTargets = [authPromise, timeoutPromise];
+  if (abortPromise) raceTargets.push(abortPromise);
+
+  try {
+    const result = await Promise.race(raceTargets);
+    return result;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 /**
  * Get a valid access token.
  * 1. Checks unexpired cached token.
- * 2. If expired/missing but account is linked, attempts GIS silent refresh (prompt: '') if not in cooldown.
- * 3. If interactive is true and silent refresh fails (or was in cooldown), prompts user with interactive popup.
+ * 2. If expired/missing but account is linked:
+ *    - On Android: Attempts Google Play Services silent refresh via GoogleAuthBridge.refresh()
+ *    - On Web: Attempts GIS silent refresh (prompt: '') if not in cooldown
+ * 3. If interactive is true and silent refresh fails (or was in cooldown), prompts user with interactive dialog.
  */
 export async function getValidAccessToken(interactive = false) {
   const stored = getStoredToken();
@@ -373,11 +484,20 @@ export async function getValidAccessToken(interactive = false) {
   const isCooldownActive = (Date.now() - _lastSilentRefreshFailureTime) < SILENT_REFRESH_COOLDOWN_MS;
   if (isGoogleLinked() && !isCooldownActive) {
     try {
-      const result = await signInWithGoogle({ prompt: '' });
-      if (result && result.accessToken) {
-        _lastSilentRefreshFailureTime = 0;
-        syncGoogleUserInfo(result.accessToken).catch(() => { });
-        return result.accessToken;
+      if (isNativeAuthSupported()) {
+        const freshToken = await refreshNativeToken();
+        if (freshToken) {
+          _lastSilentRefreshFailureTime = 0;
+          syncGoogleUserInfo(freshToken).catch(() => { });
+          return freshToken;
+        }
+      } else {
+        const result = await signInWithGoogle({ prompt: '' });
+        if (result && result.accessToken) {
+          _lastSilentRefreshFailureTime = 0;
+          syncGoogleUserInfo(result.accessToken).catch(() => { });
+          return result.accessToken;
+        }
       }
     } catch (silentErr) {
       _lastSilentRefreshFailureTime = Date.now();

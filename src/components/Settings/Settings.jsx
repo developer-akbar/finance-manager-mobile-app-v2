@@ -11,6 +11,7 @@ import { parseTradebook, parseLedger, parseHoldings, parseDividends } from '../.
 import { parseCASText } from '../../utils/casParser.js';
 import { generateCASTransactions } from '../../utils/casAdapter.js';
 import CloudSyncManager from './CloudSyncManager.jsx';
+import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -3192,9 +3193,16 @@ function RecurringManager({ onBack }) {
 // Main Settings screen
 // ─────────────────────────────────────────────
 export default function Settings({ backInterceptRef } = {}) {
-  const { state } = useApp();
-  // Check if we navigated here from AddTransaction to reorder accounts/categories
-  const [screen, setScreen] = useState(null);
+  const { state, clearNavParams } = useApp();
+  // Check if we navigated here from AddTransaction or GlobalSyncBadge
+  const [screen, setScreen] = useState(() => state.navParams?.screen || state.navParams?.subView || null);
+
+  useEffect(() => {
+    if (state.navParams?.screen) {
+      setScreen(state.navParams.screen);
+      clearNavParams?.();
+    }
+  }, [state.navParams, clearNavParams]);
 
   // Register Android back intercept for sub-screens
   React.useEffect(() => {
@@ -3235,8 +3243,9 @@ export default function Settings({ backInterceptRef } = {}) {
 
   return (
     <div className="settings-root">
-      <div className="page-hdr settings-main-hdr">
+      <div className="page-hdr settings-main-hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="page-hdr-title">Settings</div>
+        <GlobalSyncBadge mobile />
       </div>
 
       {/* Profile card — top of settings */}
@@ -3245,7 +3254,7 @@ export default function Settings({ backInterceptRef } = {}) {
           {(state.settings?.profileName || state.settings?.name || 'A').trim().charAt(0).toUpperCase()}
         </div>
         <div className="settings-profile-info">
-          <div className="settings-profile-name">{state.settings?.profileName || state.settings?.name || 'Your Name'}</div>
+          <div className="settings-profile-name">{(state.settings?.profileName || state.settings?.name || 'Your Name').replace(/\b\w/g, c => c.toUpperCase())}</div>
           <div className="settings-profile-sub">{state.settings?.pin ? '🔒 App PIN enabled' : 'Finance Manager v2'}</div>
         </div>
         <div className="settings-profile-stats-desktop">

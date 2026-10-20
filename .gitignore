@@ -1,6 +1,7 @@
 node_modules/
 dist/
 android/
+!android/app/src/main/java/com/akbar/finman/GoogleAuthBridgePlugin.java
 .env
 *.local
 .DS_Store

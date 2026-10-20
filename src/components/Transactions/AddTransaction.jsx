@@ -77,7 +77,7 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
   return (
     <>
       <div className="fullscreen-overlay" onClick={onClose} style={{ zIndex: 210 }} />
-      <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)', zIndex: 211 }}>
+      <div className="bottom-sheet" style={{ paddingBottom: 'calc(var(--safe-bottom) + 16px)', zIndex: 9999 }}>
         <div className="sheet-handle" />
 
         {step === 1 && (

@@ -152,6 +152,25 @@ export async function decryptBackupData(backupJsonString, keyMaterialOrPassword)
     const result = JSON.parse(decryptedStr);
     return result.payload || result;
   } catch (err) {
+    try {
+      const { getPersistedPin, getLegacyCorruptedPin } = await import('../services/syncSession.js');
+      const rawPin = getPersistedPin() || (typeof keyMaterialOrPassword === 'string' ? keyMaterialOrPassword : null);
+      if (rawPin) {
+        const altPin = getLegacyCorruptedPin(rawPin);
+        if (altPin && altPin !== rawPin) {
+          const altKey = await deriveKey(altPin, salt);
+          const altBuf = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv },
+            altKey,
+            ciphertext
+          );
+          const altStr = ab2str(altBuf);
+          const altResult = JSON.parse(altStr);
+          return altResult.payload || altResult;
+        }
+      }
+    } catch {}
+
     throw new Error('Incorrect password/PIN or corrupted backup data');
   }
 }

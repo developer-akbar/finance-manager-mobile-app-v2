@@ -9,6 +9,7 @@
 
 export const UNIFIED_SYNC_STATUS_KEYS = Object.freeze({
   UNINITIALIZED: 'UNINITIALIZED',
+  POPULATED_LOCAL_REQUIRES_CHOICE: 'POPULATED_LOCAL_REQUIRES_CHOICE',
   AUTH_REQUIRED: 'AUTH_REQUIRED',
   SESSION_LOCKED: 'SESSION_LOCKED',
   BOOTSTRAP_JOINING: 'BOOTSTRAP_JOINING',
@@ -34,6 +35,14 @@ export function translateSyncError(rawError) {
   }
 
   // 1. Missing OAuth Deployment Configuration
+  if (
+    lower.includes('developer configuration error') ||
+    lower.includes('developer_error') ||
+    lower.includes('sha-1') ||
+    lower.includes('status code 10')
+  ) {
+    return 'Google Sign-In configuration error: Verify that package com.akbar.finman and your debug SHA-1 fingerprint are registered in Google Cloud Console.';
+  }
   if (
     lower.includes('oauth client id is not configured') ||
     lower.includes('client id is not configured') ||
@@ -72,7 +81,14 @@ export function translateSyncError(rawError) {
   }
 
   // 5. Cryptographic Key & PIN Mismatch
-  if (lower.includes('tag mismatch') || lower.includes('aes-gcm') || lower.includes('failed to decrypt') || lower.includes('invalid key') || lower.includes('pin mismatch')) {
+  if (
+    lower.includes('tag mismatch') ||
+    lower.includes('aes-gcm') ||
+    lower.includes('failed to decrypt') ||
+    lower.includes('invalid key') ||
+    lower.includes('pin mismatch') ||
+    lower.includes('incorrect password/pin')
+  ) {
     return 'Encryption key verification failed. Please check that your PIN is correct for this cloud data.';
   }
 
@@ -94,9 +110,23 @@ export function translateSyncError(rawError) {
     return 'Safety shield triggered: Unusually high deletions detected. Sync paused to protect your financial data.';
   }
 
+  // 8.5 Fail-Closed Safeguard & Populated Device Protection
+  if (
+    lower.includes('bootstrap_safeguard_rejected') ||
+    lower.includes('destructive bootstrap rejected') ||
+    lower.includes('bootstrap_safeguard_failed')
+  ) {
+    return 'Safety shield active: Local financial records detected. Cloud restore was blocked to protect your data. Setup as primary device required.';
+  }
+
   // 9. Bootstrap & Initial Setup
   if (lower.includes('bootstrap_failed') || lower.includes('bootstrap_verification_failed') || lower.includes('existing_local_data_requires_merge')) {
     return 'Could not set up cloud repository. Please verify your connection and encryption PIN.';
+  }
+
+  // 9.5 Baseline Alignment & Newer Snapshot Updates
+  if (lower.includes('newer snapshot baseline detected') || lower.includes('aligning baseline') || lower.includes('aligning with newer')) {
+    return 'Aligning with newer cloud snapshot baseline… Please wait a moment.';
   }
 
   // Fallback: Safe generic message
@@ -132,7 +162,9 @@ export function deriveUnifiedSyncStatus(state = {}) {
     pendingConflictsCount = 0,
     latestError = null,
     isSyncing = false,
-    isDeltaSyncing = false
+    isDeltaSyncing = false,
+    hasLocalRecords = false,
+    localTransactionsCount = 0
   } = state;
 
   const conflictsNum = Math.max(0, Number(pendingConflictsCount) || 0);
@@ -182,6 +214,26 @@ export function deriveUnifiedSyncStatus(state = {}) {
 
   // 3. Uninitialized / First Setup
   if (lifecycleState === 'UNINITIALIZED') {
+    const isPopulatedDevice = hasLocalRecords || (localTransactionsCount > 0) || (pendingCount > 0);
+    if (isPopulatedDevice) {
+      return {
+        key: UNIFIED_SYNC_STATUS_KEYS.POPULATED_LOCAL_REQUIRES_CHOICE,
+        title: 'Authoritative Setup Required',
+        explanation: 'Local offline records detected. Publish this device as your cloud master to establish Snapshot v13 and activate sync.',
+        badgeText: 'Setup Required',
+        badgeType: 'warning',
+        icon: '📱',
+        hasPendingConflicts: conflictsNum > 0,
+        conflictsCount: conflictsNum,
+        conflictBadgeText,
+        primaryActionKey: 'PUBLISH_MASTER',
+        primaryActionLabel: 'Publish as Master Device',
+        requiresAction: true,
+        errorMessage: translateSyncError(latestError),
+        rawError: latestError
+      };
+    }
+
     return {
       key: UNIFIED_SYNC_STATUS_KEYS.UNINITIALIZED,
       title: 'Set Up Cloud Repository',
@@ -255,6 +307,7 @@ export function deriveUnifiedSyncStatus(state = {}) {
     let title = 'Sync Blocked — Attention Required';
     let explanation = 'Synchronization is waiting for missing prerequisite updates.';
     let badgeText = 'Sync Blocked';
+    let badgeType = 'warning';
 
     if (syncStatus === 'BLOCKED_SEQUENCE_GAP' || Number(state.blockedGapCount) > 0) {
       title = 'Sync Blocked — Missing Sequence Updates';
@@ -265,9 +318,21 @@ export function deriveUnifiedSyncStatus(state = {}) {
       explanation = 'Some updates depend on earlier changes that have not yet arrived. Waiting for dependency resolution.';
       badgeText = 'Missing Dependency';
     } else if (syncStatus === 'BLOCKED_PEER_BASELINE' || syncStatus === 'BLOCKED_INCOMPATIBLE_PEER' || (Array.isArray(state.blockedPeers) && state.blockedPeers.length > 0)) {
-      title = 'Sync Blocked — Incompatible Peer Baseline';
-      explanation = 'A peer device is using an incompatible snapshot baseline. Snapshot alignment or update is required.';
-      badgeText = 'Incompatible Peer';
+      const hasTrulyIncompatible = Array.isArray(state.blockedPeers) && state.blockedPeers.some(p => {
+        const reason = String(p.reason || p.lineage_reason || '').toUpperCase();
+        return !reason.includes('NEWER') && p.lineageStatus !== 'RECOVERABLE_NEWER';
+      });
+      const isRecoverableNewer = Boolean(state.newerBaselineDetected || state.hasNewerBaseline || (!hasTrulyIncompatible && (syncStatus === 'BLOCKED_PEER_BASELINE' || (state.blockedPeers && state.blockedPeers.length === 0))));
+      if (isRecoverableNewer && !hasTrulyIncompatible) {
+        title = 'Newer Cloud Snapshot Available';
+        explanation = 'A connected device published a newer snapshot baseline. FinMan is aligning with the latest records.';
+        badgeText = 'Newer Baseline';
+        badgeType = 'info';
+      } else {
+        title = 'Sync Blocked — Incompatible Peer Baseline';
+        explanation = 'A peer device is using an incompatible snapshot baseline. Snapshot alignment or update is required.';
+        badgeText = 'Incompatible Peer';
+      }
     }
 
     return {
@@ -275,7 +340,7 @@ export function deriveUnifiedSyncStatus(state = {}) {
       title,
       explanation,
       badgeText,
-      badgeType: 'warning',
+      badgeType,
       icon: '⏸️',
       hasPendingConflicts: conflictsNum > 0,
       conflictsCount: conflictsNum,

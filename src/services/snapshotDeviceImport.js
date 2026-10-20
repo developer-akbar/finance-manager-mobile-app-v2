@@ -973,7 +973,7 @@ export async function importSnapshotV10ToDevice({
     });
 
     // 4b. Replace operational stores with snapshot entities
-    await populateLocalEntitiesBootstrap(db, cloudPayload.entities || {});
+    await populateLocalEntitiesBootstrap(db, cloudPayload.entities || {}, { allowRecoveryReplacement: true });
 
     // 4c. Align sync lineage stores (local sequence, peer watermarks, staged events, tombstones) (Fix A)
     await alignSnapshotSyncLineage(db, {
@@ -1023,6 +1023,7 @@ export async function importSnapshotV10ToDevice({
     await setSetting('sync_base_manifest', JSON.stringify(localManifest), { suppressDeltaQueue: true });
     await setSetting('last_snapshot_id', cloudPayload.snapshot_id, { suppressDeltaQueue: true });
     await setSetting('last_parent_snapshot_id', cloudPayload.parent_snapshot_id || '', { suppressDeltaQueue: true });
+    await setSetting('last_cloud_version', String(cloudPayload.cloud_version || 1), { suppressDeltaQueue: true });
     await setSetting('last_synced_at', nowIso, { suppressDeltaQueue: true });
     await setSetting('device_lifecycle_state', DEVICE_LIFECYCLE.ACTIVE, { suppressDeltaQueue: true });
     await setSetting('sub_accounts_migrated_v2', 'true', { suppressDeltaQueue: true });
@@ -1115,6 +1116,7 @@ export async function createDurablePreImportBackup(db) {
     'sync_base_manifest',
     'last_snapshot_id',
     'last_parent_snapshot_id',
+    'last_cloud_version',
     'last_synced_at',
     'device_lifecycle_state',
     'sub_accounts_migrated_v2',
@@ -1795,7 +1797,29 @@ export async function alignSnapshotSyncLineage(db, { cloudPayload, deviceId, pee
   await db.run('DELETE FROM sync_staged_events');
   await db.run('DELETE FROM sync_staged_packages');
   await db.run('DELETE FROM sync_conflicts');
-  await db.run('DELETE FROM sync_tombstones');
+
+  // Align sync_tombstones with snapshot entities if present, or reset if baseline contains none
+  if (cloudPayload?.entities && Array.isArray(cloudPayload.entities.sync_tombstones)) {
+    const tombRows = (cloudPayload.entities.sync_tombstones || []).map(tomb => ({
+      id: String(tomb.id || tomb.entity_id || ''),
+      entity_type: String(tomb.entity_type || 'transaction'),
+      entity_id: String(tomb.entity_id || tomb.id || ''),
+      deleted_at: String(tomb.deleted_at || new Date().toISOString())
+    }));
+    if (typeof db.batchReplace === 'function') {
+      await db.batchReplace('sync_tombstones', tombRows);
+    } else {
+      await db.run('DELETE FROM sync_tombstones');
+      for (const tomb of tombRows) {
+        await db.run(
+          'INSERT OR REPLACE INTO sync_tombstones (id, entity_type, entity_id, deleted_at) VALUES (?, ?, ?, ?)',
+          [tomb.id, tomb.entity_type, tomb.entity_id, tomb.deleted_at]
+        );
+      }
+    }
+  } else {
+    await db.run('DELETE FROM sync_tombstones');
+  }
 
   // 2. Align local sequence state while strictly preserving existing device identity and lineage
   let existingState = null;
@@ -2003,16 +2027,26 @@ export async function restorePreImportBackup(options = {}) {
   }
 
   // 1. Restore operational entity stores
-  await populateLocalEntitiesBootstrap(db, backupPackage.entities || {});
+  await populateLocalEntitiesBootstrap(db, backupPackage.entities || {}, { allowRecoveryReplacement: true });
 
   // 2. Restore sync tombstones
-  await db.run('DELETE FROM sync_tombstones');
   const tombstones = backupPackage.entities?.sync_tombstones || [];
-  for (const t of tombstones) {
-    await db.run(
-      'INSERT OR REPLACE INTO sync_tombstones (id, entity_type, entity_id, deleted_at) VALUES (?, ?, ?, ?)',
-      [t.id, t.entity_type, t.entity_id, t.deleted_at]
-    );
+  if (typeof db.batchReplace === 'function') {
+    const tombRows = tombstones.map(t => ({
+      id: String(t.id || t.entity_id || ''),
+      entity_type: String(t.entity_type || 'transaction'),
+      entity_id: String(t.entity_id || t.id || ''),
+      deleted_at: String(t.deleted_at || new Date().toISOString())
+    }));
+    await db.batchReplace('sync_tombstones', tombRows);
+  } else {
+    await db.run('DELETE FROM sync_tombstones');
+    for (const t of tombstones) {
+      await db.run(
+        'INSERT OR REPLACE INTO sync_tombstones (id, entity_type, entity_id, deleted_at) VALUES (?, ?, ?, ?)',
+        [t.id, t.entity_type || 'transaction', t.entity_id || t.id, t.deleted_at || new Date().toISOString()]
+      );
+    }
   }
 
   // 3. Restore sync delta queue
@@ -2271,10 +2305,10 @@ export async function validateTrustworthySnapshotPayload(cloudPayload, options =
       `Target snapshot ID mismatch: expected '${targetSnapshotId}', got '${snapshotId}'.`
     );
   }
-  if (targetCloudVersion && cloudVersion !== targetCloudVersion) {
+  if (targetCloudVersion && cloudVersion < Number(targetCloudVersion)) {
     throw new SnapshotImportError(
       SNAPSHOT_IMPORT_ERROR_CODES.VALIDATION_FAILED,
-      `Target cloud version mismatch: expected ${targetCloudVersion}, got ${cloudVersion}.`
+      `Target cloud version mismatch: expected at least ${targetCloudVersion}, got ${cloudVersion}.`
     );
   }
 
@@ -2489,7 +2523,7 @@ export async function reconcileExistingDeviceWithSnapshot(options = {}) {
   const { withMasterSyncLock } = await import('./deltaSyncCoordinator.js');
   return await withMasterSyncLock(async () => {
     return await _executeExistingDeviceReconciliation(options);
-  });
+  }, { timeoutMs: 180000 });
 }
 
 async function _executeExistingDeviceReconciliation(options = {}) {
@@ -2527,10 +2561,10 @@ async function _executeExistingDeviceReconciliation(options = {}) {
   }
 
   // Step 2: Fetch & Decrypt Snapshot if not provided
-  let cloudPayload = providedPayload;
+  let cloudPayload = providedPayload || options.cloudPayload;
   if (!cloudPayload) {
     onProgress({ stage: 'DOWNLOADING', message: 'Downloading verified cloud snapshot…' });
-    const effectiveKey = keyMaterial || (typeof pin === 'string' && pin.trim() ? pin.trim() : pin) || getSyncSessionKey();
+    const effectiveKey = options.sessionKey || keyMaterial || (typeof pin === 'string' && pin.trim() ? pin.trim() : pin) || getSyncSessionKey();
     if (!effectiveKey) {
       throw new SnapshotImportError(
         SNAPSHOT_IMPORT_ERROR_CODES.MISSING_PARAMETERS,
@@ -2613,7 +2647,7 @@ async function _executeExistingDeviceReconciliation(options = {}) {
       quarantinedCount = quarantineRes.quarantinedCount;
 
       // 5b. Replace operational stores with snapshot entities
-      await populateLocalEntitiesBootstrap(db, cloudPayload.entities || {});
+      await populateLocalEntitiesBootstrap(db, cloudPayload.entities || {}, { allowRecoveryReplacement: true });
 
       // 5c. Align sync lineage stores (local sequence, peer watermarks, staged events, tombstones)
       await alignSnapshotSyncLineage(db, {
@@ -2650,7 +2684,9 @@ async function _executeExistingDeviceReconciliation(options = {}) {
       await setSetting('sync_base_manifest', JSON.stringify(localManifest), { suppressDeltaQueue: true });
       await setSetting('last_snapshot_id', cloudPayload.snapshot_id, { suppressDeltaQueue: true });
       await setSetting('last_parent_snapshot_id', cloudPayload.parent_snapshot_id || '', { suppressDeltaQueue: true });
+      await setSetting('last_cloud_version', String(cloudPayload.cloud_version || 1), { suppressDeltaQueue: true });
       await setSetting('last_synced_at', nowIso, { suppressDeltaQueue: true });
+      await setSetting('last_delta_synced_at', nowIso, { suppressDeltaQueue: true });
       await setSetting('device_lifecycle_state', DEVICE_LIFECYCLE.ACTIVE, { suppressDeltaQueue: true });
     }
 
@@ -2675,7 +2711,7 @@ async function _executeExistingDeviceReconciliation(options = {}) {
           const stageInput = pkg.packagePayload ? pkg : { packagePayload: pkg, packageChecksum: pkg.package_checksum || null };
           await stagePeerPackageAtomically(stageInput);
         }
-      } else if (driveClient && accessToken) {
+      } else if (accessToken || driveClient) {
         // Pull peer packages from Drive
         const effectiveKey = keyMaterial || (typeof pin === 'string' && pin.trim() ? pin.trim() : pin) || getSyncSessionKey();
         await pullPeerDeltas({
@@ -2717,6 +2753,18 @@ async function _executeExistingDeviceReconciliation(options = {}) {
     }
 
     onProgress({ stage: 'COMPLETE', message: `Guarded snapshot v${cloudPayload.cloud_version} reconciliation complete!` });
+
+    try {
+      const { ensureOwnDeviceManifestSynced } = await import('./deviceManifest.js');
+      await ensureOwnDeviceManifestSynced({
+        deviceId,
+        accessToken,
+        driveClient,
+        force: true
+      });
+    } catch (mErr) {
+      console.warn('[reconcileExistingDeviceWithSnapshot] Non-fatal: Failed to align device manifest:', mErr.message);
+    }
 
     return {
       success: true,

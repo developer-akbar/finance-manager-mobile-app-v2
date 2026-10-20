@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
+import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
 import './Layout.css';
 
 const HomeIco = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>;
@@ -185,6 +186,7 @@ export default function Layout({ children, onNavTap }) {
         </nav>
 
         <div className="sidebar-footer">
+          <GlobalSyncBadge isCollapsed={isSidebarCollapsed} />
           <button className="theme-toggle-btn" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}>
             {theme === 'dark' ? <SunIco /> : <MoonIco />}
             <span className="theme-toggle-label">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>

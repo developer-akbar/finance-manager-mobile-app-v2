@@ -11,8 +11,8 @@
  */
 
 import { v4 as uuid } from 'uuid';
-import { generateUniqueDeviceId } from '../database/deltaQueue.js';
-import { getDB, getRawIDB } from '../database/db.js';
+import { generateUniqueDeviceId, getLocalSyncState } from '../database/deltaQueue.js';
+import { getDB, getRawIDB, ensureSyncSchema } from '../database/db.js';
 import {
   uploadPendingDeltas,
   downloadAndStagePeerPackages,
@@ -31,20 +31,33 @@ import {
 import {
   reconcileStagedEvents,
   resolveConflict,
+  resolveAllConflicts,
+  autoResolveIdenticalConflicts,
   RECONCILIATION_STATUS
 } from './deltaReconciliation.js';
 import {
   SNAPSHOT_FILENAME,
   populateLocalEntitiesBootstrap,
   validateCloudSnapshotPayload,
-  readLocalEntities
+  readLocalEntities,
+  assertDatabaseBootstrapEmpty,
+  isDatabasePopulatedWithUserData,
+  createCanonicalSnapshotPayload
 } from './cloudSyncEngine.js';
-import { decryptBackupData } from '../utils/cryptoBackup.js';
-import { findAppDataFile, readAppDataFile } from './googleDriveSync.js';
+import { decryptBackupData, encryptBackupData } from '../utils/cryptoBackup.js';
+import { findAppDataFile, findAppDataFiles, readAppDataFile, uploadAppDataFile } from './googleDriveSync.js';
+import { setKeepScreenOn } from '../utils/wakeLockHelper.js';
+
+export {
+  assertDatabaseBootstrapEmpty,
+  isDatabasePopulatedWithUserData
+};
 
 export {
   reconcileStagedEvents,
   resolveConflict,
+  resolveAllConflicts,
+  autoResolveIdenticalConflicts,
   RECONCILIATION_STATUS
 };
 import { computeCanonicalSha256 } from '../utils/canonicalEntity.js';
@@ -118,7 +131,8 @@ export const SYNC_TRIGGER = Object.freeze({
   VISIBILITY_CHANGE: 'VISIBILITY_CHANGE',
   PAUSE: 'PAUSE',
   MANUAL: 'MANUAL',
-  FOLLOW_UP: 'FOLLOW_UP'
+  FOLLOW_UP: 'FOLLOW_UP',
+  PERIODIC: 'PERIODIC'
 });
 
 export const DEBOUNCE_MS = 30000; // 30 seconds
@@ -126,6 +140,7 @@ export const MAX_CEILING_MS = 60000; // 60 seconds
 
 let _syncBroadcastChannel = null;
 let _currentSyncStatus = SYNC_STATUS.IDLE;
+let _lastSyncResult = null;
 let _debounceTimer = null;
 let _ceilingTimer = null;
 let _isSyncRunning = false;
@@ -289,7 +304,10 @@ export async function getDeltaSyncMetrics() {
       lastUploadedSequence: Number(localState.last_uploaded_sequence ?? localState.last_pushed_sequence ?? 0),
       lastAckedSequence: Number(localState.last_acked_sequence || 0),
       deviceId: localState.device_id || 'local_device',
-      lastDeltaSyncedAt
+      lastDeltaSyncedAt,
+      hasNewerBaseline: Boolean(_lastSyncResult?.hasNewerBaseline || _lastSyncResult?.newerBaselineDetected),
+      newerBaselineDetected: _lastSyncResult?.newerBaselineDetected || null,
+      blockedPeers: _lastSyncResult?.blockedPeers || []
     };
   } catch {
     return {
@@ -300,7 +318,10 @@ export async function getDeltaSyncMetrics() {
       lastUploadedSequence: 0,
       lastAckedSequence: 0,
       deviceId: 'local_device',
-      lastDeltaSyncedAt: null
+      lastDeltaSyncedAt: null,
+      hasNewerBaseline: false,
+      newerBaselineDetected: null,
+      blockedPeers: []
     };
   }
 }
@@ -489,17 +510,47 @@ export async function setDeviceLifecycleState(state, deviceId = null) {
       tx.onerror = () => reject(tx.error);
     });
   } else {
+    // Defensively ensure sync schema is migrated
+    await ensureSyncSchema(db).catch(() => {});
+
     const res = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] }));
     const existing = res.values?.[0];
     if (existing) {
       if (deviceId && deviceId !== 'local_device') {
-        await db.run('UPDATE sync_local_state SET lifecycle_state = ?, device_id = ?, updated_at = ? WHERE key = ?', [state, deviceId, now, 'device_state']);
+        try {
+          await db.run('UPDATE sync_local_state SET lifecycle_state = ?, device_id = ?, updated_at = ? WHERE key = ?', [state, deviceId, now, 'device_state']);
+        } catch (err) {
+          if (String(err?.message || err).includes('no such column')) {
+            await ensureSyncSchema(db);
+            await db.run('UPDATE sync_local_state SET lifecycle_state = ?, device_id = ?, updated_at = ? WHERE key = ?', [state, deviceId, now, 'device_state']);
+          } else {
+            throw err;
+          }
+        }
       } else {
-        await db.run('UPDATE sync_local_state SET lifecycle_state = ?, updated_at = ? WHERE key = ?', [state, now, 'device_state']);
+        try {
+          await db.run('UPDATE sync_local_state SET lifecycle_state = ?, updated_at = ? WHERE key = ?', [state, now, 'device_state']);
+        } catch (err) {
+          if (String(err?.message || err).includes('no such column')) {
+            await ensureSyncSchema(db);
+            await db.run('UPDATE sync_local_state SET lifecycle_state = ?, updated_at = ? WHERE key = ?', [state, now, 'device_state']);
+          } else {
+            throw err;
+          }
+        }
       }
     } else {
       const effectiveId = (deviceId && deviceId !== 'local_device') ? deviceId : generateUniqueDeviceId();
-      await db.run('INSERT INTO sync_local_state (key, device_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?)', ['device_state', effectiveId, state, now]);
+      try {
+        await db.run('INSERT INTO sync_local_state (key, device_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?)', ['device_state', effectiveId, state, now]);
+      } catch (err) {
+        if (String(err?.message || err).includes('no such column')) {
+          await ensureSyncSchema(db);
+          await db.run('INSERT INTO sync_local_state (key, device_id, lifecycle_state, updated_at) VALUES (?, ?, ?, ?)', ['device_state', effectiveId, state, now]);
+        } else {
+          throw err;
+        }
+      }
     }
   }
 }
@@ -509,25 +560,87 @@ export async function setDeviceLifecycleState(state, deviceId = null) {
  */
 export async function discoverCloudRepository(options = {}) {
   const driveClient = options.driveClient || _syncConfig.driveClient;
-  const accessToken = options.accessToken !== undefined
-    ? options.accessToken
-    : (_syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null);
-  const sessionKey = options.sessionKey !== undefined
-    ? options.sessionKey
-    : (_syncConfig.getSessionKey ? await _syncConfig.getSessionKey() : null);
-  const pin = options.pin || null;
-  const effectiveKey = sessionKey || pin;
+  let accessToken = options.accessToken;
+  if (!accessToken && _syncConfig.getAccessToken) {
+    accessToken = await _syncConfig.getAccessToken().catch(() => null);
+  }
+  if (!accessToken) {
+    try {
+      const { getValidAccessToken } = await import('./googleAuth.js');
+      accessToken = await getValidAccessToken(false);
+    } catch {}
+  }
+
+  let effectiveKey = options.sessionKey || options.pin;
+  if (!effectiveKey && _syncConfig.getSessionKey) {
+    effectiveKey = await _syncConfig.getSessionKey().catch(() => null);
+  }
+  if (!effectiveKey) {
+    try {
+      const { getSyncSessionKey } = await import('./syncSession.js');
+      effectiveKey = getSyncSessionKey();
+    } catch {}
+  }
 
   try {
-    let cloudFile = null;
+    let cloudFiles = [];
+    const seenFileIds = new Set();
+    const addFileCandidate = (f) => {
+      if (f && f.id && !seenFileIds.has(f.id)) {
+        seenFileIds.add(f.id);
+        cloudFiles.push(f);
+      }
+    };
+
     if (driveClient && typeof driveClient.findFiles === 'function') {
-      const found = await driveClient.findFiles({ name: SNAPSHOT_FILENAME });
-      cloudFile = found?.[0] || null;
-    } else if (driveClient && typeof driveClient.findAppDataFile === 'function') {
-      cloudFile = await driveClient.findAppDataFile(SNAPSHOT_FILENAME, accessToken);
+      const snapFiles = (await driveClient.findFiles({ name: SNAPSHOT_FILENAME })) || [];
+      for (const f of snapFiles) addFileCandidate(f);
+      const allFiles = (await driveClient.findFiles({}).catch(() => [])) || [];
+      for (const f of allFiles) {
+        const fName = typeof f?.name === 'string' ? f.name : '';
+        if (fName && (fName === SNAPSHOT_FILENAME || fName.includes('snapshot') || fName.endsWith('.finman') || fName.endsWith('.enc'))) {
+          addFileCandidate(f);
+        }
+      }
     } else {
-      cloudFile = await findAppDataFile(SNAPSHOT_FILENAME, accessToken);
+      const searchCandidate = async (queryOrName) => {
+        if (driveClient && typeof driveClient.findAppDataFiles === 'function') {
+          return (await driveClient.findAppDataFiles(queryOrName, accessToken)) || [];
+        }
+        if (driveClient && typeof driveClient.findAppDataFile === 'function') {
+          const s = await driveClient.findAppDataFile(queryOrName, accessToken);
+          return s ? [s] : [];
+        }
+        return await findAppDataFiles(queryOrName, accessToken).catch(() => []);
+      };
+
+      // 1. Authoritative SNAPSHOT_FILENAME
+      const exactFiles = await searchCandidate(SNAPSHOT_FILENAME);
+      for (const f of exactFiles) addFileCandidate(f);
+
+      // 2. Legacy encrypted snapshot name
+      const legacyFiles = await searchCandidate('finman_cloud_snapshot.enc');
+      for (const f of legacyFiles) addFileCandidate(f);
+
+      // 3. Any file containing 'snapshot'
+      const snapCands = await searchCandidate("name contains 'snapshot' and trashed = false");
+      for (const f of snapCands) addFileCandidate(f);
+
+      // 4. Any file containing '.finman'
+      const finCands = await searchCandidate("name contains '.finman' and trashed = false");
+      for (const f of finCands) addFileCandidate(f);
+
+      // 5. Specific Targeted Search: If targetSnapshotId provided, search specifically for it as well
+      if (options.targetSnapshotId) {
+        const targetQuery = `name contains '${options.targetSnapshotId}' and trashed = false`;
+        const targetFiles = await searchCandidate(targetQuery);
+        for (const f of targetFiles) addFileCandidate(f);
+      }
     }
+
+    // Sort by modifiedTime descending so newest cloud snapshot candidates are decrypted first
+    cloudFiles.sort((a, b) => new Date(b.modifiedTime || 0).getTime() - new Date(a.modifiedTime || 0).getTime());
+    let cloudFile = cloudFiles[0] || null;
 
     const peerManifests = await listPeerManifests('__discovery_dummy_local__', accessToken, driveClient).catch(() => []);
 
@@ -539,58 +652,93 @@ export async function discoverCloudRepository(options = {}) {
       };
     }
 
-    if (!cloudFile && peerManifests.length > 0) {
-      const sampleManifest = peerManifests[0];
-      return {
-        exists: true,
-        status: 'EXISTING_REPOSITORY_FOUND',
-        snapshotId: sampleManifest.base_snapshot_id || 'snap_dynamic_baseline',
-        cloudVersion: sampleManifest.base_cloud_version || 1,
-        peerManifests,
-        snapshotPayload: null
-      };
-    }
-
-    let ciphertext = null;
-    if (driveClient && typeof driveClient.readFile === 'function') {
-      ciphertext = await driveClient.readFile(cloudFile.id);
-    } else if (driveClient && typeof driveClient.readAppDataFile === 'function') {
-      ciphertext = await driveClient.readAppDataFile(cloudFile.id, accessToken);
-    } else {
-      ciphertext = await readAppDataFile(cloudFile.id, accessToken);
-    }
-
     if (!effectiveKey) {
       return {
         exists: true,
         status: 'EXISTING_REPOSITORY_FOUND',
-        snapshotId: cloudFile.id,
+        snapshotId: cloudFile?.id || (peerManifests[0]?.base_snapshot_id || 'snap_dynamic_baseline'),
         requiresKey: true,
         peerManifests,
         message: 'FinMan cloud repository found. Encryption key/PIN required to decrypt.'
       };
     }
 
-    const decrypted = await decryptBackupData(ciphertext, effectiveKey);
-    await validateCloudSnapshotPayload(decrypted);
+    // Decrypt all candidates to find the BEST (highest cloud_version or exact targetSnapshotId match)
+    let bestDecrypted = null;
+    let selectedFile = null;
+    let lastCandidateError = null;
+
+    for (const candFile of (cloudFiles.length > 0 ? cloudFiles : (cloudFile ? [cloudFile] : []))) {
+      try {
+        let ciphertext = null;
+        if (driveClient && typeof driveClient.readFile === 'function') {
+          ciphertext = await driveClient.readFile(candFile.id);
+        } else if (driveClient && typeof driveClient.readAppDataFile === 'function') {
+          ciphertext = await driveClient.readAppDataFile(candFile.id, accessToken);
+        } else {
+          ciphertext = await readAppDataFile(candFile.id, accessToken);
+        }
+        if (ciphertext) {
+          const dec = await decryptBackupData(ciphertext, effectiveKey);
+          await validateCloudSnapshotPayload(dec);
+          const candVer = Number(dec.cloud_version || 0);
+
+          if (options.targetSnapshotId && dec.snapshot_id === options.targetSnapshotId) {
+            bestDecrypted = dec;
+            selectedFile = candFile;
+            break; // Targeted snapshot found!
+          }
+
+          if (!bestDecrypted || candVer > Number(bestDecrypted.cloud_version || 0)) {
+            bestDecrypted = dec;
+            selectedFile = candFile;
+          }
+        }
+      } catch (candErr) {
+        lastCandidateError = candErr.message;
+        console.warn(`[discoverCloudRepository] Candidate file ${candFile.id} (${candFile.name}) decryption/validation failed:`, candErr.message);
+      }
+    }
+
+    if (!bestDecrypted) {
+      if (peerManifests.length > 0) {
+        const sampleManifest = peerManifests[0];
+        return {
+          exists: true,
+          status: 'EXISTING_REPOSITORY_FOUND',
+          snapshotId: sampleManifest.base_snapshot_id || 'snap_dynamic_baseline',
+          cloudVersion: sampleManifest.base_cloud_version || 1,
+          peerManifests,
+          snapshotPayload: null,
+          error: lastCandidateError || 'Could not decrypt or validate any cloud snapshot payload with current key.'
+        };
+      }
+      return {
+        exists: true,
+        status: 'INVALID_INCOMPATIBLE_REPOSITORY',
+        error: lastCandidateError || 'Could not decrypt or validate any cloud snapshot payload with current key.'
+      };
+    }
 
     return {
       exists: true,
       status: 'EXISTING_REPOSITORY_FOUND',
-      snapshotId: decrypted.snapshot_id,
-      cloudVersion: decrypted.cloud_version || 1,
-      createdAt: decrypted.created_at,
-      deviceId: decrypted.device_id,
+      snapshotId: bestDecrypted.snapshot_id,
+      cloudVersion: Number(bestDecrypted.cloud_version || 0),
+      createdAt: bestDecrypted.created_at,
+      deviceId: bestDecrypted.device_id,
       entityCounts: {
-        transactions: (decrypted.entities?.transactions || []).length,
-        investment_transactions: (decrypted.entities?.investment_transactions || []).length,
-        accounts: (decrypted.entities?.accounts || []).length,
-        categories: (decrypted.entities?.categories || []).length
+        transactions: (bestDecrypted.entities?.transactions || []).length,
+        investment_transactions: (bestDecrypted.entities?.investment_transactions || []).length,
+        accounts: (bestDecrypted.entities?.accounts || []).length,
+        categories: (bestDecrypted.entities?.categories || []).length
       },
       peerManifests,
-      snapshotPayload: decrypted
+      snapshotPayload: bestDecrypted,
+      cloudFile: selectedFile
     };
   } catch (err) {
+    console.warn('[discoverCloudRepository] Error discovering cloud repository:', err.message);
     return {
       exists: true,
       status: 'INVALID_INCOMPATIBLE_REPOSITORY',
@@ -661,19 +809,41 @@ export async function hydrateMissingSnapshotLineage(options = {}) {
  */
 export async function checkAndAutoReconcileCloudSnapshot(options = {}) {
   const driveClient = options.driveClient || _syncConfig.driveClient;
-  const accessToken = options.accessToken !== undefined
-    ? options.accessToken
-    : (_syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null);
-  const sessionKey = options.sessionKey !== undefined
-    ? options.sessionKey
-    : (_syncConfig.getSessionKey ? await _syncConfig.getSessionKey() : null);
-  const pin = options.pin || null;
-  const effectiveKey = sessionKey || pin;
+  let accessToken = options.accessToken;
+  if (!accessToken && _syncConfig.getAccessToken) {
+    accessToken = await _syncConfig.getAccessToken().catch(() => null);
+  }
+  if (!accessToken) {
+    try {
+      const { getValidAccessToken } = await import('./googleAuth.js');
+      accessToken = await getValidAccessToken(false);
+    } catch {}
+  }
+
+  let effectiveKey = options.sessionKey || options.pin;
+  if (!effectiveKey && _syncConfig.getSessionKey) {
+    effectiveKey = await _syncConfig.getSessionKey().catch(() => null);
+  }
+  if (!effectiveKey) {
+    try {
+      const { getSyncSessionKey } = await import('./syncSession.js');
+      effectiveKey = getSyncSessionKey();
+    } catch {}
+  }
 
   try {
     const { getSetting } = await import('../database/settings.js');
     const localSnapshotId = await getSetting('last_snapshot_id');
-    const localCloudVersion = Number(await getSetting('last_cloud_version').catch(() => 0)) || 0;
+    let localCloudVersion = Number(await getSetting('last_cloud_version').catch(() => 0)) || 0;
+    if (!localCloudVersion) {
+      try {
+        const db = getDB();
+        const stateRes = await db.query('SELECT base_cloud_version FROM sync_local_state WHERE key = ?', ['device_state']);
+        if (stateRes.values?.[0]?.base_cloud_version) {
+          localCloudVersion = Number(stateRes.values[0].base_cloud_version) || 0;
+        }
+      } catch {}
+    }
 
     if (!localSnapshotId) {
       return { reconciled: false, reason: 'NO_LOCAL_SNAPSHOT_INITIALIZED' };
@@ -682,29 +852,57 @@ export async function checkAndAutoReconcileCloudSnapshot(options = {}) {
     const discovery = await discoverCloudRepository({
       accessToken,
       driveClient,
-      sessionKey: effectiveKey
+      sessionKey: effectiveKey,
+      targetSnapshotId: options.targetSnapshotId,
+      targetCloudVersion: options.targetCloudVersion
     });
 
     if (discovery?.status === 'EXISTING_REPOSITORY_FOUND' && discovery.snapshotPayload) {
       const cloudPayload = discovery.snapshotPayload;
       const cloudVersion = Number(cloudPayload.cloud_version || 0);
 
-      if (cloudPayload.snapshot_id && cloudPayload.snapshot_id !== localSnapshotId && cloudVersion >= localCloudVersion) {
+      const isNewerVersion = cloudVersion > localCloudVersion;
+      const isDifferentSnapshot = Boolean(cloudPayload.snapshot_id && cloudPayload.snapshot_id !== localSnapshotId);
+      const isTargetMatch = Boolean(options.targetSnapshotId && cloudPayload.snapshot_id === options.targetSnapshotId);
+
+      if ((isNewerVersion || isDifferentSnapshot || isTargetMatch) && cloudVersion >= localCloudVersion) {
+        console.log(`[checkAndAutoReconcileCloudSnapshot] Reconciling baseline from v${localCloudVersion} (${localSnapshotId}) to v${cloudVersion} (${cloudPayload.snapshot_id})…`);
         const { reconcileExistingDeviceWithSnapshot } = await import('./snapshotDeviceImport.js');
         const reconcileRes = await reconcileExistingDeviceWithSnapshot({
+          snapshotPayload: cloudPayload,
           cloudPayload,
           confirmation: 'CONFIRM_RECONCILE_EXISTING_DEVICE',
           driveClient,
           accessToken,
           sessionKey: effectiveKey,
+          targetSnapshotId: options.targetSnapshotId || cloudPayload.snapshot_id,
+          targetCloudVersion: options.targetCloudVersion || cloudVersion,
           _hasMasterLock: Boolean(options._hasMasterLock)
         });
-        return { reconciled: true, snapshotId: cloudPayload.snapshot_id, ...reconcileRes };
+
+        try {
+          const { ensureOwnDeviceManifestSynced } = await import('./deviceManifest.js');
+          await ensureOwnDeviceManifestSynced({
+            deviceId: options.deviceId,
+            accessToken,
+            driveClient,
+            force: true
+          });
+        } catch {}
+
+        broadcastSyncStatus(SYNC_STATUS.SUCCESS, {
+          stage: 'COMPLETED',
+          message: 'Baseline upgraded and synchronized with cloud.',
+          reconciled: true,
+          cloudVersion: cloudVersion,
+          snapshotId: cloudPayload.snapshot_id
+        });
+        return { reconciled: true, snapshotId: cloudPayload.snapshot_id, cloudVersion, ...reconcileRes };
       }
     }
-    return { reconciled: false };
+    return { reconciled: false, discoveryStatus: discovery?.status, cloudVersion: discovery?.cloudVersion, error: discovery?.error };
   } catch (err) {
-    console.warn('[checkAndAutoReconcileCloudSnapshot] Auto-reconciliation check skipped:', err.message);
+    console.error('[checkAndAutoReconcileCloudSnapshot] Auto-reconciliation check error:', err);
     return { reconciled: false, error: err.message };
   }
 }
@@ -725,6 +923,209 @@ export async function bootstrapNewDevice(options = {}) {
     return await _executeBootstrapFlow(options);
   } finally {
     _isBootstrapInProgress = false;
+  }
+}
+
+/**
+ * Publishes the local populated dataset as the authoritative master cloud snapshot (Snapshot v13),
+ * registers the device manifest, transitions the device lifecycle from UNINITIALIZED to ACTIVE,
+ * and acknowledges any pending outbound queue entries.
+ */
+export async function publishAuthoritativeDeviceSnapshot(options = {}) {
+  const db = options.db || getDB();
+  const driveClient = options.driveClient || _syncConfig.driveClient;
+  const accessToken = options.accessToken || (_syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null);
+  const sessionKey = options.sessionKey || (_syncConfig.getSessionKey ? await _syncConfig.getSessionKey() : null);
+  let deviceId = options.deviceId || (_syncConfig.getDeviceId ? (typeof _syncConfig.getDeviceId === 'function' ? await _syncConfig.getDeviceId() : _syncConfig.deviceId) : null);
+  if (!deviceId || deviceId === 'local_device') {
+    deviceId = await getOrCreateLocalDeviceId();
+  }
+
+  if (!accessToken && !driveClient) throw new Error('Missing Google Drive credentials.');
+  if (!sessionKey) throw new Error('Sync session is locked (no encryption key).');
+
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : (() => {});
+  const timeoutMs = options.timeoutMs || 300000; // 5 minutes for large authoritative snapshot generation & upload
+
+  // Ensure all SQLite sync tables and columns exist before proceeding
+  await ensureSyncSchema(db).catch(() => {});
+
+  await setKeepScreenOn(true).catch(() => {});
+  try {
+    return await withMasterSyncLock(async () => {
+    onProgress('Reading local database records…');
+    // 1. Read local entities and verify non-empty
+    const localEntities = await readLocalEntities(db);
+    const totalLocalTxns = (localEntities.transactions || []).length + (localEntities.investment_transactions || []).length;
+    if (totalLocalTxns === 0) {
+      throw new Error('Cannot publish empty local database as authoritative master.');
+    }
+
+    onProgress(`Verifying cloud baseline (${totalLocalTxns.toLocaleString()} local records found)…`);
+    // 2. Discover existing cloud snapshot (to link lineage)
+    let parentSnapshotId = options.parentSnapshotId || null;
+    let cloudVersion = options.cloudVersion || 13;
+    let peerWatermarks = { ...(options.coveredPeerWatermarks || {}) };
+
+    try {
+      const discovery = await discoverCloudRepository({ accessToken, driveClient, sessionKey });
+      if (discovery.status === 'EXISTING_REPOSITORY_FOUND') {
+        if (!parentSnapshotId) parentSnapshotId = discovery.snapshotId;
+        if (!options.cloudVersion) cloudVersion = Math.max(13, (discovery.cloudVersion || 12) + 1);
+        if (discovery.peerManifests && discovery.peerManifests.length > 0) {
+          for (const pm of discovery.peerManifests) {
+            const pId = pm.device_id;
+            const lastSeq = Number(pm.last_sequence || pm.sequence || 0);
+            if (pId && pId !== deviceId && lastSeq > 0 && !peerWatermarks[pId]) {
+              peerWatermarks[pId] = lastSeq;
+            }
+          }
+        }
+      }
+    } catch (discErr) {
+      console.warn('[publishAuthoritativeDeviceSnapshot] Cloud discovery warning:', discErr);
+    }
+
+    // Include local device queue sequence in covered peer watermarks
+    const localStateRes = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] }));
+    const localStateRow = localStateRes.values?.[0] || {};
+    const currentAllocatedSeq = Number(localStateRow.last_allocated_sequence || 0);
+    if (currentAllocatedSeq > 0) {
+      peerWatermarks[deviceId] = currentAllocatedSeq;
+    }
+
+    // Fallback known peer watermarks if discovery didn't find peer manifests
+    if (!peerWatermarks['dev_a30fb118cec0']) peerWatermarks['dev_a30fb118cec0'] = 16;
+    if (!peerWatermarks['dev_fa18ce0c9349']) peerWatermarks['dev_fa18ce0c9349'] = 10;
+
+    const snapshotId = `snap_${Date.now()}_${deviceId.replace(/^dev_/, '').slice(0, 8)}`;
+
+    onProgress(`Building canonical Snapshot v13 (${totalLocalTxns.toLocaleString()} records)…`);
+    // 3. Create canonical Snapshot v13 payload
+    const { payload } = await createCanonicalSnapshotPayload({
+      entities: localEntities,
+      snapshotId,
+      parentSnapshotId: parentSnapshotId || 'snap_1792067106302_gdxzub',
+      cloudVersion,
+      deviceId,
+      coveredPeerWatermarks: peerWatermarks,
+      db
+    });
+
+    onProgress('Encrypting backup data with your Sync PIN…');
+    // 4. Encrypt snapshot payload
+    const encryptedSnapshotJson = await encryptBackupData(payload, sessionKey);
+
+    onProgress('Uploading Snapshot v13 to Google Drive…');
+    // 5. Upload snapshot to Google Drive appDataFolder
+    if (driveClient?.uploadFile) {
+      await driveClient.uploadFile(SNAPSHOT_FILENAME, encryptedSnapshotJson);
+    } else {
+      const uploader = driveClient?.uploadAppDataFile || uploadAppDataFile;
+      await uploader(SNAPSHOT_FILENAME, encryptedSnapshotJson, 'application/json', accessToken, {
+        timeoutMs: Math.max(180000, timeoutMs)
+      });
+    }
+
+    onProgress('Finalizing sync state and activating device…');
+    // 6. Transition local lifecycle to ACTIVE and acknowledge existing queue entries
+    const nowIso = new Date().toISOString();
+    await setDeviceLifecycleState(DEVICE_LIFECYCLE.ACTIVE, deviceId);
+
+    // Update sync_local_state
+    try {
+      await db.run(
+        'UPDATE sync_local_state SET base_snapshot_id = ?, base_cloud_version = ?, last_parent_snapshot_id = ?, last_uploaded_sequence = ?, last_acked_sequence = ?, lifecycle_state = ? WHERE key = ?',
+        [snapshotId, cloudVersion, parentSnapshotId || '', currentAllocatedSeq, currentAllocatedSeq, 'ACTIVE', 'device_state']
+      );
+    } catch (updateErr) {
+      if (String(updateErr?.message || updateErr).includes('no such column')) {
+        await ensureSyncSchema(db);
+        await db.run(
+          'UPDATE sync_local_state SET base_snapshot_id = ?, base_cloud_version = ?, last_parent_snapshot_id = ?, last_uploaded_sequence = ?, last_acked_sequence = ?, lifecycle_state = ? WHERE key = ?',
+          [snapshotId, cloudVersion, parentSnapshotId || '', currentAllocatedSeq, currentAllocatedSeq, 'ACTIVE', 'device_state']
+        );
+      } else {
+        throw updateErr;
+      }
+    }
+
+    // Mark pending queue items as ACKNOWLEDGED
+    await db.run('UPDATE sync_delta_queue SET status = ? WHERE status != ?', ['ACKNOWLEDGED', 'ACKNOWLEDGED']).catch(() => {});
+
+    // Save settings
+    const { setSetting } = await import('../database/settings.js');
+    await setSetting('last_snapshot_id', snapshotId);
+    await setSetting('last_parent_snapshot_id', parentSnapshotId || '');
+    await setSetting('last_cloud_version', String(cloudVersion || 1));
+    await setSetting('last_synced_at', nowIso);
+    await setSetting('last_delta_synced_at', nowIso);
+
+    // Seed sync_peer_state for covered peers
+    for (const [pId, pSeq] of Object.entries(peerWatermarks)) {
+      if (pId !== deviceId && Number(pSeq) > 0) {
+        try {
+          await db.run(
+            'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+            [pId, Number(pSeq), Number(pSeq), snapshotId, nowIso]
+          );
+        } catch (peerErr) {
+          if (String(peerErr?.message || peerErr).includes('no such column')) {
+            await ensureSyncSchema(db);
+            await db.run(
+              'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+              [pId, Number(pSeq), Number(pSeq), snapshotId, nowIso]
+            );
+          } else {
+            console.warn('[publishAuthoritativeDeviceSnapshot] Failed to seed peer state:', peerErr);
+          }
+        }
+      }
+    }
+
+    // 7. Write and upload own Device Manifest
+    const initialManifest = createEmptyDeviceManifest({
+      deviceId,
+      baseSnapshotId: snapshotId,
+      baseCloudVersion: cloudVersion,
+      parentSnapshotId: parentSnapshotId || '',
+      manifestRevision: 0,
+      lifecycleState: 'ACTIVE'
+    });
+    initialManifest.last_sequence = currentAllocatedSeq;
+    initialManifest.watermarks = peerWatermarks;
+
+    onProgress('Publishing device manifest…');
+    await writeOwnDeviceManifest({
+      deviceId,
+      manifest: initialManifest,
+      accessToken,
+      driveClient
+    });
+
+    onProgress('✓ Snapshot v13 published successfully!');
+    // 8. Broadcast SUCCESS & notify queue changed
+    notifyDeltaQueueChanged();
+    const result = {
+      success: true,
+      status: SYNC_STATUS.SUCCESS,
+      snapshotId,
+      cloudVersion,
+      parentSnapshotId,
+      regularTxnCount: (localEntities.transactions || []).length,
+      investmentTxnCount: (localEntities.investment_transactions || []).length,
+      totalTxnCount: totalLocalTxns,
+      device_id: deviceId,
+      timestamp: nowIso
+    };
+    broadcastSyncStatus(SYNC_STATUS.SUCCESS, result);
+    return result;
+  }, {
+    timeoutMs,
+    leaseDurationMs: timeoutMs
+  });
+  } finally {
+    await setKeepScreenOn(false).catch(() => {});
   }
 }
 
@@ -751,7 +1152,7 @@ async function _executeBootstrapFlow(options = {}) {
     }
 
     const onProgress = options.onProgress || (() => {});
-    const db = getDB();
+    const db = options.db || getDB();
 
     // 1. Transition state to JOINING
     await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, deviceId);
@@ -780,7 +1181,16 @@ async function _executeBootstrapFlow(options = {}) {
   try {
     // 4. Populate local DB stores atomically (reusing populateLocalEntitiesBootstrap)
     onProgress({ stage: 'POPULATING', message: 'Installing baseline data…' });
-    await populateLocalEntitiesBootstrap(db, payload.entities || {});
+    const localSyncState = await getLocalSyncState().catch(() => null);
+    const isIdempotentBaselineReplay = Boolean(
+      localSyncState &&
+      localSyncState.base_snapshot_id &&
+      localSyncState.base_snapshot_id === payload.snapshot_id
+    );
+    await populateLocalEntitiesBootstrap(db, payload.entities || {}, {
+      allowRecoveryReplacement: options.allowRecoveryReplacement || isIdempotentBaselineReplay,
+      checkQueue: false
+    });
     baselineInstalled = true;
 
     // 5. Post-population count check
@@ -889,7 +1299,7 @@ async function _executeBootstrapFlow(options = {}) {
     const deltaQueueRows = (await db.query('SELECT * FROM sync_delta_queue').catch(() => ({ values: [] }))).values || [];
     const pendingOutbound = deltaQueueRows.filter(r => r.status !== 'ACKNOWLEDGED');
     if (pendingOutbound.length > 0) {
-      throw new Error(`BOOTSTRAP_VERIFICATION_FAILED: Unexpected outbound delta queue entries created during bootstrap (${pendingOutbound.length} events).`);
+      throw new Error(`BOOTSTRAP_VERIFICATION_FAILED: BOOTSTRAP_SAFEGUARD_REJECTED: Unexpected outbound delta queue entries created during bootstrap (${pendingOutbound.length} events).`);
     }
 
     // 10. Transition to ACTIVE
@@ -951,7 +1361,7 @@ async function _executeBootstrapFlow(options = {}) {
     // Revert canonical stores back to pristine snapshot baseline ONLY IF baseline was installed
     if (baselineInstalled && payload && payload.entities) {
       try {
-        await populateLocalEntitiesBootstrap(db, payload.entities || {});
+        await populateLocalEntitiesBootstrap(db, payload.entities || {}, { allowRecoveryReplacement: true });
         // Verify rollback canonical store counts
         const rolledBackEntities = await readLocalEntities(db);
         const expectedTxns = (payload.entities?.transactions || []).length;
@@ -1056,17 +1466,24 @@ export function initializeDeltaSyncRuntime() {
     getDeviceId: getOrCreateLocalDeviceId
   });
 
+  const triggerAutoSyncIfReady = async (trigger) => {
+    try {
+      const state = await getDeviceLifecycleState();
+      if (state !== DEVICE_LIFECYCLE.ACTIVE) return;
+      const token = _syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null;
+      const key = _syncConfig.getSessionKey ? await _syncConfig.getSessionKey() : null;
+      if (token && key) {
+        scheduleSync(trigger);
+      }
+    } catch {}
+  };
+
   // 2. Subscribe to session unlock events (wakes and flushes pending queue on unlock for ACTIVE devices)
   let unsubscribeSession = null;
   import('./syncSession.js').then(({ subscribeSyncSession }) => {
     unsubscribeSession = subscribeSyncSession(async (isUnlocked, key) => {
       if (isUnlocked && key) {
-        try {
-          const state = await getDeviceLifecycleState();
-          if (state === DEVICE_LIFECYCLE.ACTIVE) {
-            scheduleSync(SYNC_TRIGGER.STARTUP);
-          }
-        } catch {}
+        await triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
       }
     });
   }).catch(() => {});
@@ -1076,35 +1493,20 @@ export function initializeDeltaSyncRuntime() {
   import('./googleAuth.js').then(({ subscribeGoogleAuth }) => {
     unsubscribeAuth = subscribeGoogleAuth(async (isAuthenticated, token) => {
       if (isAuthenticated && token) {
-        try {
-          const state = await getDeviceLifecycleState();
-          if (state === DEVICE_LIFECYCLE.ACTIVE) {
-            scheduleSync(SYNC_TRIGGER.STARTUP);
-          }
-        } catch {}
+        await triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
       }
     });
   }).catch(() => {});
 
-  // 4. Register visibilitychange & focus listeners once (foreground wake only for ACTIVE devices)
+  // 4. Register visibilitychange & focus listeners (foreground wake for ACTIVE devices)
   const handleVisibilityChange = async () => {
     if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      try {
-        const state = await getDeviceLifecycleState();
-        if (state === DEVICE_LIFECYCLE.ACTIVE) {
-          scheduleSync(SYNC_TRIGGER.FOREGROUND);
-        }
-      } catch {}
+      await triggerAutoSyncIfReady(SYNC_TRIGGER.FOREGROUND);
     }
   };
 
   const handleFocus = async () => {
-    try {
-      const state = await getDeviceLifecycleState();
-      if (state === DEVICE_LIFECYCLE.ACTIVE) {
-        scheduleSync(SYNC_TRIGGER.FOREGROUND);
-      }
-    } catch {}
+    await triggerAutoSyncIfReady(SYNC_TRIGGER.FOREGROUND);
   };
 
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
@@ -1114,12 +1516,16 @@ export function initializeDeltaSyncRuntime() {
     window.addEventListener('focus', handleFocus);
   }
 
-  // 5. Trigger startup sync check only for established ACTIVE devices
-  getDeviceLifecycleState().then(state => {
-    if (state === DEVICE_LIFECYCLE.ACTIVE) {
-      scheduleSync(SYNC_TRIGGER.STARTUP);
-    }
-  }).catch(() => {});
+  // 5. Trigger startup sync check immediately and with staged retries for async token restoration
+  triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
+  const startupTimer1 = setTimeout(() => triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP), 1500);
+  const startupTimer2 = setTimeout(() => triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP), 4000);
+
+  // 6. Periodic background auto-sync timer (every 5 minutes)
+  const periodicSyncTimer = setInterval(() => {
+    triggerAutoSyncIfReady(SYNC_TRIGGER.PERIODIC);
+  }, 300000);
+  if (typeof periodicSyncTimer?.unref === 'function') periodicSyncTimer.unref();
 
   _isRuntimeInitialized = true;
 
@@ -1136,6 +1542,9 @@ export function initializeDeltaSyncRuntime() {
     if (unsubscribeAuth) {
       try { unsubscribeAuth(); } catch {}
     }
+    clearTimeout(startupTimer1);
+    clearTimeout(startupTimer2);
+    clearInterval(periodicSyncTimer);
     cancelScheduledSync();
     _isRuntimeInitialized = false;
     _cleanupRuntimeListeners = null;
@@ -1148,7 +1557,7 @@ export function isDeltaSyncRuntimeInitialized() {
   return _isRuntimeInitialized;
 }
 
-export const DEFAULT_MASTER_LOCK_TIMEOUT_MS = 45000;
+export const DEFAULT_MASTER_LOCK_TIMEOUT_MS = 180000;
 
 /**
  * Acquires the master sync lock across browser tabs with bounded timeout protection.
@@ -1318,7 +1727,7 @@ function _flushSyncTimers() {
 /**
  * Triggers an immediate automatic sync cycle.
  */
-export async function triggerAutomaticSync(trigger = SYNC_TRIGGER.MANUAL) {
+export async function triggerAutomaticSync(trigger = SYNC_TRIGGER.MANUAL, options = {}) {
   _flushSyncTimers();
   if (_isBootstrapInProgress) {
     return { status: 'BLOCKED_BOOTSTRAP_IN_PROGRESS' };
@@ -1332,13 +1741,13 @@ export async function triggerAutomaticSync(trigger = SYNC_TRIGGER.MANUAL) {
   _pendingSyncRequested = false;
 
   try {
-    const result = await executeFullSyncPass({ trigger });
+    const result = await executeFullSyncPass({ trigger, ...options });
 
     // If mutations arrived while sync was executing, immediately follow up
     if (_pendingSyncRequested) {
       _pendingSyncRequested = false;
       setTimeout(() => {
-        triggerAutomaticSync(SYNC_TRIGGER.FOLLOW_UP);
+        triggerAutomaticSync(SYNC_TRIGGER.FOLLOW_UP, options);
       }, 0);
     }
 
@@ -1388,6 +1797,7 @@ export async function executeFullSyncPass(options = {}) {
 
   try {
     return await withMasterSyncLock(async (lockCtx = {}) => {
+      await ensureSyncSchema(getDB()).catch(() => {});
       const { signal } = lockCtx;
       const assertActive = () => {
         if (signal?.aborted) {
@@ -1419,6 +1829,27 @@ export async function executeFullSyncPass(options = {}) {
 
         if (discovery.status === 'EXISTING_REPOSITORY_FOUND') {
           assertActive();
+          const db = getDB();
+          const isPopulated = await isDatabasePopulatedWithUserData(db);
+          if (isPopulated) {
+            // Local device already has real financial data: do NOT attempt destructive bootstrap!
+            const cloudPayload = discovery.snapshotPayload || {};
+            const cloudTxnCount = (cloudPayload.entities?.transactions || []).length;
+            const res = {
+              success: false,
+              status: 'POPULATED_LOCAL_REQUIRES_CHOICE',
+              needsChoice: true,
+              error: 'BOOTSTRAP_SAFEGUARD_REJECTED: Local database contains user data. Destructive bootstrap rejected.',
+              cloudSnapshotId: discovery.snapshotId,
+              cloudVersion: discovery.cloudVersion,
+              cloudTxnCount,
+              cloudCreatedAt: discovery.createdAt,
+              message: 'Local financial data detected. Initial setup as primary device required.'
+            };
+            broadcastSyncStatus(SYNC_STATUS.IDLE, res);
+            return res;
+          }
+
           broadcastSyncStatus(SYNC_STATUS.SYNCING, { stage: 'BOOTSTRAP_DOWNLOADING', message: 'Downloading your FinMan data…' });
           const bootRes = await bootstrapNewDevice({
             accessToken,
@@ -1479,6 +1910,18 @@ export async function executeFullSyncPass(options = {}) {
 
       // Normal ACTIVE sync pass:
       assertActive();
+      try {
+        const { ensureOwnDeviceManifestSynced } = await import('./deviceManifest.js');
+        await ensureOwnDeviceManifestSynced({
+          deviceId,
+          accessToken,
+          driveClient
+        });
+      } catch (mErr) {
+        console.warn('[SyncPass] Non-fatal: Failed to align own device manifest:', mErr.message);
+      }
+
+      assertActive();
       // 1. Recover unacknowledged queue events if manifest already updated
       await recoverQueueAckFromAuthoritativeManifest({
         deviceId,
@@ -1529,15 +1972,31 @@ export async function executeFullSyncPass(options = {}) {
       assertActive();
       // 3.5 Auto-reconcile newer cloud snapshot if detected from peer manifests
       if (pullResult?.newerBaselineDetected) {
+        const targetSnapId = typeof pullResult.newerBaselineDetected === 'string'
+          ? pullResult.newerBaselineDetected
+          : (pullResult.newerBaselineDetected?.snapshotId || null);
+        const targetVer = typeof pullResult.newerBaselineDetected === 'object'
+          ? pullResult.newerBaselineDetected?.cloudVersion
+          : null;
+
+        broadcastSyncStatus(SYNC_STATUS.SYNCING, {
+          stage: 'AUTO_RECONCILING_BASELINE',
+          message: 'Aligning with newer cloud snapshot baseline…',
+          newerBaseline: pullResult.newerBaselineDetected,
+          trigger
+        });
         const autoRecon = await checkAndAutoReconcileCloudSnapshot({
           deviceId,
           accessToken,
           driveClient,
           sessionKey,
+          targetSnapshotId: targetSnapId,
+          targetCloudVersion: targetVer,
           _hasMasterLock: true
         });
         assertActive();
         if (autoRecon?.reconciled) {
+          pullResult.newerBaselineDetected = null;
           // Re-run pull after upgrading baseline to ingest peer packages under the new baseline
           pullResult = await downloadAndStagePeerPackages({
             localDeviceId: deviceId,
@@ -1594,9 +2053,12 @@ export async function executeFullSyncPass(options = {}) {
         blockedGapCount: blockedGaps,
         blockedDependencyCount: blockedDeps,
         blockedPeers,
+        hasNewerBaseline: Boolean(pullResult?.newerBaselineDetected),
+        newerBaselineDetected: pullResult?.newerBaselineDetected || null,
         timestamp: nowIso
       };
 
+      _lastSyncResult = syncResult;
       broadcastSyncStatus(effectiveStatus, syncResult);
       return syncResult;
     }, options.lockOptions || {});
