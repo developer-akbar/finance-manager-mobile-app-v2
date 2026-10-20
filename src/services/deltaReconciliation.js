@@ -12,7 +12,7 @@
  */
 
 import { v4 as uuid } from 'uuid';
-import { getDB, getRawIDB } from '../database/db.js';
+import { getDB, getRawIDB, getTableColumns } from '../database/db.js';
 import { toCanonicalJson, computeCanonicalSha256 } from '../utils/canonicalEntity.js';
 import { saveConflictRecord, getPendingConflicts, CONFLICT_STATUS, CONFLICT_RESOLUTION, CONFLICT_TYPE } from '../database/conflicts.js';
 import { createDeltaEvent, DELTA_STATUS, DELTA_OPERATION } from '../database/deltaQueue.js';
@@ -774,13 +774,19 @@ async function _reconcileBundleAtomically(bundle) {
     for (const item of evaluationList) {
       if (item.decision === 'APPLY_INSERT' || item.decision === 'APPLY_UPDATE' || item.decision === 'APPLY_RECREATE') {
         const payload = item.event.payload;
-        const cols = Object.keys(payload);
-        const placeholders = cols.map(() => '?').join(',');
-        const vals = cols.map(c => typeof payload[c] === 'object' && payload[c] !== null ? JSON.stringify(payload[c]) : payload[c]);
-        await db.run(
-          `INSERT OR REPLACE INTO ${item.storeName} (${cols.join(',')}) VALUES (${placeholders})`,
-          vals
-        );
+        const rawCols = Object.keys(payload);
+        const tableCols = await getTableColumns(db, item.storeName);
+        const cols = (tableCols && tableCols.size > 0)
+          ? rawCols.filter(c => tableCols.has(c.toLowerCase()))
+          : rawCols;
+        if (cols.length > 0) {
+          const placeholders = cols.map(() => '?').join(',');
+          const vals = cols.map(c => typeof payload[c] === 'object' && payload[c] !== null ? JSON.stringify(payload[c]) : payload[c]);
+          await db.run(
+            `INSERT OR REPLACE INTO ${item.storeName} (${cols.join(',')}) VALUES (${placeholders})`,
+            vals
+          );
+        }
         if (item.decision === 'APPLY_RECREATE') {
           await db.run('DELETE FROM sync_tombstones WHERE id = ?', [item.entityId]);
         }

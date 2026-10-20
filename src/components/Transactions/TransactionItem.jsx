@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, inputToStorage, calculateAge, checkIsRedeemed, getUserFacingTags } from '../../utils/format.js';
+import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, toDDMMYYYY, inputToStorage, calculateAge, checkIsRedeemed, getUserFacingTags } from '../../utils/format.js';
 import { parseInstalmentInfo, getInstalmentSeriesStats } from '../../database/recurring.js';
 import { resolveInvestmentAccounts } from '../../utils/brokerageAccounting.js';
 import { bundleRelatedTransactions, serializeTransactions } from '../../utils/finmanPayload.js';
@@ -416,16 +416,28 @@ function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
   const handleCopyWithToday = () => {
     const now = new Date();
     const pad = n => String(n).padStart(2, '0');
+    const todayDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const todayTime = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
     onCopy({
       ...t,
-      Date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
-      Time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+      Date: todayDate,
+      date: todayDate,
+      Time: todayTime,
+      time: todayTime,
+      _copyMode: 'today',
     });
     onClose();
   };
 
   const handleCopyWithOriginal = () => {
-    onCopy(t);
+    onCopy({
+      ...t,
+      Date: t.Date || t.date,
+      date: t.date || t.Date,
+      Time: t.Time || t.time || '',
+      time: t.time || t.Time || '',
+      _copyMode: 'original',
+    });
     onClose();
   };
 
@@ -741,7 +753,7 @@ function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
             <button className="btn btn-secondary btn-full" style={{ marginBottom: 10 }} onClick={handleCopyWithOriginal}>
               Original date &amp; time
               <div style={{ fontSize: '0.65rem', fontWeight: 400, opacity: 0.75, marginTop: 2 }}>
-                {t.Date ? t.Date.split('-').reverse().join('/') : ''}{t.Time ? ' · ' + t.Time : ''}
+                {toDDMMYYYY(t.Date || t.date)}{(t.Time || t.time) ? ' · ' + (formatTime(t.Time || t.time) || (t.Time || t.time)) : ''}
               </div>
             </button>
             <button

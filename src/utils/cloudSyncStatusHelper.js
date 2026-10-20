@@ -24,7 +24,7 @@ export const UNIFIED_SYNC_STATUS_KEYS = Object.freeze({
  * Translates low-level technical errors into clean, non-alarming user guidance.
  * Preserves raw message internally for diagnostics.
  */
-export function translateSyncError(rawError) {
+export function translateSyncError(rawError, context = {}) {
   if (!rawError) return null;
   const str = typeof rawError === 'string' ? rawError : (rawError.message || String(rawError));
   const lower = str.toLowerCase();
@@ -66,13 +66,22 @@ export function translateSyncError(rawError) {
 
   // 3. Network & Connectivity Issues & Timeouts
   if (lower.includes('timed out') || lower.includes('timeout') || lower.includes('time out') || lower.includes('sync_pass_timeout') || lower.includes('drive_request_timeout')) {
+    if (context?.pendingCount > 0) {
+      return 'Sync could not finish due to a temporary network timeout. Your local changes remain queued and will sync once reconnected.';
+    }
     return 'Google Drive request timed out. Sync lock was released and FinMan will retry automatically.';
   }
   if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('network request failed') || lower.includes('econnrefused')) {
+    if (context?.pendingCount > 0) {
+      return 'Sync could not finish due to a temporary network issue. Your local changes remain queued and will sync once reconnected.';
+    }
     return 'Unable to reach Google Drive. Please check your internet connection.';
   }
 
-  // 4. Authentication & OAuth Token Expirations
+  // 4. Authentication & OAuth Token Expirations & Permissions
+  if (lower.includes('permission_denied') || lower.includes('insufficient_permissions')) {
+    return 'Google Drive permissions require attention. Please check account permissions or reconnect your account.';
+  }
   if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid_grant') || lower.includes('token expired') || lower.includes('authentication required')) {
     return 'Google Drive authorization expired. Please reconnect your account to resume sync.';
   }
@@ -97,12 +106,26 @@ export function translateSyncError(rawError) {
     return 'Google Drive request limit reached. Sync will pause and retry automatically.';
   }
   if (lower.includes('500') || lower.includes('502') || lower.includes('503') || lower.includes('504') || lower.includes('backend error') || lower.includes('internal error')) {
+    if (context?.pendingCount > 0) {
+      return 'Google Drive is temporarily unavailable. Your local changes remain queued and will sync automatically once service resumes.';
+    }
     return 'Google Drive is temporarily unavailable. FinMan will retry automatically shortly.';
   }
 
   // 7. Lineage & Peer Baseline Guards
   if (lower.includes('blocked_older_base') || lower.includes('blocked_unknown_base') || lower.includes('sequence_gap')) {
     return 'Peer synchronization is waiting for cloud baseline updates. Local financial records are completely safe.';
+  }
+
+  // 7.5 Conflict and Reconciliation Failures
+  if (
+    lower.includes('reconcil') ||
+    lower.includes('conflict') ||
+    lower.includes('staged_events') ||
+    context?.hasConflicts ||
+    context?.status === 'CONFLICTS_PENDING'
+  ) {
+    return 'Reconciliation encountered conflicting updates. Please review the Sync Conflicts section to resolve items needing attention.';
   }
 
   // 8. Safety Guardrails & Mass Deletion
@@ -119,6 +142,18 @@ export function translateSyncError(rawError) {
     return 'Safety shield active: Local financial records detected. Cloud restore was blocked to protect your data. Setup as primary device required.';
   }
 
+  // 8.6 Local Database / SQLite Schema
+  if (
+    lower.includes('sqlite') ||
+    lower.includes('no such column') ||
+    lower.includes('has no column') ||
+    lower.includes('syntax error') ||
+    lower.includes('constraint') ||
+    lower.includes('database_error')
+  ) {
+    return 'A local database issue interrupted synchronization. Local changes remain queued; please retry or view developer diagnostics.';
+  }
+
   // 9. Bootstrap & Initial Setup
   if (lower.includes('bootstrap_failed') || lower.includes('bootstrap_verification_failed') || lower.includes('existing_local_data_requires_merge')) {
     return 'Could not set up cloud repository. Please verify your connection and encryption PIN.';
@@ -129,7 +164,13 @@ export function translateSyncError(rawError) {
     return 'Aligning with newer cloud snapshot baseline… Please wait a moment.';
   }
 
-  // Fallback: Safe generic message
+  // Fallback: Safe generic message with layered verification
+  if (context?.localDataVerified === false) {
+    return 'Cloud sync encountered an unexpected issue. Please retry sync. Local data status could not be verified.';
+  }
+  if (context?.pendingCount > 0) {
+    return 'Cloud sync encountered a temporary issue. Local changes remain queued and will sync on retry.';
+  }
   return 'Cloud sync encountered a temporary issue. Your local data remains completely safe.';
 }
 

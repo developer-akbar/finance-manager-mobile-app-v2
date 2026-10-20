@@ -154,6 +154,7 @@ export default function CloudSyncManager({ onBack }) {
   const [isPublishingMaster, setIsPublishingMaster] = useState(false);
   const [publishMasterProgress, setPublishMasterProgress] = useState('');
   const [publishMasterError, setPublishMasterError] = useState('');
+  const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
 
   // Register global window helper for programmatic or console invocation
   useEffect(() => {
@@ -1499,7 +1500,11 @@ export default function CloudSyncManager({ onBack }) {
               fontSize: '0.72rem',
               fontWeight: 600
             }}>
-              🛑 {translateSyncError(deltaMetrics.latestError)}
+              🛑 {translateSyncError(deltaMetrics.latestError, {
+                pendingCount: deltaMetrics.pendingCount,
+                localDataVerified: deltaMetrics.pendingCount !== undefined,
+                status: deltaMetrics.status
+              })}
             </div>
           )}
 
@@ -2086,11 +2091,64 @@ export default function CloudSyncManager({ onBack }) {
                 {localTransactionsCount.toLocaleString()}
               </span>
             </div>
-            {deltaMetrics.latestError && (
-              <div style={{ marginTop: 8, padding: '6px 8px', borderRadius: 4, background: 'rgba(255, 77, 106, 0.08)', color: 'var(--expense)', fontSize: '0.68rem', fontFamily: 'monospace', wordBreak: 'break-word' }}>
-                Diagnostic Log: {deltaMetrics.latestError}
+            {/* Developer Diagnostics Section */}
+            <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  🛠️ Developer Diagnostics
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    const diagData = deltaMetrics.latestDiagnostic || {
+                      status: deltaMetrics.status,
+                      lifecycleState: deltaMetrics.lifecycleState,
+                      pendingChanges: deltaMetrics.pendingCount,
+                      lastUploadedSequence: deltaMetrics.lastUploadedSequence,
+                      lastAckedSequence: deltaMetrics.lastAckedSequence,
+                      redactedDeviceId: (deltaMetrics.deviceId || '').length > 8
+                        ? `${(deltaMetrics.deviceId || '').slice(0, 4)}...${(deltaMetrics.deviceId || '').slice(-4)}`
+                        : (deltaMetrics.deviceId || 'local_device'),
+                      message: deltaMetrics.latestError ? String(deltaMetrics.latestError).slice(0, 200) : 'None',
+                      timestamp: new Date().toISOString()
+                    };
+                    navigator.clipboard.writeText(JSON.stringify(diagData, null, 2));
+                    setCopiedDiagnostics(true);
+                    setTimeout(() => setCopiedDiagnostics(false), 2500);
+                  }}
+                  style={{ fontSize: '0.68rem', padding: '4px 10px' }}
+                >
+                  {copiedDiagnostics ? '✓ Copied Diagnostics!' : '📋 Copy Diagnostics'}
+                </button>
               </div>
-            )}
+
+              {deltaMetrics.latestDiagnostic ? (
+                <div style={{
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  background: 'rgba(0, 0, 0, 0.2)',
+                  fontFamily: 'monospace',
+                  fontSize: '0.68rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 3,
+                  border: '1px solid var(--border-light)'
+                }}>
+                  <div><strong style={{ color: 'var(--text-muted)' }}>Stage:</strong> <span style={{ color: 'var(--accent)' }}>{deltaMetrics.latestDiagnostic.stage}</span></div>
+                  <div><strong style={{ color: 'var(--text-muted)' }}>Error Code:</strong> <span style={{ color: 'var(--expense)' }}>{deltaMetrics.latestDiagnostic.code}</span></div>
+                  <div><strong style={{ color: 'var(--text-muted)' }}>Attempt ID:</strong> {deltaMetrics.latestDiagnostic.attemptId}</div>
+                  <div><strong style={{ color: 'var(--text-muted)' }}>Device:</strong> {deltaMetrics.latestDiagnostic.redactedDeviceId}</div>
+                  <div><strong style={{ color: 'var(--text-muted)' }}>Retryable:</strong> {deltaMetrics.latestDiagnostic.retryable ? 'Yes' : 'No'}</div>
+                  <div><strong style={{ color: 'var(--text-muted)' }}>Pending Changes:</strong> {deltaMetrics.latestDiagnostic.pendingChanges}</div>
+                  <div><strong style={{ color: 'var(--text-muted)' }}>Message:</strong> {deltaMetrics.latestDiagnostic.message}</div>
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                  All sync passes healthy. Zero unhandled diagnostic exceptions recorded.
+                </div>
+              )}
+            </div>
 
             {/* Client ID Configuration Toggle inside Advanced */}
             <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>

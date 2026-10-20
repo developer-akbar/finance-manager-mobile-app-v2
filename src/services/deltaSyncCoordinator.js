@@ -147,6 +147,63 @@ let _isSyncRunning = false;
 let _isBootstrapInProgress = false;
 let _pendingSyncRequested = false;
 
+const MAX_DIAGNOSTIC_RECORDS = 20;
+let _diagnosticHistory = [];
+let _latestDiagnostic = null;
+
+export function redactDeviceId(deviceId) {
+  if (!deviceId || typeof deviceId !== 'string') return 'dev_unknown';
+  if (deviceId.length <= 8) return deviceId;
+  return `${deviceId.slice(0, 4)}...${deviceId.slice(-4)}`;
+}
+
+export function sanitizeErrorMessage(message) {
+  if (!message || typeof message !== 'string') return '';
+  return message
+    .replace(/[a-zA-Z]:\\[^\s:;]+/g, '[filepath]')
+    .replace(/\/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/g, '[filepath]')
+    .replace(/bearer\s+[a-zA-Z0-9._\-]+/gi, 'bearer [REDACTED]')
+    .replace(/ya29\.[a-zA-Z0-9_\-]+/gi, '[AUTH_TOKEN]');
+}
+
+export function sanitizeStackTrace(stack) {
+  if (!stack || typeof stack !== 'string') return null;
+  return stack
+    .split('\n')
+    .slice(0, 10)
+    .map(line => line
+      .replace(/[a-zA-Z]:\\[^\s:;)]+[\\/]/g, '')
+      .replace(/bearer\s+[a-zA-Z0-9._\-]+/gi, 'bearer [REDACTED]')
+      .replace(/ya29\.[a-zA-Z0-9_\-]+/gi, '[AUTH_TOKEN]')
+    )
+    .join('\n');
+}
+
+export function recordSyncDiagnostic(record) {
+  _latestDiagnostic = {
+    ...record,
+    timestamp: record.timestamp || new Date().toISOString()
+  };
+  _diagnosticHistory.unshift(_latestDiagnostic);
+  if (_diagnosticHistory.length > MAX_DIAGNOSTIC_RECORDS) {
+    _diagnosticHistory.length = MAX_DIAGNOSTIC_RECORDS;
+  }
+  return _latestDiagnostic;
+}
+
+export function getSyncDiagnostics() {
+  return [..._diagnosticHistory];
+}
+
+export function getLatestSyncDiagnostic() {
+  return _latestDiagnostic;
+}
+
+export function clearSyncDiagnostics() {
+  _diagnosticHistory = [];
+  _latestDiagnostic = null;
+}
+
 export function isBootstrapInProgress() {
   return _isBootstrapInProgress;
 }
@@ -307,7 +364,8 @@ export async function getDeltaSyncMetrics() {
       lastDeltaSyncedAt,
       hasNewerBaseline: Boolean(_lastSyncResult?.hasNewerBaseline || _lastSyncResult?.newerBaselineDetected),
       newerBaselineDetected: _lastSyncResult?.newerBaselineDetected || null,
-      blockedPeers: _lastSyncResult?.blockedPeers || []
+      blockedPeers: _lastSyncResult?.blockedPeers || [],
+      latestDiagnostic: _latestDiagnostic
     };
   } catch {
     return {
@@ -321,7 +379,8 @@ export async function getDeltaSyncMetrics() {
       lastDeltaSyncedAt: null,
       hasNewerBaseline: false,
       newerBaselineDetected: null,
-      blockedPeers: []
+      blockedPeers: [],
+      latestDiagnostic: _latestDiagnostic
     };
   }
 }
@@ -1793,7 +1852,10 @@ export async function executeFullSyncPass(options = {}) {
     deviceId = await getOrCreateLocalDeviceId().catch(() => null);
   }
 
-  broadcastSyncStatus(SYNC_STATUS.SYNCING, { trigger });
+  const attemptId = 'sync_att_' + Math.random().toString(36).slice(2, 10);
+  let currentStage = 'init';
+
+  broadcastSyncStatus(SYNC_STATUS.SYNCING, { trigger, attemptId });
 
   try {
     return await withMasterSyncLock(async (lockCtx = {}) => {
@@ -1910,6 +1972,7 @@ export async function executeFullSyncPass(options = {}) {
 
       // Normal ACTIVE sync pass:
       assertActive();
+      currentStage = 'manifest_sync';
       try {
         const { ensureOwnDeviceManifestSynced } = await import('./deviceManifest.js');
         await ensureOwnDeviceManifestSynced({
@@ -1922,6 +1985,7 @@ export async function executeFullSyncPass(options = {}) {
       }
 
       assertActive();
+      currentStage = 'acknowledge';
       // 1. Recover unacknowledged queue events if manifest already updated
       await recoverQueueAckFromAuthoritativeManifest({
         deviceId,
@@ -1931,6 +1995,7 @@ export async function executeFullSyncPass(options = {}) {
       });
 
       assertActive();
+      currentStage = 'upload';
       // 2. Outbound Push: Package pending deltas -> encrypt -> upload -> manifest RMW -> durable queue ACK
       const pushResult = await uploadPendingDeltas({
         deviceId,
@@ -1960,6 +2025,7 @@ export async function executeFullSyncPass(options = {}) {
       });
 
       assertActive();
+      currentStage = 'download';
       // 3. Inbound Pull: Discover peer manifests -> download new packages -> stage contiguously
       let pullResult = await downloadAndStagePeerPackages({
         localDeviceId: deviceId,
@@ -1972,6 +2038,7 @@ export async function executeFullSyncPass(options = {}) {
       assertActive();
       // 3.5 Auto-reconcile newer cloud snapshot if detected from peer manifests
       if (pullResult?.newerBaselineDetected) {
+        currentStage = 'reconcile_snapshot';
         const targetSnapId = typeof pullResult.newerBaselineDetected === 'string'
           ? pullResult.newerBaselineDetected
           : (pullResult.newerBaselineDetected?.snapshotId || null);
@@ -1998,6 +2065,7 @@ export async function executeFullSyncPass(options = {}) {
         if (autoRecon?.reconciled) {
           pullResult.newerBaselineDetected = null;
           // Re-run pull after upgrading baseline to ingest peer packages under the new baseline
+          currentStage = 'download';
           pullResult = await downloadAndStagePeerPackages({
             localDeviceId: deviceId,
             accessToken,
@@ -2009,6 +2077,7 @@ export async function executeFullSyncPass(options = {}) {
       }
 
       assertActive();
+      currentStage = 'reconcile';
       // 4. Reconciliation: Apply staged events deterministically to canonical store
       const reconResult = await reconcileStagedEvents({ signal });
 
@@ -2074,13 +2143,51 @@ export async function executeFullSyncPass(options = {}) {
     const isAuthError = is401 || err?.message?.includes('AUTH') || err?.message?.includes('No Google Drive credentials');
     const finalStatus = isAuthError ? SYNC_STATUS.AUTH_REQUIRED : SYNC_STATUS.ERROR;
 
-    broadcastSyncStatus(finalStatus, { error: err.message, isTimeout, trigger });
+    let pendingChangesCount = 0;
+    let localDataVerified = false;
+    try {
+      const qRes = await getDB().query('SELECT id FROM sync_delta_queue WHERE status != ?', ['ACKNOWLEDGED']);
+      pendingChangesCount = (qRes.values || []).length;
+      localDataVerified = true;
+    } catch {}
+
+    const errStr = String(err?.message || err || '');
+    const errLower = errStr.toLowerCase();
+
+    let errorCode = 'UNKNOWN_ERROR';
+    if (isTimeout) errorCode = 'NETWORK_TIMEOUT';
+    else if (isAuthError) errorCode = 'AUTH_EXPIRED';
+    else if (errLower.includes('429') || errLower.includes('quota') || errLower.includes('ratelimit')) errorCode = 'RATE_LIMIT_EXCEEDED';
+    else if (errLower.includes('500') || errLower.includes('502') || errLower.includes('503') || errLower.includes('504')) errorCode = 'SERVER_ERROR';
+    else if (errLower.includes('network') || errLower.includes('failed to fetch') || errLower.includes('econnrefused')) errorCode = 'NETWORK_ERROR';
+    else if (errLower.includes('no such column') || errLower.includes('has no column') || errLower.includes('sqlite') || errLower.includes('syntax error')) errorCode = 'SQLITE_SCHEMA_ERROR';
+    else if (errLower.includes('reconcil') || errLower.includes('conflict')) errorCode = 'RECONCILIATION_ERROR';
+
+    const isRetryable = isTimeout || isAuthError || errorCode === 'RATE_LIMIT_EXCEEDED' || errorCode === 'SERVER_ERROR' || errorCode === 'NETWORK_ERROR';
+
+    const diagnostic = recordSyncDiagnostic({
+      attemptId,
+      stage: currentStage,
+      code: errorCode,
+      redactedDeviceId: redactDeviceId(deviceId),
+      httpStatus: err?.status || null,
+      sqliteErrorCode: err?.code || null,
+      retryable: isRetryable,
+      pendingChanges: pendingChangesCount,
+      eventsApplied: 0,
+      localDataVerified,
+      message: sanitizeErrorMessage(errStr),
+      sanitizedStack: sanitizeStackTrace(err?.stack)
+    });
+
+    broadcastSyncStatus(finalStatus, { error: err.message, isTimeout, trigger, diagnostic });
     return {
       success: false,
       status: finalStatus,
       isTimeout,
       error: err.message,
-      trigger
+      trigger,
+      diagnostic
     };
   }
 }

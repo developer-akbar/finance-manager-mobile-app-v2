@@ -3,6 +3,7 @@ import { v4 as uuid } from 'uuid';
 import { recordTombstone, recordTombstonesBatch } from './tombstones.js';
 import { executeAtomicMutation, executeAtomicBatch } from './atomicMutation.js';
 import { parseDescriptionStockInfo, parseStockLine } from '../utils/stockInventoryNormalization.js';
+import { buildInstalmentNote } from './recurring.js';
 
 export { parseDescriptionStockInfo };
 
@@ -565,7 +566,7 @@ export const updateTransaction = async (idOrData, maybeData) => {
       note: data.Note !== undefined ? data.Note : (data.note !== undefined ? data.note : (oldTxn?.note || oldTxn?.Note || '')),
       description: data.Description !== undefined ? data.Description : (data.description !== undefined ? data.description : (oldTxn?.description || oldTxn?.Description || '')),
       inr: inrVal, amount: amtStr, currency: data.Currency || data.currency || oldTxn?.currency || oldTxn?.Currency || 'INR',
-      type: typeVal, created_at: data.created_at || oldTxn?.created_at || now, updated_at: now, recurring_rule_id: data.recurring_rule_id || oldTxn?.recurring_rule_id || '',
+      type: typeVal, created_at: data.created_at || oldTxn?.created_at || now, updated_at: now, recurring_rule_id: data.recurring_rule_id !== undefined ? data.recurring_rule_id : (oldTxn?.recurring_rule_id || ''),
       tags: synchronizedTags, split_group_id: data.split_group_id || oldTxn?.split_group_id || '',
       receipt_image: data.receipt_image !== undefined ? data.receipt_image : (oldTxn?.receipt_image || ''),
       warranty_expiry: data.warranty_expiry !== undefined ? data.warranty_expiry : (oldTxn?.warranty_expiry || ''),
@@ -612,7 +613,7 @@ export const updateTransaction = async (idOrData, maybeData) => {
       note: data.Note !== undefined ? data.Note : (data.note !== undefined ? data.note : (oldTxn?.note || oldTxn?.Note || '')),
       description: data.Description !== undefined ? data.Description : (data.description !== undefined ? data.description : (oldTxn?.description || oldTxn?.Description || '')),
       inr: inrVal, amount: amtStr, currency: data.Currency || data.currency || oldTxn?.currency || oldTxn?.Currency || 'INR',
-      type: typeVal, created_at: data.created_at || oldTxn?.created_at || now, updated_at: now, recurring_rule_id: data.recurring_rule_id || oldTxn?.recurring_rule_id || '',
+      type: typeVal, created_at: data.created_at || oldTxn?.created_at || now, updated_at: now, recurring_rule_id: data.recurring_rule_id !== undefined ? data.recurring_rule_id : (oldTxn?.recurring_rule_id || ''),
       tags: synchronizedTags, split_group_id: data.split_group_id || oldTxn?.split_group_id || '',
       receipt_image: data.receipt_image !== undefined ? data.receipt_image : (oldTxn?.receipt_image || ''),
       warranty_expiry: data.warranty_expiry !== undefined ? data.warranty_expiry : (oldTxn?.warranty_expiry || ''),
@@ -645,6 +646,179 @@ export const updateTransaction = async (idOrData, maybeData) => {
   }
 
   return rowToTxn(rowObj);
+};
+
+export const convertTransactionToInstalment = async ({
+  transactionId,
+  updatedTransactionData,
+  instalmentRule,
+  schedule,
+  oldRuleIdToRetire = null
+}) => {
+  if (!transactionId) throw new Error('convertTransactionToInstalment requires transactionId');
+  if (!Array.isArray(schedule) || schedule.length < 2) {
+    throw new Error('convertTransactionToInstalment requires a schedule with at least 2 parts');
+  }
+  const db = getDB();
+  const now = new Date().toISOString();
+
+  // 1. Fetch original transaction to ensure it exists
+  const resTxn = await db.query('SELECT * FROM transactions WHERE id = ?', [transactionId]);
+  const oldTxn = resTxn.values?.[0];
+  if (!oldTxn) {
+    throw new Error(`Transaction to convert not found: ${transactionId}`);
+  }
+
+  const operations = [];
+
+  // 2. Retire obsolete recurring rule if specified
+  if (oldRuleIdToRetire) {
+    try {
+      const resRule = await db.query('SELECT * FROM recurring_rules WHERE id = ?', [oldRuleIdToRetire]);
+      const oldRule = resRule.values?.[0];
+      if (oldRule) {
+        operations.push({
+          storeName: 'recurring_rules',
+          id: oldRuleIdToRetire,
+          operation: 'UPDATE',
+          entity: {
+            ...oldRule,
+            status: 'cancelled',
+            updated_at: now
+          },
+          expectedBaseEntity: oldRule
+        });
+      }
+    } catch (e) {
+      console.warn(`[convertTransactionToInstalment] Could not fetch old rule ${oldRuleIdToRetire}:`, e);
+    }
+  }
+
+  // 3. New instalment recurring rule
+  const ruleId = instalmentRule.id || uuid();
+  const newRuleEntity = {
+    ...instalmentRule,
+    id: ruleId,
+    rule_type: 'instalment',
+    status: 'completed',
+    total_parts: schedule.length,
+    completed_parts: schedule.length,
+    next_date: '',
+    end_date: schedule[schedule.length - 1]?.date || '',
+    amount_per_part: schedule[0]?.amount || 0,
+    created_at: instalmentRule.created_at || now,
+    updated_at: now
+  };
+  operations.push({
+    storeName: 'recurring_rules',
+    id: ruleId,
+    operation: 'INSERT',
+    entity: newRuleEntity
+  });
+
+  // 4. Update original transaction in-place as Part 1
+  const part1 = schedule[0];
+  const [iy0, im0, id0] = part1.date.split('-');
+  const firstTxnDate = `${id0}/${im0}/${iy0}`;
+  const baseNote = instalmentRule.base_note || oldTxn.note || '';
+  const firstPartNote = buildInstalmentNote(baseNote, part1.part, part1.total);
+
+  const updatedPart1Row = {
+    id: transactionId,
+    date: firstTxnDate,
+    time: updatedTransactionData.Time || updatedTransactionData.time || oldTxn.time || '00:00',
+    account: updatedTransactionData.Account || updatedTransactionData.account || oldTxn.account || '',
+    from_account: updatedTransactionData.FromAccount || updatedTransactionData.from_account || oldTxn.from_account || '',
+    to_account: updatedTransactionData.ToAccount || updatedTransactionData.to_account || oldTxn.to_account || '',
+    category: updatedTransactionData.Category || updatedTransactionData.category || oldTxn.category || '',
+    subcategory: updatedTransactionData.Subcategory !== undefined ? updatedTransactionData.Subcategory : (oldTxn.subcategory || ''),
+    note: firstPartNote,
+    description: updatedTransactionData.Description !== undefined ? updatedTransactionData.Description : (oldTxn.description || ''),
+    inr: part1.amount,
+    amount: String(part1.amount),
+    currency: updatedTransactionData.Currency || oldTxn.currency || 'INR',
+    type: updatedTransactionData['Income/Expense'] || updatedTransactionData.type || oldTxn.type || 'Expense',
+    recurring_rule_id: ruleId,
+    tags: updatedTransactionData.Tags !== undefined ? updatedTransactionData.Tags : (oldTxn.tags || ''),
+    split_group_id: oldTxn.split_group_id || '',
+    receipt_image: updatedTransactionData.receipt_image !== undefined ? updatedTransactionData.receipt_image : (oldTxn.receipt_image || ''),
+    warranty_expiry: updatedTransactionData.warranty_expiry !== undefined ? updatedTransactionData.warranty_expiry : (oldTxn.warranty_expiry || ''),
+    serial_no: updatedTransactionData.serial_no !== undefined ? updatedTransactionData.serial_no : (oldTxn.serial_no || ''),
+    sub_account: updatedTransactionData.SubAccount !== undefined ? updatedTransactionData.SubAccount : (oldTxn.sub_account || ''),
+    from_sub_account: updatedTransactionData.FromSubAccount !== undefined ? updatedTransactionData.FromSubAccount : (oldTxn.from_sub_account || ''),
+    to_sub_account: updatedTransactionData.ToSubAccount !== undefined ? updatedTransactionData.ToSubAccount : (oldTxn.to_sub_account || ''),
+    created_at: oldTxn.created_at || now,
+    updated_at: now
+  };
+  operations.push({
+    storeName: 'transactions',
+    id: transactionId,
+    operation: 'UPDATE',
+    entity: updatedPart1Row,
+    expectedBaseEntity: oldTxn
+  });
+
+  // 5. Create sibling transactions Parts 2..N
+  const siblingRows = [];
+  for (let i = 1; i < schedule.length; i++) {
+    const inst = schedule[i];
+    const [iy, im, id2] = inst.date.split('-');
+    const instTxnDate = `${id2}/${im}/${iy}`;
+    const sibId = uuid();
+    const sibRow = {
+      id: sibId,
+      date: instTxnDate,
+      time: updatedPart1Row.time,
+      account: updatedPart1Row.account,
+      from_account: updatedPart1Row.from_account,
+      to_account: updatedPart1Row.to_account,
+      category: updatedPart1Row.category,
+      subcategory: updatedPart1Row.subcategory,
+      note: buildInstalmentNote(baseNote, inst.part, inst.total),
+      description: updatedPart1Row.description,
+      inr: inst.amount,
+      amount: String(inst.amount),
+      currency: updatedPart1Row.currency,
+      type: updatedPart1Row.type,
+      recurring_rule_id: ruleId,
+      tags: updatedPart1Row.tags,
+      split_group_id: '',
+      receipt_image: '',
+      warranty_expiry: '',
+      serial_no: '',
+      sub_account: updatedPart1Row.sub_account,
+      from_sub_account: updatedPart1Row.from_sub_account,
+      to_sub_account: updatedPart1Row.to_sub_account,
+      created_at: now,
+      updated_at: now
+    };
+    siblingRows.push(sibRow);
+    operations.push({
+      storeName: 'transactions',
+      id: sibId,
+      operation: 'INSERT',
+      entity: sibRow
+    });
+  }
+
+  // 6. Assign bundle info
+  const bundleId = transactionId;
+  const bundleTotal = operations.length;
+  for (let i = 0; i < operations.length; i++) {
+    operations[i].bundle_id = bundleId;
+    operations[i].bundle_index = i;
+    operations[i].bundle_total = bundleTotal;
+  }
+
+  // 7. Execute atomic batch
+  await executeAtomicBatch({ operations, bundleId });
+
+  return {
+    rule: newRuleEntity,
+    updatedTransaction: rowToTxn(updatedPart1Row),
+    siblingTransactions: siblingRows.map(rowToTxn),
+    retiredRuleId: oldRuleIdToRetire
+  };
 };
 
 export const deleteTransaction = async (id) => {

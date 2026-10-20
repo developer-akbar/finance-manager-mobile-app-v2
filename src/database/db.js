@@ -462,7 +462,8 @@ const applySchema = async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS sub_accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,account_id TEXT NOT NULL,sort_order INTEGER DEFAULT 0);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS budgets (id TEXT PRIMARY KEY,category TEXT NOT NULL,amount REAL NOT NULL,period TEXT DEFAULT 'Monthly',created_at TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT);`);
-  await db.execute(`CREATE TABLE IF NOT EXISTS recurring_rules (id TEXT PRIMARY KEY,rule_type TEXT NOT NULL,status TEXT DEFAULT 'active',txn_type TEXT DEFAULT 'Expense',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',base_note TEXT DEFAULT '',description TEXT DEFAULT '',currency TEXT DEFAULT 'INR',total_amount REAL DEFAULT 0,amount_per_part REAL DEFAULT 0,total_days INTEGER DEFAULT 0,total_parts INTEGER DEFAULT 0,completed_parts INTEGER DEFAULT 0,start_date TEXT DEFAULT '',next_date TEXT DEFAULT '',end_date TEXT DEFAULT '',schedule_mode TEXT DEFAULT 'on_date',frequency TEXT DEFAULT '',created_at TEXT DEFAULT '');`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS recurring_rules (id TEXT PRIMARY KEY,rule_type TEXT NOT NULL,status TEXT DEFAULT 'active',txn_type TEXT DEFAULT 'Expense',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',base_note TEXT DEFAULT '',description TEXT DEFAULT '',currency TEXT DEFAULT 'INR',total_amount REAL DEFAULT 0,amount_per_part REAL DEFAULT 0,total_days INTEGER DEFAULT 0,total_parts INTEGER DEFAULT 0,completed_parts INTEGER DEFAULT 0,start_date TEXT DEFAULT '',next_date TEXT DEFAULT '',end_date TEXT DEFAULT '',schedule_mode TEXT DEFAULT 'on_date',frequency TEXT DEFAULT '',created_at TEXT DEFAULT '',updated_at TEXT DEFAULT '');`);
+  try { await db.run(`ALTER TABLE recurring_rules ADD COLUMN updated_at TEXT DEFAULT ''`); } catch {}
   await db.execute(`CREATE TABLE IF NOT EXISTS inventory (id TEXT PRIMARY KEY,name TEXT NOT NULL,qty REAL DEFAULT 0,unit TEXT DEFAULT '',price REAL DEFAULT 0,discounted_price REAL DEFAULT 0,status TEXT DEFAULT 'available',purchased_date TEXT DEFAULT '',notes TEXT DEFAULT '',updated_at TEXT,sub_qty REAL DEFAULT 1,sub_unit TEXT DEFAULT '',original_qty REAL DEFAULT 0,pack_qty REAL DEFAULT 1,discount_type TEXT DEFAULT 'percentage',discount_value REAL DEFAULT 0,category TEXT DEFAULT '',brand TEXT DEFAULT '');`);
   try { await db.run(`ALTER TABLE inventory ADD COLUMN sub_qty REAL DEFAULT 1`); } catch {}
   try { await db.run(`ALTER TABLE inventory ADD COLUMN sub_unit TEXT DEFAULT ''`); } catch {}
@@ -712,30 +713,40 @@ const applySchema = async (db) => {
 /**
  * Ensures all sync table columns exist on SQLite, safely handling both Capacitor SQLite db.run and db.execute.
  */
+const _tableColumnsCache = new Map();
+
+export const getTableColumns = async (db, table) => {
+  if (!db || !table) return null;
+  const key = String(table).toLowerCase();
+  if (_tableColumnsCache.has(key)) return _tableColumnsCache.get(key);
+  const cols = new Set();
+  try {
+    if (typeof db.query === 'function') {
+      const info = await db.query(`PRAGMA table_info(${table})`);
+      for (const row of info.values || []) {
+        if (row.name) cols.add(row.name.toLowerCase());
+      }
+    }
+  } catch {}
+  if (cols.size > 0) {
+    _tableColumnsCache.set(key, cols);
+    return cols;
+  }
+  return null;
+};
+
+export const clearTableColumnsCache = () => {
+  _tableColumnsCache.clear();
+};
+
 export const ensureSyncSchema = async (db) => {
   if (!db) return;
-
-  const tableColumnsCache = new Map();
-  const getTableColumns = async (table) => {
-    if (tableColumnsCache.has(table)) return tableColumnsCache.get(table);
-    const cols = new Set();
-    try {
-      if (typeof db.query === 'function') {
-        const info = await db.query(`PRAGMA table_info(${table})`);
-        for (const row of info.values || []) {
-          if (row.name) cols.add(row.name.toLowerCase());
-        }
-      }
-    } catch {}
-    tableColumnsCache.set(table, cols);
-    return cols;
-  };
 
   const safeAddCol = async (table, colDef) => {
     try {
       const colName = colDef.trim().split(/\s+/)[0].toLowerCase();
-      const existingCols = await getTableColumns(table);
-      if (existingCols.has(colName)) {
+      let existingCols = await getTableColumns(db, table);
+      if (existingCols && existingCols.has(colName)) {
         return; // Column already exists, skip ALTER TABLE entirely
       }
       if (typeof db.run === 'function') {
@@ -743,7 +754,9 @@ export const ensureSyncSchema = async (db) => {
       } else if (typeof db.execute === 'function') {
         await db.execute(`ALTER TABLE ${table} ADD COLUMN ${colDef};`);
       }
-      existingCols.add(colName);
+      if (existingCols) {
+        existingCols.add(colName);
+      }
     } catch {
       // Ignore: column already exists or ALTER TABLE unsupported (e.g. IDB)
     }
@@ -783,6 +796,9 @@ export const ensureSyncSchema = async (db) => {
   // investment_plans migrations
   await safeAddCol('investment_plans', 'target_amount REAL DEFAULT 0');
   await safeAddCol('investment_plans', 'current_value REAL DEFAULT 0');
+
+  // recurring_rules migrations
+  await safeAddCol('recurring_rules', "updated_at TEXT DEFAULT ''");
 };
 
 let _db = null;

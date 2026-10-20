@@ -7,7 +7,7 @@
  */
 
 import { Capacitor } from '@capacitor/core';
-import { getDB, getRawIDB, openIDBInstance } from './db.js';
+import { getDB, getRawIDB, openIDBInstance, getTableColumns } from './db.js';
 import { createDeltaEvent, DELTA_STATUS, DELTA_OPERATION } from './deltaQueue.js';
 import { toCanonicalJson, computeCanonicalSha256 } from '../utils/canonicalEntity.js';
 import { v4 as uuid } from 'uuid';
@@ -486,13 +486,19 @@ async function _executeAtomicSQLite({ operations, suppressDeltaQueue = false }) 
         });
       }
     } else if (op.entity) {
-      const keys = Object.keys(op.entity);
-      const cols = keys.join(', ');
-      const placeholders = keys.map(() => '?').join(', ');
-      statements.push({
-        statement: `INSERT OR REPLACE INTO ${op.storeName} (${cols}) VALUES (${placeholders})`,
-        values: keys.map(k => op.entity[k] ?? null)
-      });
+      const rawKeys = Object.keys(op.entity);
+      const tableCols = await getTableColumns(db, op.storeName);
+      const keys = (tableCols && tableCols.size > 0)
+        ? rawKeys.filter(k => tableCols.has(k.toLowerCase()))
+        : rawKeys;
+      if (keys.length > 0) {
+        const cols = keys.join(', ');
+        const placeholders = keys.map(() => '?').join(', ');
+        statements.push({
+          statement: `INSERT OR REPLACE INTO ${op.storeName} (${cols}) VALUES (${placeholders})`,
+          values: keys.map(k => op.entity[k] ?? null)
+        });
+      }
     }
 
     const event = createDeltaEvent({

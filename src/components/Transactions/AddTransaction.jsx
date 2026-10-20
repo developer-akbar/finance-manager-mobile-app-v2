@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { v4 as uuid } from 'uuid';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { inputToStorage, toInputDate, nowTimeStr, formatINR, cleanNumericInput, isSystemTag, getUserFacingTags, normalizeSuggestionQuery } from '../../utils/format.js';
+import { inputToStorage, toInputDate, toInputTime, nowTimeStr, formatINR, cleanNumericInput, isSystemTag, getUserFacingTags, normalizeSuggestionQuery } from '../../utils/format.js';
 import { resolveInvestmentAccounts, calculateGrowwCharges, resolveKnownFolioAndMode } from '../../utils/brokerageAccounting.js';
 import { resolveSecurity, searchSecurities, cleanSecurityToNote } from '../../utils/securityResolution.js';
+import { convertTransactionToInstalment } from '../../database/transactions.js';
 import './AddTransaction.css';
 import { AccountsManager, CategoriesManager } from '../Settings/Settings.jsx';
 import {
@@ -59,12 +60,17 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
   const [inputMode, setInputMode] = React.useState('months');       // 'months' | 'days'
   const [repeatFreq, setRepeatFreq] = React.useState('monthly');
   const [step, setStep] = React.useState(1);              // 1=type, 2=details, 3=schedule
+  const [error, setError] = React.useState('');
 
   const handleInstSave = () => {
     const totalDays = inputMode === 'months'
       ? Math.round(parseFloat(months || 0) * 30)
       : parseInt(days || 0);
-    if (!totalDays || totalDays < 1) return;
+    if (!totalDays || (inputMode === 'months' && parseFloat(months || 0) < 2) || (inputMode === 'days' && totalDays < 31)) {
+      setError('Instalment must have at least 2 months (or 31+ days)');
+      return;
+    }
+    setError('');
     onSave({ type: 'instalment', totalDays, scheduleMode });
     onClose();
   };
@@ -133,9 +139,24 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
                 onChange={e => inputMode === 'months' ? setMonths(e.target.value) : setDays(e.target.value)}
               />
             </div>
+            {error && (
+              <div style={{ color: 'var(--expense)', fontSize: '0.74rem', marginBottom: 10, fontWeight: 600 }}>
+                {error}
+              </div>
+            )}
             <button className="btn btn-primary btn-full" style={{ marginBottom: 8 }}
-              onClick={() => setStep(3)}>Next →</button>
-            <button className="btn btn-ghost btn-full" onClick={() => setStep(1)}>← Back</button>
+              onClick={() => {
+                const totalDays = inputMode === 'months'
+                  ? Math.round(parseFloat(months || 0) * 30)
+                  : parseInt(days || 0);
+                if (!totalDays || (inputMode === 'months' && parseFloat(months || 0) < 2) || (inputMode === 'days' && totalDays < 31)) {
+                  setError('Instalment must have at least 2 months (or 31+ days)');
+                  return;
+                }
+                setError('');
+                setStep(3);
+              }}>Next →</button>
+            <button className="btn btn-ghost btn-full" onClick={() => { setError(''); setStep(1); }}>← Back</button>
           </>
         )}
 
@@ -474,7 +495,7 @@ export default function AddTransaction({
   prefillSubAccount = null,
   backInterceptRef = null, onSaveInstalment = null
 }) {
-  const { state, navigate, addTransaction, updateTransaction, deleteTransaction, createRecurringRule, updateInstalmentSiblings, advancePlanDueDate } = useApp();
+  const { state, navigate, addTransaction, updateTransaction, deleteTransaction, createRecurringRule, modifyRecurringRule, removeRecurringRule, updateInstalmentSiblings, advancePlanDueDate, load } = useApp();
   const { accounts = [], categories = {}, transactions = [], investmentPlans = [] } = state || {};
   const isEdit = !!editTransaction;
 
@@ -767,8 +788,8 @@ export default function AddTransaction({
       return {
         type: isInv ? 'Investment' : rt,
         amount: dispAmt,
-        date: toInputDate(t.Date) || todayVal(),
-        time: t.Time || lastTime,
+        date: toInputDate(t.Date || t.date) || todayVal(),
+        time: toInputTime(t.Time || t.time, lastTime),
         investmentAccount: initialInvestmentAccount,
         account: initialAccount,
         fromAccount: rt.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
@@ -927,8 +948,8 @@ export default function AddTransaction({
         return {
           type: 'Investment',
           amount: '',
-          date: toInputDate(t.Date) || todayVal(),
-          time: t.Time || nowTimeStr(),
+          date: toInputDate(t.Date || t.date) || todayVal(),
+          time: toInputTime(t.Time || t.time, t._copyMode === 'today' ? nowTimeStr() : '00:00'),
           account: initialInvestmentAccount,
           fromAccount: '',
           toAccount: '',
@@ -977,8 +998,8 @@ export default function AddTransaction({
       return {
         type: rt,
         amount: String(t.INR || t.Amount || t.amount || ''),
-        date: toInputDate(t.Date) || todayVal(),
-        time: t.Time || nowTimeStr(),
+        date: toInputDate(t.Date || t.date) || todayVal(),
+        time: toInputTime(t.Time || t.time, t._copyMode === 'today' ? nowTimeStr() : '00:00'),
         account: rt.startsWith('Transfer') ? '' : (t.Account || ''),
         fromAccount: rt.startsWith('Transfer') ? (t.Account || t.FromAccount || '') : '',
         toAccount: rt.startsWith('Transfer') ? (t.ToAccount || '') : '',
@@ -1512,7 +1533,11 @@ export default function AddTransaction({
     [categories, form.category]);
 
   const instInfo = useMemo(() => isEdit ? parseInstalmentInfo(editTransaction?.Note) : null, [isEdit, editTransaction]);
-  const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!instInfo);
+  const linkedRule = useMemo(() => {
+    if (!editTransaction?.recurring_rule_id) return null;
+    return (state.recurringRules || []).find(r => r.id === editTransaction.recurring_rule_id) || null;
+  }, [editTransaction, state.recurringRules]);
+  const isInstalmentEdit = isEdit && (Boolean(instInfo) || linkedRule?.rule_type === 'instalment');
 
   const instalmentStats = useMemo(() => {
     if (!isInstalmentEdit) return null;
@@ -2550,6 +2575,7 @@ export default function AddTransaction({
   };
 
   const isInvMode = Boolean(form.type === 'Investment' || form.type === 'BUY' || form.type === 'SELL');
+  const canShowRecurring = !isInvMode && !isSplit && (!isEdit || !isInstalmentEdit);
 
   const currentTypes = TYPES;
 
@@ -2609,6 +2635,12 @@ export default function AddTransaction({
       if (form.amount === '' || form.amount === undefined || isNaN(parseFloat(form.amount))) e.amount = 'Enter a valid amount';
       if (!form.account) e.account = 'Select account';
       if (!form.category) e.category = 'Select category';
+    }
+
+    if (recurringConfig?.type === 'instalment') {
+      if (!form.note || !form.note.trim()) {
+        e.note = 'Enter note for instalment description';
+      }
     }
     setErrors(e); return Object.keys(e).length === 0;
   };
@@ -2675,7 +2707,7 @@ export default function AddTransaction({
         return;
       }
 
-      if (!isEdit && recurringConfig) {
+      if (recurringConfig) {
         const isoDate = form.date;
         const txnDate = inputToStorage(form.date);
 
@@ -2683,8 +2715,11 @@ export default function AddTransaction({
           const rule = {
             rule_type: 'instalment', status: 'completed',
             txn_type: form.type,
-            account: form.account, from_account: form.fromAccount || '', to_account: form.toAccount || '',
-            category: form.category, subcategory: cleanSubcategory,
+            account: isTransfer ? form.fromAccount : form.account,
+            from_account: isTransfer ? form.fromAccount : '',
+            to_account: isTransfer ? form.toAccount : '',
+            category: isTransfer ? 'Transfer' : form.category,
+            subcategory: cleanSubcategory,
             base_note: baseNote, description: form.description || '',
             currency: 'INR', total_amount: totalAmount,
             total_days: recurringConfig.totalDays,
@@ -2697,32 +2732,80 @@ export default function AddTransaction({
           rule.next_date = '';
           rule.end_date = schedule[schedule.length - 1]?.date || '';
           rule.amount_per_part = schedule[0]?.amount || 0;
-          const saved = await createRecurringRule(rule);
-          for (const inst of schedule) {
-            const [iy, im, id2] = inst.date.split('-');
-            const instTxnDate = `${id2}/${im}/${iy}`;
-            await addTransaction({
-              Date: instTxnDate, Time: form.time || '00:00',
-              Account: form.account, FromAccount: form.fromAccount || '', ToAccount: form.toAccount || '',
-              Category: form.category, Subcategory: cleanSubcategory,
-              Note: buildInstalmentNote(baseNote, inst.part, inst.total),
+
+          if (isEdit && editTransaction) {
+            // Atomically convert original transaction to installment series and retire obsolete rule
+            const [iy0, im0, id0] = schedule[0].date.split('-');
+            const firstTxnDate = `${id0}/${im0}/${iy0}`;
+            const firstPartData = {
+              Date: firstTxnDate,
+              Time: form.time || editTransaction?.time || '00:00',
+              Account: isTransfer ? form.fromAccount : form.account,
+              FromAccount: isTransfer ? form.fromAccount : '',
+              ToAccount: isTransfer ? form.toAccount : '',
+              Category: isTransfer ? 'Transfer' : form.category,
+              Subcategory: cleanSubcategory,
+              Note: buildInstalmentNote(baseNote, schedule[0].part, schedule[0].total),
               Description: form.description || '',
-              INR: inst.amount, Amount: String(inst.amount),
-              Currency: 'INR', 'Income/Expense': form.type,
-              recurring_rule_id: saved.id,
+              INR: schedule[0].amount,
+              Amount: String(schedule[0].amount),
+              Currency: 'INR',
+              'Income/Expense': form.type,
               Tags: combinedTags,
+              receipt_image: form.receipt_image !== undefined ? form.receipt_image : (editTransaction?.receipt_image || ''),
+              warranty_expiry: form.warranty_expiry !== undefined ? form.warranty_expiry : (editTransaction?.warranty_expiry || ''),
+              serial_no: form.serial_no !== undefined ? form.serial_no : (editTransaction?.serial_no || ''),
+              _id: editTransaction._id,
               SubAccount: cleanSubAccount,
               FromSubAccount: isTransfer ? cleanSubAccount : '',
               ToSubAccount: isTransfer ? cleanToSubAccount : '',
+            };
+
+            await convertTransactionToInstalment({
+              transactionId: editTransaction._id,
+              updatedTransactionData: firstPartData,
+              instalmentRule: rule,
+              schedule,
+              oldRuleIdToRetire: (editTransaction?.recurring_rule_id && editTransaction.recurring_rule_id !== rule.id)
+                ? editTransaction.recurring_rule_id
+                : null
             });
+            if (load) await load();
+          } else {
+            // New transaction: create rule and all parts
+            const saved = await createRecurringRule(rule);
+            for (const inst of schedule) {
+              const [iy, im, id2] = inst.date.split('-');
+              const instTxnDate = `${id2}/${im}/${iy}`;
+              await addTransaction({
+                Date: instTxnDate, Time: form.time || '00:00',
+                Account: isTransfer ? form.fromAccount : form.account,
+                FromAccount: isTransfer ? form.fromAccount : '',
+                ToAccount: isTransfer ? form.toAccount : '',
+                Category: isTransfer ? 'Transfer' : form.category,
+                Subcategory: cleanSubcategory,
+                Note: buildInstalmentNote(baseNote, inst.part, inst.total),
+                Description: form.description || '',
+                INR: inst.amount, Amount: String(inst.amount),
+                Currency: 'INR', 'Income/Expense': form.type,
+                recurring_rule_id: saved.id,
+                Tags: combinedTags,
+                SubAccount: cleanSubAccount,
+                FromSubAccount: isTransfer ? cleanSubAccount : '',
+                ToSubAccount: isTransfer ? cleanToSubAccount : '',
+              });
+            }
           }
         } else if (recurringConfig.type === 'repeat') {
           const nextDate = computeNextRepeatDate(isoDate, recurringConfig.frequency, recurringConfig.scheduleMode);
           const rule = {
             rule_type: 'repeat', status: 'active',
             txn_type: form.type,
-            account: form.account, from_account: form.fromAccount || '', to_account: form.toAccount || '',
-            category: form.category, subcategory: cleanSubcategory,
+            account: isTransfer ? form.fromAccount : form.account,
+            from_account: isTransfer ? form.fromAccount : '',
+            to_account: isTransfer ? form.toAccount : '',
+            category: isTransfer ? 'Transfer' : form.category,
+            subcategory: cleanSubcategory,
             base_note: baseNote, description: form.description || '',
             currency: 'INR', amount_per_part: totalAmount,
             start_date: isoDate,
@@ -2732,9 +2815,11 @@ export default function AddTransaction({
             completed_parts: 1,
           };
           const saved = await createRecurringRule(rule);
-          await addTransaction({
+          const repeatData = {
             Date: txnDate, Time: form.time || '',
-            Account: form.account, FromAccount: form.fromAccount || '', ToAccount: form.toAccount || '',
+            Account: isTransfer ? form.fromAccount : form.account,
+            FromAccount: isTransfer ? form.fromAccount : '',
+            ToAccount: isTransfer ? form.toAccount : '',
             Category: isTransfer ? 'Transfer' : form.category,
             Subcategory: cleanSubcategory,
             Note: baseNote, Description: form.description || '',
@@ -2742,10 +2827,33 @@ export default function AddTransaction({
             Currency: 'INR', 'Income/Expense': form.type,
             recurring_rule_id: saved.id,
             Tags: combinedTags,
+            receipt_image: form.receipt_image !== undefined ? form.receipt_image : (editTransaction?.receipt_image || ''),
+            warranty_expiry: form.warranty_expiry !== undefined ? form.warranty_expiry : (editTransaction?.warranty_expiry || ''),
+            serial_no: form.serial_no !== undefined ? form.serial_no : (editTransaction?.serial_no || ''),
             SubAccount: cleanSubAccount,
             FromSubAccount: isTransfer ? cleanSubAccount : '',
             ToSubAccount: isTransfer ? cleanToSubAccount : '',
-          });
+          };
+          if (isEdit && editTransaction) {
+            // Retire previous recurring rule if converting from an existing rule
+            if (editTransaction.recurring_rule_id && editTransaction.recurring_rule_id !== saved.id) {
+              try {
+                if (modifyRecurringRule) {
+                  await modifyRecurringRule(editTransaction.recurring_rule_id, { status: 'cancelled' });
+                } else {
+                  await updateRecurringRule(editTransaction.recurring_rule_id, { status: 'cancelled' });
+                }
+              } catch (e) {
+                console.warn('Failed to retire obsolete recurring rule on repeat conversion:', e);
+              }
+            }
+            await updateTransaction(editTransaction._id, {
+              ...repeatData,
+              _id: editTransaction._id
+            });
+          } else {
+            await addTransaction(repeatData);
+          }
         }
       } else {
         // Check if saving an investment transaction
@@ -2997,8 +3105,7 @@ export default function AddTransaction({
           }
         } else {
           // Normal single transaction or instalment edit
-          const instInfo = parseInstalmentInfo(editTransaction?.Note);
-          const isInstalmentEdit = isEdit && (!!editTransaction?.recurring_rule_id || !!instInfo);
+          const isInstalmentEdit = isEdit && (Boolean(instInfo) || linkedRule?.rule_type === 'instalment');
           const thisNote = isInstalmentEdit && instInfo
             ? `${baseNote} (${instInfo.part}/${instInfo.total})`.trim()
             : baseNote;
@@ -3947,21 +4054,21 @@ export default function AddTransaction({
                     <input className={`form-input ${errors.date ? 'err' : ''}`} type="date" value={form.date} onChange={e => set('date', e.target.value)} onFocus={() => setPickerState(null)} />
                     <input className="form-input" type="time" value={form.time} onChange={e => set('time', e.target.value)} onFocus={() => setPickerState(null)} />
                   </div>
-                  {!isEdit && (
+                  {canShowRecurring && (
                     <button type="button" className="recurring-button" onClick={() => setShowRecurring(true)}>
                       <span>{recurringConfig ? (recurringConfig.type === 'instalment' ? '📋' : '🔁') : '🔁'}</span>
-                      <span>{recurringConfig ? (recurringConfig.type === 'instalment' ? 'Instalment' : 'Repeat') : 'Rep/Inst'}</span>
+                      <span>{recurringConfig ? (recurringConfig.type === 'instalment' ? 'Instalment' : 'Repeat') : (isEdit ? 'Convert' : 'Rep/Inst')}</span>
                     </button>
                   )}
                 </div>
               </div>
               {/* Recurring summary for selected config */}
-              {!isEdit && recurringConfig && (
+              {canShowRecurring && recurringConfig && (
                 <div className="recurring-summary">
                   <span>
                     {recurringConfig.type === 'instalment'
-                      ? `📋 Instalment · ${recurringConfig.totalDays} days · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On the day'}`
-                      : `🔁 Repeat ${recurringConfig.frequency} · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On date'}`}
+                      ? `📋 ${isEdit ? 'Convert to Instalment' : 'Instalment'} · ${recurringConfig.totalDays} days · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On the day'}`
+                      : `🔁 ${isEdit ? 'Convert to Repeat' : 'Repeat'} ${recurringConfig.frequency} · ${recurringConfig.scheduleMode === 'start_of_month' ? 'Start of month' : 'On date'}`}
                   </span>
                   <button type="button" onClick={() => setRecurringConfig(null)} className="recurring-clear">✕</button>
                 </div>
@@ -4440,7 +4547,7 @@ export default function AddTransaction({
 
           <div className="form-actions" style={{ display: 'flex', gap: '10px', marginBottom: 14 }}>
             <button className="btn btn-primary btn-lg" style={{ flex: 2 }} onClick={() => handleSave(false)} disabled={saving}>
-              {saving ? 'Saving…' : isEdit ? 'Update' : (isCopy ? 'Copy' : 'Save')}
+              {saving ? 'Saving…' : isEdit ? (recurringConfig?.type === 'instalment' ? 'Convert to Instalment' : recurringConfig?.type === 'repeat' ? 'Convert to Repeat' : 'Update') : (isCopy ? 'Copy' : 'Save')}
             </button>
             {!isEdit && onSaveAndContinue && (
               <button className="btn btn-secondary btn-lg" style={{ flex: 1 }} onClick={() => handleSave(true)} disabled={saving}>

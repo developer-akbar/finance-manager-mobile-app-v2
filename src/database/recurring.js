@@ -47,8 +47,10 @@ export const applyRecurringSchema = async (db) => {
     end_date TEXT DEFAULT '',
     schedule_mode TEXT DEFAULT 'on_date',
     frequency TEXT DEFAULT '',
-    created_at TEXT DEFAULT ''
+    created_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT ''
   );`);
+  try { await db.run(`ALTER TABLE recurring_rules ADD COLUMN updated_at TEXT DEFAULT ''`); } catch {}
 };
 
 // ── CRUD ──────────────────────────────────────────────────────────────────
@@ -67,10 +69,12 @@ export const getActiveRecurringRules = async () => {
 export const saveRecurringRule = async (rule) => {
   const db = getDB();
   const id = rule.id || uuid();
+  const now = new Date().toISOString();
   const obj = {
     ...rule,
     id,
-    created_at: rule.created_at || new Date().toISOString()
+    created_at: rule.created_at || now,
+    updated_at: rule.updated_at || now
   };
 
   const existingRes = await db.query('SELECT id FROM recurring_rules WHERE id = ?', [id]);
