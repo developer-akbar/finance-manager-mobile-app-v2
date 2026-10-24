@@ -36,7 +36,7 @@ import {
   sanitizeStackTrace
 } from '../services/deltaSyncCoordinator.js';
 import { translateSyncError } from '../utils/cloudSyncStatusHelper.js';
-import { reconcileStagedEvents } from '../services/deltaReconciliation.js';
+import { bundleRelatedTransactions } from '../utils/finmanPayload.js';
 
 const TEST_SESSION_KEY = 'test-resilience-key-32-chars-long!!';
 const TEST_BASE_SNAPSHOT_ID = 'snap_resilience_test_v1';
@@ -56,61 +56,96 @@ class MockDriveStorage {
     this.failUploadError = null;
   }
 
-  async findFileByName(name) {
-    for (const [id, file] of this.files.entries()) {
-      if (file.name === name) return { id, ...file };
-    }
-    return null;
-  }
-
-  async listFiles({ q } = {}) {
+  async findFiles({ name, trashed = false } = {}) {
     const results = [];
-    for (const [id, file] of this.files.entries()) {
-      if (q && q.includes('trashed = false') && file.trashed) continue;
-      results.push({ id, ...file });
+    for (const [id, f] of this.files.entries()) {
+      if (!f.trashed && (!name || f.name === name)) {
+        results.push({ id: f.id, name: f.name, appProperties: f.appProperties });
+      }
     }
     return results;
   }
 
-  async uploadFile(name, content, mimeType = 'application/json') {
-    if (this.failUpload) {
-      throw this.failUploadError || new Error('Network request failed (503 Service Unavailable)');
+  async findAppDataFile(name) {
+    for (const [id, f] of this.files.entries()) {
+      if (!f.trashed && f.name === name) {
+        return { id: f.id, name: f.name };
+      }
     }
-    const id = `mock_drive_file_${this.nextId++}`;
-    this.files.set(id, { name, content, mimeType, trashed: false });
+    return null;
+  }
+
+  async readFile(fileId) {
+    const f = this.files.get(fileId);
+    if (!f || f.trashed) throw new Error(`Drive file not found: ${fileId}`);
+    return f.content;
+  }
+
+  async readAppDataFile(fileId) {
+    return this.readFile(fileId);
+  }
+
+  async uploadFile({ name, content, appProperties = {} } = {}) {
+    if (this.failUpload) {
+      throw this.failUploadError || new Error('Network request failed: 503 Service Unavailable');
+    }
+    for (const [id, f] of this.files.entries()) {
+      if (!f.trashed && f.name === name) {
+        f.content = content;
+        f.appProperties = { ...f.appProperties, ...appProperties };
+        return { id: f.id, name: f.name };
+      }
+    }
+    const id = `mock_drive_${this.nextId++}`;
+    this.files.set(id, {
+      id,
+      name,
+      content,
+      appProperties: { ...appProperties },
+      trashed: false
+    });
     return { id, name };
+  }
+
+  async uploadAppDataFile(name, content) {
+    return this.uploadFile({ name, content });
   }
 
   async updateFile(fileId, content) {
     if (this.failUpload) {
-      throw this.failUploadError || new Error('Network request failed (503 Service Unavailable)');
+      throw this.failUploadError || new Error('Network request failed: 503 Service Unavailable');
     }
-    const existing = this.files.get(fileId);
-    if (!existing) throw new Error(`File not found: ${fileId}`);
-    existing.content = content;
-    return { id: fileId, name: existing.name };
-  }
-
-  async downloadFile(fileId) {
-    const file = this.files.get(fileId);
-    if (!file) throw new Error(`File not found: ${fileId}`);
-    return file.content;
+    const f = this.files.get(fileId);
+    if (!f || f.trashed) throw new Error(`Drive file not found: ${fileId}`);
+    f.content = content;
+    return { id: f.id, name: f.name };
   }
 }
 
 const mockDrive = new MockDriveStorage();
 
-const setupDeviceEnvironment = async (deviceId, idbInstance) => {
-  global.indexedDB = idbInstance;
+const setupDeviceEnvironment = async (deviceId, idbInstance, storage = {}) => {
+  globalThis.indexedDB = idbInstance;
+  global.localStorage = {
+    getItem: (k) => storage[k] || null,
+    setItem: (k, v) => { storage[k] = String(v); },
+    removeItem: (k) => { delete storage[k]; },
+    clear: () => { Object.keys(storage).forEach(k => delete storage[k]); }
+  };
+
   await closeDB();
   clearTableColumnsCache();
   await initDB();
 
-  await initLocalSyncState(deviceId, TEST_BASE_SNAPSHOT_ID, 1);
-  await setSetting('cloud_sync_device_id', deviceId);
-  await setSetting('cloud_sync_peer_lifecycle', 'ACTIVE');
-  await setSetting('sync_session_key', TEST_SESSION_KEY);
-  await setSetting('cloud_sync_last_snapshot_id', TEST_BASE_SNAPSHOT_ID);
+  await initLocalSyncState(deviceId, TEST_BASE_SNAPSHOT_ID, 1, 'ACTIVE');
+  await setSetting('last_snapshot_id', TEST_BASE_SNAPSHOT_ID, { suppressDeltaQueue: true });
+  await setSetting('last_parent_snapshot_id', '', { suppressDeltaQueue: true });
+  await setSetting('last_cloud_version', 1, { suppressDeltaQueue: true });
+
+  await setSetting('cloud_sync_device_id', deviceId, { suppressDeltaQueue: true });
+  await setSetting('cloud_sync_peer_lifecycle', 'ACTIVE', { suppressDeltaQueue: true });
+  await setSetting('sync_session_key', TEST_SESSION_KEY, { suppressDeltaQueue: true });
+  await setSetting('cloud_sync_last_snapshot_id', TEST_BASE_SNAPSHOT_ID, { suppressDeltaQueue: true });
 
   configureDeltaSyncEngine({
     getAccessToken: async () => 'mock_valid_token_resilience',
@@ -135,11 +170,13 @@ test('Cross-Device Sync Failure Resilience & Diagnostics Suite', async (t) => {
   await t.test('1. Two-device sync after Repeat-to-Installment conversion reconciles updated_at on both rules and transactions', async () => {
     const idbDeviceA = new IDBFactory();
     const idbDeviceB = new IDBFactory();
+    const storageA = {};
+    const storageB = {};
 
     // ── Setup Device A ──
-    await setupDeviceEnvironment('dev_resilience_a', idbDeviceA);
-    await replaceAccounts([{ id: 'acc_bank', name: 'Bank Account', type: 'Bank', balance: 50000 }]);
-    await replaceCategories([{ id: 'cat_electronics', name: 'Electronics', type: 'Expense' }]);
+    await setupDeviceEnvironment('dev_resilience_a', idbDeviceA, storageA);
+    await replaceAccounts([{ id: 'acc_bank', name: 'Bank Account', type: 'Bank', balance: 50000 }], { suppressDeltaQueue: true });
+    await replaceCategories([{ id: 'cat_electronics', name: 'Electronics', type: 'Expense' }], { suppressDeltaQueue: true });
 
     // Device A creates an initial Repeat Rule and initial Transaction
     const repeatRule = {
@@ -213,17 +250,17 @@ test('Cross-Device Sync Failure Resilience & Diagnostics Suite', async (t) => {
       oldRuleIdToRetire: repeatRule.id
     });
 
-    assert.equal(conversionResult.success, true);
-    assert.equal(conversionResult.totalParts, 3);
+    assert.ok(conversionResult.rule, 'Rule entity must be generated');
+    assert.equal(conversionResult.siblingTransactions.length, 2, '2 sibling transactions generated');
 
     // Push from Device A to Cloud
     const pushPassA = await executeFullSyncPass({ trigger: 'TEST_PUSH_A' });
     assert.equal(pushPassA.success, true);
 
     // ── Setup Device B ──
-    await setupDeviceEnvironment('dev_resilience_b', idbDeviceB);
-    await replaceAccounts([{ id: 'acc_bank', name: 'Bank Account', type: 'Bank', balance: 50000 }]);
-    await replaceCategories([{ id: 'cat_electronics', name: 'Electronics', type: 'Expense' }]);
+    await setupDeviceEnvironment('dev_resilience_b', idbDeviceB, storageB);
+    await replaceAccounts([{ id: 'acc_bank', name: 'Bank Account', type: 'Bank', balance: 50000 }], { suppressDeltaQueue: true });
+    await replaceCategories([{ id: 'cat_electronics', name: 'Electronics', type: 'Expense' }], { suppressDeltaQueue: true });
 
     // Device B pulls and reconciles
     const pullPassB = await executeFullSyncPass({ trigger: 'TEST_PULL_B' });
@@ -249,12 +286,12 @@ test('Cross-Device Sync Failure Resilience & Diagnostics Suite', async (t) => {
     const part1Txn = txnsB.find(t => t.id === initialTxn.id);
     assert.ok(part1Txn, 'Part 1 must preserve original transaction ID');
     assert.equal(part1Txn.INR, 4000);
-    assert.ok(part1Txn.Note.includes('[Instalment 1/3]'));
+    assert.ok(part1Txn.Note.includes('(1/3)'));
 
     // Check stats on Device B
-    const statsB = getInstalmentSeriesStats(part1Txn, txnsB, rulesB);
+    const statsB = getInstalmentSeriesStats(part1Txn, txnsB, 4000);
     assert.equal(statsB.totalParts, 3);
-    assert.equal(statsB.currentPart, 1);
+    assert.equal(statsB.part, 1);
     assert.equal(statsB.totalAmount, 12000);
   });
 
@@ -298,13 +335,13 @@ test('Cross-Device Sync Failure Resilience & Diagnostics Suite', async (t) => {
     const idbDevice = new IDBFactory();
     await setupDeviceEnvironment('dev_ooo_test', idbDevice);
 
-    // Add installment transaction parts without recurring rule yet in database
+    // Add installment transaction parts with proper note formatting before recurring rule arrives
     const txn1 = await addTransaction({
       Date: '01/10/2026',
       Time: '10:00',
       Account: 'Bank Account',
       Category: 'Electronics',
-      Note: 'Laptop Purchase [Instalment 1/3]',
+      Note: buildInstalmentNote('Laptop Purchase', 1, 3),
       INR: 15000,
       Amount: '15000',
       Currency: 'INR',
@@ -317,7 +354,7 @@ test('Cross-Device Sync Failure Resilience & Diagnostics Suite', async (t) => {
       Time: '10:00',
       Account: 'Bank Account',
       Category: 'Electronics',
-      Note: 'Laptop Purchase [Instalment 2/3]',
+      Note: buildInstalmentNote('Laptop Purchase', 2, 3),
       INR: 15000,
       Amount: '15000',
       Currency: 'INR',
@@ -326,13 +363,13 @@ test('Cross-Device Sync Failure Resilience & Diagnostics Suite', async (t) => {
     });
 
     const allTxns = await getTransactions();
-    const rules = await getAllRecurringRules(); // empty
 
     // Should compute stats safely from notes without throwing
-    const stats = getInstalmentSeriesStats(txn1, allTxns, rules);
+    const stats = getInstalmentSeriesStats(txn1, allTxns, 15000);
     assert.equal(stats.totalParts, 3);
-    assert.equal(stats.currentPart, 1);
-    assert.equal(stats.rule, null);
+    assert.equal(stats.part, 1);
+    assert.equal(stats.totalAmount, 45000);
+    assert.equal(stats.balanceRemaining, 30000);
 
     // Now recurring rule arrives subsequently
     await saveRecurringRule({
@@ -346,17 +383,15 @@ test('Cross-Device Sync Failure Resilience & Diagnostics Suite', async (t) => {
       updated_at: '2026-10-01T12:00:00.000Z'
     });
 
-    const updatedRules = await getAllRecurringRules();
-    const statsAfterRule = getInstalmentSeriesStats(txn1, allTxns, updatedRules);
+    const statsAfterRule = getInstalmentSeriesStats(txn1, allTxns, 15000);
     assert.equal(statsAfterRule.totalParts, 3);
-    assert.ok(statsAfterRule.rule);
-    assert.equal(statsAfterRule.rule.id, 'pending_rule_xyz');
+    assert.equal(statsAfterRule.totalAmount, 45000);
   });
 
   await t.test('4. Transient failure preserves pending outbox deltas and enables clean idempotent retry', async () => {
     const idbDevice = new IDBFactory();
     await setupDeviceEnvironment('dev_transient_test', idbDevice);
-    await replaceAccounts([{ id: 'acc_1', name: 'Cash', type: 'Cash', balance: 1000 }]);
+    await replaceAccounts([{ id: 'acc_1', name: 'Cash', type: 'Cash', balance: 1000 }], { suppressDeltaQueue: true });
 
     // Create a local transaction
     await addTransaction({

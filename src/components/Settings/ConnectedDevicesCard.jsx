@@ -147,7 +147,7 @@ export default function ConnectedDevicesCard({
     }
   }, [driveClient, localDeviceId]);
 
-  // Load on mount and when authentication or localDeviceId changes
+  // Load on mount and when authentication, localDeviceId, or lastLocalSyncAt changes
   useEffect(() => {
     if (isGoogleLinked() || driveClient) {
       fetchDevices();
@@ -155,7 +155,43 @@ export default function ConnectedDevicesCard({
       setDevices([]);
       setError('AUTH_REQUIRED');
     }
-  }, [isAuthenticated, fetchDevices, driveClient]);
+  }, [isAuthenticated, fetchDevices, driveClient, lastLocalSyncAt]);
+
+  // Auto-refresh devices list on live sync status broadcasts and delta queue events
+  useEffect(() => {
+    let mounted = true;
+    let unsubSync = null;
+
+    import('../../services/deltaSyncCoordinator.js').then(({ subscribeSyncStatus, SYNC_STATUS }) => {
+      if (!mounted) return;
+      unsubSync = subscribeSyncStatus((status) => {
+        if (!mounted) return;
+        if (status === SYNC_STATUS.SUCCESS || status === SYNC_STATUS.IDLE) {
+          fetchDevices();
+        }
+      });
+    }).catch(() => {});
+
+    const handleQueueChange = () => {
+      if (mounted && (isGoogleLinked() || driveClient)) {
+        fetchDevices();
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('finman:delta-queue-changed', handleQueueChange);
+      window.addEventListener('finman:conflicts-resolved', handleQueueChange);
+    }
+
+    return () => {
+      mounted = false;
+      if (typeof unsubSync === 'function') unsubSync();
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('finman:delta-queue-changed', handleQueueChange);
+        window.removeEventListener('finman:conflicts-resolved', handleQueueChange);
+      }
+    };
+  }, [fetchDevices, driveClient]);
 
   const handleCopy = async (id) => {
     try {
@@ -559,6 +595,20 @@ export default function ConnectedDevicesCard({
                           }}
                         >
                           🚫 Blocked
+                        </span>
+                      ) : (!isCurrent && typeof dev.localReconciledSequence === 'number' && dev.lastSequence > dev.localReconciledSequence) ? (
+                        <span
+                          style={{
+                            fontSize: '0.64rem',
+                            fontWeight: 700,
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            background: 'rgba(255, 179, 0, 0.15)',
+                            color: 'var(--warning, #ffb300)'
+                          }}
+                          title={`Peer sequence #${dev.lastSequence} is ahead of local reconciled sequence #${dev.localReconciledSequence}`}
+                        >
+                          ⏳ Catching Up (#{dev.localReconciledSequence}/{dev.lastSequence})
                         </span>
                       ) : (dev.lineageStatus === PEER_LINEAGE_STATUS.COMPATIBLE || isSameSnapshot || (!isPeerNewer && dev.baseCloudVersion <= currentVersion)) ? (
                         <span

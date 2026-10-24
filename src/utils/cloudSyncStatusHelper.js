@@ -113,7 +113,7 @@ export function translateSyncError(rawError, context = {}) {
   }
 
   // 7. Lineage & Peer Baseline Guards
-  if (lower.includes('blocked_older_base') || lower.includes('blocked_unknown_base') || lower.includes('sequence_gap')) {
+  if (lower.includes('blocked_older_base') || lower.includes('blocked_unknown_base') || lower.includes('sequence_gap') || lower.includes('sequence gap')) {
     return 'Peer synchronization is waiting for cloud baseline updates. Local financial records are completely safe.';
   }
 

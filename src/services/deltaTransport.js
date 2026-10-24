@@ -621,14 +621,26 @@ export async function pullPeerDeltas(opts) {
     ? async (id) => driveClient.readFile(id)
     : (driveClient?.readAppDataFile || readAppDataFile);
 
-  const creatorDeviceId = opts.creatorDeviceId || null;
+  let creatorDeviceId = opts.creatorDeviceId || null;
+  if (!creatorDeviceId) {
+    try {
+      const snapCreatorRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_creator_id']);
+      if (snapCreatorRes.values?.[0]?.value) {
+        creatorDeviceId = snapCreatorRes.values[0].value;
+      }
+    } catch {}
+  }
+
   const stagedPackageIds = new Set();
   let stagedPackagesCount = 0;
   let stagedEventsCount = 0;
 
   for (const peerManifest of peerManifests) {
     const peerDeviceId = peerManifest.device_id;
-    const isCreator = Boolean(creatorDeviceId && peerDeviceId === creatorDeviceId);
+    const isCreator = Boolean(
+      (creatorDeviceId && peerDeviceId === creatorDeviceId) ||
+      (baseSnapshotId && baseSnapshotId.endsWith('_' + peerDeviceId.replace(/^dev_/, '').slice(0, 8)))
+    );
 
     // 1. Get current local staging watermark for this peer
     const peerStateRes = await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', [peerDeviceId]);
@@ -688,6 +700,41 @@ export async function pullPeerDeltas(opts) {
       }
 
       unStagedPackages = postSnapshotPackages.filter(pkg => (pkg.end_sequence || pkg.endSequence) > lastStagedSeq);
+
+      // Lineage boundary resolution for snapshot creator:
+      // The creator's baseline snapshot physically embodies the complete canonical database of that creator device.
+      // If the creator's post-snapshot packages on baseSnapshotId begin at sequence S where S > lastStagedSeq + 1,
+      // all prior sequences up to S - 1 were pre-snapshot mutations finalized into the baseline snapshot.
+      // We safely advance the staging watermark to S - 1 so post-snapshot package replay proceeds contiguously.
+      if (unStagedPackages.length > 0) {
+        const firstPostSeq = unStagedPackages[0].start_sequence || unStagedPackages[0].startSequence;
+        if (typeof firstPostSeq === 'number' && firstPostSeq > lastStagedSeq + 1) {
+          const coveredCreatorSeq = firstPostSeq - 1;
+          lastStagedSeq = coveredCreatorSeq;
+          const rawIdb = getRawIDB();
+          const now = new Date().toISOString();
+          if (rawIdb) {
+            await new Promise((resolve, reject) => {
+              const tx = rawIdb.transaction(['sync_peer_state'], 'readwrite');
+              const store = tx.objectStore('sync_peer_state');
+              store.put({
+                peer_device_id: peerDeviceId,
+                last_staged_sequence: coveredCreatorSeq,
+                last_reconciled_sequence: coveredCreatorSeq,
+                base_snapshot_id: baseSnapshotId,
+                updated_at: now
+              });
+              tx.oncomplete = resolve;
+              tx.onerror = () => reject(tx.error);
+            });
+          } else {
+            await db.run(
+              'INSERT OR REPLACE INTO sync_peer_state (peer_device_id, last_staged_sequence, last_reconciled_sequence, base_snapshot_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+              [peerDeviceId, coveredCreatorSeq, coveredCreatorSeq, baseSnapshotId, now]
+            );
+          }
+        }
+      }
     }
 
     for (const pkg of unStagedPackages) {

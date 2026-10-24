@@ -918,7 +918,22 @@ export async function listAllCloudDeviceManifests(options = {}) {
     };
   }
 
-  // 5. Deduplicate manifests by device_id (keep latest revision or latest timestamp)
+  // 5. Query local peer state watermarks to verify reconciliation completeness
+  const peerStateMap = new Map();
+  try {
+    const db = getDB();
+    const peerRows = (await db.query('SELECT peer_device_id, last_reconciled_sequence, last_staged_sequence FROM sync_peer_state')).values || [];
+    for (const r of peerRows) {
+      if (r.peer_device_id) {
+        peerStateMap.set(r.peer_device_id, {
+          lastReconciledSequence: Number(r.last_reconciled_sequence || 0),
+          lastStagedSequence: Number(r.last_staged_sequence || 0)
+        });
+      }
+    }
+  } catch {}
+
+  // 5.5 Deduplicate manifests by device_id (keep latest revision or latest timestamp)
   const deviceMap = new Map();
   for (const m of rawManifests) {
     if (!m || !m.device_id || m.device_id === 'local_device') continue;
@@ -1037,6 +1052,10 @@ export async function listAllCloudDeviceManifests(options = {}) {
     let lineageStatus = m.lineage_status || PEER_LINEAGE_STATUS.COMPATIBLE;
     let lineageReason = m.lineage_reason || 'BASELINE_MATCH';
 
+    const localPeerState = peerStateMap.get(m.device_id);
+    const localReconciledSequence = isCurrent ? null : (localPeerState?.lastReconciledSequence ?? 0);
+    const localStagedSequence = isCurrent ? null : (localPeerState?.lastStagedSequence ?? 0);
+
     return {
       deviceId: m.device_id,
       deviceName,
@@ -1046,6 +1065,8 @@ export async function listAllCloudDeviceManifests(options = {}) {
       baseSnapshotId: effectiveBaseSnapshotId,
       baseCloudVersion: effectiveBaseCloudVersion,
       lastSequence: Number(m.last_sequence ?? m.watermarks?.last_uploaded_sequence ?? 0),
+      localReconciledSequence,
+      localStagedSequence,
       manifestRevision: Number(m.manifest_revision ?? m.revision ?? 0),
       updatedAt: m.updated_at || null,
       driveModifiedTime: m.drive_modified_time || null,

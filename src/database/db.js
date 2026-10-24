@@ -210,12 +210,24 @@ const parseAndRun = async (db, sql, vals = []) => {
   // ── SELECT ──
   if (u.startsWith('SELECT')) {
     const fm = s.match(/FROM\s+(\w+)/i); if (!fm) return { values:[] };
-    let rows = await idbAll(db, fm[1]);
+    const store = fm[1];
+    const pk = storeKey(store);
     const wm = s.match(/WHERE\s+(.+?)(?:\s+ORDER|\s+LIMIT|$)/i);
-    if (wm) {
-      const c = parseWhere(wm[1], vals);
-      rows = rows.filter(r => matchConds(r, c));
+    let rows;
+
+    // Fast-path: Single primary key equality lookup (e.g. WHERE id = ? or WHERE key = ?)
+    // Bypasses loading all 29,000+ records into memory when checking a single entity
+    if (wm && pk && vals.length === 1 && wm[1].trim().toLowerCase() === `${pk.toLowerCase()} = ?`) {
+      const single = await idbGet(db, store, vals[0]);
+      rows = single !== undefined ? [single] : [];
+    } else {
+      rows = await idbAll(db, store);
+      if (wm) {
+        const c = parseWhere(wm[1], vals);
+        rows = rows.filter(r => matchConds(r, c));
+      }
     }
+
     const om = s.match(/ORDER BY\s+([\w,\s]+?)(?:\s+LIMIT|$)/i);
     if (om) {
       const parts = om[1].trim().split(',').map(p => { const [col,dir]=p.trim().split(/\s+/); return {col,desc:(dir||'').toUpperCase()==='DESC'}; });
@@ -251,15 +263,29 @@ const parseAndRun = async (db, sql, vals = []) => {
 
   // ── UPDATE ──
   if (u.startsWith('UPDATE')) {
-    const tm = s.match(/UPDATE\s+(\w+)\s+SET/i);       if (!tm) return { changes:{changes:0} };
+    const tm = s.match(/UPDATE\s+(\w+)\s+SET/i); if (!tm) return { changes:{changes:0} };
     const sm = s.match(/SET\s+(.+?)\s+WHERE/i);
     const wm = s.match(/WHERE\s+(.+)$/i);
     if (!sm || !wm) return { changes:{changes:0} };
     const setCols = sm[1].split(',').map(p => p.trim().split(/\s*=\s*\?/)[0].trim());
     const setVals = vals.slice(0, setCols.length);
-    const conds   = parseWhere(wm[1], vals.slice(setCols.length));
+    const condVals = vals.slice(setCols.length);
     const pk = storeKey(tm[1]);
     let changed = 0;
+
+    // Fast-path: Single primary key equality update (WHERE id = ? or WHERE key = ?)
+    if (pk && condVals.length === 1 && wm[1].trim().toLowerCase() === `${pk.toLowerCase()} = ?`) {
+      const existing = await idbGet(db, tm[1], condVals[0]);
+      if (existing) {
+        const upd = { ...existing };
+        setCols.forEach((col, i) => { upd[col] = setVals[i] ?? null; });
+        await idbPut(db, tm[1], upd);
+        changed = 1;
+      }
+      return { changes: { changes: changed } };
+    }
+
+    const conds = parseWhere(wm[1], condVals);
     for (const row of await idbAll(db, tm[1])) {
       if (matchConds(row, conds)) {
         const upd = { ...row };
@@ -276,6 +302,13 @@ const parseAndRun = async (db, sql, vals = []) => {
     const wm = s.match(/WHERE\s+(.+)$/i);
     if (!wm) { await idbClear(db, tm[1]); return { changes:{changes:1} }; }
     const pk = storeKey(tm[1]);
+
+    // Fast-path: Single primary key equality delete (WHERE id = ? or WHERE key = ?)
+    if (pk && vals.length === 1 && wm[1].trim().toLowerCase() === `${pk.toLowerCase()} = ?`) {
+      await idbDelete(db, tm[1], vals[0]);
+      return { changes: { changes: 1 } };
+    }
+
     const conds = parseWhere(wm[1], vals); let changed = 0;
     for (const row of await idbAll(db, tm[1])) {
       if (matchConds(row, conds)) { await idbDelete(db, tm[1], row[pk]); changed++; }

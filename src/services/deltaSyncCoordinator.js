@@ -13,6 +13,7 @@
 import { v4 as uuid } from 'uuid';
 import { generateUniqueDeviceId, getLocalSyncState } from '../database/deltaQueue.js';
 import { getDB, getRawIDB, ensureSyncSchema } from '../database/db.js';
+import { getSetting, setSetting } from '../database/settings.js';
 import {
   uploadPendingDeltas,
   downloadAndStagePeerPackages,
@@ -365,7 +366,8 @@ export async function getDeltaSyncMetrics() {
       hasNewerBaseline: Boolean(_lastSyncResult?.hasNewerBaseline || _lastSyncResult?.newerBaselineDetected),
       newerBaselineDetected: _lastSyncResult?.newerBaselineDetected || null,
       blockedPeers: _lastSyncResult?.blockedPeers || [],
-      latestDiagnostic: _latestDiagnostic
+      latestDiagnostic: _latestDiagnostic,
+      latestError: _latestDiagnostic?.message || null
     };
   } catch {
     return {
@@ -380,7 +382,8 @@ export async function getDeltaSyncMetrics() {
       hasNewerBaseline: false,
       newerBaselineDetected: null,
       blockedPeers: [],
-      latestDiagnostic: _latestDiagnostic
+      latestDiagnostic: _latestDiagnostic,
+      latestError: _latestDiagnostic?.message || null
     };
   }
 }
@@ -1048,7 +1051,15 @@ export async function publishAuthoritativeDeviceSnapshot(options = {}) {
     // Include local device queue sequence in covered peer watermarks
     const localStateRes = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] }));
     const localStateRow = localStateRes.values?.[0] || {};
-    const currentAllocatedSeq = Number(localStateRow.last_allocated_sequence || 0);
+    const queueRes = await db.query('SELECT sequence FROM sync_delta_queue').catch(() => ({ values: [] }));
+    const queueMaxSeq = (queueRes.values || []).reduce((max, r) => Math.max(max, Number(r.sequence) || 0), 0);
+    const currentAllocatedSeq = Math.max(
+      Number(localStateRow.last_allocated_sequence || 0),
+      Number(localStateRow.last_uploaded_sequence || 0),
+      Number(localStateRow.last_pushed_sequence || 0),
+      Number(localStateRow.last_acked_sequence || 0),
+      queueMaxSeq
+    );
     if (currentAllocatedSeq > 0) {
       peerWatermarks[deviceId] = currentAllocatedSeq;
     }
@@ -1119,6 +1130,7 @@ export async function publishAuthoritativeDeviceSnapshot(options = {}) {
     await setSetting('last_cloud_version', String(cloudVersion || 1));
     await setSetting('last_synced_at', nowIso);
     await setSetting('last_delta_synced_at', nowIso);
+    await setSetting('last_snapshot_creator_id', deviceId);
 
     // Seed sync_peer_state for covered peers
     for (const [pId, pSeq] of Object.entries(peerWatermarks)) {
@@ -1215,41 +1227,41 @@ async function _executeBootstrapFlow(options = {}) {
 
     // 1. Transition state to JOINING
     await setDeviceLifecycleState(DEVICE_LIFECYCLE.JOINING, deviceId);
-  broadcastSyncStatus(SYNC_STATUS.SYNCING, { stage: 'BOOTSTRAP_JOINING', message: 'Setting Up Your Cloud Data…' });
-  onProgress({ stage: 'JOINING', message: 'Setting Up Your Cloud Data…' });
+    broadcastSyncStatus(SYNC_STATUS.SYNCING, { stage: 'BOOTSTRAP_JOINING', message: 'Setting Up Your Cloud Data…' });
+    onProgress({ stage: 'JOINING', message: 'Setting Up Your Cloud Data…' });
 
-  // 2. Fetch & Decrypt snapshot if not provided
-  let payload = options.snapshotPayload || null;
-  if (!payload) {
-    onProgress({ stage: 'DOWNLOADING', message: 'Downloading your FinMan data…' });
-    const discovery = await discoverCloudRepository({ accessToken, driveClient, sessionKey, pin });
-    if (discovery.status !== 'EXISTING_REPOSITORY_FOUND' || !discovery.snapshotPayload) {
-      throw new Error(`BOOTSTRAP_FAILED: Cloud snapshot could not be retrieved. (${discovery.error || discovery.status})`);
+    // 2. Fetch & Decrypt snapshot if not provided
+    let payload = options.snapshotPayload || null;
+    if (!payload) {
+      onProgress({ stage: 'DOWNLOADING', message: 'Downloading your FinMan data…' });
+      const discovery = await discoverCloudRepository({ accessToken, driveClient, sessionKey, pin });
+      if (discovery.status !== 'EXISTING_REPOSITORY_FOUND' || !discovery.snapshotPayload) {
+        throw new Error(`BOOTSTRAP_FAILED: Cloud snapshot could not be retrieved. (${discovery.error || discovery.status})`);
+      }
+      payload = discovery.snapshotPayload;
     }
-    payload = discovery.snapshotPayload;
-  }
 
-  // 3. Deep validate cloud snapshot
-  await validateCloudSnapshotPayload(payload);
+    // 3. Deep validate cloud snapshot
+    await validateCloudSnapshotPayload(payload);
 
-  // 3.5 Validate & resolve authoritative peer coverage watermarks before any database mutations
-  const watermarksToApply = resolveSnapshotPeerWatermarks(payload);
+    // 3.5 Validate & resolve authoritative peer coverage watermarks before any database mutations
+    const watermarksToApply = resolveSnapshotPeerWatermarks(payload);
 
-  let baselineInstalled = false;
-  const stagedPackageIdsInAttempt = new Set();
-  try {
-    // 4. Populate local DB stores atomically (reusing populateLocalEntitiesBootstrap)
-    onProgress({ stage: 'POPULATING', message: 'Installing baseline data…' });
-    const localSyncState = await getLocalSyncState().catch(() => null);
-    const isIdempotentBaselineReplay = Boolean(
-      localSyncState &&
-      localSyncState.base_snapshot_id &&
-      localSyncState.base_snapshot_id === payload.snapshot_id
-    );
-    await populateLocalEntitiesBootstrap(db, payload.entities || {}, {
-      allowRecoveryReplacement: options.allowRecoveryReplacement || isIdempotentBaselineReplay,
-      checkQueue: false
-    });
+    let baselineInstalled = false;
+    const stagedPackageIdsInAttempt = new Set();
+    try {
+      // 4. Populate local DB stores atomically (reusing populateLocalEntitiesBootstrap)
+      onProgress({ stage: 'POPULATING', message: 'Installing baseline data…' });
+      const localSyncState = await getLocalSyncState().catch(() => null);
+      const isIdempotentBaselineReplay = Boolean(
+        localSyncState &&
+        localSyncState.base_snapshot_id &&
+        localSyncState.base_snapshot_id === payload.snapshot_id
+      );
+      await populateLocalEntitiesBootstrap(db, payload.entities || {}, {
+        allowRecoveryReplacement: options.allowRecoveryReplacement || isIdempotentBaselineReplay,
+        checkQueue: false
+      });
     baselineInstalled = true;
 
     // 5. Post-population count check
@@ -1296,6 +1308,7 @@ async function _executeBootstrapFlow(options = {}) {
     await setSetting('last_synced_at', now, { suppressDeltaQueue: true });
     await setSetting('sub_accounts_migrated_v2', 'true', { suppressDeltaQueue: true });
     await setSetting('historical_charges_reconciled', 'true', { suppressDeltaQueue: true });
+    await setSetting('last_snapshot_creator_id', payload.device_id || '', { suppressDeltaQueue: true });
 
     // 6.5 Initialize peer watermarks from authoritative or verified transition coverage metadata
     try {
@@ -1637,7 +1650,7 @@ export async function withMasterSyncLock(taskFn, lockOptions = {}) {
     }
   }
 
-  const runWithTimeout = async (context = {}) => {
+  const runWithTimeout = async (contextOrTask = {}) => {
     let timer = null;
     const timeoutPromise = new Promise((_, reject) => {
       timer = setTimeout(() => {
@@ -1650,9 +1663,13 @@ export async function withMasterSyncLock(taskFn, lockOptions = {}) {
       if (typeof timer.unref === 'function') timer.unref();
     });
 
+    const executionPromise = typeof contextOrTask === 'function'
+      ? contextOrTask()
+      : taskFn({ ...contextOrTask, signal: controller.signal });
+
     try {
       return await Promise.race([
-        taskFn({ ...context, signal: controller.signal }),
+        executionPromise,
         timeoutPromise
       ]);
     } finally {
@@ -1664,8 +1681,10 @@ export async function withMasterSyncLock(taskFn, lockOptions = {}) {
   };
 
   if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function' && !lockOptions.forceFallback) {
-    return await navigator.locks.request(MASTER_SYNC_LOCK_NAME, { mode: 'exclusive' }, async () => {
-      return await runWithTimeout();
+    return await runWithTimeout(async () => {
+      return await navigator.locks.request(MASTER_SYNC_LOCK_NAME, { mode: 'exclusive', signal: controller.signal }, async () => {
+        return await taskFn({ signal: controller.signal });
+      });
     });
   }
 
@@ -2027,8 +2046,10 @@ export async function executeFullSyncPass(options = {}) {
       assertActive();
       currentStage = 'download';
       // 3. Inbound Pull: Discover peer manifests -> download new packages -> stage contiguously
+      const activeCreatorId = (await getSetting('last_snapshot_creator_id').catch(() => null)) || null;
       let pullResult = await downloadAndStagePeerPackages({
         localDeviceId: deviceId,
+        creatorDeviceId: activeCreatorId,
         accessToken,
         driveClient,
         sessionKey,
@@ -2066,8 +2087,10 @@ export async function executeFullSyncPass(options = {}) {
           pullResult.newerBaselineDetected = null;
           // Re-run pull after upgrading baseline to ingest peer packages under the new baseline
           currentStage = 'download';
+          const updatedCreatorId = (await getSetting('last_snapshot_creator_id').catch(() => null)) || activeCreatorId;
           pullResult = await downloadAndStagePeerPackages({
             localDeviceId: deviceId,
+            creatorDeviceId: updatedCreatorId,
             accessToken,
             driveClient,
             sessionKey,
@@ -2110,6 +2133,43 @@ export async function executeFullSyncPass(options = {}) {
           const { setSetting } = await import('../database/settings.js');
           await setSetting('last_delta_synced_at', nowIso);
         } catch {}
+
+        recordSyncDiagnostic({
+          attemptId,
+          stage: 'idle',
+          code: 'SUCCESS',
+          redactedDeviceId: redactDeviceId(deviceId),
+          retryable: false,
+          pendingChanges: 0,
+          eventsApplied: reconResult?.reconciledCount || 0,
+          localDataVerified: true,
+          message: 'All sync passes healthy. Zero unhandled diagnostic exceptions recorded.'
+        });
+      } else if (isBlocked) {
+        let blockCode = 'BLOCKED_SYNC';
+        let blockMsg = 'Synchronization paused waiting for peer updates.';
+        if (blockedGaps > 0) {
+          blockCode = 'BLOCKED_SEQUENCE_GAP';
+          blockMsg = `Sync Blocked: Peer sequence gap detected. Reconciled clean watermarks up to peer sequence. Waiting for peer sequence packages.`;
+        } else if (blockedDeps > 0) {
+          blockCode = 'BLOCKED_DEPENDENCY';
+          blockMsg = `Sync Blocked: Event dependency awaiting conflict resolution.`;
+        } else if (blockedPeers.length > 0 || hasUnresolvedNewerBaseline) {
+          blockCode = 'BLOCKED_PEER_BASELINE';
+          blockMsg = `Sync Blocked: Incompatible peer baseline detected.`;
+        }
+
+        recordSyncDiagnostic({
+          attemptId,
+          stage: currentStage,
+          code: blockCode,
+          redactedDeviceId: redactDeviceId(deviceId),
+          retryable: true,
+          pendingChanges: pushResult?.eventsUploaded || 0,
+          eventsApplied: reconResult?.reconciledCount || 0,
+          localDataVerified: true,
+          message: blockMsg
+        });
       }
 
       const syncResult = {
@@ -2140,8 +2200,13 @@ export async function executeFullSyncPass(options = {}) {
         invalidateStoredToken();
       } catch {}
     }
+    const errStr = String(err?.message || err || '');
+    const errLower = errStr.toLowerCase();
     const isAuthError = is401 || err?.message?.includes('AUTH') || err?.message?.includes('No Google Drive credentials');
-    const finalStatus = isAuthError ? SYNC_STATUS.AUTH_REQUIRED : SYNC_STATUS.ERROR;
+    const isSeqGap = errLower.includes('sequence_gap') || errLower.includes('sequence gap');
+    const finalStatus = isAuthError
+      ? SYNC_STATUS.AUTH_REQUIRED
+      : (isSeqGap ? SYNC_STATUS.BLOCKED_SEQUENCE_GAP : SYNC_STATUS.ERROR);
 
     let pendingChangesCount = 0;
     let localDataVerified = false;
@@ -2151,19 +2216,17 @@ export async function executeFullSyncPass(options = {}) {
       localDataVerified = true;
     } catch {}
 
-    const errStr = String(err?.message || err || '');
-    const errLower = errStr.toLowerCase();
-
     let errorCode = 'UNKNOWN_ERROR';
     if (isTimeout) errorCode = 'NETWORK_TIMEOUT';
     else if (isAuthError) errorCode = 'AUTH_EXPIRED';
+    else if (isSeqGap) errorCode = 'BLOCKED_SEQUENCE_GAP';
     else if (errLower.includes('429') || errLower.includes('quota') || errLower.includes('ratelimit')) errorCode = 'RATE_LIMIT_EXCEEDED';
     else if (errLower.includes('500') || errLower.includes('502') || errLower.includes('503') || errLower.includes('504')) errorCode = 'SERVER_ERROR';
     else if (errLower.includes('network') || errLower.includes('failed to fetch') || errLower.includes('econnrefused')) errorCode = 'NETWORK_ERROR';
     else if (errLower.includes('no such column') || errLower.includes('has no column') || errLower.includes('sqlite') || errLower.includes('syntax error')) errorCode = 'SQLITE_SCHEMA_ERROR';
     else if (errLower.includes('reconcil') || errLower.includes('conflict')) errorCode = 'RECONCILIATION_ERROR';
 
-    const isRetryable = isTimeout || isAuthError || errorCode === 'RATE_LIMIT_EXCEEDED' || errorCode === 'SERVER_ERROR' || errorCode === 'NETWORK_ERROR';
+    const isRetryable = isTimeout || isAuthError || errorCode === 'BLOCKED_SEQUENCE_GAP' || errorCode === 'RATE_LIMIT_EXCEEDED' || errorCode === 'SERVER_ERROR' || errorCode === 'NETWORK_ERROR';
 
     const diagnostic = recordSyncDiagnostic({
       attemptId,

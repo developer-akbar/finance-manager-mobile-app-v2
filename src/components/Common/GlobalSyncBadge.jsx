@@ -52,7 +52,9 @@ export default function GlobalSyncBadge({ isCollapsed = false, mobile = false, c
           setSyncState(prev => ({
             ...prev,
             pendingCount: m.pendingCount ?? prev.pendingCount,
-            status: m.status ?? prev.status
+            status: m.status ?? prev.status,
+            lifecycleState: m.lifecycleState ?? prev.lifecycleState,
+            latestError: prev.latestError || m.latestError || null
           }));
         }
       }).catch(() => { });
@@ -68,6 +70,7 @@ export default function GlobalSyncBadge({ isCollapsed = false, mobile = false, c
         setSyncState({
           status: m.status || SYNC_STATUS.IDLE,
           pendingCount: m.pendingCount || 0,
+          lifecycleState: m.lifecycleState || 'ACTIVE',
           latestError: m.latestError || null
         });
       }
@@ -133,6 +136,26 @@ export default function GlobalSyncBadge({ isCollapsed = false, mobile = false, c
       label: `${conflictCount} Conflict${conflictCount > 1 ? 's' : ''}`,
       tooltip: `${conflictCount} record conflict(s) require review. Tap to resolve.`
     };
+  } else if (syncState.lifecycleState === 'JOINING') {
+    config = {
+      dotColor: 'var(--primary, #00d2ff)',
+      bgColor: 'rgba(0, 210, 255, 0.12)',
+      borderColor: 'rgba(0, 210, 255, 0.35)',
+      textColor: 'var(--primary, #00d2ff)',
+      icon: '📥',
+      label: 'Setting Up…',
+      tooltip: 'Setting up cloud data from backup…'
+    };
+  } else if (syncState.lifecycleState === 'UNINITIALIZED') {
+    config = {
+      dotColor: 'var(--text-muted)',
+      bgColor: 'rgba(255, 255, 255, 0.04)',
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      textColor: 'var(--text-muted)',
+      icon: '☁️',
+      label: 'Setup Required',
+      tooltip: 'Cloud setup required. Tap to set up.'
+    };
   } else if (syncState.status === SYNC_STATUS.SYNCING) {
     config = {
       dotColor: 'var(--primary, #00d2ff)',
@@ -144,15 +167,18 @@ export default function GlobalSyncBadge({ isCollapsed = false, mobile = false, c
       isSpinning: true,
       tooltip: 'Exchanging updates with Google Drive…'
     };
-  } else if (syncState.latestError) {
+  } else if (syncState.latestError || syncState.status === SYNC_STATUS.ERROR || syncState.status === SYNC_STATUS.BLOCKED_SEQUENCE_GAP) {
+    const isGap = syncState.status === SYNC_STATUS.BLOCKED_SEQUENCE_GAP || String(syncState.latestError || '').includes('SEQUENCE_GAP');
     config = {
       dotColor: 'var(--expense, #ff4d6a)',
       bgColor: 'rgba(255, 77, 106, 0.12)',
       borderColor: 'rgba(255, 77, 106, 0.35)',
       textColor: 'var(--expense, #ff4d6a)',
-      icon: '⚠️',
-      label: 'Sync Alert',
-      tooltip: `Sync encountered an issue: ${syncState.latestError}. Tap for details.`
+      icon: isGap ? '⏸️' : '⚠️',
+      label: isGap ? 'Sync Paused' : 'Sync Alert',
+      tooltip: isGap
+        ? 'Sync paused: peer sequence updates pending. Tap for details.'
+        : `Sync encountered an issue: ${syncState.latestError || 'Needs attention'}. Tap for details.`
     };
   } else if (syncState.pendingCount > 0) {
     config = {

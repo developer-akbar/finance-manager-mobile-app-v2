@@ -144,7 +144,7 @@ async function _releaseReconcileFallbackLock(lockName, ownerToken) {
  * Scans staged events for peer devices, evaluates preconditions,
  * atomically applies clean mutations, logs conflicts, and advances watermarks.
  */
-export async function reconcileStagedEvents({ peerDeviceId = null, limit = 5000, isBootstrap = false } = {}) {
+export async function reconcileStagedEvents({ peerDeviceId = null, limit = 5000, isBootstrap = false, signal = null } = {}) {
   const db = getDB();
 
   // Guard: Reconciliation is forbidden if device is not ACTIVE (unless explicitly part of bootstrap JOINING flow)
@@ -183,7 +183,10 @@ export async function reconcileStagedEvents({ peerDeviceId = null, limit = 5000,
   };
 
   for (const peerId of peers) {
-    const peerSummary = await _reconcilePeerEvents(peerId, limit);
+    if (signal?.aborted) {
+      throw signal.reason || new Error('SYNC_PASS_ABORTED: Reconciliation cancelled or timed out');
+    }
+    const peerSummary = await _reconcilePeerEvents(peerId, limit, signal);
     results.reconciledCount += peerSummary.reconciledCount;
     results.idempotentCount += peerSummary.idempotentCount;
     results.conflictCount += peerSummary.conflictCount;
@@ -226,7 +229,7 @@ function _classifyIncompatibleBase(baseSnapshotId, activeBaseSnapshotId, immedia
 /**
  * Reconciles events for a single peer device in sequence order.
  */
-async function _reconcilePeerEvents(peerDeviceId, limit) {
+async function _reconcilePeerEvents(peerDeviceId, limit, signal = null) {
   const db = getDB();
   const summary = {
     reconciledCount: 0,
@@ -240,7 +243,7 @@ async function _reconcilePeerEvents(peerDeviceId, limit) {
   // 1. Get peer sync state
   const peerStateRes = await db.query('SELECT * FROM sync_peer_state WHERE peer_device_id = ?', [peerDeviceId]);
   const peerState = peerStateRes.values?.[0] || null;
-  const currentWatermark = Number(peerState?.last_reconciled_sequence) || 0;
+  let currentWatermark = Number(peerState?.last_reconciled_sequence) || 0;
 
   let activeBaseSnapshotId = APPROVED_BASE_SNAPSHOT_ID;
   let immediateParentSnapshotId = null;
@@ -302,6 +305,38 @@ async function _reconcilePeerEvents(peerDeviceId, limit) {
 
   const bundles = Array.from(bundleMap.values()).sort((a, b) => a[0].sequence - b[0].sequence);
 
+  // Fast filter: bundles already at or below currentWatermark are already reconciled.
+  // Never let already-reconciled historical bundles reset expectedNextSeq or trigger false sequence gaps.
+  const unReconciledBundles = bundles.filter(b => b[b.length - 1].sequence > currentWatermark);
+
+  if (unReconciledBundles.length === 0) {
+    summary.newWatermark = currentWatermark;
+    return summary;
+  }
+
+  // Lineage boundary resolution for snapshot creator:
+  // If this peer is the snapshot creator and post-snapshot events begin at firstPostSeq > currentWatermark + 1,
+  // pre-snapshot sequences up to firstPostSeq - 1 were incorporated into the baseline snapshot.
+  let creatorDeviceId = null;
+  try {
+    const snapCreatorRes = await db.query('SELECT value FROM settings WHERE key = ?', ['last_snapshot_creator_id']);
+    if (snapCreatorRes.values?.[0]?.value) {
+      creatorDeviceId = snapCreatorRes.values[0].value;
+    }
+  } catch {}
+
+  const isCreator = Boolean(
+    (creatorDeviceId && peerDeviceId === creatorDeviceId) ||
+    (baseSnapshotId && baseSnapshotId.endsWith('_' + peerDeviceId.replace(/^dev_/, '').slice(0, 8)))
+  );
+
+  if (isCreator && unReconciledBundles.length > 0) {
+    const firstPostSeq = unReconciledBundles[0][0].sequence;
+    if (typeof firstPostSeq === 'number' && firstPostSeq > currentWatermark + 1) {
+      currentWatermark = firstPostSeq - 1;
+    }
+  }
+
   // Track sequence progression, conflict holes, and active dependencies
   let contiguousWatermark = currentWatermark;
   let canAdvanceWatermark = true;
@@ -318,8 +353,8 @@ async function _reconcilePeerEvents(peerDeviceId, limit) {
     conflictedEntityKeys.add(`${c.collection}:${c.entity_id}`);
   }
 
-  // Scan through sequences to check for True Sequence Gaps before lowest event
-  const minStagedSeq = rawEvents[0].sequence;
+  // Scan through sequences to check for True Sequence Gaps before lowest un-reconciled event
+  const minStagedSeq = unReconciledBundles[0][0].sequence;
   if (minStagedSeq > currentWatermark + 1) {
     // There is an initial missing sequence gap between watermark and first staged event
     missingSequenceSeen = true;
@@ -327,8 +362,18 @@ async function _reconcilePeerEvents(peerDeviceId, limit) {
   }
 
   let expectedNextSeq = currentWatermark + 1;
+  let bundleIndex = 0;
 
-  for (const bundle of bundles) {
+  for (const bundle of unReconciledBundles) {
+    if (signal?.aborted) {
+      throw signal.reason || new Error('SYNC_PASS_ABORTED: Reconciliation cancelled or timed out');
+    }
+
+    bundleIndex++;
+    if (bundleIndex % 15 === 0) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+
     const bundleStartSeq = bundle[0].sequence;
     const bundleEndSeq = bundle[bundle.length - 1].sequence;
 
