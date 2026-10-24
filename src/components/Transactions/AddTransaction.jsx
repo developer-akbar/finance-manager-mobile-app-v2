@@ -728,7 +728,12 @@ export default function AddTransaction({
 
       // Strip (x/x) instalment suffix from Note so user sees clean note in edit form
       const cleanNote = stripInstalmentSuffix(t.Note || t.note || '');
-      const dispAmt = String(t.TradeValue || t.trade_value || t.INR || t.Amount || t.amount || '');
+      let dispAmt = String(t.TradeValue || t.trade_value || t.INR || t.Amount || t.amount || '');
+      if (t.split_group_id && !t.split_group_id.startsWith('inv_charge_')) {
+        const groupTxns = (transactions || []).filter(item => item.split_group_id === t.split_group_id);
+        const groupSum = groupTxns.reduce((sum, item) => sum + (parseFloat(item.INR || item.Amount || 0) || 0), 0);
+        if (groupSum > 0) dispAmt = String(groupSum);
+      }
       const dispActual = t.ActualAmount !== undefined && t.ActualAmount !== null && t.ActualAmount !== ''
         ? String(t.ActualAmount)
         : (t.actual_amount !== undefined && t.actual_amount !== null && t.actual_amount !== '' ? String(t.actual_amount) : '');
@@ -1282,14 +1287,91 @@ export default function AddTransaction({
   const [showRecurring, setShowRecurring] = useState(false);
   const [recurringConfig, setRecurringConfig] = useState(null); // {type, totalDays?, scheduleMode, frequency?}
 
+  const isSplitEdit = Boolean(isEdit && editTransaction?.split_group_id && !editTransaction.split_group_id.startsWith('inv_charge_'));
+
+  const splitGroupTransactions = useMemo(() => {
+    if (!isSplitEdit) return [];
+    const group = (transactions || []).filter(t => t.split_group_id === editTransaction.split_group_id);
+    if (group.length > 0) {
+      return [...group].sort((a, b) => {
+        const ta = a.created_at || a.Date || '';
+        const tb = b.created_at || b.Date || '';
+        return ta.localeCompare(tb);
+      });
+    }
+    return [editTransaction];
+  }, [isSplitEdit, editTransaction, transactions]);
+
   // Split Transaction state
-  const [isSplit, setIsSplit] = useState(false);
-  const [splits, setSplits] = useState([
-    { id: 's1', category: '', subcategory: '', amount: '', note: '' },
-    { id: 's2', category: '', subcategory: '', amount: '', note: '' },
-  ]);
+  const [isSplit, setIsSplit] = useState(() => isSplitEdit);
+  const [splits, setSplits] = useState(() => {
+    if (isSplitEdit && splitGroupTransactions.length > 0) {
+      return splitGroupTransactions.map((t, idx) => ({
+        id: t._id || t.id || ('s' + (idx + 1)),
+        transactionId: t._id || t.id,
+        category: t.Category || t.category || '',
+        subcategory: (t.Subcategory || t.subcategory || 'Default') === 'Default' ? '' : (t.Subcategory || t.subcategory || ''),
+        amount: String(t.INR || t.Amount || t.amount || ''),
+        note: t.Note || t.note || '',
+        description: t.Description || t.description || ''
+      }));
+    }
+    return [
+      { id: 's1', category: '', subcategory: '', amount: '', note: '', description: '' },
+      { id: 's2', category: '', subcategory: '', amount: '', note: '', description: '' },
+    ];
+  });
   const [splitNoteFocusedIdx, setSplitNoteFocusedIdx] = useState(null);
   const [splitNoteSugs, setSplitNoteSugs] = useState([]);
+
+  const splitCategoryRefs = useRef([]);
+  const splitSubcatRefs = useRef([]);
+  const splitAmountRefs = useRef([]);
+  const splitNoteRefs = useRef([]);
+  const splitDescriptionRefs = useRef([]);
+  const splitsRef = useRef(splits);
+
+  useEffect(() => {
+    splitsRef.current = splits;
+  }, [splits]);
+
+  useEffect(() => {
+    splitCategoryRefs.current = splitCategoryRefs.current.slice(0, splits.length);
+    splitSubcatRefs.current = splitSubcatRefs.current.slice(0, splits.length);
+    splitAmountRefs.current = splitAmountRefs.current.slice(0, splits.length);
+    splitNoteRefs.current = splitNoteRefs.current.slice(0, splits.length);
+    splitDescriptionRefs.current = splitDescriptionRefs.current.slice(0, splits.length);
+  }, [splits.length]);
+
+  const focusSplitAmount = useCallback((targetIdx) => {
+    setTimeout(() => {
+      const el = splitAmountRefs.current[targetIdx];
+      if (el) {
+        el.focus();
+        el.select?.();
+      }
+    }, 60);
+  }, []);
+
+  // Hydrate splits and form.amount if transactions loaded asynchronously in edit mode
+  useEffect(() => {
+    if (isSplitEdit && splitGroupTransactions.length > 0) {
+      setSplits(prev => {
+        if (prev.some(p => p.transactionId)) return prev;
+        return splitGroupTransactions.map((t, idx) => ({
+          id: t._id || t.id || ('s' + (idx + 1)),
+          transactionId: t._id || t.id,
+          category: t.Category || t.category || '',
+          subcategory: (t.Subcategory || t.subcategory || 'Default') === 'Default' ? '' : (t.Subcategory || t.subcategory || ''),
+          amount: String(t.INR || t.Amount || t.amount || ''),
+          note: t.Note || t.note || '',
+          description: t.Description || t.description || ''
+        }));
+      });
+      const groupSum = splitGroupTransactions.reduce((sum, t) => sum + (parseFloat(t.INR || t.Amount || 0) || 0), 0);
+      setForm(p => ({ ...p, amount: String(groupSum || p.amount) }));
+    }
+  }, [isSplitEdit, splitGroupTransactions]);
 
   const allocatedSplitSum = useMemo(() => {
     return splits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
@@ -1597,6 +1679,90 @@ export default function AddTransaction({
     }
     return result;
   }, [transactions, form.category]);
+
+  const openSplitCategoryPicker = useCallback((targetIdx) => {
+    if (targetIdx < 0 || targetIdx >= splitsRef.current.length) return;
+    const currentSplits = splitsRef.current;
+    const targetSplit = currentSplits[targetIdx];
+
+    splitCategoryRefs.current[targetIdx]?.focus();
+
+    setPickerState({
+      type: `split-cat-${targetIdx}`,
+      label: `Select Category (Split #${targetIdx + 1})`,
+      value: targetSplit?.category || '',
+      items: availCats,
+      recent: recentCats,
+      onSelect: (v) => {
+        const freshSubs = (categories?.[v]?.subcategories || []).filter(sub => sub && sub !== 'Default');
+        const recSubs = getRecentSubsForCategory(v);
+        setSplits(prev => prev.map((item, i) => i === targetIdx ? { ...item, category: v, subcategory: '' } : item));
+        if (freshSubs.length > 0) {
+          setTimeout(() => {
+            let subSelected = false;
+            setPickerState({
+              type: `split-sub-${targetIdx}`,
+              label: `Select Subcategory for ${v}`,
+              value: '',
+              items: freshSubs,
+              recent: recSubs,
+              onSelect: (subVal) => {
+                subSelected = true;
+                setSplits(prev => prev.map((item, i) => i === targetIdx ? { ...item, subcategory: subVal } : item));
+                setPickerState(null);
+                focusSplitAmount(targetIdx);
+              },
+              onClose: () => {
+                setPickerState(null);
+                if (!subSelected) {
+                  focusSplitAmount(targetIdx);
+                }
+              }
+            });
+          }, 50);
+        } else {
+          setPickerState(null);
+          focusSplitAmount(targetIdx);
+        }
+      },
+      onClose: () => {
+        setPickerState(null);
+      }
+    });
+  }, [availCats, recentCats, categories, getRecentSubsForCategory, focusSplitAmount]);
+
+  const openSplitSubcategoryPicker = useCallback((targetIdx) => {
+    if (targetIdx < 0 || targetIdx >= splitsRef.current.length) return;
+    const currentSplits = splitsRef.current;
+    const targetSplit = currentSplits[targetIdx];
+    if (!targetSplit?.category) return;
+    const freshSubs = (categories?.[targetSplit.category]?.subcategories || []).filter(sub => sub && sub !== 'Default');
+    const recSubs = getRecentSubsForCategory(targetSplit.category);
+    if (freshSubs.length === 0) return;
+
+    splitSubcatRefs.current[targetIdx]?.focus();
+
+    let subSelected = false;
+    setPickerState({
+      type: `split-sub-${targetIdx}`,
+      label: `Select Subcategory for ${targetSplit.category}`,
+      value: targetSplit.subcategory || '',
+      items: freshSubs,
+      recent: recSubs,
+      onSelect: (subVal) => {
+        subSelected = true;
+        setSplits(prev => prev.map((item, i) => i === targetIdx ? { ...item, subcategory: subVal } : item));
+        setPickerState(null);
+        focusSplitAmount(targetIdx);
+      },
+      onClose: () => {
+        setPickerState(null);
+        if (!subSelected) {
+          focusSplitAmount(targetIdx);
+        }
+      }
+    });
+  }, [categories, getRecentSubsForCategory, focusSplitAmount]);
 
   const allAvailableTags = useMemo(() => {
     const seen = new Set();
@@ -2653,7 +2819,9 @@ export default function AddTransaction({
       const totalAmount = isSplit && allocatedSplitSum > 0 ? allocatedSplitSum : (parseFloat(form.amount) || 0);
 
       // Extract hashtags from Note & Description and combine with manual tags
-      const noteAndDesc = `${baseNote} ${form.description || ''}`;
+      const noteAndDesc = isSplit
+        ? splits.map(s => `${s.note || ''} ${s.description || ''}`).join(' ')
+        : `${baseNote} ${form.description || ''}`;
       const extractedHashtags = (noteAndDesc.match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g) || []).filter(t => !isSystemTag(t)).map(t => t.toLowerCase());
       const manualTags = getUserFacingTags(form.tags || '');
 
@@ -2682,29 +2850,76 @@ export default function AddTransaction({
       const validCatSubs = (categories?.[catName]?.subcategories || []).filter(s => s && s !== 'Default');
       const cleanSubcategory = (!isTransfer && !isInvMode && validCatSubs.includes(form.subcategory)) ? form.subcategory : 'Default';
 
-      if (isSplit && !isTransfer && !isEdit) {
-        const splitGroupId = 'split-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-        for (const s of splits) {
-          const splitAmt = parseFloat(s.amount) || 0;
-          await addTransaction({
-            Date: inputToStorage(form.date),
-            Time: form.time || '',
-            Account: form.account,
-            Category: s.category,
-            Subcategory: s.subcategory || 'Default',
-            Note: s.note.trim(),
-            Description: form.description || '',
-            INR: splitAmt,
-            Amount: String(splitAmt),
-            Currency: 'INR',
-            'Income/Expense': form.type,
-            Tags: combinedTags,
-            split_group_id: splitGroupId,
-            SubAccount: cleanSubAccount,
-          });
+      if (isSplit && !isTransfer) {
+        if (!isEdit) {
+          const splitGroupId = 'split-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+          for (const s of splits) {
+            const splitAmt = parseFloat(s.amount) || 0;
+            await addTransaction({
+              Date: inputToStorage(form.date),
+              Time: form.time || '',
+              Account: form.account,
+              Category: s.category,
+              Subcategory: s.subcategory || 'Default',
+              Note: s.note.trim(),
+              Description: (s.description !== undefined ? s.description : form.description) || '',
+              INR: splitAmt,
+              Amount: String(splitAmt),
+              Currency: 'INR',
+              'Income/Expense': form.type,
+              Tags: combinedTags,
+              split_group_id: splitGroupId,
+              SubAccount: cleanSubAccount,
+            });
+          }
+          onClose();
+          return;
+        } else {
+          // Editing existing split group or converting existing transaction to split
+          const splitGroupId = editTransaction.split_group_id || ('split-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+          const existingIds = new Set(splitGroupTransactions.map(t => String(t._id || t.id)));
+          const keptIds = new Set();
+
+          for (let i = 0; i < splits.length; i++) {
+            const s = splits[i];
+            const splitAmt = parseFloat(s.amount) || 0;
+            const txnData = {
+              Date: inputToStorage(form.date),
+              Time: form.time || '',
+              Account: form.account,
+              Category: s.category,
+              Subcategory: s.subcategory || 'Default',
+              Note: s.note.trim(),
+              Description: (s.description !== undefined ? s.description : form.description) || '',
+              INR: splitAmt,
+              Amount: String(splitAmt),
+              Currency: 'INR',
+              'Income/Expense': form.type,
+              Tags: combinedTags,
+              split_group_id: splitGroupId,
+              SubAccount: cleanSubAccount,
+            };
+
+            const existingTxnId = s.transactionId || (i === 0 && !isSplitEdit ? (editTransaction._id || editTransaction.id) : null);
+            if (existingTxnId && existingIds.has(String(existingTxnId))) {
+              keptIds.add(String(existingTxnId));
+              await updateTransaction(existingTxnId, txnData);
+            } else {
+              await addTransaction(txnData);
+            }
+          }
+
+          // Delete any existing split group transactions that were removed by the user
+          for (const oldTxn of splitGroupTransactions) {
+            const oldId = String(oldTxn._id || oldTxn.id);
+            if (!keptIds.has(oldId)) {
+              await deleteTransaction(oldId);
+            }
+          }
+
+          onClose();
+          return;
         }
-        onClose();
-        return;
       }
 
       if (recurringConfig) {
@@ -3145,6 +3360,15 @@ export default function AddTransaction({
           if (isInstalmentEdit) {
             await updateInstalmentSiblings(editTransaction.recurring_rule_id, data, editTransaction);
           } else if (isEdit) {
+            if (isSplitEdit && !isSplit) {
+              data.split_group_id = '';
+              for (const sibling of splitGroupTransactions) {
+                const sId = String(sibling._id || sibling.id);
+                if (sId !== String(editTransaction._id || editTransaction.id)) {
+                  await deleteTransaction(sId);
+                }
+              }
+            }
             await updateTransaction(editTransaction._id, data);
           } else {
             await addTransaction(data);
@@ -4235,10 +4459,19 @@ export default function AddTransaction({
                     value={form.amount} onChange={e => set('amount', cleanNumericInput(e.target.value))}
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); noteRef.current?.focus(); } }} />
                 </div>
-                {!isTransfer && !isEdit && (
+                {!isTransfer && !isInvMode && (!isEdit || !isInstalmentEdit) && (
                   <button
                     type="button"
-                    onClick={() => setIsSplit(v => !v)}
+                    onClick={() => {
+                      if (!isSplit) {
+                        setIsSplit(true);
+                        setTimeout(() => {
+                          openSplitCategoryPicker(0);
+                        }, 100);
+                      } else {
+                        setIsSplit(false);
+                      }
+                    }}
                   style={{
                     padding: '8px 12px',
                     borderRadius: 12,
@@ -4305,35 +4538,8 @@ export default function AddTransaction({
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button
                       type="button"
-                      onClick={() => setPickerState({
-                        type: `split-cat-${idx}`,
-                        label: `Select Category (Split #${idx + 1})`,
-                        value: s.category,
-                        items: availCats,
-                        recent: recentCats,
-                        onSelect: (v) => {
-                          const freshSubs = (categories?.[v]?.subcategories || []).filter(sub => sub && sub !== 'Default');
-                          const recSubs = getRecentSubsForCategory(v);
-                          setSplits(prev => prev.map((item, i) => i === idx ? { ...item, category: v, subcategory: '' } : item));
-                          if (freshSubs.length > 0) {
-                            setTimeout(() => {
-                              setPickerState({
-                                type: `split-sub-${idx}`,
-                                label: `Select Subcategory for ${v}`,
-                                value: '',
-                                items: freshSubs,
-                                recent: recSubs,
-                                onSelect: (subVal) => {
-                                  setSplits(prev => prev.map((item, i) => i === idx ? { ...item, subcategory: subVal } : item));
-                                  setPickerState(null);
-                                }
-                              });
-                            }, 50);
-                          } else {
-                            setPickerState(null);
-                          }
-                        }
-                      })}
+                      ref={el => splitCategoryRefs.current[idx] = el}
+                      onClick={() => openSplitCategoryPicker(idx)}
                       style={{
                         flex: 1, padding: '8px 10px', borderRadius: 10, background: 'var(--bg-base)',
                         border: `1px solid ${!s.category && errors.splits ? 'var(--expense)' : 'var(--border)'}`,
@@ -4348,21 +4554,8 @@ export default function AddTransaction({
                     {s.category && (categories?.[s.category]?.subcategories || []).filter(sub => sub && sub !== 'Default').length > 0 && (
                       <button
                         type="button"
-                        onClick={() => {
-                          const freshSubs = (categories?.[s.category]?.subcategories || []).filter(sub => sub && sub !== 'Default');
-                          const recSubs = getRecentSubsForCategory(s.category);
-                          setPickerState({
-                            type: `split-sub-${idx}`,
-                            label: `Select Subcategory for ${s.category}`,
-                            value: s.subcategory,
-                            items: freshSubs,
-                            recent: recSubs,
-                            onSelect: (v) => {
-                              setSplits(prev => prev.map((item, i) => i === idx ? { ...item, subcategory: v } : item));
-                              setPickerState(null);
-                            }
-                          });
-                        }}
+                        ref={el => splitSubcatRefs.current[idx] = el}
+                        onClick={() => openSplitSubcategoryPicker(idx)}
                         style={{
                           flex: 1, padding: '8px 10px', borderRadius: 10, background: 'var(--bg-base)',
                           border: '1px solid var(--border)',
@@ -4382,6 +4575,7 @@ export default function AddTransaction({
                       <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>₹</span>
                       <input
                         type="text"
+                        ref={el => splitAmountRefs.current[idx] = el}
                         inputMode="decimal"
                         autoComplete="off"
                         autoCorrect="off"
@@ -4393,6 +4587,12 @@ export default function AddTransaction({
                         onFocus={handleNumberFocus}
                         onClick={handleNumberFocus}
                         onContextMenu={handleNumberContextMenu}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            splitNoteRefs.current[idx]?.focus();
+                          }
+                        }}
                         onChange={e => {
                           const val = cleanNumericInput(e.target.value);
                           setSplits(prev => {
@@ -4408,10 +4608,17 @@ export default function AddTransaction({
                     <div style={{ position: 'relative', flex: 1 }}>
                       <input
                         type="text"
+                        ref={el => splitNoteRefs.current[idx] = el}
                         placeholder="Note (e.g. Vegetables)"
                         className="form-input"
                         style={{ width: '100%', fontSize: '0.8rem', padding: '6px 10px' }}
                         value={s.note}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            splitDescriptionRefs.current[idx]?.focus();
+                          }
+                        }}
                         onFocus={() => {
                           setSplitNoteFocusedIdx(idx);
                           setSplitNoteSugs(getRecentAndMostUsedNotes(form.type, s.category));
@@ -4452,6 +4659,9 @@ export default function AddTransaction({
                                   setSplits(prev => prev.map((part, i) => i === idx ? { ...part, note: label } : part));
                                   setSplitNoteFocusedIdx(null);
                                   setSplitNoteSugs([]);
+                                  setTimeout(() => {
+                                    splitDescriptionRefs.current[idx]?.focus();
+                                  }, 50);
                                 }}
                                 style={{ display: 'flex', alignItems: 'center', fontSize: '0.78rem', padding: '6px 10px' }}
                               >
@@ -4464,13 +4674,46 @@ export default function AddTransaction({
                       )}
                     </div>
                   </div>
+
+                  {/* Split Description */}
+                  <div style={{ position: 'relative', width: '100%' }}>
+                    <input
+                      type="text"
+                      ref={el => splitDescriptionRefs.current[idx] = el}
+                      placeholder="Description (optional)"
+                      className="form-input"
+                      style={{ width: '100%', fontSize: '0.8rem', padding: '6px 10px' }}
+                      value={s.description || ''}
+                      autoComplete="on"
+                      autoCorrect="on"
+                      spellCheck="true"
+                      onChange={e => {
+                        const val = e.target.value;
+                        setSplits(prev => prev.map((item, i) => i === idx ? { ...item, description: val } : item));
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (idx + 1 < splits.length) {
+                            openSplitCategoryPicker(idx + 1);
+                          }
+                        }
+                      }}
+                    />
+                  </div>
                 </div>
               ))}
 
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
                 <button
                   type="button"
-                  onClick={() => setSplits(prev => [...prev, { id: 's' + (prev.length + 1), category: '', subcategory: '', amount: '', note: '' }])}
+                  onClick={() => {
+                    const nextIdx = splits.length;
+                    setSplits(prev => [...prev, { id: 's' + (prev.length + 1), category: '', subcategory: '', amount: '', note: '', description: '' }]);
+                    setTimeout(() => {
+                      openSplitCategoryPicker(nextIdx);
+                    }, 60);
+                  }}
                   style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}
                 >
                   + Add Split Part
@@ -4484,8 +4727,19 @@ export default function AddTransaction({
                         const last = next[next.length - 1];
                         if (last && (!last.amount || parseFloat(last.amount) === 0)) {
                           last.amount = String(splitRemaining);
+                          setTimeout(() => {
+                            if (!last.category) {
+                              openSplitCategoryPicker(next.length - 1);
+                            } else {
+                              splitAmountRefs.current[next.length - 1]?.focus();
+                            }
+                          }, 60);
                         } else {
-                          next.push({ id: 's' + (next.length + 1), category: '', subcategory: '', amount: String(splitRemaining), note: '' });
+                          const nextIdx = next.length;
+                          next.push({ id: 's' + (next.length + 1), category: '', subcategory: '', amount: String(splitRemaining), note: '', description: '' });
+                          setTimeout(() => {
+                            openSplitCategoryPicker(nextIdx);
+                          }, 60);
                         }
                         return next;
                       });
@@ -4535,15 +4789,18 @@ export default function AddTransaction({
             </div>
           )}
 
-          <div className="description-section">
-            <div className="form-group">
-              <textarea ref={el => { textInputRef(el); descriptionRef.current = el; }} className="form-input" rows={1} value={form.description}
-                autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
-                onFocus={() => setPickerState(null)}
-                onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 220) + 'px'; }}
-                onChange={e => set('description', e.target.value)} placeholder='Description' />
+          {/* Description Section (hidden when isSplit) */}
+          {!isSplit && (
+            <div className="description-section">
+              <div className="form-group">
+                <textarea ref={el => { textInputRef(el); descriptionRef.current = el; }} className="form-input" rows={1} value={form.description}
+                  autoComplete="on" autoCorrect="on" spellCheck="true" autoCapitalize="sentences"
+                  onFocus={() => setPickerState(null)}
+                  onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 220) + 'px'; }}
+                  onChange={e => set('description', e.target.value)} placeholder='Description' />
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="form-actions" style={{ display: 'flex', gap: '10px', marginBottom: 14 }}>
             <button className="btn btn-primary btn-lg" style={{ flex: 2 }} onClick={() => handleSave(false)} disabled={saving}>
@@ -4741,7 +4998,7 @@ export default function AddTransaction({
         {/* Inline Picker Room */}
         {pickerState && (
           <div className="picker-room">
-            {pickerState.type === 'subcategory' ? (
+            {pickerState.type === 'subcategory' || (pickerState.type && pickerState.type.startsWith('split-sub-')) ? (
               <SubcategoryPickerInline
                 items={pickerState.items}
                 recent={pickerState.recent}
