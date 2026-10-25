@@ -779,6 +779,163 @@ test('FinMan Stock Inventory — Quantity Decrement & Reconciliation Suite', asy
     assert.equal(bB.remainingQty, 0, 'Batch B remaining quantity is 2 - 2 = 0');
   });
 
+  // 17. Dabur Amla Jan 18 consumption does not cross-talk with Jan 18 Oil and decrements manual baseline correctly
+  await suite.test('17. Dabur Amla Jan 18 consumption does not cross-talk with Jan 18 Oil and decrements manual baseline correctly', async () => {
+    const db = getDB();
+
+    // Setup: Existing Oil item in inventory from Jan 18, 2026
+    await db.run(
+      'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ['inv-oil-jan18', 'Cooking Oil', 0, 'litre', 139, 114, 'unavailable', '2026-01-18']
+    );
+
+    // Setup: Another Oil item from Aug 7, 2026 with 7L available
+    await db.run(
+      'INSERT INTO inventory (id, name, qty, unit, price, discounted_price, status, purchased_date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['de34ffd0-8639-4a05-81fd-f429eab188e4', 'Cooking Oil', 7, 'litre', 172, 154, 'available', '2026-08-07', 'Amazon Fresh']
+    );
+
+    // Verify LOWER(name) = ? query in db.js strictly filters case-insensitively and does not return Cooking Oil
+    const queryRes = await db.query('SELECT * FROM inventory WHERE LOWER(name) = ?', ['dabur amla']);
+    assert.equal(queryRes.values.length, 0, 'LOWER(name) = ? returns 0 rows when dabur amla is not in inventory table');
+
+    // Create Dabur Amla purchase transaction dated Jan 18, 2026 with manual baseline of 1 remaining
+    const amlaTxnId = 'txn-amla-flipkart-jan18';
+    const amlaPurchaseTxn = {
+      id: amlaTxnId,
+      date: '18/01/2026',
+      time: '12:00',
+      type: 'Transfer-Out',
+      account: 'Flipkart',
+      to_account: 'Stock',
+      amount: 262,
+      inr: 262,
+      description: 'Flipkart \n\n\n\nDabur amla Stock available 550ml*2: 291: @131*2, 1'
+    };
+    await addTransaction(amlaPurchaseTxn);
+
+    const initialBatches = extractNormalizedBatchesFromTransactions([amlaPurchaseTxn]);
+    assert.equal(initialBatches.length, 1);
+    const amlaBatch = initialBatches[0];
+    assert.equal(amlaBatch.cleanedName, 'Dabur amla');
+    assert.equal(amlaBatch.purchasedQty, 2);
+    assert.equal(amlaBatch.explicitRemaining, 1);
+    assert.equal(amlaBatch.remainingQty, 1);
+    assert.equal(amlaBatch.status, 'available');
+
+    // User clicks Use and consumes 1 qty of Dabur Amla
+    await consumeInventoryItem(
+      amlaBatch.batchId,
+      1,
+      '2026-10-19',
+      false,
+      'To Home',
+      'Groceries',
+      'consume',
+      '',
+      3,
+      '14:00',
+      '',
+      amlaBatch
+    );
+
+    // 1. Transaction description must be for Dabur amla, NOT Cooking Oil
+    const allTxns = await getTransactions();
+    const consumeTxn = allTxns.find(t => t.id !== amlaTxnId);
+    assert.ok(consumeTxn, 'Consumption transaction must be created');
+    assert.ok(consumeTxn.description.includes('Dabur amla'), `Description must be for Dabur amla, got: ${consumeTxn.description}`);
+    assert.ok(!consumeTxn.description.toLowerCase().includes('cooking oil'), 'Description must not contain Cooking Oil');
+    assert.ok(consumeTxn.tags.includes(`#stock_ref_${amlaBatch.batchId}:1`), 'Must tag the Dabur Amla batchId');
+
+    // 2. Cooking Oil inventory must remain intact at 7L
+    const oilAfter = (await db.query('SELECT * FROM inventory WHERE id = ?', ['de34ffd0-8639-4a05-81fd-f429eab188e4'])).values[0];
+    assert.equal(oilAfter.qty, 7, 'Cooking Oil quantity must remain 7L');
+
+    // 3. Batches normalization must reflect remainingQty = 0 and status = unavailable (OUT)
+    const updatedBatches = extractNormalizedBatchesFromTransactions(allTxns);
+    const updatedAmla = updatedBatches.find(b => b.canonicalProduct === 'Dabur Amla Hair Oil');
+    assert.ok(updatedAmla, 'Dabur Amla batch must exist');
+    assert.equal(updatedAmla.remainingQty, 0, 'Dabur Amla remaining quantity must be 0');
+    assert.equal(updatedAmla.consumedQty, 2, 'Total consumed quantity must be 2 (1 baseline + 1 modern)');
+    assert.equal(updatedAmla.status, 'unavailable', 'Status must be OUT (unavailable)');
+  });
+
+  // 18. Purchase with subAccount and Consumption with userDescription and installment options
+  await suite.test('18. Purchase with subAccount and Consumption with userDescription and installment options', async () => {
+    const { addInventoryPurchase } = await import('../database/inventory.js');
+    const { getRecurringRules } = await import('../database/recurring.js');
+
+    // 1. Test purchase with subAccount
+    const purchaseResult = await addInventoryPurchase({
+      date: '2026-10-20',
+      time: '10:30',
+      fromAccount: 'Liquid Mutual Funds',
+      subAccount: 'SBI Liquid Fund',
+      items: [
+        {
+          name: 'Colgate Toothpaste',
+          brand: 'Colgate',
+          variant: '200g',
+          original_qty: 2,
+          qty: 2,
+          price: 120,
+          discounted_price: 108,
+          unit: 'pack',
+          notes: 'Reliance Smart'
+        }
+      ]
+    });
+
+    assert.ok(purchaseResult, 'Purchase succeeded');
+    const allTxns = await getTransactions();
+    const purchaseTxn = allTxns.find(t => t.id === purchaseResult.txnId);
+    assert.ok(purchaseTxn, 'Purchase txn found');
+    assert.equal(purchaseTxn.sub_account, 'SBI Liquid Fund', 'sub_account is saved on purchase transaction');
+    assert.equal(purchaseTxn.from_sub_account, 'SBI Liquid Fund', 'from_sub_account is saved on purchase transaction');
+
+    // Find the Colgate batch
+    const batches = extractNormalizedBatchesFromTransactions(allTxns);
+    const colgateBatch = batches.find(b => (b.cleanedName || b.canonicalProduct || b.name || '').toLowerCase().includes('colgate'));
+    assert.ok(colgateBatch, 'Colgate batch found');
+
+    // 2. Consume Colgate item with installment options and user description
+    const consumeRes = await consumeInventoryItem(
+      colgateBatch.batchId,
+      1,
+      '2026-10-21',
+      false,
+      'Personal Dental Care',
+      'Groceries',
+      'installment',
+      'Shared bathroom pack',
+      0,
+      '11:00',
+      '',
+      colgateBatch,
+      'Personal Dental Care',
+      {
+        inputMode: 'months',
+        months: 3,
+        days: 90,
+        scheduleMode: 'on_date'
+      }
+    );
+
+    assert.ok(consumeRes, 'Installment consumption succeeded');
+    const updatedTxns = await getTransactions();
+    const instTxn = updatedTxns.find(t => t.type === 'Expense' && t.description && t.description.includes('Colgate Toothpaste'));
+    assert.ok(instTxn, 'Installment transaction created');
+    assert.ok(instTxn.description.startsWith('Personal Dental Care\n\nUsed 1 pack of Colgate Toothpaste'), `Description should have userDescription prepended, got: ${instTxn.description}`);
+    assert.ok(instTxn.recurring_rule_id, 'Recurring rule id generated');
+
+    // Verify recurring rule exists and has 3 total parts (or instalments)
+    const { getAllRecurringRules } = await import('../database/recurring.js');
+    const rules = await getAllRecurringRules();
+    const rule = rules.find(r => r.id === instTxn.recurring_rule_id);
+    assert.ok(rule, 'Recurring rule exists in database');
+    assert.equal(rule.total_instalments || rule.total_parts, 3, 'Total instalments/parts configured to 3');
+  });
+
 });
 
 

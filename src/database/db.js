@@ -143,6 +143,7 @@ const parseWhere = (clause, vals) => {
     const gte = p.trim().match(/^(\w+)\s*>=\s*\?/);
     const lt  = p.trim().match(/^(\w+)\s*<\s*\?/);
     const gt  = p.trim().match(/^(\w+)\s*>\s*\?/);
+    const lowerEm = p.trim().match(/^LOWER\((\w+)\)\s*=\s*\?/i);
     const em  = p.trim().match(/^(\w+)\s*=\s*\?/);
     const om  = p.trim().match(/^\((.+)\)/);  // OR groups like (a=? OR b=? OR c=?)
     if (inM) {
@@ -156,12 +157,15 @@ const parseWhere = (clause, vals) => {
     if (gte) return { col:gte[1], op:'>=',   val:vals[vi++] };
     if (lt)  return { col:lt[1],  op:'<',    val:vals[vi++] };
     if (gt)  return { col:gt[1],  op:'>',    val:vals[vi++] };
+    if (lowerEm) return { col:lowerEm[1], op:'LOWER_EQ', val:vals[vi++] };
     if (em)  return { col:em[1],  op:'=',    val:vals[vi++] };
     if (om) {
       // parse OR sub-conditions
       const subs = om[1].split(/\s+OR\s+/i).map(sp => {
+        const slm = sp.trim().match(/^LOWER\((\w+)\)\s*=\s*\?/i);
         const sm = sp.trim().match(/^(\w+)\s*=\s*\?/);
         const sl = sp.trim().match(/^(\w+)\s+LIKE\s+\?/i);
+        if (slm) return { col:slm[1], op:'LOWER_EQ', val:vals[vi++] };
         if (sm) return { col:sm[1], op:'=',    val:vals[vi++] };
         if (sl) return { col:sl[1], op:'LIKE', val:vals[vi++] };
         return null;
@@ -177,6 +181,7 @@ const matchCond = (row, c) => {
   const rawVal = row[c.col];
   const rv = String(rawVal ?? '');
   if (c.op === 'IN')   return Array.isArray(c.val) && c.val.map(x => String(x ?? '')).includes(rv);
+  if (c.op === 'LOWER_EQ') return rv.toLowerCase() === String(c.val ?? '').toLowerCase();
   if (c.op === '=')    return rv === String(c.val ?? '');
   if (c.op === '<=') {
     const n1 = Number(rawVal), n2 = Number(c.val);

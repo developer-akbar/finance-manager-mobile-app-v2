@@ -46,7 +46,7 @@
   font-size: 0.62rem;
   font-weight: 700;
   color: var(--text-muted);
-  text-transform: uppercase;
+  text-transform: capitalize;
   letter-spacing: 0.5px;
 }
 
@@ -198,7 +198,7 @@
   background: var(--bg-card2);
   border: 1px solid var(--border);
   color: var(--text-muted);
-  text-transform: uppercase;
+  text-transform: capitalize;
 }
 
 .stock-item-qty-col {
@@ -454,7 +454,7 @@
   font-size: 0.58rem;
   font-weight: 700;
   color: var(--text-muted);
-  text-transform: uppercase;
+  text-transform: capitalize;
   letter-spacing: 0.5px;
 }
 
@@ -523,7 +523,7 @@
   font-size: 0.65rem;
   font-weight: 700;
   color: var(--text-muted);
-  text-transform: uppercase;
+  text-transform: capitalize;
   margin-bottom: 2px;
 }
 
@@ -631,7 +631,7 @@
   font-size: 0.62rem;
   font-weight: 700;
   color: var(--text-muted);
-  text-transform: uppercase;
+  text-transform: capitalize;
   letter-spacing: 0.5px;
 }
 
@@ -661,7 +661,7 @@
 
 @media (min-width: 768px) {
   .stock-prod-summary-grid {
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(7, 1fr);
   }
 }
 
@@ -676,7 +676,7 @@
   font-size: 0.6rem;
   font-weight: 700;
   color: var(--text-muted);
-  text-transform: uppercase;
+  text-transform: capitalize;
   letter-spacing: 0.5px;
 }
 
@@ -750,7 +750,7 @@
   color: var(--text-muted);
   font-size: 0.64rem;
   font-weight: 800;
-  text-transform: uppercase;
+  text-transform: capitalize;
   letter-spacing: 0.5px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
@@ -842,7 +842,7 @@
   font-size: 0.68rem;
   font-weight: 700;
   color: var(--text-muted);
-  text-transform: uppercase;
+  text-transform: capitalize;
   letter-spacing: 0.5px;
 }
 
@@ -939,4 +939,309 @@
   font-weight: 700;
   margin-top: 4px;
 }
+
+/* ── Modern Use Modal & Segment Controls ─────────────────── */
+.stock-use-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 2px;
+}
+
+.stock-use-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  line-height: 1;
+  transition: all 0.15s ease;
+}
+
+.stock-use-close-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.stock-avail-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(0, 229, 160, 0.12);
+  border: 1px solid rgba(0, 229, 160, 0.25);
+  font-size: 0.72rem;
+  color: var(--green, #00e5a0);
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+.stock-usage-tabs {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.stock-usage-tab-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  border: 1.5px solid var(--border);
+  background: var(--bg-card2);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.stock-usage-tab-btn:hover:not(:disabled) {
+  border-color: var(--border-hover, rgba(255, 255, 255, 0.25));
+  color: var(--text-primary);
+}
+
+.stock-usage-tab-btn.active.consume {
+  background: rgba(77, 159, 255, 0.14);
+  color: var(--blue, #4d9fff);
+  border-color: rgba(77, 159, 255, 0.4);
+}
+
+.stock-usage-tab-btn.active.lend {
+  background: rgba(255, 179, 0, 0.14);
+  color: var(--gold, #ffb300);
+  border-color: rgba(255, 179, 0, 0.4);
+}
+
+.stock-usage-tab-btn.active.instalment {
+  background: rgba(255, 179, 0, 0.15);
+  color: var(--gold, #ffb300);
+  border-color: rgba(255, 179, 0, 0.4);
+}
+
+/* Mode toggle segmented pills (Months/Days, Pack/Unit) */
+.stock-mode-toggle-group {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-card2, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.stock-mode-toggle-btn {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.3;
+  user-select: none;
+}
+
+.stock-mode-toggle-btn:hover:not(.active) {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.stock-mode-toggle-btn.active {
+  background: var(--accent, #00e5a0);
+  color: #0b1320 !important;
+  font-weight: 800;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.stock-modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.stock-confirm-btn {
+  flex: 1;
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  border: none;
+  background: var(--accent, #00e5a0);
+  color: #0b1320;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 6px rgba(0, 229, 160, 0.25);
+}
+
+.stock-confirm-btn:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+
+.stock-confirm-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.stock-cancel-btn {
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.stock-cancel-btn:hover:not(:disabled) {
+  background: var(--bg-card2);
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   Account & Sub Account Picker Dropdown Styles (aligned with AddTransaction)
+   ========================================================================== */
+
+.stock-account-picker-row .picker-sheet-dropdown {
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-xl, 14px);
+  padding: 10px 0 12px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+  box-sizing: border-box;
+}
+
+/* Search box */
+.stock-account-picker-row .picker-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: var(--r-lg, 10px);
+  padding: 6px 12px;
+  margin: 2px 10px 8px;
+}
+
+.stock-account-picker-row .picker-search-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.stock-account-picker-row .picker-search-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  font-size: 0.85rem;
+  font-family: var(--font);
+  color: var(--text-primary);
+  min-height: 26px;
+  padding: 0;
+}
+
+.stock-account-picker-row .picker-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.stock-account-picker-row .picker-search-clear {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+/* Section labels */
+.stock-account-picker-row .picker-section-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 6px 10px 4px;
+}
+
+/* Recent — horizontal wrapping chip row with pill shape */
+.stock-account-picker-row .picker-recent-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+
+.stock-account-picker-row .picker-recent-row .picker-chip {
+  flex: 0 0 auto;
+  border-radius: var(--r-full, 9999px);
+  padding: 6px 14px;
+  min-height: 28px;
+  width: auto;
+  max-width: fit-content;
+}
+
+/* 3-column chip grid for all options matching AddTransaction */
+.stock-account-picker-row .picker-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 0 10px;
+}
+
+/* Shared chip styling matching AddTransaction */
+.stock-account-picker-row .picker-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 6px;
+  cursor: pointer;
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--bg-card2);
+  font-size: 0.74rem;
+  font-weight: var(--fw-data, 500);
+  color: var(--text-primary);
+  font-family: var(--font);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  line-height: 1.2;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+.stock-account-picker-row .picker-chip:hover {
+  border-color: var(--accent);
+}
+
+.stock-account-picker-row .picker-chip:active {
+  background: var(--bg-hover);
+}
+
+.stock-account-picker-row .picker-chip-active {
+  background: rgba(0, 229, 160, 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.stock-account-picker-row .picker-chip-check {
+  font-size: 0.7rem;
+  margin-left: 3px;
+  flex-shrink: 0;
+}
+
 

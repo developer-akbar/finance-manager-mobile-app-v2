@@ -86,6 +86,12 @@ const formatFraction = (val) => {
   return String(parseFloat(val.toFixed(3)));
 };
 
+const formatPriceVal = (val) => {
+  if (val === null || val === undefined || isNaN(val) || val === '') return '0';
+  const num = Number(val);
+  return (num % 1 !== 0) ? num.toFixed(2) : String(Math.round(num));
+};
+
 const cleanItemName = (rawName) => {
   if (!rawName) return '';
   let name = rawName.trim();
@@ -116,7 +122,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState('in_stock'); // 'in_stock', 'out_of_stock', 'all'
   const [search, setSearch] = useState('');
-  
+
   // Product Detail View state
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [selectedVariant, setSelectedVariant] = useState('all');
@@ -145,6 +151,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const [editingBatchId, setEditingBatchId] = useState(null);
   const [editFormData, setEditFormData] = useState({});
   const [activeStoreEditSug, setActiveStoreEditSug] = useState(false);
+  const [activeEditItemSug, setActiveEditItemSug] = useState(false);
 
   // Suggestions active index states
   const [activeItemSugIdx, setActiveItemSugIdx] = useState(null);
@@ -158,6 +165,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const [consumingItemBatchDate, setConsumingItemBatchDate] = useState('');
   const [consumeQty, setConsumeQty] = useState('');
   const [consumeUserNote, setConsumeUserNote] = useState('');
+  const [consumeDescription, setConsumeDescription] = useState('');
   const [consumeDate, setConsumeDate] = useState(new Date().toISOString().split('T')[0]);
   const [consumeTime, setConsumeTime] = useState('');
   const [consumeUnitMode, setConsumeUnitMode] = useState('pack'); // 'pack' or 'sub'
@@ -165,13 +173,46 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const [consumeSubcategory, setConsumeSubcategory] = useState('Groceries');
   const [usageType, setUsageType] = useState('consume'); // 'consume' or 'lend' or 'instalment'
   const [instalmentMonths, setInstalmentMonths] = useState('3');
+  const [instalmentDays, setInstalmentDays] = useState('90');
+  const [instalmentInputMode, setInstalmentInputMode] = useState('months'); // 'months' or 'days'
+  const [instalmentScheduleMode, setInstalmentScheduleMode] = useState('on_date'); // 'on_date' or 'start_of_month'
   const [personName, setPersonName] = useState('');
   const [consumeError, setConsumeError] = useState('');
 
   // Purchase modal states
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
   const [showAccountPicker, setShowAccountPicker] = useState(false);
+  const [accountSearchQuery, setAccountSearchQuery] = useState('');
   const [purchaseFrom, setPurchaseFrom] = useState('');
+  const [purchaseSubAccount, setPurchaseSubAccount] = useState('');
+  const [showSubAccountPicker, setShowSubAccountPicker] = useState(false);
+  const accountPickerRef = useRef(null);
+  const subAccountPickerRef = useRef(null);
+
+  useEffect(() => {
+    if (!showAccountPicker && !showSubAccountPicker) return;
+    const handleClickOutside = (e) => {
+      const inAcct = accountPickerRef.current && accountPickerRef.current.contains(e.target);
+      const inSub = subAccountPickerRef.current && subAccountPickerRef.current.contains(e.target);
+      if (!inAcct && !inSub) {
+        setShowAccountPicker(false);
+        setShowSubAccountPicker(false);
+        setAccountSearchQuery('');
+        if (document.activeElement && typeof document.activeElement.blur === 'function') {
+          if (accountPickerRef.current?.contains(document.activeElement) || subAccountPickerRef.current?.contains(document.activeElement)) {
+            document.activeElement.blur();
+          }
+        }
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside, true);
+    document.addEventListener('touchstart', handleClickOutside, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside, true);
+      document.removeEventListener('touchstart', handleClickOutside, true);
+    };
+  }, [showAccountPicker, showSubAccountPicker]);
+
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().split('T')[0]);
   const [purchaseTime, setPurchaseTime] = useState(new Date().toLocaleTimeString('en-IN', { hour12: false }).slice(0, 5));
   const [purchaseNote, setPurchaseNote] = useState('in stock');
@@ -278,33 +319,39 @@ export default function StockManager({ onBack, backInterceptRef }) {
       const XLSX = await import('xlsx');
       const dataRows = [];
 
-      // Header row with comprehensive history
+      // Header row matching requested column order: Date, Brand, Variant, Source, Purchased, Item Price, MRP, Paid, Saved, Consumed, Rem. Qty, Rem. Value, Status
       dataRows.push([
-        'Product', 'Variant', 'Purchase Date', 'Store / Source', 'Purchased Qty',
-        'Consumed Qty', 'Remaining Qty', 'Unit Price (₹)', 'MRP (₹)', 'Paid Amount (₹)',
-        'Saved Amount (₹)', 'Status'
+        'Product', 'Date', 'Brand', 'Variant', 'Source', 'Purchased',
+        'Item Price (₹)', 'MRP (₹)', 'Paid (₹)', 'Saved (₹)',
+        'Consumed', 'Rem. Qty', 'Rem. Value (₹)', 'Status'
       ]);
 
-      allNormalizedBatches.forEach(b => {
+      const batchesToExport = selectedProduct ? activeProductBatches : allNormalizedBatches;
+
+      batchesToExport.forEach(b => {
+        const remVal = (b.remainingQty || 0) * (b.unitPrice || 0);
         dataRows.push([
-          b.canonicalProduct,
-          b.variant,
+          b.canonicalProduct || '',
           b.purchasedDate || '',
+          getBatchBrand(b) || '',
+          b.variant || '',
           getBatchSource(b) || '',
           b.purchasedQty,
+          Number((b.unitPrice || 0).toFixed(2)),
+          Number((b.mrp || 0).toFixed(2)),
+          Number((b.paid || 0).toFixed(2)),
+          Number((b.savings || 0).toFixed(2)),
           b.consumedQty,
           b.remainingQty,
-          Number(b.unitPrice.toFixed(2)),
-          Number(b.mrp.toFixed(2)),
-          Number(b.paid.toFixed(2)),
-          Number(b.savings.toFixed(2)),
-          b.remainingQty > 0 ? 'Available' : 'Unavailable'
+          Number(remVal.toFixed(2)),
+          b.remainingQty > 0 ? 'In Stock' : 'Out'
         ]);
       });
 
+      const sheetName = selectedProduct ? selectedProduct.slice(0, 31).replace(/[\\/?*[\]:]/g, '') : 'Stock History';
       const ws = XLSX.utils.aoa_to_sheet(dataRows);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Stock History');
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
 
       const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'binary' });
       const buf = new ArrayBuffer(wbout.length);
@@ -315,7 +362,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Stock-Inventory-History_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const exportName = selectedProduct ? `Stock_${selectedProduct.replace(/[^a-zA-Z0-9]/g, '_')}` : 'Stock-Inventory-History';
+      a.download = `${exportName}_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -365,7 +413,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
     if (!backInterceptRef) return;
     if (isSavingConsume || isSavingPurchase || isSavingEdit) {
       // While saving, prevent navigation or modal closing to protect in-flight DB operations
-      backInterceptRef.current = () => {};
+      backInterceptRef.current = () => { };
     } else if (showPurchaseModal) {
       backInterceptRef.current = () => setShowPurchaseModal(false);
     } else if (consumingItemId) {
@@ -546,6 +594,13 @@ export default function StockManager({ onBack, backInterceptRef }) {
     const indexed = activeProductBatches.map((b, idx) => ({ ...b, _origIdx: idx }));
 
     return indexed.sort((a, b) => {
+      // 1. Keep In Stock items at top irrelevant of date or sort field
+      const aInStock = (parseFloat(a.remainingQty) || 0) > 0 ? 1 : 0;
+      const bInStock = (parseFloat(b.remainingQty) || 0) > 0 ? 1 : 0;
+      if (aInStock !== bInStock) {
+        return bInStock - aInStock; // 1 (in stock) comes before 0 (out of stock)
+      }
+
       let comp = 0;
       switch (historySortField) {
         case 'date': {
@@ -580,6 +635,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
           comp = (parseFloat(a.purchasedQty) || 0) - (parseFloat(b.purchasedQty) || 0);
           break;
         }
+        case 'item_price':
+        case 'unit_price': {
+          comp = (parseFloat(a.unitPrice) || 0) - (parseFloat(b.unitPrice) || 0);
+          break;
+        }
         case 'mrp': {
           comp = (parseFloat(a.mrp) || 0) - (parseFloat(b.mrp) || 0);
           break;
@@ -598,6 +658,12 @@ export default function StockManager({ onBack, backInterceptRef }) {
         }
         case 'remaining': {
           comp = (parseFloat(a.remainingQty) || 0) - (parseFloat(b.remainingQty) || 0);
+          break;
+        }
+        case 'remaining_val': {
+          const valA = (parseFloat(a.remainingQty) || 0) * (parseFloat(a.unitPrice) || 0);
+          const valB = (parseFloat(b.remainingQty) || 0) * (parseFloat(b.unitPrice) || 0);
+          comp = valA - valB;
           break;
         }
         case 'status': {
@@ -620,7 +686,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
       }
       return comp;
     });
-  }, [activeProductBatches, historySortField, historySortDir, items]);
+  }, [activeProductBatches, historySortField, historySortDir, items, getBatchBrand, getBatchSource]);
 
   const updatePurchaseItem = (itemId, field, value) => {
     setPurchaseItems(prev => prev.map(it => {
@@ -665,6 +731,39 @@ export default function StockManager({ onBack, backInterceptRef }) {
     setActiveItemSugIdx(null);
   };
 
+  const getSubAccountNames = useCallback((acctNameOrObj) => {
+    if (!acctNameOrObj) return [];
+    let acctObj = null;
+    if (typeof acctNameOrObj === 'object') {
+      acctObj = acctNameOrObj;
+    } else {
+      acctObj = (accounts || []).find(a => (a.name || a || '').toLowerCase() === String(acctNameOrObj).toLowerCase());
+    }
+    if (!acctObj) return [];
+    const subs = Array.isArray(acctObj.subAccounts)
+      ? acctObj.subAccounts
+      : (acctObj.subAccounts ? Array.from(acctObj.subAccounts) : []);
+    const extracted = subs.map(s => (typeof s === 'string' ? s : (s?.name || s?.id || '')).trim()).filter(Boolean);
+
+    const acctName = String(acctObj.name || acctObj || '').trim().toLowerCase();
+    let canonicalDefaults = [];
+    if (acctName === 'mutual funds tax saver') canonicalDefaults = ['Ak ETMoney'];
+    else if (acctName === 'liquid mutual funds') canonicalDefaults = ['Fareeda Groww', 'Ammi Groww', 'Ak ETMoney'];
+    else if (acctName === 'share market') canonicalDefaults = ['Zerodha', 'Fareeda Groww'];
+
+    const rawList = [...extracted, ...canonicalDefaults];
+    const seen = new Set();
+    const unique = [];
+    for (const name of rawList) {
+      const key = name.trim().toLowerCase();
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        unique.push(name.trim());
+      }
+    }
+    return unique;
+  }, [accounts]);
+
   const accountList = useMemo(() => {
     if (!accounts) return [];
     if (Array.isArray(accounts)) {
@@ -680,13 +779,98 @@ export default function StockManager({ onBack, backInterceptRef }) {
     return [];
   }, [accounts]);
 
+  const recentAccountsList = useMemo(() => {
+    const list = [];
+    const seen = new Set();
+    for (const t of (transactions || [])) {
+      const acct = t.Account || t.FromAccount;
+      if (acct && !seen.has(acct)) {
+        seen.add(acct);
+        list.push(acct);
+        if (list.length >= 6) break;
+      }
+    }
+    return list;
+  }, [transactions]);
+
+  const availablePurchaseSubAccounts = useMemo(() => {
+    return getSubAccountNames(purchaseFrom);
+  }, [purchaseFrom, getSubAccountNames]);
+
+  const filteredAccountList = useMemo(() => {
+    if (!accountSearchQuery.trim()) return accountList;
+    const q = accountSearchQuery.toLowerCase().trim();
+    return accountList.filter(a => a.toLowerCase().includes(q));
+  }, [accountList, accountSearchQuery]);
+
+  const handleSelectPurchaseAccount = (accName) => {
+    setPurchaseFrom(accName);
+    const subs = getSubAccountNames(accName);
+    if (subs.length > 0) {
+      if (!subs.includes(purchaseSubAccount)) {
+        setPurchaseSubAccount(subs[0] || '');
+      }
+    } else {
+      setPurchaseSubAccount('');
+    }
+    setShowAccountPicker(false);
+    setAccountSearchQuery('');
+  };
+
   const itemSuggestions = useMemo(() => {
     return [...new Set(allNormalizedBatches.map(i => i.cleanedName || i.rawName))];
   }, [allNormalizedBatches]);
 
   const storeSuggestions = useMemo(() => {
-    return [...new Set(allNormalizedBatches.map(i => i.source).filter(Boolean))];
-  }, [allNormalizedBatches]);
+    const set = new Set();
+    // 1. From database inventory items (where notes is specifically the saved Store Name)
+    (items || []).forEach(i => {
+      const s = (i.notes || '').trim();
+      if (s && s !== 'Unknown' && s !== 'manual' && s.toLowerCase() !== 'in stock' && !s.startsWith('#') && s.length < 50) {
+        set.add(s);
+      }
+    });
+
+    // 2. From transactions where the description header explicitly records the store name
+    (transactions || []).forEach(t => {
+      const desc = t.Description || t.description || '';
+      if (desc && (desc.toLowerCase().includes('stock available') || desc.toLowerCase().includes('stock unavailable'))) {
+        const lines = desc.split('\n');
+        if (lines.length > 1) {
+          const first = lines[0].trim();
+          if (
+            first &&
+            !first.toLowerCase().includes('stock available') &&
+            !first.toLowerCase().includes('stock unavailable') &&
+            first.toLowerCase() !== 'in stock' &&
+            !first.startsWith('#') &&
+            first.length < 50
+          ) {
+            set.add(first);
+          }
+        }
+      }
+    });
+
+    // 3. From allNormalizedBatches where source is an actual store (and not a fallback to txn.Note)
+    (allNormalizedBatches || []).forEach(b => {
+      const rawTxnNote = (b.originalTxn?.Note || b.originalTxn?.note || '').trim().toLowerCase();
+      const s = (b.source || '').trim();
+      if (
+        s &&
+        s !== 'Unknown' &&
+        s !== 'manual' &&
+        s.toLowerCase() !== 'in stock' &&
+        !s.startsWith('#') &&
+        s.length < 50 &&
+        (!rawTxnNote || s.toLowerCase() !== rawTxnNote)
+      ) {
+        set.add(s);
+      }
+    });
+
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [items, transactions, allNormalizedBatches]);
 
   const debtPeople = useMemo(() => {
     const names = new Set();
@@ -735,6 +919,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
     setConsumingItemBatchDate(batch.purchasedDate || '');
     setConsumeQty(String(Math.min(1, batch.remainingQty > 0 ? batch.remainingQty : 1)));
     setConsumeUserNote('');
+    setConsumeDescription('');
     setConsumeDate(new Date().toISOString().split('T')[0]);
     setConsumeTime(new Date().toLocaleTimeString('en-IN', { hour12: false }).slice(0, 5));
     setConsumeUnitMode('pack');
@@ -742,6 +927,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
     setConsumeSubcategory('Groceries');
     setUsageType('consume');
     setPersonName('');
+    setInstalmentMonths('3');
+    setInstalmentDays('90');
+    setInstalmentInputMode('months');
+    setInstalmentScheduleMode('on_date');
     setConsumeError('');
   };
 
@@ -762,6 +951,12 @@ export default function StockManager({ onBack, backInterceptRef }) {
     isConsumingRef.current = true;
     setIsSavingConsume(true);
     try {
+      const instConfig = {
+        inputMode: instalmentInputMode,
+        months: instalmentMonths,
+        days: instalmentDays,
+        scheduleMode: instalmentScheduleMode
+      };
       await consumeInventoryItem(
         consumingItemId,
         qty,
@@ -771,16 +966,19 @@ export default function StockManager({ onBack, backInterceptRef }) {
         consumeSubcategory,
         usageType,
         personName,
-        parseInt(instalmentMonths) || 3,
+        instConfig,
         consumeTime,
         consumeUserNote,
-        consumingBatch
+        consumingBatch,
+        consumeDescription,
+        instConfig
       );
       setConsumingItemId(null);
       setConsumingBatch(null);
       setConsumeQty('');
       setPersonName('');
       setConsumeUserNote('');
+      setConsumeDescription('');
       await fetchItems();
       await load();
       showAppAlert('✓ Stock usage saved successfully.');
@@ -1131,17 +1329,23 @@ export default function StockManager({ onBack, backInterceptRef }) {
                   )}
                 </div>
                 <div className="stock-prod-stat-item">
+                  <div className="stock-prod-stat-label">Remaining Value</div>
+                  <div className="stock-prod-stat-value" style={{ color: 'var(--green)' }}>
+                    {formatINR(activeProductData.availableValue, activeProductData.availableValue % 1 !== 0 ? 2 : 0)}
+                  </div>
+                </div>
+                <div className="stock-prod-stat-item">
                   <div className="stock-prod-stat-label">Total MRP</div>
-                  <div className="stock-prod-stat-value">{formatINR(activeProductData.totalMRP)}</div>
+                  <div className="stock-prod-stat-value">{formatINR(activeProductData.totalMRP, activeProductData.totalMRP % 1 !== 0 ? 2 : 0)}</div>
                 </div>
                 <div className="stock-prod-stat-item">
                   <div className="stock-prod-stat-label">Total Paid</div>
-                  <div className="stock-prod-stat-value">{formatINR(activeProductData.totalPaid)}</div>
+                  <div className="stock-prod-stat-value">{formatINR(activeProductData.totalPaid, activeProductData.totalPaid % 1 !== 0 ? 2 : 0)}</div>
                 </div>
                 <div className="stock-prod-stat-item" title="Item-level MRP savings for this product">
                   <div className="stock-prod-stat-label">Product Saved</div>
                   <div className="stock-prod-stat-value" style={{ color: activeProductData.totalSavings < 0 ? 'var(--red, #ef4444)' : 'var(--green)' }}>
-                    {activeProductData.totalSavings < 0 ? `-₹${Math.abs(Math.round(activeProductData.totalSavings))}` : formatINR(activeProductData.totalSavings)} <span style={{ fontSize: '0.62rem' }}>({activeProductData.savingsPct}%)</span>
+                    {activeProductData.totalSavings < 0 ? `-₹${formatPriceVal(Math.abs(activeProductData.totalSavings))}` : formatINR(activeProductData.totalSavings, activeProductData.totalSavings % 1 !== 0 ? 2 : 0)} <span style={{ fontSize: '0.62rem' }}>({activeProductData.savingsPct}%)</span>
                   </div>
                 </div>
               </div>
@@ -1200,6 +1404,12 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           {historySortField === 'purchased' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
                         </div>
                       </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('item_price')} title="Click to sort by Item Price">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Item Price</span>
+                          {historySortField === 'item_price' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
                       <th className="stock-sortable-th" onClick={() => handleSortClick('mrp')} title="Click to sort by MRP">
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                           <span>MRP</span>
@@ -1226,8 +1436,14 @@ export default function StockManager({ onBack, backInterceptRef }) {
                       </th>
                       <th className="stock-sortable-th" onClick={() => handleSortClick('remaining')} title="Click to sort by Remaining Quantity">
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                          <span>Remaining</span>
+                          <span>Rem. Qty</span>
                           {historySortField === 'remaining' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
+                        </div>
+                      </th>
+                      <th className="stock-sortable-th" onClick={() => handleSortClick('remaining_val')} title="Click to sort by Remaining Value">
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span>Rem. Value</span>
+                          {historySortField === 'remaining_val' && <span className="stock-sort-indicator">{historySortDir === 'asc' ? '↑' : '↓'}</span>}
                         </div>
                       </th>
                       <th className="stock-sortable-th" onClick={() => handleSortClick('status')} title="Click to sort by Status">
@@ -1260,14 +1476,18 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           <td style={{ fontWeight: 700 }}>
                             {formatFraction(batch.purchasedQty)}
                           </td>
-                          <td>₹{batch.mrp}</td>
-                          <td style={{ fontWeight: 700 }}>₹{batch.paid}</td>
+                          <td style={{ fontWeight: 600 }}>₹{formatPriceVal(batch.unitPrice)}</td>
+                          <td>₹{formatPriceVal(batch.mrp)}</td>
+                          <td style={{ fontWeight: 700 }}>₹{formatPriceVal(batch.paid)}</td>
                           <td style={{ color: batch.savings < 0 ? 'var(--red, #ef4444)' : 'var(--green)' }}>
-                            {batch.savings < 0 ? `-₹${Math.abs(batch.savings)}` : `₹${batch.savings}`}
+                            {batch.savings < 0 ? `-₹${formatPriceVal(Math.abs(batch.savings))}` : `₹${formatPriceVal(batch.savings)}`}
                           </td>
                           <td style={{ color: 'var(--text-muted)' }}>{formatFraction(batch.consumedQty)}</td>
                           <td style={{ fontWeight: 800, color: isAvail ? 'var(--green)' : 'var(--text-muted)' }}>
                             {formatFraction(batch.remainingQty)}
+                          </td>
+                          <td style={{ fontWeight: 700, color: isAvail ? 'var(--green)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                            {isAvail ? `₹${formatPriceVal((batch.remainingQty || 0) * (batch.unitPrice || 0))}` : '₹0'}
                           </td>
                           <td>
                             <span className={`stock-badge ${isAvail ? 'available' : 'unavailable'}`}>
@@ -1324,11 +1544,13 @@ export default function StockManager({ onBack, backInterceptRef }) {
                     <option value="variant">Variant</option>
                     <option value="source">Source</option>
                     <option value="purchased">Purchased</option>
+                    <option value="item_price">Item Price</option>
                     <option value="mrp">MRP</option>
                     <option value="paid">Paid</option>
                     <option value="saved">Saved</option>
                     <option value="consumed">Consumed</option>
-                    <option value="remaining">Remaining</option>
+                    <option value="remaining">Rem. Qty</option>
+                    <option value="remaining_val">Rem. Value</option>
                     <option value="status">Status</option>
                   </select>
                   <button
@@ -1360,11 +1582,19 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           {batchBrand && <span className="stock-badge brand">{batchBrand}</span>}
                           <span className="stock-badge variant">{batch.variant}</span>
                         </div>
-                        <span>Paid: <strong>₹{batch.paid}</strong> <span style={{ color: 'var(--text-muted)', fontSize: '0.62rem' }}>(MRP ₹{batch.mrp})</span></span>
+                        <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span>Item: <strong>₹{formatPriceVal(batch.unitPrice)}</strong></span>
+                          <span>Paid: <strong>₹{formatPriceVal(batch.paid)}</strong> <span style={{ color: 'var(--text-muted)', fontSize: '0.62rem' }}>(MRP ₹{formatPriceVal(batch.mrp)})</span></span>
+                          {isAvail && (
+                            <span style={{ color: 'var(--green)', fontSize: '0.68rem', fontWeight: 700 }}>
+                              (Rem: ₹{formatPriceVal((batch.remainingQty || 0) * (batch.unitPrice || 0))})
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
                         <span style={{ fontSize: '0.65rem', color: batch.savings < 0 ? 'var(--red, #ef4444)' : 'var(--green)' }}>
-                          {batch.savings < 0 ? `Variance -₹${Math.abs(batch.savings)}` : `Saved ₹${batch.savings}`}
+                          {batch.savings < 0 ? `Variance -₹${formatPriceVal(Math.abs(batch.savings))}` : `Saved ₹${formatPriceVal(batch.savings)}`}
                         </span>
                         <div style={{ display: 'flex', gap: 6 }}>
                           {isAvail && (
@@ -1503,205 +1733,299 @@ export default function StockManager({ onBack, backInterceptRef }) {
           )}
         </div>
 
-        {/* Inline Edit Modal */}
+        {/* Edit Batch Modal */}
         {editingBatchId && (
-          <div
-            className="stock-batch-row animate-pop"
-            style={{
-              position: 'fixed',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              width: '90%',
-              maxWidth: '420px',
-              gap: 8,
-              padding: 16,
-              zIndex: 1000,
-              background: 'var(--bg-card)',
-              borderRadius: '12px',
-              border: '1.5px solid var(--accent)',
-              boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)',
-              maxHeight: '90vh',
-              overflowY: 'auto',
-              display: 'flex',
-              flexDirection: 'column'
-            }}
-          >
-            <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800, marginBottom: 4 }}>
-              Edit Batch Details
-            </div>
-
-            {/* Purchase Date & Time */}
-            <div className="stock-row-grid-2">
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Purchase Date</label>
-                <input
-                  type="date"
-                  className="form-input"
-                  style={{ width: '100%' }}
-                  value={editFormData.purchased_date}
-                  onChange={e => setEditFormData({ ...editFormData, purchased_date: e.target.value })}
-                />
-              </div>
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Store / Source</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  style={{ width: '100%' }}
-                  value={editFormData.notes}
-                  onChange={e => setEditFormData({ ...editFormData, notes: e.target.value })}
-                />
-              </div>
-            </div>
-
-            {/* Item Name */}
-            <div className="mgr-edit-field">
-              <label className="stock-builder-lbl">Item Name</label>
-              <input
-                type="text"
-                className="form-input"
-                style={{ width: '100%' }}
-                value={editFormData.name}
-                onChange={e => setEditFormData({ ...editFormData, name: e.target.value })}
-              />
-            </div>
-
-            {/* Category & Brand */}
-            <div className="stock-row-grid-2">
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Category</label>
-                <select
-                  className="form-input"
-                  value={editFormData.category || 'Groceries'}
-                  onChange={e => setEditFormData({ ...editFormData, category: e.target.value })}
+          <div className="stock-purchase-modal" onClick={() => setEditingBatchId(null)}>
+            <div className="stock-purchase-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '640px' }}>
+              <div className="stock-modal-header">
+                <div className="stock-modal-title">Edit Stock Item</div>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary stock-modal-close-btn"
+                  onClick={() => setEditingBatchId(null)}
+                  aria-label="Close"
                 >
-                  {availableStockCategories.map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
-                </select>
-                {editFormData.category === 'Other' && (
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Custom Category Name"
-                    style={{ marginTop: 6 }}
-                    value={editFormData.customCategory || ''}
-                    onChange={e => setEditFormData({ ...editFormData, customCategory: e.target.value })}
-                  />
-                )}
+                  ✕
+                </button>
               </div>
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Brand (Optional)</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="e.g. Gemini, Fortune"
-                  value={editFormData.brand || ''}
-                  onChange={e => setEditFormData({ ...editFormData, brand: e.target.value })}
-                />
-              </div>
-            </div>
 
-            {/* Pack Size & Unit & Qty */}
-            <div className="stock-row-grid-3">
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Pack Size</label>
-                <input
-                  type="number"
-                  step="any"
-                  className="form-input"
-                  value={editFormData.sub_qty}
-                  onChange={e => setEditFormData({ ...editFormData, sub_qty: e.target.value })}
-                />
-              </div>
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Pack Unit</label>
-                <select
-                  className="form-input"
-                  value={normalizeUnit(editFormData.sub_unit)}
-                  onChange={e => setEditFormData({ ...editFormData, sub_unit: e.target.value })}
-                >
-                  <option value="g">g</option>
-                  <option value="kg">kg</option>
-                  <option value="ml">ml</option>
-                  <option value="litre">litre</option>
-                  <option value="pcs">pcs</option>
-                  <option value="box">box</option>
-                  <option value="packet">packet</option>
-                </select>
-              </div>
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Total Parts</label>
-                <input
-                  type="number"
-                  step="any"
-                  className="form-input"
-                  value={editFormData.original_qty}
-                  onChange={e => setEditFormData({ ...editFormData, original_qty: e.target.value })}
-                />
-              </div>
-            </div>
+              <div className="stock-purchase-body">
+                {/* Purchase Date & Store Name */}
+                <div className="stock-row-grid-2">
+                  <div className="mgr-edit-field">
+                    <label className="stock-builder-lbl">Purchase Date</label>
+                    <input
+                      type="date"
+                      className="form-input"
+                      value={editFormData.purchased_date || ''}
+                      onChange={e => setEditFormData(prev => ({ ...prev, purchased_date: e.target.value }))}
+                    />
+                  </div>
+                  <div className="mgr-edit-field" style={{ position: 'relative' }}>
+                    <label className="stock-builder-lbl">Store Name</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. DMart, Amazon"
+                      value={editFormData.notes || ''}
+                      onFocus={() => setActiveStoreEditSug(true)}
+                      onBlur={() => setTimeout(() => setActiveStoreEditSug(false), 200)}
+                      onChange={e => {
+                        setEditFormData(prev => ({ ...prev, notes: e.target.value }));
+                        setActiveStoreEditSug(true);
+                      }}
+                    />
+                    {activeStoreEditSug && storeSuggestions.filter(s => s.toLowerCase().includes((editFormData.notes || '').toLowerCase())).length > 0 && (
+                      <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 160, overflowY: 'auto' }}>
+                        {storeSuggestions.filter(s => s.toLowerCase().includes((editFormData.notes || '').toLowerCase())).slice(0, 8).map(sug => (
+                          <div
+                            key={sug}
+                            className="note-sug-item"
+                            onMouseDown={() => {
+                              setEditFormData(prev => ({ ...prev, notes: sug }));
+                              setActiveStoreEditSug(false);
+                            }}
+                            style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
+                          >
+                            {sug}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
 
-            {/* Parts & Available Parts */}
-            <div className="stock-row-grid-2">
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Available Parts</label>
-                <input
-                  type="number"
-                  step="any"
-                  className="form-input"
-                  value={editFormData.qty}
-                  onChange={e => setEditFormData({ ...editFormData, qty: e.target.value })}
-                />
-              </div>
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Original Price (₹)</label>
-                <input
-                  type="number"
-                  step="any"
-                  className="form-input"
-                  value={editFormData.price}
-                  onChange={e => setEditFormData({ ...editFormData, price: e.target.value })}
-                />
-              </div>
-            </div>
+                <div className="stock-item-row-builder" style={{ marginTop: 10 }}>
+                  {/* Identity: Item Name */}
+                  <div className="mgr-edit-field" style={{ position: 'relative' }}>
+                    <label className="stock-builder-lbl">Item Name</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. Cooking Oil, Gemini Tea"
+                      value={editFormData.name || ''}
+                      onFocus={() => setActiveEditItemSug(true)}
+                      onBlur={() => setTimeout(() => setActiveEditItemSug(false), 200)}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setEditFormData(prev => ({ ...prev, name: val }));
+                        setActiveEditItemSug(true);
+                      }}
+                    />
+                    {activeEditItemSug && itemSuggestions.filter(s => s.toLowerCase().includes((editFormData.name || '').toLowerCase())).length > 0 && (
+                      <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 150, overflowY: 'auto' }}>
+                        {itemSuggestions.filter(s => s.toLowerCase().includes((editFormData.name || '').toLowerCase())).slice(0, 8).map(sug => (
+                          <div
+                            key={sug}
+                            className="note-sug-item"
+                            onMouseDown={() => {
+                              setEditFormData(prev => ({ ...prev, name: sug }));
+                              setActiveEditItemSug(false);
+                            }}
+                            style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
+                          >
+                            {sug}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-            {/* Pricing Model: Discount Type & Final / Discount Price */}
-            <div className="stock-row-grid-2">
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">Discount Type</label>
-                <select
-                  className="form-input"
-                  value={editFormData.discountType || 'final_price'}
-                  onChange={e => setEditFormData({ ...editFormData, discountType: e.target.value })}
-                >
-                  <option value="final_price">Final Price</option>
-                  <option value="percentage">%</option>
-                  <option value="fixed">₹ Discount</option>
-                </select>
-              </div>
-              <div className="mgr-edit-field">
-                <label className="stock-builder-lbl">
-                  {editFormData.discountType === 'percentage'
-                    ? 'Discount (%)'
-                    : editFormData.discountType === 'fixed'
-                    ? 'Discount (₹)'
-                    : 'Final Price (₹)'}
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  className="form-input"
-                  value={editFormData.discountValue || ''}
-                  onChange={e => setEditFormData({ ...editFormData, discountValue: e.target.value })}
-                />
-              </div>
-            </div>
+                  {/* Identity: Category & Brand */}
+                  <div className="stock-row-grid-2">
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">Category</label>
+                      <select
+                        className="form-input"
+                        value={editFormData.category || 'Groceries'}
+                        onChange={e => setEditFormData(prev => ({ ...prev, category: e.target.value }))}
+                      >
+                        {availableStockCategories.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                      {editFormData.category === 'Other' && (
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder="Custom Category Name"
+                          style={{ marginTop: 6 }}
+                          value={editFormData.customCategory || ''}
+                          onChange={e => setEditFormData(prev => ({ ...prev, customCategory: e.target.value }))}
+                        />
+                      )}
+                    </div>
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">Brand (Optional)</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="e.g. Gemini, Fortune"
+                        value={editFormData.brand || ''}
+                        onChange={e => setEditFormData(prev => ({ ...prev, brand: e.target.value }))}
+                      />
+                    </div>
+                  </div>
 
-            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-              <button className="stock-btn-action consume" onClick={() => handleSaveEditBatch(editingBatchId)}>Save</button>
-              <button className="stock-btn-action" onClick={() => setEditingBatchId(null)}>Cancel</button>
+                  {/* Pack: Pack Size & Pack Unit */}
+                  <div className="stock-row-grid-2">
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">Pack Size</label>
+                      <input
+                        type="number"
+                        step="any"
+                        className="form-input"
+                        placeholder="e.g. 5, 200, 1"
+                        value={editFormData.sub_qty || ''}
+                        onChange={e => setEditFormData(prev => ({ ...prev, sub_qty: e.target.value }))}
+                      />
+                    </div>
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">Pack Unit</label>
+                      <select
+                        className="form-input"
+                        value={normalizeUnit(editFormData.sub_unit)}
+                        onChange={e => setEditFormData(prev => ({ ...prev, sub_unit: e.target.value }))}
+                      >
+                        <option value="g">g</option>
+                        <option value="kg">kg</option>
+                        <option value="ml">ml</option>
+                        <option value="litre">litre</option>
+                        <option value="pcs">pcs</option>
+                        <option value="box">box</option>
+                        <option value="packet">packet</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Pack: Qty/Packs, Parts, Available Parts */}
+                  <div className="stock-row-grid-3">
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">Qty / Packs</label>
+                      <input
+                        type="number"
+                        step="any"
+                        className="form-input"
+                        placeholder="1"
+                        value={editFormData.pack_qty || ''}
+                        onChange={e => setEditFormData(prev => ({ ...prev, pack_qty: e.target.value }))}
+                      />
+                    </div>
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">Parts (N)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        className="form-input"
+                        placeholder="1"
+                        value={editFormData.original_qty || ''}
+                        onChange={e => setEditFormData(prev => ({ ...prev, original_qty: e.target.value }))}
+                      />
+                    </div>
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">Available Parts (N)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        className="form-input"
+                        placeholder="1"
+                        value={editFormData.qty || ''}
+                        onChange={e => setEditFormData(prev => ({ ...prev, qty: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Pricing: Original Price / MRP, Discount Type, Discount / Final Value */}
+                  <div className="stock-pricing-grid">
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">Original Price / MRP</label>
+                      <input
+                        type="number"
+                        step="any"
+                        className="form-input"
+                        value={editFormData.price || ''}
+                        onChange={e => setEditFormData(prev => ({ ...prev, price: e.target.value }))}
+                      />
+                    </div>
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">Discount Type</label>
+                      <select
+                        className="form-input"
+                        value={editFormData.discountType || 'final_price'}
+                        onChange={e => setEditFormData(prev => ({ ...prev, discountType: e.target.value }))}
+                      >
+                        <option value="final_price">Final Price</option>
+                        <option value="percentage">%</option>
+                        <option value="fixed">₹ Discount</option>
+                      </select>
+                    </div>
+                    <div className="mgr-edit-field">
+                      <label className="stock-builder-lbl">
+                        {editFormData.discountType === 'percentage'
+                          ? 'Discount (%)'
+                          : editFormData.discountType === 'fixed'
+                            ? 'Discount (₹)'
+                            : 'Final Price (₹)'}
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        className="form-input"
+                        value={editFormData.discountValue || ''}
+                        onChange={e => setEditFormData(prev => ({ ...prev, discountValue: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Calculated Metrics Live Preview */}
+                  {(() => {
+                    const editCalcs = getItemCalculations(editFormData);
+                    return (
+                      <div className="stock-item-calc-preview">
+                        <div className="stock-calc-col">
+                          <span className="stock-calc-lbl">Paid Price</span>
+                          <span className="stock-calc-val paid">{formatINR(editCalcs.paidPrice, editCalcs.paidPrice % 1 !== 0 ? 2 : 0)}</span>
+                        </div>
+                        <div className="stock-calc-col">
+                          <span className="stock-calc-lbl">Price / Unit</span>
+                          <span className="stock-calc-val">{formatINR(editCalcs.pricePerUnit, editCalcs.pricePerUnit % 1 !== 0 ? 2 : 0)}</span>
+                        </div>
+                        <div className="stock-calc-col">
+                          <span className="stock-calc-lbl">Remaining Value</span>
+                          <span className="stock-calc-val avail">{formatINR(editCalcs.remainingValue, editCalcs.remainingValue % 1 !== 0 ? 2 : 0)}</span>
+                        </div>
+                        {editCalcs.saved > 0 && (
+                          <div className="stock-calc-col">
+                            <span className="stock-calc-lbl">Saved</span>
+                            <span className="stock-calc-val" style={{ color: 'var(--green)' }}>{formatINR(editCalcs.saved, editCalcs.saved % 1 !== 0 ? 2 : 0)}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ flex: 1, padding: '10px' }}
+                    disabled={isSavingEdit}
+                    onClick={() => handleSaveEditBatch(editingBatchId)}
+                  >
+                    {isSavingEdit ? '⏳ Saving…' : 'Save Changes'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ padding: '10px 18px' }}
+                    disabled={isSavingEdit}
+                    onClick={() => setEditingBatchId(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1716,12 +2040,13 @@ export default function StockManager({ onBack, backInterceptRef }) {
               left: '50%',
               transform: 'translate(-50%, -50%)',
               width: '90%',
-              maxWidth: '420px',
-              gap: 8,
+              maxWidth: '440px',
+              minHeight: '440px',
+              gap: 10,
               padding: 16,
               zIndex: 1000,
               background: 'var(--bg-card)',
-              borderRadius: '12px',
+              borderRadius: '14px',
               border: '1.5px solid var(--accent)',
               boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.5)',
               maxHeight: '90vh',
@@ -1730,8 +2055,35 @@ export default function StockManager({ onBack, backInterceptRef }) {
               flexDirection: 'column'
             }}
           >
-            <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800, marginBottom: 4 }}>
-              Use Item: {consumingItemName} ({consumingItemBatchDate || 'Batch'})
+            <div className="stock-use-header">
+              <div>
+                <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800, fontSize: '0.88rem' }}>
+                  Use Item: {consumingItemName} ({consumingItemBatchDate || 'Batch'})
+                </div>
+                <div className="stock-avail-pill">
+                  <span>📦 Total Available:</span>
+                  <strong>{formatFraction(consumingBatch?.remainingQty || 0)} {consumingBatch?.unit || 'pcs'}</strong>
+                  {consumingBatch?.sub_qty > 1 && (
+                    <span style={{ opacity: 0.85, fontSize: '0.68rem' }}>
+                      ({formatFraction((consumingBatch.remainingQty || 0) * consumingBatch.sub_qty)} {consumingBatch.sub_unit})
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="stock-use-close-btn"
+                disabled={isSavingConsume}
+                onClick={() => {
+                  if (!isSavingConsume) {
+                    setConsumingItemId(null);
+                    setConsumeError('');
+                  }
+                }}
+                title="Close"
+              >
+                ✕
+              </button>
             </div>
 
             {isSavingConsume && (
@@ -1741,6 +2093,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
               </div>
             )}
 
+            {/* Row 1: Date & Time */}
             <div className="stock-row-grid-2">
               <div className="mgr-edit-field">
                 <label className="stock-builder-lbl">Date</label>
@@ -1764,61 +2117,63 @@ export default function StockManager({ onBack, backInterceptRef }) {
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 6, width: '100%', marginBottom: 4 }}>
+            {/* Row 2: Action tabs: Consume, Lend, Instalment */}
+            <div className="stock-usage-tabs">
               <button
                 type="button"
-                className="stock-btn-action"
+                className={`stock-usage-tab-btn ${usageType === 'consume' ? 'active consume' : ''}`}
                 disabled={isSavingConsume}
-                style={{
-                  flex: 1,
-                  background: usageType === 'consume' ? 'var(--blue-bg)' : 'var(--bg-card2)',
-                  color: usageType === 'consume' ? 'var(--blue)' : 'var(--text-primary)',
-                  borderColor: usageType === 'consume' ? 'rgba(77, 159, 255, 0.2)' : 'var(--border)',
-                  opacity: isSavingConsume ? 0.6 : 1
-                }}
                 onClick={() => setUsageType('consume')}
               >
                 🍽️ Consume
               </button>
               <button
                 type="button"
-                className="stock-btn-action"
+                className={`stock-usage-tab-btn ${usageType === 'lend' ? 'active lend' : ''}`}
                 disabled={isSavingConsume}
-                style={{
-                  flex: 1,
-                  background: usageType === 'lend' ? 'rgba(255, 179, 0, 0.15)' : 'var(--bg-card2)',
-                  color: usageType === 'lend' ? 'var(--gold)' : 'var(--text-primary)',
-                  borderColor: usageType === 'lend' ? 'rgba(255, 179, 0, 0.2)' : 'var(--border)',
-                  opacity: isSavingConsume ? 0.6 : 1
-                }}
                 onClick={() => setUsageType('lend')}
               >
                 🤝 Lend
               </button>
               <button
                 type="button"
-                className="stock-btn-action"
+                className={`stock-usage-tab-btn ${usageType === 'instalment' ? 'active instalment' : ''}`}
                 disabled={isSavingConsume}
-                style={{
-                  flex: 1,
-                  background: usageType === 'instalment' ? 'rgba(255, 179, 0, 0.15)' : 'var(--bg-card2)',
-                  color: usageType === 'instalment' ? 'var(--gold)' : 'var(--text-primary)',
-                  borderColor: usageType === 'instalment' ? 'rgba(255, 179, 0, 0.2)' : 'var(--border)',
-                  opacity: isSavingConsume ? 0.6 : 1
-                }}
                 onClick={() => setUsageType('instalment')}
               >
                 📋 Instalment
               </button>
             </div>
 
+            {/* Row 4: Quantity to Use */}
             <div className="mgr-edit-field">
-              <label className="stock-builder-lbl">Quantity to Use</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                <label className="stock-builder-lbl" style={{ margin: 0 }}>Quantity to Use</label>
+                {consumingBatch?.sub_qty > 1 && (
+                  <div className="stock-mode-toggle-group">
+                    <button
+                      type="button"
+                      className={`stock-mode-toggle-btn ${consumeUnitMode === 'pack' ? 'active' : ''}`}
+                      onClick={() => setConsumeUnitMode('pack')}
+                    >
+                      {consumingBatch?.unit || 'Packs'}
+                    </button>
+                    <button
+                      type="button"
+                      className={`stock-mode-toggle-btn ${consumeUnitMode === 'sub' ? 'active' : ''}`}
+                      onClick={() => setConsumeUnitMode('sub')}
+                    >
+                      {consumingBatch?.sub_unit || 'Units'}
+                    </button>
+                  </div>
+                )}
+              </div>
               <input
                 type="number"
                 step="any"
                 disabled={isSavingConsume}
                 className={`form-input ${consumeError ? 'err' : ''}`}
+                placeholder={`Max ${formatFraction(consumingBatch?.remainingQty || 0)}`}
                 value={consumeQty}
                 onChange={e => {
                   setConsumeQty(e.target.value);
@@ -1827,16 +2182,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
               />
             </div>
 
-            <div className="mgr-edit-field">
-              <label className="stock-builder-lbl">Note (Optional)</label>
-              <NoteAutocompleteInput
-                value={consumeUserNote}
-                disabled={isSavingConsume}
-                onChange={setConsumeUserNote}
-                transactions={transactions}
-              />
-            </div>
-
+            {/* Row 5: Type-specific options */}
             {usageType === 'lend' ? (
               <div className="mgr-edit-field" style={{ position: 'relative' }}>
                 <label className="stock-builder-lbl">Lend to (Person)</label>
@@ -1848,13 +2194,14 @@ export default function StockManager({ onBack, backInterceptRef }) {
                   value={personName}
                   onClick={e => { if (!isSavingConsume) { e.stopPropagation(); setActiveLendSug(true); } }}
                   onFocus={() => { if (!isSavingConsume) setActiveLendSug(true); }}
+                  onBlur={() => setTimeout(() => setActiveLendSug(false), 200)}
                   onChange={e => {
                     setPersonName(e.target.value);
                     setActiveLendSug(true);
                   }}
                 />
                 {!isSavingConsume && activeLendSug && debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase())).length > 0 && (
-                  <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 100, maxHeight: 100, overflowY: 'auto' }}>
+                  <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 180, overflowY: 'auto' }}>
                     {debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase())).map(item => (
                       <div
                         key={item}
@@ -1863,13 +2210,100 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           setPersonName(item);
                           setActiveLendSug(false);
                         }}
-                        style={{ fontSize: '0.72rem', padding: '6px 8px', cursor: 'pointer' }}
+                        style={{ fontSize: '0.75rem', padding: '8px 12px', cursor: 'pointer' }}
                       >
                         {item}
                       </div>
                     ))}
                   </div>
                 )}
+              </div>
+            ) : usageType === 'instalment' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="stock-row-grid-2">
+                  <div className="mgr-edit-field">
+                    <label className="stock-builder-lbl">Category</label>
+                    <select
+                      className="form-input"
+                      disabled={isSavingConsume}
+                      value={consumeCategory}
+                      onChange={e => {
+                        setConsumeCategory(e.target.value);
+                        const firstSub = categories?.[e.target.value]?.subcategories?.[0] || '';
+                        setConsumeSubcategory(firstSub);
+                      }}
+                    >
+                      {categoriesList.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div className="mgr-edit-field">
+                    <label className="stock-builder-lbl">Subcategory</label>
+                    <select
+                      className="form-input"
+                      disabled={isSavingConsume}
+                      value={consumeSubcategory}
+                      onChange={e => setConsumeSubcategory(e.target.value)}
+                    >
+                      {subcategoriesList.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="stock-row-grid-2">
+                  <div className="mgr-edit-field">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 22, marginBottom: 4 }}>
+                      <label className="stock-builder-lbl" style={{ margin: 0 }}>Duration</label>
+                      <div className="stock-mode-toggle-group">
+                        <button
+                          type="button"
+                          className={`stock-mode-toggle-btn ${instalmentInputMode === 'months' ? 'active' : ''}`}
+                          onClick={() => setInstalmentInputMode('months')}
+                        >
+                          Months
+                        </button>
+                        <button
+                          type="button"
+                          className={`stock-mode-toggle-btn ${instalmentInputMode === 'days' ? 'active' : ''}`}
+                          onClick={() => setInstalmentInputMode('days')}
+                        >
+                          Days
+                        </button>
+                      </div>
+                    </div>
+                    {instalmentInputMode === 'months' ? (
+                      <input
+                        type="number"
+                        min="2"
+                        className="form-input"
+                        placeholder="e.g. 3"
+                        value={instalmentMonths}
+                        onChange={e => setInstalmentMonths(e.target.value)}
+                      />
+                    ) : (
+                      <input
+                        type="number"
+                        min="31"
+                        className="form-input"
+                        placeholder="e.g. 90"
+                        value={instalmentDays}
+                        onChange={e => setInstalmentDays(e.target.value)}
+                      />
+                    )}
+                  </div>
+                  <div className="mgr-edit-field">
+                    <div style={{ display: 'flex', alignItems: 'center', minHeight: 22, marginBottom: 4 }}>
+                      <label className="stock-builder-lbl" style={{ margin: 0 }}>Schedule Mode</label>
+                    </div>
+                    <select
+                      className="form-input"
+                      value={instalmentScheduleMode}
+                      onChange={e => setInstalmentScheduleMode(e.target.value)}
+                    >
+                      <option value="on_date">On the Date</option>
+                      <option value="start_of_month">1st of Each Month</option>
+                    </select>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="stock-row-grid-2">
@@ -1902,11 +2336,37 @@ export default function StockManager({ onBack, backInterceptRef }) {
               </div>
             )}
 
+            {/* Row 3: Note field (3rd row for Consume, Lend, and Installment) */}
+            <div className="mgr-edit-field" style={{ position: 'relative' }}>
+              <label className="stock-builder-lbl">Note (Optional)</label>
+              <NoteAutocompleteInput
+                value={consumeUserNote}
+                disabled={isSavingConsume}
+                onChange={setConsumeUserNote}
+                transactions={transactions}
+                placeholder="Note / store / purpose..."
+              />
+            </div>
+
+            {/* Row 6: Description field (for Consume, Lend, and Installment) */}
+            <div className="mgr-edit-field">
+              <label className="stock-builder-lbl">Description (Optional)</label>
+              <input
+                type="text"
+                className="form-input"
+                disabled={isSavingConsume}
+                placeholder="Additional description..."
+                value={consumeDescription}
+                onChange={e => setConsumeDescription(e.target.value)}
+              />
+            </div>
+
             {consumeError && <div className="field-error">{consumeError}</div>}
 
-            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            <div className="stock-modal-actions">
               <button
-                className="stock-btn-action consume"
+                type="button"
+                className="stock-confirm-btn"
                 disabled={isSavingConsume}
                 style={{ opacity: isSavingConsume ? 0.7 : 1, cursor: isSavingConsume ? 'not-allowed' : 'pointer' }}
                 onClick={handleConsume}
@@ -1914,7 +2374,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
                 {isSavingConsume ? '⏳ Saving Stock Usage…' : 'Confirm'}
               </button>
               <button
-                className="stock-btn-action"
+                type="button"
+                className="stock-cancel-btn"
                 disabled={isSavingConsume}
                 style={{ opacity: isSavingConsume ? 0.5 : 1, cursor: isSavingConsume ? 'not-allowed' : 'pointer' }}
                 onClick={() => {
@@ -1933,7 +2394,17 @@ export default function StockManager({ onBack, backInterceptRef }) {
         {/* Purchase Modal */}
         {showPurchaseModal && (
           <div className="stock-purchase-modal" onClick={() => setShowPurchaseModal(false)}>
-            <div className="stock-purchase-content" onClick={e => e.stopPropagation()}>
+            <div
+              className="stock-purchase-content"
+              onClick={e => e.stopPropagation()}
+              onMouseDown={(e) => {
+                if (!['input', 'textarea', 'button', 'select'].includes((e.target.tagName || '').toLowerCase())) {
+                  if (document.activeElement && typeof document.activeElement.blur === 'function') {
+                    document.activeElement.blur();
+                  }
+                }
+              }}
+            >
               <div className="stock-modal-header">
                 <div className="stock-modal-title">New Stock Purchase</div>
                 <button
@@ -1976,37 +2447,166 @@ export default function StockManager({ onBack, backInterceptRef }) {
                   </div>
                 </div>
 
-                <div className="form-group" style={{ position: 'relative' }}>
-                  <label className="stock-builder-lbl">Paid From</label>
-                  <button
-                    type="button"
-                    className="picker-trigger"
-                    style={{ textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowAccountPicker(!showAccountPicker);
-                    }}
-                  >
-                    <span>{purchaseFrom || 'Select Account...'}</span>
-                    <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>▼</span>
-                  </button>
-                  {showAccountPicker && (
-                    <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 100, maxHeight: 180, overflowY: 'auto' }}>
-                      {accountList.map(accName => (
+                <div className="stock-account-picker-row" style={{ width: '100%', position: 'relative', marginBottom: 12 }}>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: availablePurchaseSubAccounts.length > 0 ? '1fr 1fr' : '1fr',
+                    gap: 10,
+                    width: '100%'
+                  }}>
+                    <div ref={accountPickerRef} style={{ width: '100%', position: 'relative' }}>
+                      <label className="stock-builder-lbl">Paid From</label>
+                      <button
+                        type="button"
+                        className="picker-trigger"
+                        style={{
+                          width: '100%',
+                          textAlign: 'left',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          boxSizing: 'border-box'
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowAccountPicker(prev => !prev);
+                          setShowSubAccountPicker(false);
+                        }}
+                      >
+                        <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {purchaseFrom || 'Select Account...'}
+                        </span>
+                        <span style={{ fontSize: '0.7rem', opacity: 0.7, marginLeft: 6 }}>▼</span>
+                      </button>
+                      {showAccountPicker && (
                         <div
-                          key={accName}
-                          className="note-sug-item"
-                          onMouseDown={() => {
-                            setPurchaseFrom(accName);
+                          className="picker-sheet-dropdown"
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: 'calc(100% + 4px)',
+                            width: availablePurchaseSubAccounts.length > 0 ? 'min(360px, 90vw)' : '100%',
+                            minWidth: '280px',
+                            maxWidth: '420px',
+                            zIndex: 1200,
+                            maxHeight: 280,
+                            overflowY: 'auto'
+                          }}
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <div className="picker-search-wrap">
+                            <span className="picker-search-icon">🔍</span>
+                            <input
+                              type="text"
+                              className="picker-search-input"
+                              placeholder="Search account…"
+                              value={accountSearchQuery}
+                              onChange={e => setAccountSearchQuery(e.target.value)}
+                              autoFocus
+                            />
+                            {accountSearchQuery && (
+                              <button type="button" className="picker-search-clear" onClick={() => setAccountSearchQuery('')}>✕</button>
+                            )}
+                          </div>
+                          {recentAccountsList.length > 0 && !accountSearchQuery && (
+                            <>
+                              <div className="picker-section-label">Recent</div>
+                              <div className="picker-recent-row">
+                                {recentAccountsList.map(accName => (
+                                  <button
+                                    key={accName}
+                                    type="button"
+                                    className={`picker-chip ${purchaseFrom === accName ? 'picker-chip-active' : ''}`}
+                                    onClick={() => handleSelectPurchaseAccount(accName)}
+                                  >
+                                    {accName}{purchaseFrom === accName && <span className="picker-chip-check"> ✓</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                          <div className="picker-section-label">
+                            {accountSearchQuery ? 'Matching Accounts' : 'All Accounts'}
+                          </div>
+                          <div className="picker-chip-grid">
+                            {filteredAccountList.map(accName => (
+                              <button
+                                key={accName}
+                                type="button"
+                                className={`picker-chip ${purchaseFrom === accName ? 'picker-chip-active' : ''}`}
+                                onClick={() => handleSelectPurchaseAccount(accName)}
+                              >
+                                {accName}{purchaseFrom === accName && <span className="picker-chip-check"> ✓</span>}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Sub Account Field */}
+                    {availablePurchaseSubAccounts.length > 0 && (
+                      <div ref={subAccountPickerRef} style={{ width: '100%', position: 'relative' }}>
+                        <label className="stock-builder-lbl">Sub Account</label>
+                        <button
+                          type="button"
+                          className="picker-trigger"
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            boxSizing: 'border-box'
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowSubAccountPicker(prev => !prev);
                             setShowAccountPicker(false);
                           }}
-                          style={{ fontSize: '0.8rem', padding: '8px 12px', cursor: 'pointer' }}
                         >
-                          {accName}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                          <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {purchaseSubAccount || 'Select Sub Account'}
+                          </span>
+                          <span style={{ fontSize: '0.7rem', opacity: 0.7, marginLeft: 6 }}>▼</span>
+                        </button>
+                        {showSubAccountPicker && (
+                          <div
+                            className="picker-sheet-dropdown"
+                            style={{
+                              position: 'absolute',
+                              right: 0,
+                              top: 'calc(100% + 4px)',
+                              width: 'min(360px, 90vw)',
+                              minWidth: '260px',
+                              maxWidth: '380px',
+                              zIndex: 1200,
+                              maxHeight: 240,
+                              overflowY: 'auto'
+                            }}
+                            onClick={e => e.stopPropagation()}
+                          >
+                            <div className="picker-section-label">Sub Accounts</div>
+                            <div className="picker-chip-grid">
+                              {availablePurchaseSubAccounts.map(sub => (
+                                <button
+                                  key={sub}
+                                  type="button"
+                                  className={`picker-chip ${purchaseSubAccount === sub ? 'picker-chip-active' : ''}`}
+                                  onClick={() => {
+                                    setPurchaseSubAccount(sub);
+                                    setShowSubAccountPicker(false);
+                                  }}
+                                >
+                                  {sub}{purchaseSubAccount === sub && <span className="picker-chip-check"> ✓</span>}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   {errors.fromAccount && <div className="field-error">{errors.fromAccount}</div>}
                 </div>
 
@@ -2028,7 +2628,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           ✕
                         </button>
                       )}
-                      
+
                       {/* Identity: Item Name */}
                       <div className="mgr-edit-field" style={{ position: 'relative' }}>
                         <label className="stock-builder-lbl">Item Name</label>
@@ -2039,6 +2639,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           value={item.name}
                           onClick={e => { e.stopPropagation(); setActiveItemSugIdx(idx); }}
                           onFocus={() => setActiveItemSugIdx(idx)}
+                          onBlur={() => setTimeout(() => setActiveItemSugIdx(null), 200)}
                           onChange={e => {
                             const val = e.target.value;
                             updatePurchaseItem(item._id, 'name', val);
@@ -2060,7 +2661,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           }}
                         />
                         {activeItemSugIdx === idx && itemSuggestions.filter(s => s.toLowerCase().includes((item.name || '').toLowerCase())).length > 0 && (
-                          <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 100, maxHeight: 140, overflowY: 'auto' }}>
+                          <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 140, overflowY: 'auto' }}>
                             {itemSuggestions.filter(s => s.toLowerCase().includes((item.name || '').toLowerCase())).slice(0, 8).map(sug => (
                               <div
                                 key={sug}
@@ -2208,8 +2809,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             {item.discountType === 'percentage'
                               ? 'Discount (%)'
                               : item.discountType === 'fixed'
-                              ? 'Discount (₹)'
-                              : 'Final Price (₹)'}
+                                ? 'Discount (₹)'
+                                : 'Final Price (₹)'}
                           </label>
                           <input
                             type="number"
@@ -2221,38 +2822,60 @@ export default function StockManager({ onBack, backInterceptRef }) {
                         </div>
                       </div>
 
-                      {/* Calculated Metrics Live Preview */}
-                      <div className="stock-item-calc-preview">
-                        <div className="stock-calc-col">
-                          <span className="stock-calc-lbl">Paid Price</span>
-                          <span className="stock-calc-val paid">{formatINR(calcs.paidPrice)}</span>
-                        </div>
-                        <div className="stock-calc-col">
-                          <span className="stock-calc-lbl">Price / Unit</span>
-                          <span className="stock-calc-val">{formatINR(calcs.pricePerUnit)}</span>
-                        </div>
-                        <div className="stock-calc-col">
-                          <span className="stock-calc-lbl">Remaining Value</span>
-                          <span className="stock-calc-val avail">{formatINR(calcs.remainingValue)}</span>
-                        </div>
-                        {calcs.saved > 0 && (
-                          <div className="stock-calc-col">
-                            <span className="stock-calc-lbl">Saved</span>
-                            <span className="stock-calc-val" style={{ color: 'var(--green)' }}>{formatINR(calcs.saved)}</span>
-                          </div>
-                        )}
-                      </div>
-
                       {/* Source: Store Name */}
-                      <div className="mgr-edit-field">
+                      <div className="mgr-edit-field" style={{ position: 'relative' }}>
                         <label className="stock-builder-lbl">Store Name</label>
                         <input
                           type="text"
                           className="form-input"
                           placeholder="e.g. DMart, Amazon"
                           value={item.notes}
-                          onChange={e => updatePurchaseItem(item._id, 'notes', e.target.value)}
+                          onFocus={() => setActiveStoreSugIdx(idx)}
+                          onBlur={() => setTimeout(() => setActiveStoreSugIdx(null), 200)}
+                          onChange={e => {
+                            updatePurchaseItem(item._id, 'notes', e.target.value);
+                            setActiveStoreSugIdx(idx);
+                          }}
                         />
+                        {activeStoreSugIdx === idx && storeSuggestions.filter(s => s.toLowerCase().includes((item.notes || '').toLowerCase())).length > 0 && (
+                          <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 140, overflowY: 'auto' }}>
+                            {storeSuggestions.filter(s => s.toLowerCase().includes((item.notes || '').toLowerCase())).slice(0, 8).map(sug => (
+                              <div
+                                key={sug}
+                                className="note-sug-item"
+                                onMouseDown={() => {
+                                  updatePurchaseItem(item._id, 'notes', sug);
+                                  setActiveStoreSugIdx(null);
+                                }}
+                                style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
+                              >
+                                {sug}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Calculated Metrics Live Preview */}
+                      <div className="stock-item-calc-preview">
+                        <div className="stock-calc-col">
+                          <span className="stock-calc-lbl">Paid Price</span>
+                          <span className="stock-calc-val paid">{formatINR(calcs.paidPrice, calcs.paidPrice % 1 !== 0 ? 2 : 0)}</span>
+                        </div>
+                        <div className="stock-calc-col">
+                          <span className="stock-calc-lbl">Price / Unit</span>
+                          <span className="stock-calc-val">{formatINR(calcs.pricePerUnit, calcs.pricePerUnit % 1 !== 0 ? 2 : 0)}</span>
+                        </div>
+                        <div className="stock-calc-col">
+                          <span className="stock-calc-lbl">Remaining Value</span>
+                          <span className="stock-calc-val avail">{formatINR(calcs.remainingValue, calcs.remainingValue % 1 !== 0 ? 2 : 0)}</span>
+                        </div>
+                        {calcs.saved > 0 && (
+                          <div className="stock-calc-col">
+                            <span className="stock-calc-lbl">Saved</span>
+                            <span className="stock-calc-val" style={{ color: 'var(--green)' }}>{formatINR(calcs.saved, calcs.saved % 1 !== 0 ? 2 : 0)}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -2262,7 +2885,17 @@ export default function StockManager({ onBack, backInterceptRef }) {
                   type="button"
                   className="btn btn-secondary"
                   style={{ width: '100%', padding: '8px' }}
-                  onClick={() => setPurchaseItems(prev => [...prev, createEmptyPurchaseItem()])}
+                  onClick={() => {
+                    const firstItem = purchaseItems[0];
+                    const newItem = createEmptyPurchaseItem();
+                    if (firstItem) {
+                      if (firstItem.discountType) newItem.discountType = firstItem.discountType;
+                      if (firstItem.discountValue !== undefined && firstItem.discountValue !== '') {
+                        newItem.discountValue = firstItem.discountValue;
+                      }
+                    }
+                    setPurchaseItems(prev => [...prev, newItem]);
+                  }}
                 >
                   ➕ Add Another Item
                 </button>
@@ -2270,7 +2903,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                 <div className="grand-total-section">
                   <span>Grand Total:</span>
                   <span style={{ fontWeight: 800, color: 'var(--green)', fontSize: '1rem' }}>
-                    {formatINR(totalPurchaseSum)}
+                    {formatINR(totalPurchaseSum, totalPurchaseSum % 1 !== 0 ? 2 : 0)}
                   </span>
                 </div>
 
@@ -2311,8 +2944,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           sub_unit: it.sub_unit || 'pcs'
                         };
                       });
-                      await addInventoryPurchase(purchaseFrom, purchaseDate, finalItems, purchaseNote, purchaseTime);
+                      await addInventoryPurchase(purchaseFrom, purchaseDate, finalItems, purchaseNote, purchaseTime, purchaseSubAccount);
                       setShowPurchaseModal(false);
+                      setPurchaseFrom('');
+                      setPurchaseSubAccount('');
                       setPurchaseItems([createEmptyPurchaseItem()]);
                       await fetchItems();
                       await load();

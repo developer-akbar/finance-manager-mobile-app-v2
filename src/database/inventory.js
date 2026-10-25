@@ -60,18 +60,20 @@ export const getInventoryItems = async () => {
   return res.values || [];
 };
 
-export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeItems, noteText = 'in stock', timeText = '') => {
-  let fromAccount, date, items;
+export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeItems, noteText = 'in stock', timeText = '', maybeSubAccount = '') => {
+  let fromAccount, date, items, subAccount;
   if (typeof fromAccountOrData === 'object' && fromAccountOrData !== null && !maybeDate) {
     fromAccount = fromAccountOrData.fromAccount || fromAccountOrData.account || 'Cash';
     date = fromAccountOrData.date || new Date().toISOString().slice(0, 10);
     items = fromAccountOrData.items || [];
     noteText = fromAccountOrData.noteText || fromAccountOrData.note || noteText;
     timeText = fromAccountOrData.timeText || fromAccountOrData.time || timeText;
+    subAccount = fromAccountOrData.subAccount || fromAccountOrData.sub_account || maybeSubAccount || '';
   } else {
     fromAccount = fromAccountOrData;
     date = maybeDate || new Date().toISOString().slice(0, 10);
     items = maybeItems || [];
+    subAccount = maybeSubAccount || '';
   }
   const now = new Date().toISOString();
   let totalAmount = 0;
@@ -152,6 +154,8 @@ export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeIt
     Account: fromAccount,
     FromAccount: fromAccount,
     ToAccount: 'Stock',
+    SubAccount: subAccount || '',
+    FromSubAccount: subAccount || '',
     Category: 'Transfer',
     Subcategory: '',
     Note: txnNote,
@@ -192,8 +196,8 @@ export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeIt
       receipt_image: '',
       warranty_expiry: '',
       serial_no: '',
-      sub_account: '',
-      from_sub_account: '',
+      sub_account: subAccount || '',
+      from_sub_account: subAccount || '',
       to_sub_account: ''
     },
     bundle_id: txnId,
@@ -327,7 +331,9 @@ export const consumeInventoryItem = async (
   instalmentMonths = 3,
   timeStr = '',
   userNote = '',
-  batchMeta = null
+  batchMeta = null,
+  userDescription = '',
+  instalmentConfig = null
 ) => {
   const db = getDB();
   const now = new Date().toISOString();
@@ -352,9 +358,17 @@ export const consumeInventoryItem = async (
   // If still not found, check if a DB inventory row matches canonical name and purchase date
   if (!item && batchMeta) {
     const candidateName = (batchMeta.cleanedName || batchMeta.rawName || batchMeta.canonicalProduct || batchMeta.name || '').toLowerCase();
+    const candidateCanon = (batchMeta.canonicalProduct || getCanonicalProductName(candidateName) || '').toLowerCase();
     const batchDate = batchMeta.purchasedDate || batchMeta.purchased_date || '';
     const allMatching = await db.query('SELECT * FROM inventory WHERE LOWER(name) = ?', [candidateName]);
-    const matches = (allMatching.values || []).filter(r => !batchDate || r.purchased_date === batchDate);
+    const matches = (allMatching.values || []).filter(r => {
+      const rName = (r.name || '').toLowerCase();
+      const rCanon = getCanonicalProductName(rName).toLowerCase();
+      const nameMatches = rName === candidateName || rCanon === candidateCanon || rName.includes(candidateName) || candidateName.includes(rName);
+      if (!nameMatches) return false;
+      if (batchDate && r.purchased_date && r.purchased_date !== batchDate) return false;
+      return true;
+    });
     if (matches.length > 0) {
       item = matches[0];
       res = { values: [item] };
@@ -535,11 +549,14 @@ export const consumeInventoryItem = async (
       description = `${description} - ${trimmedUserNote}`;
     }
   }
+  if (userDescription && userDescription.trim()) {
+    description = `${userDescription.trim()}\n\n${description}`;
+  }
   const stockTags = deductions.map(d => `#stock_ref_${d.id}:${d.qty}`).join(' ');
 
   const bundleId = uuid();
 
-  if (usageType === 'instalment') {
+  if (usageType === 'instalment' || usageType === 'installment') {
     // Convert date format to YYYY-MM-DD for recurring engine
     let isoStartDate = date;
     if (date.includes('/')) {
@@ -547,8 +564,20 @@ export const consumeInventoryItem = async (
       isoStartDate = `${yyyy}-${mm}-${dd}`;
     }
 
-    const months = parseInt(instalmentMonths) || 3;
-    const totalDays = months * 30;
+    const instCfg = (typeof instalmentMonths === 'object' && instalmentMonths !== null)
+      ? instalmentMonths
+      : (instalmentConfig || {});
+
+    const inputMode = instCfg.inputMode || 'months';
+    let totalDays = 90;
+    if (inputMode === 'days') {
+      totalDays = parseInt(instCfg.days || instCfg.totalDays) || 30;
+    } else {
+      const monthsVal = parseFloat(instCfg.months !== undefined ? instCfg.months : instalmentMonths) || 3;
+      totalDays = Math.round(monthsVal * 30);
+    }
+    const scheduleMode = instCfg.scheduleMode || 'on_date';
+
     const baseInstalmentNote = (userNote || '').trim() || 'consumed';
     const ruleId = uuid();
 
@@ -568,7 +597,7 @@ export const consumeInventoryItem = async (
       total_amount: roundedExpense,
       total_days: totalDays,
       start_date: isoStartDate,
-      schedule_mode: 'on_date',
+      schedule_mode: scheduleMode,
       created_at: now
     };
 
