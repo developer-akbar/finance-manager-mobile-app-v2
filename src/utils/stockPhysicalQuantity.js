@@ -267,6 +267,30 @@ export function parseBatchPhysicalQuantity(variantStr = '', rawNameStr = '', pur
     };
   }
 
+  // 5b. Single physical unit in rawName when variant is "Standard" or missing:
+  // e.g. "Cooking Oil 1L", "Oil 5L", "Sugar 1kg", "Honey 500g"
+  const rawSingleMatch = raw.match(/(?:^|\s+)([\d\.]+)\s*(g|gm|gms|kg|ml|l|ltr|litre|litres)(?:\s+|$)/i);
+  if (rawSingleMatch) {
+    const sizeVal = parseFloat(rawSingleMatch[1]);
+    const rawUnit = rawSingleMatch[2].toLowerCase();
+    const stdUnit = STANDARD_UNITS[rawUnit] || (rawUnit.startsWith('l') ? 'L' : rawUnit);
+    const dim = UNIT_DIMENSIONS[rawUnit] || (rawUnit.startsWith('l') ? 'volume' : null);
+    const totalPhysical = effectiveQty * sizeVal;
+    if (stdUnit && dim) {
+      return {
+        packCount: effectiveQty,
+        packSizeValue: sizeVal,
+        packSizeUnit: stdUnit,
+        unitPhysicalQty: sizeVal,
+        totalPhysicalQty: totalPhysical,
+        physicalUnit: stdUnit,
+        dimension: dim,
+        confidence: 'recoverable',
+        isRecoverable: true
+      };
+    }
+  }
+
   // 6. Ambiguous / Non-physical patterns: e.g. "Salt 22", "Sugar 1", "MTR 220", "Standard", etc.
   return {
     packCount: effectiveQty,

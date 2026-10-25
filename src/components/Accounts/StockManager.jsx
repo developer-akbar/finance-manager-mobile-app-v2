@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, normalizeSuggestionQuery } from '../../utils/format.js';
 import { calculateLifetimePurchaseSavings } from '../../utils/stockInventorySavings.js';
@@ -207,6 +207,34 @@ export default function StockManager({ onBack, backInterceptRef }) {
     };
   }, [allNormalizedBatches, transactions]);
 
+  // Helper to resolve an individual batch's store / source
+  const getBatchSource = useCallback((batch) => {
+    if (!batch) return '';
+    if (batch.source && batch.source.trim()) return batch.source.trim();
+    if (batch.notes && batch.notes.trim()) return batch.notes.trim();
+
+    // Direct ID match from SQLite / IDB inventory table items
+    const directMatch = (items || []).find(i => i.id === batch.id || i.id === batch.batchId);
+    if (directMatch && directMatch.notes && directMatch.notes.trim()) return directMatch.notes.trim();
+
+    const targetName = (batch.cleanedName || batch.name || batch.canonicalProduct || '').toLowerCase().trim();
+    const exactMatch = (items || []).find(i =>
+      (i.name || '').toLowerCase().trim() === targetName &&
+      i.purchased_date === batch.purchasedDate &&
+      Number(i.original_qty || i.pack_qty || 1) === Number(batch.purchasedQty || batch.original_qty || 1) &&
+      String(i.sub_qty || 1) === String(batch.sub_qty || 1) &&
+      (i.sub_unit || '').toLowerCase().trim() === (batch.sub_unit || '').toLowerCase().trim() &&
+      i.notes && i.notes.trim()
+    );
+    if (exactMatch && exactMatch.notes && exactMatch.notes.trim()) return exactMatch.notes.trim();
+
+    // Fallback: Check if the underlying transaction had a store or note
+    const txnNote = batch.originalTxn?.Note || batch.originalTxn?.note || '';
+    if (txnNote && txnNote.trim() && txnNote.toLowerCase() !== 'in stock') return txnNote.trim();
+
+    return '';
+  }, [items]);
+
   // Filtered products list for main catalog
   const filteredProducts = useMemo(() => {
     return canonicalProducts.filter(p => {
@@ -218,12 +246,12 @@ export default function StockManager({ onBack, backInterceptRef }) {
         const matchCategory = (p.category || '').toLowerCase().includes(q);
         const matchBrand = (p.brand || '').toLowerCase().includes(q);
         const matchVariant = p.variantList.some(v => v.variant.toLowerCase().includes(q));
-        const matchStore = p.batches.some(b => (b.source || '').toLowerCase().includes(q));
+        const matchStore = p.batches.some(b => (getBatchSource(b) || '').toLowerCase().includes(q));
         return matchName || matchCategory || matchBrand || matchVariant || matchStore;
       }
       return true;
     });
-  }, [canonicalProducts, filter, search]);
+  }, [canonicalProducts, filter, search, getBatchSource]);
 
   // Active product for detail view
   const activeProductData = useMemo(() => {
@@ -262,7 +290,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
           b.canonicalProduct,
           b.variant,
           b.purchasedDate || '',
-          b.source || '',
+          getBatchSource(b) || '',
           b.purchasedQty,
           b.consumedQty,
           b.remainingQty,
@@ -541,8 +569,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
           break;
         }
         case 'source': {
-          const sA = a.source || '';
-          const sB = b.source || '';
+          const sA = getBatchSource(a) || '';
+          const sB = getBatchSource(b) || '';
           if (!sA && sB) return 1;
           if (sA && !sB) return -1;
           comp = sA.localeCompare(sB, undefined, { sensitivity: 'base' });
@@ -798,7 +826,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
       price: String(originalPrice),
       discountType,
       discountValue,
-      notes: batch.source || batch.notes || dbItem?.notes || '',
+      notes: getBatchSource(batch) || batch.source || batch.notes || dbItem?.notes || '',
       purchased_date: batch.purchasedDate || batch.purchased_date || ''
     });
   };
@@ -876,6 +904,13 @@ export default function StockManager({ onBack, backInterceptRef }) {
         discount_value: discVal
       });
 
+      // Update in-memory batch immediately so table and modal stay in sync
+      if (editFormData.batchObj) {
+        editFormData.batchObj.source = (editFormData.notes || '').trim();
+        editFormData.batchObj.notes = (editFormData.notes || '').trim();
+        editFormData.batchObj.brand = finalBrand;
+      }
+
       // 2. Update underlying transaction in transactions table & state
       const batch = editFormData.batchObj || allNormalizedBatches.find(b => b.id === batchId || b.batchId === batchId || b.txnId === batchId);
       if (batch) {
@@ -917,7 +952,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
               Description: newDescription,
               description: newDescription,
               INR: roundedTotal > 0 ? roundedTotal : (targetTxn.INR || targetTxn.Amount || 0),
-              Amount: String(roundedTotal > 0 ? roundedTotal : (targetTxn.INR || targetTxn.Amount || 0))
+              Amount: String(roundedTotal > 0 ? roundedTotal : (targetTxn.INR || targetTxn.Amount || 0)),
+              Note: (editFormData.notes || '').trim() || targetTxn.Note || targetTxn.note || 'in stock'
             };
 
             await updateTransaction(txnUniqueId, updatedTxnData);
@@ -1064,21 +1100,30 @@ export default function StockManager({ onBack, backInterceptRef }) {
               <div className="stock-prod-summary-grid">
                 <div className="stock-prod-stat-item">
                   <div className="stock-prod-stat-label">Purchased</div>
-                  <div className="stock-prod-stat-value">{formatFraction(activeProductData.totalPurchasedQty)}</div>
+                  <div className="stock-prod-stat-value">
+                    {formatFraction(activeProductData.totalPurchasedQty)}
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, opacity: 0.8, marginLeft: 3 }}>packs</span>
+                  </div>
                   {activeProductPhysical?.hasPhysicalData && activeProductPhysical.purchasedDisplay && (
                     <div className="stock-prod-stat-phys">{activeProductPhysical.purchasedDisplay}</div>
                   )}
                 </div>
                 <div className="stock-prod-stat-item">
                   <div className="stock-prod-stat-label">Consumed</div>
-                  <div className="stock-prod-stat-value" style={{ color: 'var(--text-muted)' }}>{formatFraction(activeProductData.totalConsumedQty)}</div>
+                  <div className="stock-prod-stat-value" style={{ color: 'var(--text-muted)' }}>
+                    {formatFraction(activeProductData.totalConsumedQty)}
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, opacity: 0.8, marginLeft: 3 }}>packs</span>
+                  </div>
                   {activeProductPhysical?.hasPhysicalData && activeProductPhysical.consumedDisplay && (
                     <div className="stock-prod-stat-phys" style={{ color: 'var(--text-muted)' }}>{activeProductPhysical.consumedDisplay}</div>
                   )}
                 </div>
                 <div className="stock-prod-stat-item">
                   <div className="stock-prod-stat-label">Available</div>
-                  <div className="stock-prod-stat-value" style={{ color: 'var(--green)' }}>{formatFraction(activeProductData.totalRemainingQty)}</div>
+                  <div className="stock-prod-stat-value" style={{ color: 'var(--green)' }}>
+                    {formatFraction(activeProductData.totalRemainingQty)}
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, opacity: 0.8, marginLeft: 3 }}>packs</span>
+                  </div>
                   {activeProductPhysical?.hasPhysicalData && activeProductPhysical.remainingDisplay && (
                     <div className="stock-prod-stat-phys" style={{ color: activeProductData.totalRemainingQty > 0 ? 'var(--green)' : 'var(--text-muted)' }}>
                       {activeProductPhysical.remainingDisplay}
@@ -1210,7 +1255,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             <span className="stock-badge variant">{batch.variant}</span>
                           </td>
                           <td>
-                            {batch.source ? <span className="stock-badge store">{batch.source}</span> : '-'}
+                            {getBatchSource(batch) ? <span className="stock-badge store">{getBatchSource(batch)}</span> : '-'}
                           </td>
                           <td style={{ fontWeight: 700 }}>
                             {formatFraction(batch.purchasedQty)}
@@ -1304,7 +1349,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                       <div className="stock-batch-meta">
                         <span style={{ fontWeight: 700 }}>
                           📅 {batch.purchasedDate || 'Unknown Date'}
-                          {batch.source && ` @ ${batch.source}`}
+                          {getBatchSource(batch) && ` @ ${getBatchSource(batch)}`}
                         </span>
                         <span className={`stock-badge ${isAvail ? 'available' : 'unavailable'}`}>
                           {isAvail ? `${formatFraction(batch.remainingQty)} avail` : 'Consumed'}

@@ -86,6 +86,9 @@ export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeIt
   const ops = [];
   const inventoryRows = [];
 
+  const commonStore = items.find(it => it.notes && it.notes.trim())?.notes?.trim() || '';
+  const headerOffset = commonStore ? 2 : 0;
+
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const packQty = parseFloat(item.pack_qty) || 1;
@@ -110,7 +113,8 @@ export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeIt
     itemDetails.push(`${cleanedName} ${statusWord} ${sizePart}: ${originalPrice}: @${discountedPrice}${suffix}`);
 
     const status = remainingParts > 0 ? 'available' : 'unavailable';
-    const batchId = `${isoDate}_${txnId}_${i}`;
+    const lineIdx = i + headerOffset;
+    const batchId = `${isoDate}_${txnId}_${lineIdx}`;
     const unitPrice = partsVal > 0 ? (discountedPrice / partsVal) : discountedPrice;
 
     const row = {
@@ -137,7 +141,8 @@ export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeIt
   }
 
   const roundedTotal = Math.round(totalAmount);
-  const description = itemDetails.join('\n');
+  const description = commonStore ? `${commonStore}\n\n${itemDetails.join('\n')}` : itemDetails.join('\n');
+  const txnNote = commonStore || noteText;
   const txn = {
     id: txnId,
     _id: txnId,
@@ -149,7 +154,7 @@ export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeIt
     ToAccount: 'Stock',
     Category: 'Transfer',
     Subcategory: '',
-    Note: noteText,
+    Note: txnNote,
     Description: description,
     INR: roundedTotal,
     Amount: String(roundedTotal),
@@ -173,7 +178,7 @@ export const addInventoryPurchase = async (fromAccountOrData, maybeDate, maybeIt
       to_account: 'Stock',
       category: 'Transfer',
       subcategory: '',
-      note: noteText,
+      note: txnNote,
       description,
       inr: roundedTotal,
       amount: String(roundedTotal),
@@ -330,7 +335,21 @@ export const consumeInventoryItem = async (
   let res = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
   let item = res.values?.[0];
 
-  // If not found by itemId directly, check if a DB inventory row matches canonical name and purchase date
+  // If not found by itemId directly, check structured ID against purchase txn ID
+  if (!item && /^\d{4}-\d{2}-\d{2}_.+_\d+$/.test(itemId)) {
+    const matchParts = itemId.match(/^(\d{4}-\d{2}-\d{2})_(.+)_\d+$/);
+    if (matchParts) {
+      const pTxnId = matchParts[2];
+      const invRes = await db.query('SELECT * FROM inventory');
+      const candidates = (invRes.values || []).filter(r => r.id && r.id.includes(pTxnId));
+      if (candidates.length === 1) {
+        item = candidates[0];
+        res = { values: [item] };
+      }
+    }
+  }
+
+  // If still not found, check if a DB inventory row matches canonical name and purchase date
   if (!item && batchMeta) {
     const candidateName = (batchMeta.cleanedName || batchMeta.rawName || batchMeta.canonicalProduct || batchMeta.name || '').toLowerCase();
     const batchDate = batchMeta.purchasedDate || batchMeta.purchased_date || '';
@@ -359,6 +378,15 @@ export const consumeInventoryItem = async (
   }
   if (!item) throw new Error('Item not found in stock');
 
+  let cleanPerson = '';
+  if (usageType === 'lend') {
+    const rawPerson = (personName || '').trim();
+    cleanPerson = rawPerson.replace(/^(to\s*:?|lend\s*to\s*:?|given\s*to\s*:?)\s+/i, '').trim();
+    if (!cleanPerson) {
+      throw new Error('Please enter a valid person name for lending.');
+    }
+  }
+
   const subQtyVal = parseFloat(item.sub_qty) || 1;
   let finalQtyToConsume = qtyToConsume;
   if (useSubUnit && subQtyVal > 0) {
@@ -380,7 +408,7 @@ export const consumeInventoryItem = async (
       }, 0)
     : (parseFloat(item.qty) || 0);
 
-  if (finalQtyToConsume > (totalAvailablePacks + 0.0001) && totalAvailablePacks > 0) {
+  if (finalQtyToConsume > (totalAvailablePacks + 0.0001)) {
     throw new Error(`Insufficient total stock. You requested ${formatFraction(finalQtyToConsume)} packs but only have ${formatFraction(totalAvailablePacks)} packs in total.`);
   }
 
@@ -393,7 +421,7 @@ export const consumeInventoryItem = async (
 
   // Clicked item first
   const currQty = parseFloat(item.qty) || 0;
-  const deductFromCurrent = Math.min(currQty > 0 ? currQty : remainingToConsume, remainingToConsume);
+  const deductFromCurrent = Math.min(currQty > 0 ? currQty : 0, remainingToConsume);
   const newQty = Math.max(0, currQty - deductFromCurrent);
   const status = newQty > 0.0001 ? 'available' : 'unavailable';
 
@@ -499,7 +527,14 @@ export const consumeInventoryItem = async (
     ? `${totalQtyStr} ${item.sub_unit || 'g'}`
     : `${totalQtyStr} ${item.unit || 'pcs'}`;
 
-  const description = `${labelPrefix} ${totalConsumedStr} of ${item.name} (${detailsList.join(', ')})`;
+  let description = `${labelPrefix} ${totalConsumedStr} of ${item.name} (${detailsList.join(', ')})`;
+  if (usageType === 'lend') {
+    const trimmedUserNote = (userNote || '').trim();
+    const cleanUserNotePerson = trimmedUserNote.replace(/^(to\s*:?|lend\s*to\s*:?|given\s*to\s*:?)\s+/i, '').trim();
+    if (trimmedUserNote && cleanUserNotePerson.toLowerCase() !== cleanPerson.toLowerCase()) {
+      description = `${description} - ${trimmedUserNote}`;
+    }
+  }
   const stockTags = deductions.map(d => `#stock_ref_${d.id}:${d.qty}`).join(' ');
 
   const bundleId = uuid();
@@ -589,7 +624,8 @@ export const consumeInventoryItem = async (
       });
     }
   } else {
-    const finalNote = (userNote || '').trim() || (usageType === 'lend' ? `Lend to ${personName.trim()}` : '');
+    const isLend = usageType === 'lend';
+    const finalNote = isLend ? `to ${cleanPerson}` : (userNote || '').trim();
     const txnId = uuid();
     ops.push({
       storeName: 'transactions',
@@ -599,21 +635,21 @@ export const consumeInventoryItem = async (
         id: txnId,
         date: formattedDate,
         time: finalTime,
-        account: usageType === 'lend' ? 'Lend' : 'Stock',
-        from_account: usageType === 'lend' ? 'Lend' : 'Stock',
-        to_account: '',
-        category: usageType === 'lend' ? 'Lend' : category,
-        subcategory: usageType === 'lend' ? '' : subcategory,
+        account: 'Stock',
+        from_account: 'Stock',
+        to_account: isLend ? 'Lend' : '',
+        category: isLend ? 'Transfer' : category,
+        subcategory: isLend ? '' : subcategory,
         note: finalNote,
         description: description,
         inr: roundedExpense,
         amount: String(roundedExpense),
         currency: 'INR',
-        type: 'Expense',
+        type: isLend ? 'Transfer-Out' : 'Expense',
         created_at: now,
         updated_at: now,
         recurring_rule_id: '',
-        tags: `#stock #${usageType === 'lend' ? 'lent' : 'consumed'} ${stockTags}`,
+        tags: `#stock #${isLend ? 'lent' : 'consumed'} ${stockTags}`,
         split_group_id: '',
         receipt_image: '',
         warranty_expiry: '',
@@ -758,6 +794,9 @@ export const syncStockFromPastTransactions = async () => {
         discountValue = Number((((parsed.mrp - parsed.paid) / parsed.mrp) * 100).toFixed(2));
       }
 
+      const existingInvItem = curInventory.find(ci => ci.id === batchId);
+      const resolvedNotes = (parsed.source && parsed.source.trim()) ? parsed.source.trim() : (existingInvItem?.notes || '');
+
       newInventoryRows.push({
         id: batchId,
         name: parsed.canonicalProduct || parsed.cleanedName,
@@ -767,7 +806,7 @@ export const syncStockFromPastTransactions = async () => {
         discounted_price: parsed.unitPrice,
         status: parsed.status,
         purchased_date: parsed.purchasedDate,
-        notes: parsed.source || '',
+        notes: resolvedNotes,
         updated_at: now,
         sub_qty: parsed.sub_qty || 1,
         sub_unit: parsed.sub_unit || '',

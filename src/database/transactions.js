@@ -2,7 +2,7 @@ import { getDB } from './db.js';
 import { v4 as uuid } from 'uuid';
 import { recordTombstone, recordTombstonesBatch } from './tombstones.js';
 import { executeAtomicMutation, executeAtomicBatch } from './atomicMutation.js';
-import { parseDescriptionStockInfo, parseStockLine } from '../utils/stockInventoryNormalization.js';
+import { parseDescriptionStockInfo, parseStockLine, LEGACY_HISTORICAL_REF_MAP } from '../utils/stockInventoryNormalization.js';
 import { buildInstalmentNote } from './recurring.js';
 
 export { parseDescriptionStockInfo };
@@ -333,6 +333,75 @@ export const parseStockRefTags = (tagsStr) => {
   return matches;
 };
 
+/**
+ * Unambiguously resolve the inventory DB entity associated with a given stock reference ID.
+ * 1. Checks exact match by item.id.
+ * 2. Checks canonical mapping for legacy historical IDs.
+ * 3. Checks structured batch format (YYYY-MM-DD_<txnId>_<lineIdx>) matching purchase transaction ID.
+ * 4. Checks single unique item name match if unambiguous. Refuses to restore if multiple candidates exist.
+ */
+export const resolveInventoryItemForStockRef = async (db, itemId, info = null, txn = null) => {
+  if (!itemId) return null;
+
+  // 1. Exact match on inventory row ID
+  const exactRes = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
+  if (exactRes.values?.[0]) {
+    return exactRes.values[0];
+  }
+
+  // 2. Check canonical mapping for legacy historical IDs
+  const mappedId = LEGACY_HISTORICAL_REF_MAP?.[itemId];
+  if (mappedId) {
+    const mapRes = await db.query('SELECT * FROM inventory WHERE id = ?', [mappedId]);
+    if (mapRes.values?.[0]) {
+      return mapRes.values[0];
+    }
+  }
+
+  // 3. Structured pattern match: YYYY-MM-DD_<txnId>_<lineIdx>
+  // Handles index offsets (e.g., when purchase had a store header)
+  const matchParts = itemId.match(/^(\d{4}-\d{2}-\d{2})_(.+)_\d+$/);
+  if (matchParts) {
+    const [, , pTxnId] = matchParts;
+    const invRes = await db.query('SELECT * FROM inventory');
+    const candidates = (invRes.values || []).filter(item => item.id && item.id.includes(pTxnId));
+    if (candidates.length === 1) {
+      return candidates[0];
+    }
+    if (candidates.length > 1) {
+      const desc = txn ? (txn.description || txn.Description || '') : '';
+      const nameMatch = desc.match(/(?:Used|Lent|Instalment Use)\s+[\d\/\.\s\w]+\s+of\s+([^(]+?)(?:\s*\(|$)/i);
+      const targetName = (nameMatch ? nameMatch[1].trim() : (info?.name || '')).toLowerCase();
+      if (targetName) {
+        const filtered = candidates.filter(c => c.name && (c.name.toLowerCase().includes(targetName) || targetName.includes(c.name.toLowerCase())));
+        if (filtered.length === 1) {
+          return filtered[0];
+        }
+      }
+      console.warn(`[resolveInventoryItemForStockRef] Multiple inventory candidates found for purchase ${pTxnId}. Refusing ambiguous restoration.`);
+      return null;
+    }
+  }
+
+  // 4. Safe fallback by item name from description if unambiguously unique
+  const desc = txn ? (txn.description || txn.Description || '') : '';
+  const nameMatch = desc.match(/(?:Used|Lent|Instalment Use)\s+[\d\/\.\s\w]+\s+of\s+([^(]+?)(?:\s*\(|$)/i);
+  const targetName = (nameMatch ? nameMatch[1].trim() : (info?.name || '')).toLowerCase();
+  if (targetName) {
+    const allInv = await db.query('SELECT * FROM inventory');
+    const nameCandidates = (allInv.values || []).filter(item => item.name && item.name.toLowerCase() === targetName);
+    if (nameCandidates.length === 1) {
+      return nameCandidates[0];
+    }
+    if (nameCandidates.length > 1) {
+      console.warn(`[resolveInventoryItemForStockRef] Multiple inventory candidates found with name "${targetName}" for ref ${itemId}. Refusing ambiguous restoration.`);
+      return null;
+    }
+  }
+
+  return null;
+};
+
 export const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
   const oldRefs = parseStockRefTags(oldTxn ? (oldTxn.tags || oldTxn.Tags) : '');
   const newRefs = parseStockRefTags(newTxn ? (newTxn.tags || newTxn.Tags) : '');
@@ -350,8 +419,10 @@ export const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
       const newInfo = parseDescriptionStockInfo(newTxn.description);
       if (newInfo && !isNaN(newInfo.qty) && newInfo.qty > 0) {
         let newQtyInPacks = newInfo.qty;
-        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [targetRef.id]);
-        let item = res.values?.[0];
+        let item = (await db.query('SELECT * FROM inventory WHERE id = ?', [targetRef.id])).values?.[0];
+        if (!item) {
+          item = await resolveInventoryItemForStockRef(db, targetRef.id, newInfo, newTxn);
+        }
         if (!item && /^\d{4}-\d{2}-\d{2}_.+_\d+$/.test(targetRef.id)) {
           const parts = targetRef.id.split('_');
           const pLineIdx = parseInt(parts[parts.length - 1], 10);
@@ -398,8 +469,7 @@ export const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
         restoreQty = oldInfo ? oldInfo.qty : 0;
       }
       if (restoreQty > 0) {
-        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [r.id]);
-        const item = res.values?.[0];
+        const item = await resolveInventoryItemForStockRef(db, r.id, oldInfo, oldTxn);
         if (item) {
           const currQty = parseFloat(item.qty) || 0;
           const subQtyVal = parseFloat(item.sub_qty) || 1;
@@ -411,7 +481,7 @@ export const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
           const status = newQty > 0 ? 'available' : 'unavailable';
           ops.push({
             storeName: 'inventory',
-            id: r.id,
+            id: item.id || r.id,
             operation: 'UPDATE',
             entity: { ...item, qty: newQty, status, updated_at: now },
             expectedBaseEntity: item
@@ -429,8 +499,7 @@ export const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
     if (oldInfo && newInfo) {
       const qtyDiff = newInfo.qty - oldInfo.qty;
       if (qtyDiff !== 0 || oldInfo.unit !== newInfo.unit) {
-        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [firstRef.id]);
-        const item = res.values?.[0];
+        const item = await resolveInventoryItemForStockRef(db, firstRef.id, oldInfo, oldTxn);
         if (item) {
           const subQtyVal = parseFloat(item.sub_qty) || 1;
           let oldQtyInPacks = oldInfo.qty;
@@ -447,7 +516,7 @@ export const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
           const status = newQty > 0.0001 ? 'available' : 'unavailable';
           ops.push({
             storeName: 'inventory',
-            id: firstRef.id,
+            id: item.id || firstRef.id,
             operation: 'UPDATE',
             entity: { ...item, qty: newQty, status, updated_at: now },
             expectedBaseEntity: item
@@ -467,8 +536,7 @@ export const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
         deductQty = newInfo ? newInfo.qty : 0;
       }
       if (deductQty > 0) {
-        const res = await db.query('SELECT * FROM inventory WHERE id = ?', [r.id]);
-        const item = res.values?.[0];
+        const item = await resolveInventoryItemForStockRef(db, r.id, newInfo, newTxn);
         if (item) {
           const subQtyVal = parseFloat(item.sub_qty) || 1;
           let qtyInPacks = deductQty;
@@ -480,7 +548,7 @@ export const computeStockOperationsOnTxnChange = async (oldTxn, newTxn) => {
           const status = newQty > 0.0001 ? 'available' : 'unavailable';
           ops.push({
             storeName: 'inventory',
-            id: r.id,
+            id: item.id || r.id,
             operation: 'UPDATE',
             entity: { ...item, qty: newQty, status, updated_at: now },
             expectedBaseEntity: item
@@ -836,15 +904,21 @@ export const deleteTransaction = async (id) => {
       if (stockRefTags.length > 0) {
         const info = parseDescriptionStockInfo(txn.description);
         const now = new Date().toISOString();
+        const modifiedItems = new Map();
+        const originalItems = new Map();
+
         for (const tag of stockRefTags) {
           let itemId = tag.id;
           let qtyToRestore = tag.qty !== null ? tag.qty : (info ? info.qty : 0);
           let unitMode = info?.unit || 'pack';
           if (qtyToRestore > 0) {
-            const iRes = await db.query('SELECT * FROM inventory WHERE id = ?', [itemId]);
-            const item = iRes.values?.[0];
+            const item = await resolveInventoryItemForStockRef(db, itemId, info, txn);
             if (item) {
-              const currQty = parseFloat(item.qty) || 0;
+              if (!originalItems.has(item.id)) {
+                originalItems.set(item.id, item);
+              }
+              const currentItem = modifiedItems.get(item.id) || item;
+              const currQty = parseFloat(currentItem.qty) || 0;
               const subQtyVal = parseFloat(item.sub_qty) || 1;
               let finalQty = qtyToRestore;
               if (item.sub_unit && unitMode === item.sub_unit && subQtyVal > 0) {
@@ -852,15 +926,25 @@ export const deleteTransaction = async (id) => {
               }
               const newQty = currQty + finalQty;
               const status = newQty > 0 ? 'available' : 'unavailable';
-              stockOps.push({
-                storeName: 'inventory',
-                id: itemId,
-                operation: 'UPDATE',
-                entity: { ...item, qty: newQty, status, updated_at: now },
-                expectedBaseEntity: item
+              modifiedItems.set(item.id, {
+                ...currentItem,
+                qty: newQty,
+                status,
+                updated_at: now
               });
             }
           }
+        }
+
+        for (const [resItemId, updatedEntity] of modifiedItems.entries()) {
+          const originalEntity = originalItems.get(resItemId);
+          stockOps.push({
+            storeName: 'inventory',
+            id: resItemId,
+            operation: 'UPDATE',
+            entity: updatedEntity,
+            expectedBaseEntity: originalEntity
+          });
         }
       }
     }

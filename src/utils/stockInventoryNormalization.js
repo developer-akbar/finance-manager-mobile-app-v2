@@ -358,6 +358,12 @@ export const parseStockLine = (rawLine, txn = {}, lineIdx = 0) => {
   if (descLines[0] && !descLines[0].toLowerCase().includes('stock')) {
     storeName = descLines[0].split('with')[0].trim();
   }
+  if (!storeName) {
+    const rawNote = txn.Note || txn.note || '';
+    if (rawNote && rawNote.trim() && rawNote.toLowerCase() !== 'in stock') {
+      storeName = rawNote.trim();
+    }
+  }
 
   // Format date
   const rawDate = txn.Date || txn.date || '';
