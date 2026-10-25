@@ -131,6 +131,7 @@ test('FinMan Stage C — Cloud Sync User-Friendly UX Test Suite', async (t) => {
     assert.ok(source.includes('⚡ Sync Now'), 'Sync Now button must be present in Cloud Sync card');
     assert.ok(source.includes('🔍 Preview Cloud Backup'), 'Preview Cloud Backup button must be present');
     assert.ok(source.includes('📦 Create Cloud Backup'), 'Create Cloud Backup button must be present');
+    assert.ok(source.includes('📱 Push as Master Backup (Force Push)'), 'Push as Master Backup button must be present');
     assert.ok(source.includes('🔒 Lock Sync'), 'Lock Sync button must be present');
     assert.ok(source.includes('Unlock Sync'), 'Unlock Sync button must be present');
 

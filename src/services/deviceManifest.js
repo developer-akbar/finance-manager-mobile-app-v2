@@ -466,7 +466,13 @@ export async function ensureOwnDeviceManifestSynced(options = {}) {
     const needsSeqUpdate = localMaxSeq > (manifest.last_sequence || 0);
     const needsNameUpdate = Boolean(resolvedName && manifest.device_name !== resolvedName);
 
-    if (force || needsSnapshotUpdate || needsVersionUpdate || needsSeqUpdate || needsNameUpdate) {
+    let localRecordCount = 0;
+    try {
+      const txRes = await db.query('SELECT COUNT(*) as count FROM transactions');
+      localRecordCount = Number(txRes.values?.[0]?.count || 0);
+    } catch {}
+
+    if (force || needsSnapshotUpdate || needsVersionUpdate || needsSeqUpdate || needsNameUpdate || (localRecordCount > 0 && manifest.record_count !== localRecordCount)) {
       manifest.base_snapshot_id = currentBaseSnapshotId;
       manifest.base_cloud_version = currentBaseCloudVersion || manifest.base_cloud_version || 14;
       manifest.last_sequence = Math.max(manifest.last_sequence || 0, localMaxSeq);
@@ -475,6 +481,7 @@ export async function ensureOwnDeviceManifestSynced(options = {}) {
       manifest.manifest_revision = (manifest.manifest_revision || 0) + 1;
       manifest.revision = manifest.manifest_revision;
       manifest.updated_at = new Date().toISOString();
+      if (localRecordCount > 0) manifest.record_count = localRecordCount;
       if (resolvedName) manifest.device_name = resolvedName;
 
       await writeOwnDeviceManifest(manifest, accessToken, driveClient);
@@ -1072,6 +1079,7 @@ export async function listAllCloudDeviceManifests(options = {}) {
       driveModifiedTime: m.drive_modified_time || null,
       driveFileId: m.drive_file_id || null,
       lifecycleState: m.device_lifecycle_state || m.lifecycle_state || 'ACTIVE',
+      recordCount: Number(m.record_count ?? m.recordCount ?? 0) || null,
       lineageStatus,
       lineageReason
     };

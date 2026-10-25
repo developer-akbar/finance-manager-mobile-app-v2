@@ -54,7 +54,7 @@ export default function GlobalSyncBadge({ isCollapsed = false, mobile = false, c
             pendingCount: m.pendingCount ?? prev.pendingCount,
             status: m.status ?? prev.status,
             lifecycleState: m.lifecycleState ?? prev.lifecycleState,
-            latestError: prev.latestError || m.latestError || null
+            latestError: (m.status === SYNC_STATUS.SUCCESS || m.latestDiagnostic?.code === 'SUCCESS') ? null : (m.latestError || null)
           }));
         }
       }).catch(() => { });
@@ -71,7 +71,7 @@ export default function GlobalSyncBadge({ isCollapsed = false, mobile = false, c
           status: m.status || SYNC_STATUS.IDLE,
           pendingCount: m.pendingCount || 0,
           lifecycleState: m.lifecycleState || 'ACTIVE',
-          latestError: m.latestError || null
+          latestError: (m.status === SYNC_STATUS.SUCCESS || m.latestDiagnostic?.code === 'SUCCESS') ? null : (m.latestError || null)
         });
       }
     }).catch(() => { });
@@ -167,7 +167,11 @@ export default function GlobalSyncBadge({ isCollapsed = false, mobile = false, c
       isSpinning: true,
       tooltip: 'Exchanging updates with Google Drive…'
     };
-  } else if (syncState.latestError || syncState.status === SYNC_STATUS.ERROR || syncState.status === SYNC_STATUS.BLOCKED_SEQUENCE_GAP) {
+  } else if (
+    syncState.status === SYNC_STATUS.ERROR ||
+    syncState.status === SYNC_STATUS.BLOCKED_SEQUENCE_GAP ||
+    (syncState.latestError && syncState.status !== SYNC_STATUS.IDLE && syncState.status !== SYNC_STATUS.SUCCESS)
+  ) {
     const isGap = syncState.status === SYNC_STATUS.BLOCKED_SEQUENCE_GAP || String(syncState.latestError || '').includes('SEQUENCE_GAP');
     config = {
       dotColor: 'var(--expense, #ff4d6a)',

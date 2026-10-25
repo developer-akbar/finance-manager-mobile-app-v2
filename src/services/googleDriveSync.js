@@ -11,7 +11,7 @@ import { invalidateStoredToken } from './googleAuth.js';
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
-export const DRIVE_REQUEST_TIMEOUT_MS = 25000;
+export const DRIVE_REQUEST_TIMEOUT_MS = 60000;
 
 /**
  * Fetch wrapper with bounded timeout and optional AbortSignal chaining.

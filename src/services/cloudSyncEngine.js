@@ -1522,129 +1522,14 @@ export async function previewCloudSync({
 
   console.log('[CloudPayloadDiagnostic]', JSON.stringify(cloudPayloadDiagnostic, null, 2));
 
-  // Phase 6C.15 Forensic Drive Revision & Original v1 Verification (READ-ONLY)
-  let v1RevisionDiagnostic = {
+  // Phase 6C.15 Forensic Drive Revision & Original v1 Verification (Disabled in live preview for fast response)
+  const v1RevisionDiagnostic = {
     revisionsQueried: false,
     revisionsCount: 0,
     allRevisions: [],
     v1RevisionFound: false,
-    v1RevisionId: null,
-    v1ModifiedTime: null,
-    v1SnapshotId: null,
-    v1CreatedAt: null,
-    v1CloudVersion: null,
-    v1ParentSnapshotId: null,
-    v1TransactionCount: 0,
-    v1InvestmentCount: 0,
-    v1AccountsCount: 0,
-    v1CategoriesCount: 0,
-    v1RawTxnComparisonWithLocal: {
-      localCount: rawLocalTxns.length,
-      v1Count: 0,
-      commonCount: 0,
-      localOnlyCount: 0,
-      v1OnlyCount: 0
-    },
-    v1RawInvComparisonWithLocal: {
-      localCount: rawLocalInvs.length,
-      v1Count: 0,
-      commonCount: 0,
-      localOnlyCount: 0,
-      v1OnlyCount: 0
-    },
-    v1ContainsKnownCloudTxnId: false, // txn_1704067200000_000000
-    v1ContainsKnownCloudInvId: false, // inv_cloud_hist_0000
-    v1ContainsLocalTxnId: false,      // 652866ae-d1bd-435a-88e0-1e8813f65c10
-    v1ContainsLocalInvId: false,      // 48db2ea6-629b-47bd-a6ea-de54140c9ace
-    v1IntegrityChecksumMatch: null,
-    error: null
+    skipped: true
   };
-
-  try {
-    const revisions = typeof transport.listFileRevisions === 'function'
-      ? await transport.listFileRevisions(cloudFile.id, accessToken)
-      : await listFileRevisions(cloudFile.id, accessToken);
-    
-    v1RevisionDiagnostic.revisionsQueried = true;
-    v1RevisionDiagnostic.revisionsCount = revisions.length;
-    v1RevisionDiagnostic.allRevisions = revisions.map(r => ({ id: r.id, modifiedTime: r.modifiedTime, size: r.size, mimeType: r.mimeType }));
-
-    for (const rev of revisions) {
-      try {
-        const revCipher = typeof transport.readRevisionContent === 'function'
-          ? await transport.readRevisionContent(cloudFile.id, rev.id, accessToken)
-          : await readRevisionContent(cloudFile.id, rev.id, accessToken);
-        const revPayload = await decryptBackupData(revCipher, effectiveKey);
-
-        if (revPayload && (revPayload.snapshot_id === 'snap_1790234303785_wiv4d1' || revPayload.cloud_version === 1)) {
-          v1RevisionDiagnostic.v1RevisionFound = true;
-          v1RevisionDiagnostic.v1RevisionId = rev.id;
-          v1RevisionDiagnostic.v1ModifiedTime = rev.modifiedTime;
-          v1RevisionDiagnostic.v1SnapshotId = revPayload.snapshot_id;
-          v1RevisionDiagnostic.v1CreatedAt = revPayload.created_at || revPayload.timestamp;
-          v1RevisionDiagnostic.v1CloudVersion = revPayload.cloud_version || 1;
-          v1RevisionDiagnostic.v1ParentSnapshotId = revPayload.parent_snapshot_id || null;
-
-          const v1Txns = Array.isArray(revPayload.entities?.transactions) ? revPayload.entities.transactions : [];
-          const v1Invs = Array.isArray(revPayload.entities?.investment_transactions) ? revPayload.entities.investment_transactions : [];
-          const v1Accs = Array.isArray(revPayload.entities?.accounts) ? revPayload.entities.accounts : [];
-          const v1Cats = Array.isArray(revPayload.entities?.categories) ? revPayload.entities.categories : [];
-
-          v1RevisionDiagnostic.v1TransactionCount = v1Txns.length;
-          v1RevisionDiagnostic.v1InvestmentCount = v1Invs.length;
-          v1RevisionDiagnostic.v1AccountsCount = v1Accs.length;
-          v1RevisionDiagnostic.v1CategoriesCount = v1Cats.length;
-
-          // Transaction ID reconciliation
-          const v1TxnIdSet = new Set(v1Txns.map(t => String(t.id || t.ID || t._id || t.key || '')));
-          let commonTxns = 0;
-          for (const id of rawLocalTxnIdSet) {
-            if (v1TxnIdSet.has(id)) commonTxns++;
-          }
-          v1RevisionDiagnostic.v1RawTxnComparisonWithLocal = {
-            localCount: rawLocalTxns.length,
-            v1Count: v1Txns.length,
-            commonCount: commonTxns,
-            localOnlyCount: rawLocalTxns.length - commonTxns,
-            v1OnlyCount: v1Txns.length - commonTxns
-          };
-
-          // Investment ID reconciliation
-          const v1InvIdSet = new Set(v1Invs.map(t => String(t.id || t.ID || t._id || t.key || '')));
-          let commonInvs = 0;
-          for (const id of rawLocalInvIdSet) {
-            if (v1InvIdSet.has(id)) commonInvs++;
-          }
-          v1RevisionDiagnostic.v1RawInvComparisonWithLocal = {
-            localCount: rawLocalInvs.length,
-            v1Count: v1Invs.length,
-            commonCount: commonInvs,
-            localOnlyCount: rawLocalInvs.length - commonInvs,
-            v1OnlyCount: v1Invs.length - commonInvs
-          };
-
-          // Known IDs verification
-          v1RevisionDiagnostic.v1ContainsKnownCloudTxnId = v1TxnIdSet.has('txn_1704067200000_000000');
-          v1RevisionDiagnostic.v1ContainsKnownCloudInvId = v1InvIdSet.has('inv_cloud_hist_0000');
-          v1RevisionDiagnostic.v1ContainsLocalTxnId = v1TxnIdSet.has('652866ae-d1bd-435a-88e0-1e8813f65c10');
-          v1RevisionDiagnostic.v1ContainsLocalInvId = v1InvIdSet.has('48db2ea6-629b-47bd-a6ea-de54140c9ace');
-
-          // Checksum / Integrity calculation
-          if (revPayload.checksum || revPayload.manifest_checksum) {
-            const calculatedChecksum = await sha256Hex(JSON.stringify(revPayload.entities || {}));
-            v1RevisionDiagnostic.v1IntegrityChecksumMatch = (calculatedChecksum === (revPayload.checksum || revPayload.manifest_checksum));
-          }
-          break;
-        }
-      } catch (revErr) {
-        console.warn('[V1RevisionDiagnostic] Error reading revision', rev.id, revErr);
-      }
-    }
-  } catch (err) {
-    v1RevisionDiagnostic.error = err.message;
-  }
-
-  console.log('[V1RevisionDiagnostic]', JSON.stringify(v1RevisionDiagnostic, null, 2));
 
   // Check if Local Database qualifies for Clean Bootstrap
   const isBootstrapEligible = isDatabaseBootstrapEmpty(localEntities);

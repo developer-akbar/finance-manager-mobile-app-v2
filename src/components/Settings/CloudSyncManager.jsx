@@ -619,9 +619,10 @@ export default function CloudSyncManager({ onBack }) {
         }
       });
 
-      setPublishMasterProgress('✓ Snapshot v13 published successfully!');
-      setSuccessMsg(`✓ Snapshot v13 published (${result.totalTxnCount.toLocaleString()} transactions)! This device is now your active cloud master.`);
+      setPublishMasterProgress('✓ Cloud master published successfully!');
+      setSuccessMsg(`✓ Cloud master published (${result.totalTxnCount.toLocaleString()} transactions)! This device is now your active cloud master.`);
       setShowPublishMasterModal(false);
+      setPreviewResult(null);
       if (typeof load === 'function') {
         try { await load(); } catch { }
       }
@@ -1623,10 +1624,28 @@ export default function CloudSyncManager({ onBack }) {
             >
               {isLoading && operationType === 'preview' ? 'Inspecting...' : '🔍 Preview Cloud Backup'}
             </button>
+
+            <button
+              className="btn btn-secondary"
+              onClick={handlePublishMasterClick}
+              disabled={isPublishingMaster || isLiveDeltaSyncing || isLoading || isSyncing || !isGoogleLinked()}
+              style={{
+                flex: '1 1 100%',
+                padding: '10px 14px',
+                fontSize: '0.82rem',
+                fontWeight: 800,
+                border: '1px solid var(--accent)',
+                color: 'var(--accent)',
+                background: 'rgba(74, 144, 226, 0.08)'
+              }}
+            >
+              {isPublishingMaster ? 'Publishing Cloud Master...' : '📱 Push as Master Backup (Force Push)'}
+            </button>
           </div>
 
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-            • <strong>Create Cloud Backup</strong>: Encrypts and saves your entire database as a complete cloud backup.<br />
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+            • <strong>Push as Master Backup</strong>: Force-pushes this device's records directly as the cloud master. Overrides conflicts and updates other devices.<br />
+            • <strong>Create Cloud Backup</strong>: Encrypts and reconciles your database with existing cloud snapshots.<br />
             • <strong>Preview Cloud Backup</strong>: Performs a 100% read-only inspection. Zero database changes, zero Drive writes.
           </div>
 
@@ -2382,6 +2401,18 @@ export default function CloudSyncManager({ onBack }) {
                       </div>
                     ))}
                   </div>
+
+                  <div style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handlePublishMasterClick}
+                      disabled={isPublishingMaster || !isGoogleLinked()}
+                      style={{ width: '100%', fontSize: '0.78rem', fontWeight: 800, padding: '10px 14px' }}
+                    >
+                      📱 Force Push This Device as Cloud Master (Keep All Local Edits)
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -2425,9 +2456,47 @@ export default function CloudSyncManager({ onBack }) {
                   {modalConfig.descriptionText}
                 </div>
                 <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                  Local changes: {previewResult.plannedLocalChanges?.inserts || 0} inserts, {previewResult.plannedLocalChanges?.updates || 0} updates, {previewResult.plannedLocalChanges?.deletes || 0} deletes.
+                  Incoming cloud updates to apply: {previewResult.plannedLocalChanges?.inserts || 0} inserts, {previewResult.plannedLocalChanges?.updates || 0} updates, {previewResult.plannedLocalChanges?.deletes || 0} deletes.
                 </div>
               </div>
+
+              {previewResult.conflicts?.length > 0 && (
+                <div style={{
+                  background: 'rgba(255, 179, 0, 0.08)',
+                  border: '1px solid rgba(255, 179, 0, 0.28)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  marginBottom: 16,
+                  fontSize: '0.72rem',
+                  lineHeight: 1.45,
+                  textAlign: 'left'
+                }}>
+                  <div style={{ fontWeight: 800, color: 'var(--warning)', marginBottom: 4 }}>
+                    ⚠️ {previewResult.conflicts.length} local edits differ from old cloud copy
+                  </div>
+                  <div style={{ color: 'var(--text-secondary)', marginBottom: 8 }}>
+                    If you edited these records legitimately on this device, you can push them directly as the master baseline without resolving each conflict.
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setShowConfirmModal(false);
+                      handlePublishMasterClick();
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      fontSize: '0.74rem',
+                      fontWeight: 800,
+                      border: '1px solid var(--accent)',
+                      color: 'var(--accent)'
+                    }}
+                  >
+                    📱 Push This Device as Master (Keep All Local Edits)
+                  </button>
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: 12, width: '100%' }}>
                 <button
@@ -2832,7 +2901,7 @@ export default function CloudSyncManager({ onBack }) {
                 Publish as Authoritative Master
               </div>
               <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                Establish Snapshot v13 from this device's records
+                Establish new cloud master baseline from this device's records
               </div>
             </div>
 
@@ -2856,11 +2925,11 @@ export default function CloudSyncManager({ onBack }) {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                 <span style={{ color: 'var(--text-muted)' }}>Target Baseline:</span>
-                <span style={{ fontWeight: 800, color: 'var(--accent)' }}>Snapshot v13 (Schema 13)</span>
+                <span style={{ fontWeight: 800, color: 'var(--accent)' }}>Cloud Master Baseline</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Peer Coverage:</span>
-                <span style={{ fontWeight: 800 }}>Device C (#16), Device D (#10)</span>
+                <span style={{ color: 'var(--text-muted)' }}>Authority:</span>
+                <span style={{ fontWeight: 800, color: 'var(--green)' }}>Authoritative Master</span>
               </div>
             </div>
 
@@ -2878,7 +2947,7 @@ export default function CloudSyncManager({ onBack }) {
               gap: 8
             }}>
               <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>💡</span>
-              <span><strong>Keep Screen Unlocked:</strong> Uploading 29k records takes ~45–60s. FinMan keeps the screen awake automatically, but please do not lock your screen or switch apps until complete.</span>
+              <span><strong>Keep Screen Unlocked:</strong> Uploading 29k records takes ~30–45s. FinMan keeps the screen awake automatically, but please do not lock your screen or switch apps until complete.</span>
             </div>
 
             {isPublishingMaster && (
@@ -2892,7 +2961,7 @@ export default function CloudSyncManager({ onBack }) {
               }}>
                 <div style={{ fontSize: '1.6rem', marginBottom: 6 }}>⏳</div>
                 <div style={{ fontWeight: 800, fontSize: '0.85rem', color: 'var(--accent)', marginBottom: 4 }}>
-                  {publishMasterProgress || 'Publishing Snapshot v13…'}
+                  {publishMasterProgress || 'Publishing Cloud Master…'}
                 </div>
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                   Processing {localTransactionsCount.toLocaleString()} records. Please keep FinMan open.
@@ -2946,7 +3015,7 @@ export default function CloudSyncManager({ onBack }) {
                 onClick={handleExecutePublishMaster}
                 disabled={isPublishingMaster}
               >
-                {isPublishingMaster ? 'Publishing Snapshot v13...' : (publishMasterError ? 'Retry Publish v13' : 'Confirm & Publish v13')}
+                {isPublishingMaster ? 'Publishing Master...' : (publishMasterError ? 'Retry Publish' : 'Confirm & Publish Master')}
               </button>
             </div>
           </div>

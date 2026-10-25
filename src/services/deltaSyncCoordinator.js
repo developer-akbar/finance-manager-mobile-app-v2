@@ -367,7 +367,7 @@ export async function getDeltaSyncMetrics() {
       newerBaselineDetected: _lastSyncResult?.newerBaselineDetected || null,
       blockedPeers: _lastSyncResult?.blockedPeers || [],
       latestDiagnostic: _latestDiagnostic,
-      latestError: _latestDiagnostic?.message || null
+      latestError: (_latestDiagnostic?.code && _latestDiagnostic.code !== 'SUCCESS') ? (_latestDiagnostic.message || null) : null
     };
   } catch {
     return {
@@ -383,7 +383,7 @@ export async function getDeltaSyncMetrics() {
       newerBaselineDetected: null,
       blockedPeers: [],
       latestDiagnostic: _latestDiagnostic,
-      latestError: _latestDiagnostic?.message || null
+      latestError: (_latestDiagnostic?.code && _latestDiagnostic.code !== 'SUCCESS') ? (_latestDiagnostic.message || null) : null
     };
   }
 }
@@ -1070,8 +1070,8 @@ export async function publishAuthoritativeDeviceSnapshot(options = {}) {
 
     const snapshotId = `snap_${Date.now()}_${deviceId.replace(/^dev_/, '').slice(0, 8)}`;
 
-    onProgress(`Building canonical Snapshot v13 (${totalLocalTxns.toLocaleString()} records)…`);
-    // 3. Create canonical Snapshot v13 payload
+    onProgress(`Building canonical Snapshot v${cloudVersion} (${totalLocalTxns.toLocaleString()} records)…`);
+    // 3. Create canonical Snapshot payload
     const { payload } = await createCanonicalSnapshotPayload({
       entities: localEntities,
       snapshotId,
@@ -1086,7 +1086,7 @@ export async function publishAuthoritativeDeviceSnapshot(options = {}) {
     // 4. Encrypt snapshot payload
     const encryptedSnapshotJson = await encryptBackupData(payload, sessionKey);
 
-    onProgress('Uploading Snapshot v13 to Google Drive…');
+    onProgress(`Uploading Snapshot v${cloudVersion} to Google Drive…`);
     // 5. Upload snapshot to Google Drive appDataFolder
     if (driveClient?.uploadFile) {
       await driveClient.uploadFile(SNAPSHOT_FILENAME, encryptedSnapshotJson);
@@ -1165,6 +1165,7 @@ export async function publishAuthoritativeDeviceSnapshot(options = {}) {
     });
     initialManifest.last_sequence = currentAllocatedSeq;
     initialManifest.watermarks = peerWatermarks;
+    initialManifest.record_count = totalLocalTxns;
 
     onProgress('Publishing device manifest…');
     await writeOwnDeviceManifest({
@@ -1174,7 +1175,7 @@ export async function publishAuthoritativeDeviceSnapshot(options = {}) {
       driveClient
     });
 
-    onProgress('✓ Snapshot v13 published successfully!');
+    onProgress(`✓ Snapshot v${cloudVersion} published successfully!`);
     // 8. Broadcast SUCCESS & notify queue changed
     notifyDeltaQueueChanged();
     const result = {

@@ -17,7 +17,7 @@ export default function ConnectedDevicesCard({
   lastLocalSyncAt,
   driveClient
 }) {
-  const { load } = useApp?.() || {};
+  const { state, load } = useApp?.() || {};
   const [devices, setDevices] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -747,6 +747,14 @@ export default function ConnectedDevicesCard({
                     <div>
                       <span style={{ color: 'var(--text-muted)' }}>Current Environment: </span>
                       <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{dev.deviceType}</span>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--text-muted)' }}>Local Records: </span>
+                      <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {isCurrent
+                          ? `${(state?.transactions?.length || 0).toLocaleString()} transactions`
+                          : (dev.recordCount ? `${dev.recordCount.toLocaleString()} transactions` : 'In sync with baseline')}
+                      </span>
                     </div>
                     <div>
                       <span style={{ color: 'var(--text-muted)' }}>Sequence Watermark: </span>

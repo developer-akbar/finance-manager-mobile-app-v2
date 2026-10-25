@@ -871,4 +871,27 @@ test('FinMan Cloud Sync Sequence Gap Recovery Test Suite', async (t) => {
     assert.ok(source.includes("{!isCurrent && ("), 'Must allow removing non-current peer devices');
     assert.ok(source.includes("window.addEventListener('finman:sync-progress'"), 'Must register finman:sync-progress listener');
   });
+
+  await t.test('11. Diagnostic SUCCESS never leaks as false latestError or triggers false Sync Alert', async () => {
+    const { recordSyncDiagnostic, getDeltaSyncMetrics } = await import('../services/deltaSyncCoordinator.js');
+    recordSyncDiagnostic({
+      attemptId: 'test_success_att',
+      stage: 'idle',
+      code: 'SUCCESS',
+      redactedDeviceId: 'dev_test',
+      retryable: false,
+      pendingChanges: 0,
+      message: 'All sync passes healthy. Zero unhandled diagnostic exceptions recorded.'
+    });
+
+    const metrics = await getDeltaSyncMetrics();
+    assert.equal(metrics.latestError, null, 'latestError must be null when diagnostic is SUCCESS');
+
+    const fs = await import('node:fs');
+    const badgeFileUrl = new URL('../components/Common/GlobalSyncBadge.jsx', import.meta.url);
+    const badgeSource = fs.readFileSync(badgeFileUrl, 'utf8');
+
+    assert.ok(badgeSource.includes("m.latestDiagnostic?.code === 'SUCCESS'"), 'GlobalSyncBadge clears latestError on diagnostic SUCCESS');
+  });
 });
+
