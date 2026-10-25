@@ -786,6 +786,15 @@ export async function pullPeerDeltas(opts) {
           } catch {}
         }
         lastStagedSeq = payload.end_sequence;
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          window.dispatchEvent(new CustomEvent('finman:sync-progress', {
+            detail: {
+              peerDeviceId,
+              currentSequence: payload.end_sequence,
+              totalSequence: peerManifest.last_sequence || (unStagedPackages[unStagedPackages.length - 1]?.end_sequence) || payload.end_sequence
+            }
+          }));
+        }
       }
     }
   }

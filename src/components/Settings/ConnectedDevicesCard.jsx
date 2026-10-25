@@ -178,9 +178,26 @@ export default function ConnectedDevicesCard({
       }
     };
 
+    const handleSyncProgress = (e) => {
+      if (!mounted) return;
+      const { peerDeviceId, currentSequence, totalSequence } = e?.detail || {};
+      if (!peerDeviceId || typeof currentSequence !== 'number') return;
+      setDevices(prev => prev.map(d => {
+        if (d.deviceId === peerDeviceId) {
+          return {
+            ...d,
+            localReconciledSequence: currentSequence,
+            lastSequence: Math.max(d.lastSequence || 0, totalSequence || currentSequence)
+          };
+        }
+        return d;
+      }));
+    };
+
     if (typeof window !== 'undefined') {
       window.addEventListener('finman:delta-queue-changed', handleQueueChange);
       window.addEventListener('finman:conflicts-resolved', handleQueueChange);
+      window.addEventListener('finman:sync-progress', handleSyncProgress);
     }
 
     return () => {
@@ -189,6 +206,7 @@ export default function ConnectedDevicesCard({
       if (typeof window !== 'undefined') {
         window.removeEventListener('finman:delta-queue-changed', handleQueueChange);
         window.removeEventListener('finman:conflicts-resolved', handleQueueChange);
+        window.removeEventListener('finman:sync-progress', handleSyncProgress);
       }
     };
   }, [fetchDevices, driveClient]);
@@ -276,7 +294,7 @@ export default function ConnectedDevicesCard({
   const handleRemoveDevice = async (dev) => {
     const fileId = dev?.driveFileId || dev?.drive_file_id;
     if (!fileId && !dev?.deviceId) return;
-    const confirm = window.confirm(`Remove stale device "${dev.deviceName || dev.deviceId}" from your Google Drive cloud vault? This will clear the incompatible peer warning.`);
+    const confirm = window.confirm(`Remove device "${dev.deviceName || dev.deviceId}" from your Google Drive cloud vault? This will unlink it from your connected devices list.`);
     if (!confirm) return;
 
     try {
@@ -297,9 +315,10 @@ export default function ConnectedDevicesCard({
       await db.run('DELETE FROM sync_peer_state WHERE peer_device_id = ?', [dev.deviceId]).catch(() => { });
       await fetchDevices();
       const { triggerAutomaticSync, SYNC_TRIGGER } = await import('../../services/deltaSyncCoordinator.js');
-      await triggerAutomaticSync(SYNC_TRIGGER.MANUAL);
+      await triggerAutomaticSync(SYNC_TRIGGER.MANUAL).catch(() => {});
     } catch (err) {
-      console.warn('Failed to remove stale device:', err);
+      console.warn('Failed to remove device:', err);
+      alert(`Failed to remove device: ${err.message}`);
     } finally {
       setRemovingId(null);
     }
@@ -578,6 +597,24 @@ export default function ConnectedDevicesCard({
                         >
                           ✏️
                         </button>
+                        {!isCurrent && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            onClick={() => handleRemoveDevice(dev)}
+                            disabled={removingId === dev.deviceId}
+                            title="Remove device from cloud sync"
+                            style={{
+                              fontSize: '0.65rem',
+                              padding: '1px 4px',
+                              color: 'var(--expense, #ff4d6a)',
+                              opacity: 0.8,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {removingId === dev.deviceId ? '⏳' : '🗑️'}
+                          </button>
+                        )}
                       </div>
                     )}
 

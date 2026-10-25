@@ -148,6 +148,7 @@ export default function CloudSyncManager({ onBack }) {
   const [confirmResolutionModal, setConfirmResolutionModal] = useState(null);
   const [confirmResolveAllModal, setConfirmResolveAllModal] = useState(null);
   const [isResolvingAll, setIsResolvingAll] = useState(false);
+  const [liveCatchingUpProgress, setLiveCatchingUpProgress] = useState(null);
 
   // Authoritative Master Setup State (for Populated Uninitialized Devices)
   const [showPublishMasterModal, setShowPublishMasterModal] = useState(false);
@@ -361,9 +362,24 @@ export default function CloudSyncManager({ onBack }) {
       window.addEventListener('focus', handleQueueChanged);
     }
 
+    const handleSyncProgress = (e) => {
+      if (!mounted) return;
+      const { currentSequence, totalSequence } = e?.detail || {};
+      if (typeof currentSequence === 'number' && typeof totalSequence === 'number') {
+        setLiveCatchingUpProgress({ currentSequence, totalSequence });
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('finman:sync-progress', handleSyncProgress);
+    }
+
     const unsubscribeDelta = subscribeSyncStatus((status, details) => {
       // 1. Immediately and synchronously update status to maintain real-time UI responsiveness
       if (mounted && status) {
+        if (status === DELTA_SYNC_STATUS.SUCCESS || status === DELTA_SYNC_STATUS.IDLE) {
+          setLiveCatchingUpProgress(null);
+        }
         setDeltaMetrics(prev => ({
           ...prev,
           status,
@@ -380,6 +396,7 @@ export default function CloudSyncManager({ onBack }) {
       if (typeof window !== 'undefined') {
         window.removeEventListener('finman:delta-queue-changed', handleQueueChanged);
         window.removeEventListener('focus', handleQueueChanged);
+        window.removeEventListener('finman:sync-progress', handleSyncProgress);
       }
     };
   }, [isUnlocked, isAuthenticated, load]);
@@ -703,7 +720,7 @@ export default function CloudSyncManager({ onBack }) {
     setResolvingId(conflict.conflict_id);
     setResolutionMsg(null);
     try {
-      await resolveConflict(conflict.conflict_id, resolution);
+      await resolveConflict(conflict.conflict_id, resolution, null, { force: true });
 
       const successText = resolution === CONFLICT_RESOLUTION.KEEP_LOCAL
         ? 'Resolved: your version will be propagated to other devices.'
@@ -755,7 +772,7 @@ export default function CloudSyncManager({ onBack }) {
     setIsResolvingAll(true);
     setResolutionMsg(null);
     try {
-      const res = await resolveAllConflicts(resolution);
+      const res = await resolveAllConflicts(resolution, { force: true });
       const isKeepLocal = resolution === CONFLICT_RESOLUTION.KEEP_LOCAL;
       setResolutionMsg({
         type: res.failed > 0 ? 'warning' : 'success',
@@ -1107,6 +1124,10 @@ export default function CloudSyncManager({ onBack }) {
             newerBaselineDetected: deltaMetrics.newerBaselineDetected || null,
             blockedPeers: deltaMetrics.blockedPeers || []
           });
+
+          if (liveCatchingUpProgress && (isLiveDeltaSyncing || deltaMetrics.status === 'SYNCING')) {
+            unifiedStatus.explanation = `Catching up updates from other device (#${liveCatchingUpProgress.currentSequence}/${liveCatchingUpProgress.totalSequence})…`;
+          }
 
           const bannerStyles = {
             success: {

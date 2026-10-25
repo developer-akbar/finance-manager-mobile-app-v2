@@ -361,6 +361,8 @@ async function _reconcilePeerEvents(peerDeviceId, limit, signal = null) {
     canAdvanceWatermark = false;
   }
 
+  const lastBundle = unReconciledBundles[unReconciledBundles.length - 1];
+  const maxPeerSeq = lastBundle ? lastBundle[lastBundle.length - 1].sequence : currentWatermark;
   let expectedNextSeq = currentWatermark + 1;
   let bundleIndex = 0;
 
@@ -398,6 +400,15 @@ async function _reconcilePeerEvents(peerDeviceId, limit, signal = null) {
     if (allTerminal) {
       if (canAdvanceWatermark && bundleStartSeq === contiguousWatermark + 1) {
         contiguousWatermark = bundleEndSeq;
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          window.dispatchEvent(new CustomEvent('finman:sync-progress', {
+            detail: {
+              peerDeviceId,
+              currentSequence: contiguousWatermark,
+              totalSequence: maxPeerSeq
+            }
+          }));
+        }
       }
       expectedNextSeq = bundleEndSeq + 1;
       continue;
@@ -433,11 +444,29 @@ async function _reconcilePeerEvents(peerDeviceId, limit, signal = null) {
       summary.reconciledCount += bundle.length;
       if (canAdvanceWatermark && bundleStartSeq === contiguousWatermark + 1) {
         contiguousWatermark = bundleEndSeq;
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          window.dispatchEvent(new CustomEvent('finman:sync-progress', {
+            detail: {
+              peerDeviceId,
+              currentSequence: contiguousWatermark,
+              totalSequence: maxPeerSeq
+            }
+          }));
+        }
       }
     } else if (outcome.status === 'RECONCILED_IDEMPOTENT') {
       summary.idempotentCount += bundle.length;
       if (canAdvanceWatermark && bundleStartSeq === contiguousWatermark + 1) {
         contiguousWatermark = bundleEndSeq;
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          window.dispatchEvent(new CustomEvent('finman:sync-progress', {
+            detail: {
+              peerDeviceId,
+              currentSequence: contiguousWatermark,
+              totalSequence: maxPeerSeq
+            }
+          }));
+        }
       }
     } else {
       // CONFLICT
@@ -450,6 +479,16 @@ async function _reconcilePeerEvents(peerDeviceId, limit, signal = null) {
     }
 
     expectedNextSeq = bundleEndSeq + 1;
+  }
+
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('finman:sync-progress', {
+      detail: {
+        peerDeviceId,
+        currentSequence: contiguousWatermark,
+        totalSequence: maxPeerSeq
+      }
+    }));
   }
 
   // 4. If any event was reconciled or superseded, recompute contiguous terminal watermark across all staged events
@@ -923,7 +962,7 @@ async function _updateStagedEventStatus(eventId, status) {
  * Applies user/engine decision atomically, generates appropriate local delta events,
  * marks conflict and staged events resolved, and unblocks downstream events.
  */
-export async function resolveConflict(conflictId, resolution, customData = null) {
+export async function resolveConflict(conflictId, resolution, customData = null, options = {}) {
   if (!conflictId) throw new Error('conflictId is required for conflict resolution');
   if (![CONFLICT_RESOLUTION.KEEP_LOCAL, CONFLICT_RESOLUTION.ACCEPT_REMOTE, CONFLICT_RESOLUTION.CUSTOM_STATE].includes(resolution)) {
     throw new Error(`Invalid conflict resolution: ${resolution}`);
@@ -957,11 +996,22 @@ export async function resolveConflict(conflictId, resolution, customData = null)
   const liveLocalChecksum = liveLocalEntity ? await computeCanonicalSha256(liveLocalEntity) : null;
 
   const localPayloadParsed = typeof confRow.local_payload === 'string' ? JSON.parse(confRow.local_payload || 'null') : confRow.local_payload;
+  const remotePayloadParsed = typeof confRow.remote_payload === 'string' ? JSON.parse(confRow.remote_payload || 'null') : confRow.remote_payload;
+
   const hasLocalDrift = liveLocalChecksum !== confRow.local_checksum &&
     (!liveLocalEntity || !localPayloadParsed || calculateEntityDiff(liveLocalEntity, localPayloadParsed, storeName).hasChanges);
 
   if (hasLocalDrift) {
-    throw new Error('STALE_CONFLICT_ERROR: Local entity was modified after conflict was logged.');
+    if (!options.force) {
+      throw new Error('STALE_CONFLICT_ERROR: Local entity was modified after conflict was logged.');
+    }
+    // When options.force === true (explicit user resolution from UI), refresh stored conflict payload
+    try {
+      await db.run(
+        'UPDATE sync_conflicts SET local_checksum = ?, local_payload = ? WHERE conflict_id = ?',
+        [liveLocalChecksum, JSON.stringify(liveLocalEntity), conflictId]
+      );
+    } catch {}
   }
 
   // 3. Execute Resolution inside Atomic Lock & Transaction
@@ -1194,7 +1244,7 @@ export async function resolveConflict(conflictId, resolution, customData = null)
 /**
  * Resolves all pending conflicts with the specified resolution strategy (KEEP_LOCAL or ACCEPT_REMOTE).
  */
-export async function resolveAllConflicts(resolution = CONFLICT_RESOLUTION.KEEP_LOCAL) {
+export async function resolveAllConflicts(resolution = CONFLICT_RESOLUTION.KEEP_LOCAL, options = {}) {
   const pending = await getPendingConflicts();
   if (!pending.length) {
     return { total: 0, resolved: 0, failed: 0, errors: [] };
@@ -1206,7 +1256,7 @@ export async function resolveAllConflicts(resolution = CONFLICT_RESOLUTION.KEEP_
 
   for (const c of pending) {
     try {
-      await resolveConflict(c.conflict_id, resolution);
+      await resolveConflict(c.conflict_id, resolution, null, { force: true, ...options });
       resolved++;
     } catch (err) {
       console.warn(`[resolveAllConflicts] Failed to resolve conflict ${c.conflict_id}:`, err);
@@ -1226,12 +1276,21 @@ export async function autoResolveIdenticalConflicts() {
   const pending = await getPendingConflicts();
   if (!pending.length) return { resolved: 0 };
 
+  const db = getDB();
   let resolved = 0;
   for (const c of pending) {
-    const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
+    const storeName = c.collection;
+    const keyField = getStoreKeyField(storeName);
+    let liveLocal = c.local_payload;
+    try {
+      const liveRes = await db.query(`SELECT * FROM ${storeName} WHERE ${keyField} = ?`, [c.entity_id]);
+      if (liveRes.values?.[0]) liveLocal = liveRes.values[0];
+    } catch {}
+
+    const diff = calculateEntityDiff(liveLocal, c.remote_payload, c.collection);
     if (!diff.hasChanges) {
       try {
-        await resolveConflict(c.conflict_id, CONFLICT_RESOLUTION.KEEP_LOCAL);
+        await resolveConflict(c.conflict_id, CONFLICT_RESOLUTION.KEEP_LOCAL, null, { force: true });
         resolved++;
       } catch (e) {
         console.warn(`[autoResolveIdenticalConflicts] Failed to auto-resolve identical conflict ${c.conflict_id}:`, e);

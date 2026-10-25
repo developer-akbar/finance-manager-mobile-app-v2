@@ -770,4 +770,105 @@ test('FinMan Cloud Sync Sequence Gap Recovery Test Suite', async (t) => {
     assert.equal(syncedStatus.key, UNIFIED_SYNC_STATUS_KEYS.SYNCED);
     assert.equal(syncedStatus.badgeText, 'Cloud Sync On');
   });
+
+  await t.test('8. Conflict resolution resilience: ACCEPT_REMOTE succeeds even if local entity drifted', async () => {
+    const { resolveConflict } = await import('../services/deltaReconciliation.js');
+    const { CONFLICT_RESOLUTION } = await import('../database/conflicts.js');
+    const db = getDB();
+
+    const txnId = 'txn_drift_test_1';
+    const initialTxn = { id: txnId, type: 'expense', amount: 491, note: 'Amazon Purchase', date: '2026-10-16' };
+    const remoteTxn = { id: txnId, type: 'expense', amount: 490, note: 'Amazon Purchase (Remote)', date: '2026-10-16' };
+
+    await db.run(
+      'INSERT OR REPLACE INTO transactions (id, type, amount, note, date) VALUES (?, ?, ?, ?, ?)',
+      [initialTxn.id, initialTxn.type, initialTxn.amount, initialTxn.note, initialTxn.date]
+    );
+
+    const initialChecksum = await computeCanonicalSha256(initialTxn);
+    const remoteChecksum = await computeCanonicalSha256(remoteTxn);
+    const confId = 'conf_drift_test_1';
+
+    await db.run(
+      `INSERT OR REPLACE INTO sync_conflicts (
+        conflict_id, collection, entity_id, conflict_type, peer_device_id, event_id, package_id,
+        base_checksum, local_checksum, remote_checksum, local_payload, remote_payload, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        confId, 'transactions', txnId, 'CONCURRENT_EDIT', ANDROID_DEVICE_ID, 'evt_remote_1', 'pkg_remote_1',
+        'base_chk', initialChecksum, remoteChecksum, JSON.stringify(initialTxn), JSON.stringify(remoteTxn), 'PENDING', new Date().toISOString()
+      ]
+    );
+
+    // Simulate local drift: e.g. user or companion update modified the transaction after conflict was logged
+    await db.run('UPDATE transactions SET note = ? WHERE id = ?', ['Intervening Local Drift', txnId]);
+
+    // Attempting ACCEPT_REMOTE with force: true (as done by UI button) must succeed cleanly without throwing STALE_CONFLICT_ERROR
+    const res = await resolveConflict(confId, CONFLICT_RESOLUTION.ACCEPT_REMOTE, null, { force: true });
+    assert.equal(res.success, true);
+    assert.equal(res.status, 'RESOLVED');
+
+    // Verify canonical store was updated to remote version
+    const updatedTxnRes = await db.query('SELECT * FROM transactions WHERE id = ?', [txnId]);
+    assert.equal(updatedTxnRes.values[0].amount, 490);
+    assert.equal(updatedTxnRes.values[0].note, 'Amazon Purchase (Remote)');
+  });
+
+  await t.test('9. Conflict resolution resilience: KEEP_LOCAL with force: true succeeds on drifted entity', async () => {
+    const { resolveConflict } = await import('../services/deltaReconciliation.js');
+    const { CONFLICT_RESOLUTION } = await import('../database/conflicts.js');
+    const db = getDB();
+
+    const txnId = 'txn_force_test_2';
+    const initialTxn = { id: txnId, type: 'income', amount: 1000, note: 'Salary Initial', date: '2026-10-15' };
+    const remoteTxn = { id: txnId, type: 'income', amount: 1200, note: 'Salary Remote', date: '2026-10-15' };
+
+    await db.run(
+      'INSERT OR REPLACE INTO transactions (id, type, amount, note, date) VALUES (?, ?, ?, ?, ?)',
+      [initialTxn.id, initialTxn.type, initialTxn.amount, initialTxn.note, initialTxn.date]
+    );
+
+    const initialChecksum = await computeCanonicalSha256(initialTxn);
+    const remoteChecksum = await computeCanonicalSha256(remoteTxn);
+    const confId = 'conf_force_test_2';
+
+    await db.run(
+      `INSERT OR REPLACE INTO sync_conflicts (
+        conflict_id, collection, entity_id, conflict_type, peer_device_id, event_id, package_id,
+        base_checksum, local_checksum, remote_checksum, local_payload, remote_payload, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        confId, 'transactions', txnId, 'CONCURRENT_EDIT', ANDROID_DEVICE_ID, 'evt_remote_2', 'pkg_remote_2',
+        'base_chk', initialChecksum, remoteChecksum, JSON.stringify(initialTxn), JSON.stringify(remoteTxn), 'PENDING', new Date().toISOString()
+      ]
+    );
+
+    // Simulate intervening local mutation
+    await db.run('UPDATE transactions SET note = ? WHERE id = ?', ['Salary Mutated Later', txnId]);
+
+    // KEEP_LOCAL without force: fails closed with STALE_CONFLICT_ERROR
+    await assert.rejects(
+      async () => await resolveConflict(confId, CONFLICT_RESOLUTION.KEEP_LOCAL),
+      /STALE_CONFLICT_ERROR/
+    );
+
+    // KEEP_LOCAL with force: true succeeds
+    const res = await resolveConflict(confId, CONFLICT_RESOLUTION.KEEP_LOCAL, null, { force: true });
+    assert.equal(res.success, true);
+    assert.equal(res.status, 'RESOLVED');
+
+    const updatedTxnRes = await db.query('SELECT * FROM transactions WHERE id = ?', [txnId]);
+    assert.equal(updatedTxnRes.values[0].note, 'Salary Mutated Later');
+  });
+
+  await t.test('10. Connected Devices UI audit: Non-current devices provide remove buttons and live progress listener is present', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const fileUrl = new URL('../components/Settings/ConnectedDevicesCard.jsx', import.meta.url);
+    const source = fs.readFileSync(fileUrl, 'utf8');
+
+    assert.ok(source.includes("handleRemoveDevice(dev)"), 'Must provide handleRemoveDevice handler');
+    assert.ok(source.includes("{!isCurrent && ("), 'Must allow removing non-current peer devices');
+    assert.ok(source.includes("window.addEventListener('finman:sync-progress'"), 'Must register finman:sync-progress listener');
+  });
 });
