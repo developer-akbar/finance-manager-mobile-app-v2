@@ -219,10 +219,30 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const [purchaseItems, setPurchaseItems] = useState([createEmptyPurchaseItem()]);
   const [errors, setErrors] = useState({});
   const [syncing, setSyncing] = useState(false);
+  const [showRejectedRefsDetails, setShowRejectedRefsDetails] = useState(false);
 
-  // Derive all normalized historical batches from transactions
-  const allNormalizedBatches = useMemo(() => {
-    return extractNormalizedBatchesFromTransactions(transactions || []);
+  // Derive all normalized historical batches and unresolved reference diagnostics from transactions
+  const { allNormalizedBatches, rejectedStockReferences } = useMemo(() => {
+    const diag = { unresolvedRefs: [] };
+    const batches = extractNormalizedBatchesFromTransactions(transactions || [], diag);
+
+    // Deduplicate diagnostics by stable key: txnId + refId + reason
+    const seen = new Set();
+    const deduplicated = [];
+    (diag.unresolvedRefs || []).forEach(d => {
+      if (d.reason === 'CANONICAL_REF_PRODUCT_NAME_MISMATCH') {
+        const key = `${d.txnId || ''}_${d.refId || ''}_${d.reason}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          deduplicated.push(d);
+        }
+      }
+    });
+
+    return {
+      allNormalizedBatches: batches,
+      rejectedStockReferences: deduplicated
+    };
   }, [transactions]);
 
   // Derive canonical product hierarchy
@@ -1621,6 +1641,72 @@ export default function StockManager({ onBack, backInterceptRef }) {
           ) : (
             /* Main Product Catalog View */
             <>
+              {/* Rejected Stock References Warning Banner */}
+              {rejectedStockReferences.length > 0 && (
+                <div className="stock-ref-warning-banner" data-testid="stock-ref-warning-banner">
+                  <div className="stock-ref-warning-hdr">
+                    <div className="stock-ref-warning-title-wrap">
+                      <span style={{ fontSize: '1.1rem' }}>⚠️</span>
+                      <div>
+                        <div className="stock-ref-warning-title">
+                          {rejectedStockReferences.length} Stock Reference Mismatch{rejectedStockReferences.length > 1 ? 'es' : ''} Detected
+                        </div>
+                        <div className="stock-ref-warning-sub">
+                          Excluded from batch deductions to prevent cross-product inventory corruption.
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="stock-ref-warning-toggle"
+                      onClick={() => setShowRejectedRefsDetails(prev => !prev)}
+                      aria-expanded={showRejectedRefsDetails}
+                    >
+                      {showRejectedRefsDetails ? 'Hide ▲' : 'Details ▼'}
+                    </button>
+                  </div>
+
+                  {showRejectedRefsDetails && (
+                    <div className="stock-ref-warning-details" data-testid="stock-ref-warning-details">
+                      {rejectedStockReferences.map((ref) => {
+                        const stableKey = `${ref.txnId || ''}_${ref.refId || ''}_${ref.reason}`;
+                        return (
+                          <div key={stableKey} className="stock-ref-warning-item">
+                            <div className="stock-ref-warning-item-row">
+                              <span className="stock-ref-warning-key">Txn ID:</span>
+                              <span className="stock-ref-warning-val stock-ref-warning-mono">{ref.txnId || '—'}</span>
+                              {ref.date && (
+                                <>
+                                  <span className="stock-ref-warning-key" style={{ marginLeft: 6 }}>Date:</span>
+                                  <span className="stock-ref-warning-val">{ref.date}</span>
+                                </>
+                              )}
+                            </div>
+                            <div className="stock-ref-warning-item-row">
+                              <span className="stock-ref-warning-key">Expected Product:</span>
+                              <span className="stock-ref-warning-val" style={{ color: 'var(--green)' }}>{ref.expectedProduct || '—'}</span>
+                              <span style={{ color: 'var(--text-muted)' }}>→</span>
+                              <span className="stock-ref-warning-key">Referenced:</span>
+                              <span className="stock-ref-warning-val" style={{ color: 'var(--red, #ef4444)' }}>{ref.referencedProduct || '—'}</span>
+                            </div>
+                            <div className="stock-ref-warning-item-row">
+                              <span className="stock-ref-warning-key">Reason:</span>
+                              <span className="stock-ref-warning-val stock-ref-warning-mono">{ref.reason}</span>
+                              {ref.candidateBatchId && (
+                                <>
+                                  <span className="stock-ref-warning-key" style={{ marginLeft: 6 }}>Target Batch:</span>
+                                  <span className="stock-ref-warning-val stock-ref-warning-mono">{ref.candidateBatchId}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Main Top Summary Card */}
               <div className="stock-summary-card">
                 <div className="stock-summary-col">

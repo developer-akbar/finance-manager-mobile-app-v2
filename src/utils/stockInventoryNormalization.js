@@ -174,6 +174,54 @@ export const getCanonicalProductName = (rawName) => {
 };
 
 /**
+ * Extract the expected product name from a consumption or lending transaction.
+ */
+export const extractExpectedProductName = (txn = {}) => {
+  const desc = txn.Description || txn.description || '';
+  const descNameMatch = desc.match(/(?:Used|Lent|Instalment Use)\s+[\d\/\.\s\w]+\s+of\s+([^(]+?)(?:\s*\(|$)/i);
+  if (descNameMatch) {
+    return cleanRawItemName(descNameMatch[1].trim());
+  }
+  const altMatch = desc.match(/^(?:Used|Lent|Instalment Use)\s+[\d\/\.\s\w]+\s+([^(]+?)(?:\s*\(|$)/i);
+  if (altMatch) {
+    return cleanRawItemName(altMatch[1].trim());
+  }
+  const note = txn.Note || txn.note || '';
+  if (note && !note.toLowerCase().startsWith('from ') && !note.toLowerCase().startsWith('to ')) {
+    return cleanRawItemName(note.trim());
+  }
+  return '';
+};
+
+/**
+ * Check if the product specified in a consumption/lending transaction is concordant
+ * with the target inventory batch. Prevents cross-product reference corruption.
+ */
+export const isProductConcordant = (expectedRaw, targetBatch) => {
+  if (!targetBatch) return false;
+  if (!expectedRaw) return false;
+
+  const expClean = cleanRawItemName(expectedRaw).toLowerCase().trim();
+  if (!expClean) return false;
+
+  const bClean = cleanRawItemName(targetBatch.cleanedName || targetBatch.rawName || '').toLowerCase().trim();
+  const expCanon = getCanonicalProductName(expClean).toLowerCase().trim();
+  const bCanon = (targetBatch.canonicalProduct || getCanonicalProductName(bClean)).toLowerCase().trim();
+
+  // 1. Direct canonical product equality (handles aliases/synonyms like Pestro Gel -> Presto Dishwash Gel)
+  if (expCanon && bCanon && expCanon === bCanon) return true;
+
+  // 2. Direct string inclusion between cleaned names (e.g. "presto" in "presto floor cleaner")
+  if (bClean && (bClean.includes(expClean) || expClean.includes(bClean))) return true;
+
+  // 3. Inclusion between canonical product and cleaned names
+  if (bCanon && (bCanon.includes(expClean) || expClean.includes(bCanon))) return true;
+  if (expCanon && (expCanon.includes(bClean) || bClean.includes(expCanon))) return true;
+
+  return false;
+};
+
+/**
  * Parse a raw stock inventory line into a structured batch object
  */
 export const parseStockLine = (rawLine, txn = {}, lineIdx = 0) => {
@@ -589,6 +637,8 @@ export const extractNormalizedBatchesFromTransactions = (transactions = [], diag
     }
     if (refMatches.length === 0) return;
 
+    const descItemName = extractExpectedProductName(txn);
+
     // Safe fallback reconciliation for unambiguous, single-reference consumption transactions
     let singleRefOverrideQty = null;
     if (refMatches.length === 1) {
@@ -597,10 +647,8 @@ export const extractNormalizedBatchesFromTransactions = (transactions = [], diag
       if (descInfo && !isNaN(descInfo.qty) && descInfo.qty > 0) {
         const candidateBatch = resolveTargetBatch(refMatches[0].refId, txn, batches, null);
         if (candidateBatch) {
-          const descNameMatch = desc.match(/(?:Used|Lent|Instalment Use)\s+[\d\/\.\s\w]+\s+of\s+([^(]+?)(?:\s*\(|$)/i);
-          const descItemName = descNameMatch ? cleanRawItemName(descNameMatch[1].trim()).toLowerCase() : '';
           const bClean = (candidateBatch.cleanedName || candidateBatch.rawName || candidateBatch.canonicalProduct || '').toLowerCase();
-          const isMatchingProduct = Boolean(descItemName) && (bClean.includes(descItemName) || descItemName.includes(bClean));
+          const isMatchingProduct = isProductConcordant(descItemName, candidateBatch);
 
           if (isMatchingProduct) {
             const descUnit = (descInfo.unit || '').toLowerCase();
@@ -617,24 +665,34 @@ export const extractNormalizedBatchesFromTransactions = (transactions = [], diag
             } else if (!descUnit || descUnit === 'pcs' || descUnit === 'pc') {
               singleRefOverrideQty = descInfo.qty;
             }
-          } else if (Array.isArray(unresolvedLog)) {
-            unresolvedLog.push({
-              refId: refMatches[0].refId,
-              txnId: txn.id || txn.ID || txn._id || '',
-              date: txn.Date || txn.date || '',
-              reason: 'FALLBACK_PRODUCT_NAME_MISMATCH',
-              descItemName,
-              candidateBatchName: bClean
-            });
           }
         }
       }
     }
 
     refMatches.forEach(({ refId, qty }) => {
-      const effectiveQty = (refMatches.length === 1 && singleRefOverrideQty !== null) ? singleRefOverrideQty : qty;
       const targetBatch = resolveTargetBatch(refId, txn, batches, unresolvedLog);
       if (targetBatch) {
+        // Validation Guard: Ensure reference does not cross product boundaries
+        if (!isProductConcordant(descItemName, targetBatch)) {
+          if (Array.isArray(unresolvedLog)) {
+            const alreadyLogged = unresolvedLog.some(e => (e.txnId === (txn.id || txn.ID || txn._id)) && e.refId === refId && e.reason === 'CANONICAL_REF_PRODUCT_NAME_MISMATCH');
+            if (!alreadyLogged) {
+              unresolvedLog.push({
+                refId,
+                txnId: txn.id || txn.ID || txn._id || '',
+                date: txn.Date || txn.date || '',
+                reason: 'CANONICAL_REF_PRODUCT_NAME_MISMATCH',
+                expectedProduct: descItemName || 'Unknown Product',
+                referencedProduct: targetBatch.canonicalProduct || targetBatch.cleanedName || targetBatch.rawName,
+                candidateBatchId: targetBatch.batchId
+              });
+            }
+          }
+          return; // REJECT dynamic deduction
+        }
+
+        const effectiveQty = (refMatches.length === 1 && singleRefOverrideQty !== null) ? singleRefOverrideQty : qty;
         const rawDate = txn.Date || txn.date || '';
         let txnIsoDate = rawDate;
         if (rawDate.includes('/')) {

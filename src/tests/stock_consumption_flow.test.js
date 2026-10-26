@@ -721,7 +721,7 @@ test('FinMan Stock Inventory — Quantity Decrement & Reconciliation Suite', asy
     assert.equal(oil.consumedQty, 4, 'Single-ref fallback without parens reconciled to 4 L');
     assert.equal(oil.remainingQty, 5, 'Remaining is 9 - 4 = 5 L');
 
-    // Case A3: Mismatched product name WITH parentheses preserves tag and logs diagnostic
+    // Case A3: Mismatched product name WITH parentheses rejects cross-product deduction and logs diagnostic
     const diagWithParens = { unresolvedRefs: [] };
     const mismatchWithParens = {
       id: 'txn-mismatch-parens',
@@ -731,12 +731,14 @@ test('FinMan Stock Inventory — Quantity Decrement & Reconciliation Suite', asy
     };
     batches = extractNormalizedBatchesFromTransactions([purchaseTxn, mismatchWithParens], diagWithParens);
     oil = batches.find(b => b.canonicalProduct === 'Cooking Oil');
-    assert.equal(oil.consumedQty, 7, 'Mismatched product with parens strictly preserves tag :7');
-    assert.equal(oil.remainingQty, 2, 'Remaining is 9 - 7 = 2 L');
-    assert.equal(diagWithParens.unresolvedRefs.length, 1, 'Diagnostic recorded for product mismatch with parens');
-    assert.equal(diagWithParens.unresolvedRefs[0].reason, 'FALLBACK_PRODUCT_NAME_MISMATCH');
+    assert.equal(oil.consumedQty, 0, 'Mismatched product with parens rejects cross-product deduction; consumed is 0');
+    assert.equal(oil.remainingQty, 9, 'Remaining is preserved at 9 L');
+    assert.equal(diagWithParens.unresolvedRefs.length, 1, 'Diagnostic recorded for cross-product mismatch with parens');
+    assert.equal(diagWithParens.unresolvedRefs[0].reason, 'CANONICAL_REF_PRODUCT_NAME_MISMATCH');
+    assert.equal(diagWithParens.unresolvedRefs[0].expectedProduct, 'Detergent Powder');
+    assert.equal(diagWithParens.unresolvedRefs[0].referencedProduct, 'Cooking Oil');
 
-    // Case A4: Mismatched product name WITHOUT parentheses preserves tag and logs diagnostic
+    // Case A4: Mismatched product name WITHOUT parentheses rejects cross-product deduction and logs diagnostic
     const diagNoParens = { unresolvedRefs: [] };
     const mismatchNoParens = {
       id: 'txn-mismatch-no-parens',
@@ -746,10 +748,12 @@ test('FinMan Stock Inventory — Quantity Decrement & Reconciliation Suite', asy
     };
     batches = extractNormalizedBatchesFromTransactions([purchaseTxn, mismatchNoParens], diagNoParens);
     oil = batches.find(b => b.canonicalProduct === 'Cooking Oil');
-    assert.equal(oil.consumedQty, 7, 'Mismatched product without parens strictly preserves tag :7');
-    assert.equal(oil.remainingQty, 2, 'Remaining is 9 - 7 = 2 L');
-    assert.equal(diagNoParens.unresolvedRefs.length, 1, 'Diagnostic recorded for product mismatch without parens');
-    assert.equal(diagNoParens.unresolvedRefs[0].reason, 'FALLBACK_PRODUCT_NAME_MISMATCH');
+    assert.equal(oil.consumedQty, 0, 'Mismatched product without parens rejects cross-product deduction; consumed is 0');
+    assert.equal(oil.remainingQty, 9, 'Remaining is preserved at 9 L');
+    assert.equal(diagNoParens.unresolvedRefs.length, 1, 'Diagnostic recorded for cross-product mismatch without parens');
+    assert.equal(diagNoParens.unresolvedRefs[0].reason, 'CANONICAL_REF_PRODUCT_NAME_MISMATCH');
+    assert.equal(diagNoParens.unresolvedRefs[0].expectedProduct, 'Detergent Powder');
+    assert.equal(diagNoParens.unresolvedRefs[0].referencedProduct, 'Cooking Oil');
 
     // Case B: Multi-reference FIFO transaction where description is "Used 3 pcs of Soap" across two 1-pack batches
     // Proves that FIFO / multi-reference transactions remain untouched and are NOT overridden by aggregate description quantity
