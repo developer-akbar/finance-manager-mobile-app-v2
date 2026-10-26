@@ -340,7 +340,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
 }
 
 // ── Detail sheet ─────────────────────────────────────────────────────────────
-function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
+export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
   const { deleteTransaction, updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments, state } = useApp();
   const [showDelete, setShowDelete] = useState(false);
   const [showCopyPicker, setShowCopyPicker] = useState(false);

@@ -315,6 +315,23 @@ export function calculateBatchPhysicalDetails(batch) {
   const meta = parseBatchPhysicalQuantity(batch.variant, batch.rawName || batch.name, batch.purchasedQty);
   
   if (meta.confidence === 'unknown' || meta.unitPhysicalQty === null || !meta.physicalUnit) {
+    if (batch.sub_unit && batch.sub_qty > 0) {
+      const rawU = String(batch.sub_unit).toLowerCase();
+      const stdUnit = STANDARD_UNITS[rawU] || batch.sub_unit;
+      const dim = UNIT_DIMENSIONS[rawU] || 'mass';
+      const pQty = parseFloat(batch.purchasedQty) || 0;
+      const rQty = parseFloat(batch.remainingQty) || 0;
+      const cQty = batch.consumedQty !== undefined ? (parseFloat(batch.consumedQty) || 0) : Math.max(0, pQty - rQty);
+      return {
+        purchasedPhysical: pQty * batch.sub_qty,
+        consumedPhysical: cQty * batch.sub_qty,
+        remainingPhysical: rQty * batch.sub_qty,
+        unit: stdUnit,
+        dimension: dim,
+        isConfident: true,
+        unitPhysicalQty: batch.sub_qty
+      };
+    }
     return {
       purchasedPhysical: null,
       consumedPhysical: null,
@@ -327,8 +344,8 @@ export function calculateBatchPhysicalDetails(batch) {
   }
 
   const purchasedQty = parseFloat(batch.purchasedQty) || 0;
-  const consumedQty = parseFloat(batch.consumedQty) || 0;
   const remainingQty = parseFloat(batch.remainingQty) || 0;
+  const consumedQty = batch.consumedQty !== undefined ? (parseFloat(batch.consumedQty) || 0) : Math.max(0, purchasedQty - remainingQty);
   const unitSize = meta.unitPhysicalQty;
 
   return {
