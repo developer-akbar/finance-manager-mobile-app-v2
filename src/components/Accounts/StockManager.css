@@ -286,6 +286,12 @@
   border-color: rgba(255, 77, 106, 0.2);
 }
 
+.stock-btn-action.history {
+  background: rgba(0, 229, 160, 0.1);
+  color: var(--accent);
+  border-color: rgba(0, 229, 160, 0.25);
+}
+
 .stock-consume-inline {
   display: flex;
   flex-direction: column;

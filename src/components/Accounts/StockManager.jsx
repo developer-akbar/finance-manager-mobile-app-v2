@@ -19,6 +19,7 @@ import {
   syncStockFromPastTransactions
 } from '../../database/inventory.js';
 import NoteAutocompleteInput from '../Common/NoteAutocompleteInput.jsx';
+import StockActivityDrawer from './StockActivityDrawer.jsx';
 import './StockManager.css';
 
 const getEmoji = (name) => {
@@ -126,6 +127,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
   // Product Detail View state
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [selectedVariant, setSelectedVariant] = useState('all');
+  const [activeActivityProduct, setActiveActivityProduct] = useState(null);
+  const [activeActivityBatchId, setActiveActivityBatchId] = useState(null);
 
   const [popup, setPopup] = useState(null);
 
@@ -414,6 +417,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
     if (isSavingConsume || isSavingPurchase || isSavingEdit) {
       // While saving, prevent navigation or modal closing to protect in-flight DB operations
       backInterceptRef.current = () => { };
+    } else if (activeActivityProduct) {
+      backInterceptRef.current = () => {
+        setActiveActivityProduct(null);
+        setActiveActivityBatchId(null);
+      };
     } else if (showPurchaseModal) {
       backInterceptRef.current = () => setShowPurchaseModal(false);
     } else if (consumingItemId) {
@@ -434,7 +442,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
     return () => {
       if (backInterceptRef) backInterceptRef.current = onBack;
     };
-  }, [showPurchaseModal, consumingItemId, editingBatchId, selectedProduct, onBack, backInterceptRef, isSavingConsume, isSavingPurchase, isSavingEdit]);
+  }, [showPurchaseModal, consumingItemId, editingBatchId, selectedProduct, activeActivityProduct, onBack, backInterceptRef, isSavingConsume, isSavingPurchase, isSavingEdit]);
 
   // Escape key handler to close popup/modals
   useEffect(() => {
@@ -443,7 +451,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
         if (isSavingConsume || isSavingPurchase || isSavingEdit) {
           return; // Prevent dismissal during saving
         }
-        if (showPurchaseModal) {
+        if (activeActivityProduct) {
+          setActiveActivityProduct(null);
+          setActiveActivityBatchId(null);
+        } else if (showPurchaseModal) {
           setShowPurchaseModal(false);
         } else if (consumingItemId) {
           setConsumingItemId(null);
@@ -458,7 +469,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showPurchaseModal, consumingItemId, editingBatchId, selectedProduct, isSavingConsume, isSavingPurchase, isSavingEdit]);
+  }, [showPurchaseModal, consumingItemId, editingBatchId, selectedProduct, activeActivityProduct, isSavingConsume, isSavingPurchase, isSavingEdit]);
 
   const availableStockCategories = useMemo(() => {
     const set = new Set(DEFAULT_STOCK_CATEGORIES);
@@ -1232,7 +1243,10 @@ export default function StockManager({ onBack, backInterceptRef }) {
           <button
             className="back-btn"
             onClick={() => {
-              if (selectedProduct) {
+              if (activeActivityProduct) {
+                setActiveActivityProduct(null);
+                setActiveActivityBatchId(null);
+              } else if (selectedProduct) {
                 setSelectedProduct(null);
                 setSelectedVariant('all');
               } else {
@@ -1292,6 +1306,31 @@ export default function StockManager({ onBack, backInterceptRef }) {
                     {activeProductMetadata?.variantDisplay || '—'}
                   </span>
                 </div>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{
+                    marginLeft: 'auto',
+                    padding: '5px 12px',
+                    fontSize: '0.74rem',
+                    fontWeight: 700,
+                    borderRadius: 8,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(0, 229, 160, 0.15)',
+                    color: 'var(--accent)',
+                    border: '1.5px solid var(--accent)',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => {
+                    setActiveActivityProduct(activeProductData.productName || selectedProduct);
+                    setActiveActivityBatchId(null);
+                  }}
+                  title="View complete activity and transaction ledger for this product"
+                >
+                  📜 View Activity / History
+                </button>
               </div>
 
               {/* Lifetime Product Summary Card */}
@@ -1496,6 +1535,16 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           </td>
                           <td>
                             <div style={{ display: 'flex', gap: 4 }}>
+                              <button
+                                className="stock-btn-action history"
+                                onClick={() => {
+                                  setActiveActivityProduct(activeProductData.productName || selectedProduct);
+                                  setActiveActivityBatchId(batch.batchId || batch.id);
+                                }}
+                                title="View transaction & stock movement history for this batch"
+                              >
+                                📜
+                              </button>
                               {isAvail && (
                                 <button
                                   className="stock-btn-action consume"
@@ -1597,6 +1646,16 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           {batch.savings < 0 ? `Variance -₹${formatPriceVal(Math.abs(batch.savings))}` : `Saved ₹${formatPriceVal(batch.savings)}`}
                         </span>
                         <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            className="stock-btn-action history"
+                            onClick={() => {
+                              setActiveActivityProduct(activeProductData.productName || selectedProduct);
+                              setActiveActivityBatchId(batch.batchId || batch.id);
+                            }}
+                            title="View history for this batch"
+                          >
+                            📜
+                          </button>
                           {isAvail && (
                             <button
                               className="stock-btn-action consume"
@@ -1694,6 +1753,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
                 {filteredProducts.map(prod => {
                   const isOut = prod.totalRemainingQty <= 0;
                   const avgUnitPrice = prod.totalPurchasedQty > 0 ? (prod.totalPaid / prod.totalPurchasedQty) : 0;
+                  const prodPhysical = aggregateProductPhysicalQuantities(prod.batches || []);
 
                   return (
                     <div
@@ -1716,9 +1776,28 @@ export default function StockManager({ onBack, backInterceptRef }) {
                             </div>
                           </div>
                         </div>
-                        <div className="stock-item-qty-col">
-                          <div className={`stock-item-qty ${isOut ? 'out' : ''}`} style={{ fontSize: '0.82rem', fontWeight: 900 }}>
-                            {isOut ? 'Out of Stock' : `${formatFraction(prod.totalRemainingQty)} in stock`}
+                        <div className="stock-item-qty-col" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div className={`stock-item-qty ${isOut ? 'out' : ''}`} style={{ fontSize: '0.82rem', fontWeight: 900 }}>
+                              {isOut
+                                ? 'Out of Stock'
+                                : (prodPhysical?.hasPhysicalData && prodPhysical.remainingDisplay
+                                    ? `${formatFraction(prod.totalRemainingQty)} packs (${prodPhysical.remainingDisplay})`
+                                    : `${formatFraction(prod.totalRemainingQty)} in stock`)}
+                            </div>
+                            <button
+                              type="button"
+                              className="stock-btn-action history"
+                              style={{ padding: '3px 6px', fontSize: '0.75rem', borderRadius: 6, lineHeight: 1 }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveActivityProduct(prod.productName);
+                                setActiveActivityBatchId(null);
+                              }}
+                              title="View Activity & Transaction History"
+                            >
+                              📜
+                            </button>
                           </div>
                           <div className="stock-item-price" style={{ fontSize: '0.7rem', color: isOut ? 'var(--text-muted)' : 'var(--accent)', fontWeight: 700, marginTop: 1 }}>
                             {isOut ? `Avg: ₹${avgUnitPrice.toFixed(1)}` : `Value: ${formatINR(prod.availableValue)}`}
@@ -2966,6 +3045,21 @@ export default function StockManager({ onBack, backInterceptRef }) {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Item Activity & Transaction History Drawer */}
+        {activeActivityProduct && (
+          <StockActivityDrawer
+            product={activeActivityProduct}
+            initialBatchId={activeActivityBatchId}
+            batches={allNormalizedBatches}
+            transactions={transactions}
+            inventoryItems={items}
+            onClose={() => {
+              setActiveActivityProduct(null);
+              setActiveActivityBatchId(null);
+            }}
+          />
         )}
 
         {/* Custom App Popup / Alerts with Mobile Safe Area Protection */}
