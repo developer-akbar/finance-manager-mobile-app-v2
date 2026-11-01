@@ -15,6 +15,10 @@ import {
 } from '../../services/googleAuth.js';
 import { getSetting } from '../../database/settings.js';
 import {
+  verifyNativeBackupDiagnostic,
+  executeSelfRestoreDiagnostic
+} from '../../utils/nativeRecoveryDiagnostic.js';
+import {
   previewCloudSync,
   executeCloudSync,
   executeBootstrap,
@@ -35,7 +39,9 @@ import {
   unlockSyncSession,
   lockSyncSession,
   subscribeSyncSession,
-  getSyncSessionKey
+  getSyncSessionKey,
+  clearRecoverySafetyLockWithPin,
+  subscribeRecoveryLock
 } from '../../services/syncSession.js';
 import {
   getDeltaSyncMetrics,
@@ -159,6 +165,29 @@ export default function CloudSyncManager({ onBack }) {
   const [publishMasterProgress, setPublishMasterProgress] = useState('');
   const [publishMasterError, setPublishMasterError] = useState('');
   const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
+  const [nativeBackupStatus, setNativeBackupStatus] = useState(null);
+  const [isTestingNativeBackup, setIsTestingNativeBackup] = useState(false);
+
+  // Recovery Safety Lock State
+  const [recoveryLockState, setRecoveryLockState] = useState({
+    isLocked: false,
+    details: null,
+    unlockPin: '',
+    error: '',
+    isClearing: false
+  });
+
+  useEffect(() => {
+    const unsub = subscribeRecoveryLock((isLocked, details) => {
+      setRecoveryLockState(prev => ({
+        ...prev,
+        isLocked,
+        details,
+        error: ''
+      }));
+    });
+    return () => unsub();
+  }, []);
 
   // Register global window helper for programmatic or console invocation
   useEffect(() => {
@@ -227,6 +256,10 @@ export default function CloudSyncManager({ onBack }) {
           ...options
         });
       };
+      window.__finmanRunNativeBackupDiagnostic = async (options = {}) => {
+        const { runNativeBackupDiagnostic } = await import('../../services/snapshotDeviceImport.js');
+        return runNativeBackupDiagnostic(options);
+      };
     }
     return () => {
       if (typeof window !== 'undefined') {
@@ -237,6 +270,7 @@ export default function CloudSyncManager({ onBack }) {
         delete window.__finmanVerifySequence16Compatibility;
         delete window.__finmanVerifyRollbackState;
         delete window.__finmanPublishSnapshotV13;
+        delete window.__finmanRunNativeBackupDiagnostic;
       }
     };
   }, [deltaMetrics.deviceId]);
@@ -280,10 +314,6 @@ export default function CloudSyncManager({ onBack }) {
           const user = getStoredGoogleUser();
           setGoogleUser(user);
 
-          checkDatabaseBootstrapEligibility().then(el => {
-            if (mounted) setBootstrapEligibility(el);
-          }).catch(() => { });
-
           const token = getStoredToken();
           if (token && !user.email) {
             syncGoogleUserInfo(token).then(u => {
@@ -293,13 +323,9 @@ export default function CloudSyncManager({ onBack }) {
             }).catch(() => { });
           }
 
-          if (token) {
-            getDeviceLifecycleState().then(lc => {
-              if (lc === DEVICE_LIFECYCLE.UNINITIALIZED || lc === DEVICE_LIFECYCLE.JOINING) {
-                checkNewDeviceBackup(token);
-              }
-            }).catch(() => { });
-          }
+          checkDatabaseBootstrapEligibility().then(el => {
+            if (mounted) setBootstrapEligibility(el);
+          }).catch(() => { });
 
           if (isGoogleLinked() && !token) {
             getValidAccessToken(false).then(validToken => {
@@ -317,6 +343,12 @@ export default function CloudSyncManager({ onBack }) {
                     }
                   }).catch(() => { });
                 }
+              }
+            }).catch(() => { });
+          } else if (token) {
+            getDeviceLifecycleState().then(lc => {
+              if (lc === DEVICE_LIFECYCLE.UNINITIALIZED || lc === DEVICE_LIFECYCLE.JOINING) {
+                checkNewDeviceBackup(token);
               }
             }).catch(() => { });
           }
@@ -424,9 +456,10 @@ export default function CloudSyncManager({ onBack }) {
   // Check if an UNINITIALIZED / new device should offer cloud restore
   const checkNewDeviceBackup = async (token) => {
     try {
-      // Fail-closed safeguard: Never offer Restore Backup on a populated device
+      // Fail-closed safeguard: Check structured eligibility before offering restore
       const eligibility = await checkDatabaseBootstrapEligibility();
       setBootstrapEligibility(eligibility);
+
       if (!eligibility.isEligible) {
         console.log(`[CloudSyncManager] Restore backup prompt suppressed: ${eligibility.summary}`);
         return;
@@ -445,6 +478,8 @@ export default function CloudSyncManager({ onBack }) {
             progressMsg: ''
           });
         }
+      } else {
+        console.log(`[CloudSyncManager] Device lifecycle is '${lifecycle}' (not UNINITIALIZED or JOINING). Suppressing cloud restore prompt.`);
       }
     } catch (err) {
       console.warn('[CloudSyncManager] New device backup check error:', err);
@@ -723,6 +758,22 @@ export default function CloudSyncManager({ onBack }) {
     setShowConfirmModal(false);
     setConfirmResolutionModal(null);
     setDeltaMetrics(prev => ({ ...prev, latestError: null }));
+  };
+
+  // Handle Explicit Clear of Recovery Safety Lock with PIN
+  const handleClearRecoveryLock = async () => {
+    if (!recoveryLockState.unlockPin || !recoveryLockState.unlockPin.trim()) {
+      setRecoveryLockState(prev => ({ ...prev, error: 'Please enter your encryption PIN.' }));
+      return;
+    }
+    setRecoveryLockState(prev => ({ ...prev, isClearing: true, error: '' }));
+    try {
+      await clearRecoverySafetyLockWithPin(recoveryLockState.unlockPin.trim());
+      setRecoveryLockState(prev => ({ ...prev, isLocked: false, details: null, unlockPin: '', isClearing: false }));
+      setSuccessMsg('✓ Recovery safety lock successfully cleared. Sync session restored.');
+    } catch (err) {
+      setRecoveryLockState(prev => ({ ...prev, isClearing: false, error: err.message || 'Failed to clear recovery lock.' }));
+    }
   };
 
   // Open Conflict Resolution Confirmation Modal
@@ -1109,6 +1160,73 @@ export default function CloudSyncManager({ onBack }) {
       </div>
 
       <div className="cloud-sync-container">
+        {/* Persistent Recovery Safety Lock Alert Banner */}
+        {recoveryLockState.isLocked && (
+          <div style={{
+            background: 'rgba(255, 77, 106, 0.12)',
+            border: '2px solid var(--expense, #ff4d6a)',
+            borderRadius: 12,
+            padding: '14px 16px',
+            margin: '12px 0 16px',
+            color: 'var(--text-primary)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: '1.2rem' }}>⚠️</span>
+              <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--expense)' }}>
+                Snapshot Recovery Safety Lock Active
+              </div>
+            </div>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 12 }}>
+              A previous snapshot recovery or synchronization attempt was interrupted (or process restart occurred during recovery).
+              Automatic sync, background polling, and PIN restoration are suspended to protect your financial records.
+              {recoveryLockState.details?.reason && (
+                <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  Reason: {recoveryLockState.details.reason} {recoveryLockState.details.locked_at ? `(${new Date(recoveryLockState.details.locked_at).toLocaleString()})` : ''}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="password"
+                placeholder="Enter Sync PIN to confirm"
+                value={recoveryLockState.unlockPin}
+                onChange={(e) => setRecoveryLockState(prev => ({ ...prev, unlockPin: e.target.value, error: '' }))}
+                style={{
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  padding: '6px 12px',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.8rem',
+                  width: '190px'
+                }}
+              />
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleClearRecoveryLock}
+                disabled={recoveryLockState.isClearing}
+                style={{
+                  background: 'var(--expense)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '6px 14px',
+                  fontWeight: 700,
+                  fontSize: '0.78rem',
+                  cursor: 'pointer'
+                }}
+              >
+                {recoveryLockState.isClearing ? 'Verifying PIN…' : 'Verify PIN & Clear Recovery Lock'}
+              </button>
+            </div>
+            {recoveryLockState.error && (
+              <div style={{ color: 'var(--expense)', fontSize: '0.75rem', fontWeight: 700, marginTop: 8 }}>
+                {recoveryLockState.error}
+              </div>
+            )}
+          </div>
+        )}
         {/* Security & Privacy Notice */}
         <div style={{
           background: 'rgba(0, 229, 160, 0.08)',
@@ -1282,1190 +1400,1299 @@ export default function CloudSyncManager({ onBack }) {
               </span>
             </div>
             <div className="settings-card" style={{ padding: 14, margin: '0 0 14px' }}>
-          {isUnlocked ? (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-              <div>
-                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  Protected · Unlocked for this session
-                </div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                  Your data is encrypted before it leaves this device.
-                </div>
-              </div>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={handleLock}
-                style={{ fontSize: '0.75rem', color: 'var(--expense)', border: '1px solid var(--border-light)', padding: '5px 12px', flexShrink: 0 }}
-              >
-                🔒 Lock Sync
-              </button>
-            </div>
-          ) : (
-            <>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 10 }}>
-                PIN required to sync your encrypted data.
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <div style={{ position: 'relative', flex: 1 }}>
-                  <input
-                    type={showPin ? 'text' : 'password'}
-                    className={`form-input ${pinError ? 'input-error' : ''}`}
-                    placeholder="Enter 4+ digit sync PIN"
-                    value={pin}
-                    onChange={e => { setPin(e.target.value); setPinError(''); }}
-                    onKeyDown={e => { if (e.key === 'Enter') handleUnlock(); }}
-                    style={{ width: '100%', fontSize: '0.85rem', padding: '8px 40px 8px 12px' }}
-                    autoComplete="off"
-                  />
+              {isUnlocked ? (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Protected · Unlocked for this session
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                      Your data is encrypted before it leaves this device.
+                    </div>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setShowPin(!showPin)}
-                    style={{
-                      position: 'absolute',
-                      right: 8,
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      background: 'none',
-                      border: 'none',
-                      fontSize: '0.9rem',
-                      cursor: 'pointer',
-                      opacity: 0.6
-                    }}
-                    aria-label={showPin ? 'Hide PIN' : 'Show PIN'}
-                  >
-                    {showPin ? '👁️' : '🔒'}
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={handleUnlock}
-                  disabled={isUnlocking}
-                  style={{ fontSize: '0.78rem', padding: '8px 16px', flexShrink: 0 }}
-                >
-                  {isUnlocking ? 'Unlocking...' : 'Unlock Sync'}
-                </button>
-              </div>
-
-              {pinError && (
-                <div style={{ color: 'var(--expense)', fontSize: '0.7rem', fontWeight: 600, marginTop: 6 }}>
-                  ⚠️ {translateSyncError(pinError)}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Column 1 on desktop: Cloud Operations (Sync & Backup) */}
-      <div className="cs-col cs-col-left">
-        {/* Card 2: Cloud Sync */}
-        <div className="cs-section cs-section-sync">
-        <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>☁️ Cloud Sync</span>
-          <span style={{
-            fontSize: '0.68rem',
-            fontWeight: 800,
-            padding: '2px 8px',
-            borderRadius: 4,
-            background: !isUnlocked
-              ? 'rgba(255, 179, 0, 0.15)'
-              : (isLiveDeltaSyncing
-                ? 'rgba(74, 144, 226, 0.15)'
-                : (deltaMetrics.pendingCount > 0 ? 'rgba(255, 179, 0, 0.15)' : 'rgba(0, 229, 160, 0.15)')),
-            color: !isUnlocked
-              ? 'var(--warning)'
-              : (isLiveDeltaSyncing
-                ? 'var(--accent)'
-                : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)'))
-          }}>
-            {!isUnlocked
-              ? 'Sync Locked'
-              : (isLiveDeltaSyncing
-                ? 'Syncing…'
-                : (deltaMetrics.pendingCount > 0 ? `${deltaMetrics.pendingCount} Waiting` : 'All Changes Up to Date'))}
-          </span>
-        </div>
-        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
-          {/* Account Connection Sub-Row */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 10, borderBottom: '1px solid var(--border-light)', marginBottom: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{
-                width: 10,
-                height: 10,
-                borderRadius: '50%',
-                background: isAuthenticated ? 'var(--green)' : (isGoogleLinked() ? 'var(--warning)' : 'var(--text-muted)'),
-                boxShadow: isAuthenticated ? '0 0 6px var(--green)' : (isGoogleLinked() ? '0 0 6px var(--warning)' : 'none')
-              }} />
-              <div>
-                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {isAuthenticated
-                    ? 'Google Drive'
-                    : (isGoogleLinked() ? 'Google Drive (Needs Reconnect)' : 'Not Connected to Google Drive')}
-                </div>
-                {isAuthenticated && (
-                  <div style={{ marginTop: 2 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--green)' }}>● Connected</span>
-                    </div>
-                    {googleUser.email && (
-                      <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--accent)', marginTop: 1 }}>
-                        {googleUser.displayName
-                          ? `${formatTitleCase(googleUser.displayName)} <${googleUser.email}>`
-                          : (googleUser.email ? `${formatTitleCase(googleUser.email.split('@')[0])} <${googleUser.email}>` : '')}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                  Used for encrypted FinMan cloud sync
-                </div>
-              </div>
-
-            </div>
-
-            {isGoogleLinked() ? (
-              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                {!isAuthenticated && (
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleConnect}
-                    disabled={isAuthenticating}
-                    style={{ fontSize: '0.75rem', padding: '4px 10px' }}
-                  >
-                    {isAuthenticating ? 'Connecting...' : 'Reconnect'}
-                  </button>
-                )}
-                {isAuthenticating && (
-                  <button
                     className="btn btn-ghost"
-                    onClick={handleCancelConnect}
-                    style={{ fontSize: '0.75rem', padding: '4px 8px', color: 'var(--text-muted)' }}
+                    onClick={handleLock}
+                    style={{ fontSize: '0.75rem', color: 'var(--expense)', border: '1px solid var(--border-light)', padding: '5px 12px', flexShrink: 0 }}
                   >
-                    Cancel
+                    🔒 Lock Sync
                   </button>
-                )}
-                <button
-                  className="btn btn-ghost"
-                  onClick={handleDisconnect}
-                  style={{ fontSize: '0.75rem', color: 'var(--expense)', padding: '4px 10px' }}
-                >
-                  Disconnect
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleConnect}
-                  disabled={isAuthenticating}
-                  style={{ fontSize: '0.78rem', padding: '6px 14px', flexShrink: 0 }}
-                >
-                  {isAuthenticating ? 'Connecting...' : 'Connect Google'}
-                </button>
-                {isAuthenticating && (
-                  <button
-                    className="btn btn-ghost"
-                    onClick={handleCancelConnect}
-                    style={{ fontSize: '0.78rem', padding: '6px 10px', color: 'var(--text-muted)' }}
-                  >
-                    Cancel
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-
-          {authError && (
-            <div style={{
-              marginBottom: 10,
-              padding: '8px 12px',
-              borderRadius: 6,
-              background: 'rgba(255, 77, 106, 0.12)',
-              color: 'var(--expense)',
-              fontSize: '0.72rem',
-              fontWeight: 600
-            }}>
-              ⚠️ {translateSyncError(authError)}
-            </div>
-          )}
-
-          {/* Sync Metrics Table */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Status</span>
-            <span style={{
-              fontWeight: 700,
-              color: !isUnlocked
-                ? 'var(--warning)'
-                : (isLiveDeltaSyncing
-                  ? 'var(--accent)'
-                  : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
-                    ? 'var(--expense)'
-                    : (String(deltaMetrics.status || '').startsWith('BLOCKED')
-                      ? 'var(--warning)'
-                      : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)'))))
-            }}>
-              {!isUnlocked
-                ? '🔒 Sync Locked (PIN Required)'
-                : (isLiveDeltaSyncing
-                  ? 'Syncing...'
-                  : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
-                    ? (String(deltaMetrics.latestError || '').toLowerCase().includes('time') ? 'Sync Paused (Timed Out)' : 'Sync Paused (Needs Attention)')
-                    : (deltaMetrics.status === 'BLOCKED_PEER_BASELINE'
-                      ? (deltaMetrics.hasNewerBaseline || deltaMetrics.newerBaselineDetected ? 'Aligning Baseline…' : 'Baseline Alignment Required')
-                      : (deltaMetrics.status === 'BLOCKED_SEQUENCE_GAP' || deltaMetrics.status === 'BLOCKED_DEPENDENCY'
-                        ? 'Sync Paused (Waiting for Updates)'
-                        : (deltaMetrics.pendingCount > 0 ? 'Changes Waiting' : 'Up to Date')))))}
-            </span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Changes waiting</span>
-            <span style={{ fontWeight: 700, color: deltaMetrics.pendingCount > 0 ? 'var(--warning)' : (!isUnlocked ? 'var(--text-secondary)' : 'var(--green)') }}>
-              {deltaMetrics.pendingCount} {deltaMetrics.pendingCount === 1 ? 'change' : 'changes'}
-            </span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last successful full sync</span>
-            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-              {deltaMetrics.lastDeltaSyncedAt ? new Date(deltaMetrics.lastDeltaSyncedAt).toLocaleString() : 'Never'}
-            </span>
-          </div>
-
-          {deltaMetrics.latestError && deltaMetrics.status === DELTA_SYNC_STATUS.ERROR && (
-            <div style={{
-              marginTop: 10,
-              padding: '8px 12px',
-              borderRadius: 6,
-              background: 'rgba(255, 77, 106, 0.12)',
-              color: 'var(--expense)',
-              fontSize: '0.72rem',
-              fontWeight: 600
-            }}>
-              🛑 {translateSyncError(deltaMetrics.latestError, {
-                pendingCount: deltaMetrics.pendingCount,
-                localDataVerified: deltaMetrics.pendingCount !== undefined,
-                status: deltaMetrics.status
-              })}
-            </div>
-          )}
-
-          {deltaMetrics.lifecycleState === 'UNINITIALIZED' && localTransactionsCount > 0 ? (
-            <div style={{
-              marginTop: 12,
-              padding: '12px 14px',
-              borderRadius: 8,
-              background: 'rgba(74, 144, 226, 0.1)',
-              border: '1px solid rgba(74, 144, 226, 0.3)'
-            }}>
-              <div style={{ fontWeight: 800, fontSize: '0.82rem', color: 'var(--accent)', marginBottom: 4 }}>
-                📱 Offline Records Ready to Sync
-              </div>
-              <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.45, marginBottom: 10 }}>
-                This device contains <strong>{localTransactionsCount.toLocaleString()} offline records</strong>. Publish this device as your authoritative cloud master to establish Snapshot v13 and activate automatic sync across all devices.
-              </div>
-              <button
-                className="btn btn-primary"
-                onClick={handlePublishMasterClick}
-                disabled={isPublishingMaster || !isGoogleLinked()}
-                style={{ width: '100%', padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
-              >
-                {isPublishingMaster ? 'Publishing Snapshot v13...' : '📱 Set as Master Device & Enable Sync'}
-              </button>
-            </div>
-          ) : (
-            <button
-              className={!isUnlocked ? "btn btn-secondary" : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR ? "btn btn-secondary" : "btn btn-primary")}
-              onClick={!isUnlocked ? () => {
-                const pinInput = document.querySelector('input[placeholder*="sync PIN"]');
-                if (pinInput) pinInput.focus();
-              } : handleSyncChangesNow}
-              disabled={!isUnlocked ? false : (isLiveDeltaSyncing || isLoading || isSyncing || !isGoogleLinked())}
-              style={{
-                width: '100%',
-                marginTop: 12,
-                padding: '10px 14px',
-                fontSize: '0.82rem',
-                fontWeight: 800
-              }}
-            >
-              {!isUnlocked
-                ? '🔒 Unlock Sync with PIN to Sync'
-                : (isLiveDeltaSyncing
-                  ? 'Syncing...'
-                  : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR ? '🔄 Retry Sync' : '⚡ Sync Now'))}
-            </button>
-          )}
-
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 8 }}>
-            {!isUnlocked ? (
-              <span>• <strong>Sync Locked</strong>: Enter your PIN in Sync Security above to resume sync.</span>
-            ) : (
-              <span>• <strong>Sync Now</strong>: Uploads your latest edits and downloads changes from your other devices.</span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Card 4: Cloud Backup */}
-      <div className="cs-section cs-section-backup">
-        <div className="settings-group-label" style={{ padding: '8px 0 6px', color: 'var(--text-primary, #ffffff)', fontWeight: 700 }}>📦 Cloud Backup</div>
-        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
-          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 10 }}>
-            Create a complete encrypted backup of your FinMan data in Google Drive.
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Local Records</span>
-            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{localTransactionsCount.toLocaleString()} transactions</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Last Full Backup</span>
-            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-              {lastSyncInfo.lastSyncedAt ? new Date(lastSyncInfo.lastSyncedAt).toLocaleString() : 'Never'}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 12 }}>
-            <button
-              className="btn btn-primary"
-              onClick={handleSyncNowClick}
-              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
-              style={{ flex: '1 1 180px', padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
-            >
-              {isLoading && operationType === 'sync_now' ? 'Preparing...' : '📦 Create Cloud Backup'}
-            </button>
-
-            <button
-              className="btn btn-secondary"
-              onClick={handlePreview}
-              disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
-              style={{ flex: '1 1 180px', padding: '9px 14px', fontSize: '0.8rem', fontWeight: 600 }}
-            >
-              {isLoading && operationType === 'preview' ? 'Inspecting...' : '🔍 Preview Cloud Backup'}
-            </button>
-
-            <button
-              className="btn btn-secondary"
-              onClick={handlePublishMasterClick}
-              disabled={isPublishingMaster || isLiveDeltaSyncing || isLoading || isSyncing || !isGoogleLinked()}
-              style={{
-                flex: '1 1 100%',
-                padding: '10px 14px',
-                fontSize: '0.82rem',
-                fontWeight: 800,
-                border: '1px solid var(--accent)',
-                color: 'var(--accent)',
-                background: 'rgba(74, 144, 226, 0.08)'
-              }}
-            >
-              {isPublishingMaster ? 'Publishing Cloud Master...' : '📱 Push as Master Backup (Force Push)'}
-            </button>
-          </div>
-
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
-            • <strong>Push as Master Backup</strong>: Force-pushes this device's records directly as the cloud master. Overrides conflicts and updates other devices.<br />
-            • <strong>Create Cloud Backup</strong>: Encrypts and reconciles your database with existing cloud snapshots.<br />
-            • <strong>Preview Cloud Backup</strong>: Performs a 100% read-only inspection. Zero database changes, zero Drive writes.
-          </div>
-
-          {errorMsg && (
-            <div style={{
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: 'rgba(255, 77, 106, 0.12)',
-              color: 'var(--expense)',
-              fontSize: '0.74rem',
-              fontWeight: 600
-            }}>
-              🛑 {translateSyncError(errorMsg)}
-            </div>
-          )}
-
-          {successMsg && (
-            <div style={{
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: 'rgba(0, 229, 160, 0.12)',
-              color: 'var(--green)',
-              fontSize: '0.74rem',
-              fontWeight: 700
-            }}>
-              {successMsg}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-
-    {/* Column 2 on desktop: Devices & Conflicts */}
-    <div className="cs-col cs-col-right">
-      {/* Card: Connected Devices */}
-      <div className="cs-section cs-section-devices">
-        <ConnectedDevicesCard
-          isAuthenticated={isAuthenticated}
-          localDeviceId={deltaMetrics.deviceId !== 'local_device' ? deltaMetrics.deviceId : null}
-          lastLocalSyncAt={deltaMetrics.lastDeltaSyncedAt}
-        />
-      </div>
-
-      {/* Card 3: Sync Conflicts */}
-      <div className="cs-section cs-section-conflicts">
-        <div id="sync-conflicts-section" className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>⚖️ Sync Conflicts</span>
-          <span style={{
-            fontSize: '0.68rem',
-            fontWeight: 800,
-            padding: '2px 8px',
-            borderRadius: 4,
-            background: pendingConflicts.length > 0 ? 'rgba(255, 179, 0, 0.15)' : 'rgba(0, 229, 160, 0.15)',
-            color: pendingConflicts.length > 0 ? 'var(--warning)' : 'var(--green)'
-          }}>
-            {pendingConflicts.length > 0 ? `⚠️ ${pendingConflicts.length} Pending` : '0 Pending'}
-          </span>
-        </div>
-
-        <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
-          {resolutionMsg && (
-            <div style={{
-              marginBottom: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: resolutionMsg.type === 'success' ? 'rgba(0, 229, 160, 0.12)' : 'rgba(255, 77, 106, 0.12)',
-              color: resolutionMsg.type === 'success' ? 'var(--green)' : 'var(--expense)',
-              fontSize: '0.74rem',
-              fontWeight: 700
-            }}>
-              {resolutionMsg.type === 'success' ? '✅ ' : '🛑 '}{resolutionMsg.text}
-            </div>
-          )}
-
-          {pendingConflicts.length === 0 ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
-              <span style={{ fontSize: '1rem' }}>✅</span>
-              <div>
-                <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.78rem' }}>No Sync Conflicts</div>
-                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>All your devices are in sync.</div>
-              </div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{
-                padding: '10px 12px',
-                borderRadius: 8,
-                background: 'rgba(255, 179, 0, 0.08)',
-                border: '1px solid rgba(255, 179, 0, 0.25)',
-                color: 'var(--text-primary)',
-                fontSize: '0.72rem',
-                lineHeight: 1.45
-              }}>
-                <div style={{ fontWeight: 800, color: 'var(--warning)', marginBottom: 3 }}>
-                  🛡️ Both versions are safely preserved while you review.
-                </div>
-                <div>
-                  This conflict affects only this record. Other transactions and accounts continue syncing normally. Choose which version should become authoritative.
-                </div>
-              </div>
-
-              {pendingConflicts.length > 1 && (() => {
-                const allIdentical = pendingConflicts.every(c => {
-                  const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
-                  return !diff.hasChanges;
-                });
-
-                return (
-                  <div style={{
-                    padding: '12px 14px',
-                    borderRadius: 10,
-                    background: 'var(--bg-card)',
-                    border: '1px solid var(--border-light)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 10
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-                      <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                        ⚡ Bulk Resolution ({pendingConflicts.length} Pending)
-                      </div>
-                      {allIdentical && (
-                        <span style={{
-                          fontSize: '0.66rem',
-                          padding: '2px 8px',
-                          borderRadius: 4,
-                          background: 'rgba(0, 229, 160, 0.15)',
-                          color: 'var(--green)',
-                          fontWeight: 700
-                        }}>
-                          ✓ All records have identical data
-                        </span>
-                      )}
-                    </div>
-
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                      {allIdentical
-                        ? 'All pending records have identical values on both devices. You can resolve all of them with one tap to clear the conflict banner and resume automatic synchronization.'
-                        : 'Quickly resolve all pending conflicts across all affected collections in a single step.'}
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={() => handleOpenResolveAllConfirm(CONFLICT_RESOLUTION.KEEP_LOCAL)}
-                        disabled={!isUnlocked || isResolvingAll || Boolean(resolvingId)}
-                        style={{ padding: '9px 10px', fontSize: '0.74rem', fontWeight: 700, textAlign: 'center' }}
-                      >
-                        {isResolvingAll ? 'Resolving All…' : "📱 Keep This Device's Versions"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={() => handleOpenResolveAllConfirm(CONFLICT_RESOLUTION.ACCEPT_REMOTE)}
-                        disabled={!isUnlocked || isResolvingAll || Boolean(resolvingId)}
-                        style={{ padding: '9px 10px', fontSize: '0.74rem', fontWeight: 700, textAlign: 'center' }}
-                      >
-                        {isResolvingAll ? 'Resolving All…' : "☁️ Accept Other Device's Versions"}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {pendingConflicts.map((c) => {
-                const isCurrentResolving = resolvingId === c.conflict_id;
-                const formatted = formatConflictEntity(c);
-                const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
-
-                return (
-                  <div
-                    key={c.conflict_id}
-                    style={{
-                      border: '1px solid var(--border-light)',
-                      borderRadius: 10,
-                      padding: 14,
-                      background: 'var(--bg-surface)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 12
-                    }}
-                  >
-                    {/* Conflict Header */}
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                        <span style={{
-                          fontSize: '0.68rem',
-                          fontWeight: 800,
-                          padding: '2px 8px',
-                          borderRadius: 4,
-                          background: 'rgba(255, 179, 0, 0.15)',
-                          color: 'var(--warning)'
-                        }}>
-                          ⚠️ {formatted.friendlyType}
-                        </span>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                          {formatted.collectionLabel}
-                        </span>
-                      </div>
-                      <div style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--text-primary)', wordBreak: 'break-word', marginTop: 4 }}>
-                        {formatted.primaryTitle}
-                      </div>
-                      {formatted.primarySubtitle && (
-                        <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--accent)', marginTop: 2 }}>
-                          {formatted.primarySubtitle}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* What Changed (Field Diff Highlights) */}
-                    {diff.changedFields.length > 0 && (
-                      <div style={{
-                        background: 'rgba(255, 255, 255, 0.03)',
-                        border: '1px solid var(--border-light)',
-                        borderRadius: 8,
-                        padding: '10px 12px'
-                      }}>
-                        <div style={{ fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--warning)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <span>⚡</span>
-                          <span>What Changed</span>
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          {diff.changedFields.map((field) => (
-                            <div key={field.key} style={{
-                              padding: '6px 8px',
-                              borderRadius: 6,
-                              background: 'rgba(255, 179, 0, 0.06)',
-                              border: '1px solid rgba(255, 179, 0, 0.15)',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: 2
-                            }}>
-                              <div style={{ fontWeight: 700, fontSize: '0.72rem', color: 'var(--text-primary)' }}>
-                                {field.label}
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', flexWrap: 'wrap', gap: 4 }}>
-                                <span style={{ color: 'var(--accent)' }}>
-                                  This Device: <strong>{field.localValue}</strong>
-                                </span>
-                                <span style={{ color: 'var(--warning)' }}>
-                                  Other Device: <strong>{field.remoteValue}</strong>
-                                </span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Unchanged Fields Collapsible */}
-                    {diff.unchangedFields.length > 0 && (
-                      <details style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                        <summary style={{ cursor: 'pointer', fontWeight: 600, padding: '2px 0' }}>
-                          Show unchanged fields ({diff.unchangedFields.length})
-                        </summary>
-                        <div style={{ padding: '6px 8px', background: 'var(--bg-card)', borderRadius: 6, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          {diff.unchangedFields.map((f) => (
-                            <div key={f.key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem' }}>
-                              <span>{f.label}:</span>
-                              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{f.localValue}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </details>
-                    )}
-
-                    {/* Side-by-Side Version Cards */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
-                      {/* Local Version */}
-                      <div style={{
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        background: 'rgba(74, 144, 226, 0.08)',
-                        border: '1px solid rgba(74, 144, 226, 0.2)'
-                      }}>
-                        <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent)', marginBottom: 2 }}>
-                          📱 This Device
-                        </div>
-                        <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 6 }}>
-                          Current version on this device
-                        </div>
-                        <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
-                          {formatted.localDescriptor.note || formatted.localDescriptor.title}
-                        </div>
-                        {formatted.localDescriptor.amount && (
-                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                            Amount: {formatted.localDescriptor.amount}
-                          </div>
-                        )}
-                        {formatted.localDescriptor.date && (
-                          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                            Date: {formatted.localDescriptor.date}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Remote Version */}
-                      <div style={{
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        background: 'rgba(255, 179, 0, 0.08)',
-                        border: '1px solid rgba(255, 179, 0, 0.2)'
-                      }}>
-                        <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--warning)', marginBottom: 2 }}>
-                          ☁️ Other Device
-                        </div>
-                        <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 6 }}>
-                          Incoming version from cloud sync
-                        </div>
-                        <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
-                          {formatted.remoteDescriptor.note || formatted.remoteDescriptor.title}
-                        </div>
-                        {formatted.remoteDescriptor.amount && (
-                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                            Amount: {formatted.remoteDescriptor.amount}
-                          </div>
-                        )}
-                        {formatted.remoteDescriptor.date && (
-                          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                            Date: {formatted.remoteDescriptor.date}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={() => handleOpenResolveConfirm(c, CONFLICT_RESOLUTION.KEEP_LOCAL)}
-                        disabled={!isUnlocked || isCurrentResolving}
-                        style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          padding: '8px 10px',
-                          borderRadius: 8,
-                          textAlign: 'center'
-                        }}
-                      >
-                        <span style={{ fontWeight: 800, fontSize: '0.76rem' }}>
-                          {isCurrentResolving ? 'Resolving...' : "📱 Keep This Device's Version"}
-                        </span>
-                        <span style={{ fontSize: '0.64rem', fontWeight: 400, opacity: 0.85, marginTop: 2 }}>
-                          Keep local edits and sync this version to your other devices
-                        </span>
-                      </button>
-
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={() => handleOpenResolveConfirm(c, CONFLICT_RESOLUTION.ACCEPT_REMOTE)}
-                        disabled={!isUnlocked || isCurrentResolving}
-                        style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          padding: '8px 10px',
-                          borderRadius: 8,
-                          textAlign: 'center'
-                        }}
-                      >
-                        <span style={{ fontWeight: 800, fontSize: '0.76rem' }}>
-                          {isCurrentResolving ? 'Resolving...' : "☁️ Accept Other Device's Version"}
-                        </span>
-                        <span style={{ fontSize: '0.64rem', fontWeight: 400, opacity: 0.85, marginTop: 2 }}>
-                          Replace this device's version with incoming version and sync it
-                        </span>
-                      </button>
-                    </div>
-
-                    {!isUnlocked && (
-                      <div style={{ fontSize: '0.68rem', color: 'var(--warning)', fontWeight: 600 }}>
-                        🔒 Unlock the sync session above to resolve this conflict.
-                      </div>
-                    )}
-
-                    {/* Collapsible Technical Diagnostics */}
-                    <details style={{
-                      marginTop: 4,
-                      padding: '6px 10px',
-                      borderRadius: 6,
-                      background: 'rgba(0, 0, 0, 0.15)',
-                      border: '1px solid var(--border-light)',
-                      fontSize: '0.68rem',
-                      color: 'var(--text-muted)'
-                    }}>
-                      <summary style={{ cursor: 'pointer', fontWeight: 700, color: 'var(--text-secondary)' }}>
-                        ⚙️ Technical Diagnostics (ID: {formatted.shortEntityId})
-                      </summary>
-                      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3, fontFamily: 'monospace', fontSize: '0.65rem' }}>
-                        <div><strong>Conflict ID:</strong> {c.conflict_id}</div>
-                        <div><strong>Collection:</strong> {c.collection}</div>
-                        <div><strong>Entity ID:</strong> {c.entity_id}</div>
-                        <div><strong>Conflict Type:</strong> {c.conflict_type}</div>
-                        <div><strong>Peer Device ID:</strong> {c.peer_device_id || '—'}</div>
-                        <div><strong>Event ID:</strong> {c.event_id || '—'}</div>
-                        <div><strong>Package ID:</strong> {c.package_id || '—'}</div>
-                        <div><strong>Base Checksum:</strong> {c.base_checksum ? c.base_checksum.slice(0, 16) + '...' : '—'}</div>
-                        <div><strong>Local Checksum:</strong> {c.local_checksum ? c.local_checksum.slice(0, 16) + '...' : '—'}</div>
-                        <div><strong>Remote Checksum:</strong> {c.remote_checksum ? c.remote_checksum.slice(0, 16) + '...' : '—'}</div>
-                      </div>
-                    </details>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-
-      {/* Card 5: Advanced Settings & Diagnostics */}
-      <div className="cs-section cs-section-advanced">
-        <details className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem', cursor: 'pointer' }}>
-          <summary style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
-            <div>
-              <div>⚙️ Advanced Settings &amp; Diagnostics</div>
-              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 400, marginTop: 2 }}>
-                Technical information for troubleshooting.
-              </div>
-            </div>
-            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Expand / Collapse</span>
-          </summary>
-          <div style={{ marginTop: 12, borderTop: '1px solid var(--border-light)', paddingTop: 8, cursor: 'default' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Uploaded Sequence</span>
-              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {deltaMetrics.lastUploadedSequence}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Acknowledged Sequence</span>
-              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {deltaMetrics.lastAckedSequence}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Local Device ID</span>
-              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                {deltaMetrics.deviceId}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Lifecycle State</span>
-              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                {deltaMetrics.lifecycleState}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Local Base Snapshot ID</span>
-              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                {lastSyncInfo.lastSnapshotId || 'None'}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Google Drive Scope</span>
-              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                {isAuthenticated ? 'drive.appdata (Sandboxed)' : 'None'}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Encryption Standard</span>
-              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-primary)' }}>
-                AES-256-GCM (Zero-Knowledge)
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Storage Repository</span>
-              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-primary)' }}>
-                Google Drive (Sandboxed AppData)
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Local Transactions</span>
-              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                {localTransactionsCount.toLocaleString()}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
-              <div>
-                <span style={{ color: 'var(--text-muted)' }}>Restore Safeguard</span>
-                <div style={{ fontSize: '0.68rem', color: bootstrapEligibility?.isEligible ? 'var(--green)' : 'var(--text-muted)' }}>
-                  {bootstrapEligibility?.isEligible ? 'Eligible for Cloud Restore' : 'Destructive Restore Suppressed'}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ fontSize: '0.68rem', padding: '3px 8px', color: 'var(--blue)', borderColor: 'rgba(59, 130, 246, 0.4)' }}
-                onClick={() => setShowEligibilityModal(true)}
-              >
-                🛡️ View Diagnostics
-              </button>
-            </div>
-            {/* Developer Diagnostics Section */}
-            <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <span style={{ fontWeight: 700, fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                  🛠️ Developer Diagnostics
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setShowEligibilityModal(true)}
-                  style={{ fontSize: '0.68rem', padding: '4px 8px', background: 'rgba(59, 130, 246, 0.1)', borderColor: 'rgba(59, 130, 246, 0.3)', color: 'var(--blue)' }}
-                  title="Audit device emptiness and cloud restore eligibility"
-                >
-                  🛡️ View Diagnostics
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    const diagData = deltaMetrics.latestDiagnostic || {
-                      status: deltaMetrics.status,
-                      lifecycleState: deltaMetrics.lifecycleState,
-                      pendingChanges: deltaMetrics.pendingCount,
-                      lastUploadedSequence: deltaMetrics.lastUploadedSequence,
-                      lastAckedSequence: deltaMetrics.lastAckedSequence,
-                      redactedDeviceId: (deltaMetrics.deviceId || '').length > 8
-                        ? `${(deltaMetrics.deviceId || '').slice(0, 4)}...${(deltaMetrics.deviceId || '').slice(-4)}`
-                        : (deltaMetrics.deviceId || 'local_device'),
-                      message: deltaMetrics.latestError ? String(deltaMetrics.latestError).slice(0, 200) : 'None',
-                      timestamp: new Date().toISOString()
-                    };
-                    navigator.clipboard.writeText(JSON.stringify(diagData, null, 2));
-                    setCopiedDiagnostics(true);
-                    setTimeout(() => setCopiedDiagnostics(false), 2500);
-                  }}
-                  style={{ fontSize: '0.68rem', padding: '4px 10px' }}
-                >
-                  {copiedDiagnostics ? '✓ Copied Diagnostics!' : '📋 Copy Diagnostics'}
-                </button>
-              </div>
-
-              {deltaMetrics.latestDiagnostic ? (
-                <div style={{
-                  padding: '8px 10px',
-                  borderRadius: 6,
-                  background: 'rgba(0, 0, 0, 0.2)',
-                  fontFamily: 'monospace',
-                  fontSize: '0.68rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 3,
-                  border: '1px solid var(--border-light)'
-                }}>
-                  <div><strong style={{ color: 'var(--text-muted)' }}>Stage:</strong> <span style={{ color: 'var(--accent)' }}>{deltaMetrics.latestDiagnostic.stage}</span></div>
-                  <div><strong style={{ color: 'var(--text-muted)' }}>Error Code:</strong> <span style={{ color: 'var(--expense)' }}>{deltaMetrics.latestDiagnostic.code}</span></div>
-                  <div><strong style={{ color: 'var(--text-muted)' }}>Attempt ID:</strong> {deltaMetrics.latestDiagnostic.attemptId}</div>
-                  <div><strong style={{ color: 'var(--text-muted)' }}>Device:</strong> {deltaMetrics.latestDiagnostic.redactedDeviceId}</div>
-                  <div><strong style={{ color: 'var(--text-muted)' }}>Retryable:</strong> {deltaMetrics.latestDiagnostic.retryable ? 'Yes' : 'No'}</div>
-                  <div><strong style={{ color: 'var(--text-muted)' }}>Pending Changes:</strong> {deltaMetrics.latestDiagnostic.pendingChanges}</div>
-                  <div><strong style={{ color: 'var(--text-muted)' }}>Message:</strong> {deltaMetrics.latestDiagnostic.message}</div>
                 </div>
               ) : (
-                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                  All sync passes healthy. Zero unhandled diagnostic exceptions recorded.
-                </div>
-              )}
-            </div>
-
-            {/* Client ID Configuration Toggle inside Advanced */}
-            <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => setShowConfig(!showConfig)}
-                  style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textDecoration: 'underline', padding: 0 }}
-                >
-                  {showConfig ? 'Hide OAuth Client ID Config' : 'Configure Custom OAuth Client ID'}
-                </button>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Active Client ID:</span>
-                  <span style={{
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    fontWeight: 700,
-                    fontSize: '0.68rem',
-                    background: clientIdSource === 'CUSTOM_SAVED' ? 'rgba(0, 229, 160, 0.15)' : 'rgba(255, 179, 0, 0.15)',
-                    color: clientIdSource === 'CUSTOM_SAVED' ? 'var(--green)' : 'var(--warning, #ffb300)'
-                  }}>
-                    {clientIdSource === 'CUSTOM_SAVED' ? 'Custom / Saved to this origin' : 'Environment Default'}
-                  </span>
-                </div>
-              </div>
-
-              {showConfig && (
-                <div style={{ marginTop: 8 }}>
-                  {/* Current Origin Display Banner */}
-                  <div style={{
-                    padding: '8px 12px',
-                    background: 'rgba(255, 255, 255, 0.03)',
-                    borderRadius: 6,
-                    marginBottom: 10,
-                    border: '1px solid var(--border-light)'
-                  }}>
-                    <div style={{ color: 'var(--text-muted)', marginBottom: 3, fontSize: '0.68rem' }}>
-                      Current Browser Origin (for Google Cloud Console):
-                    </div>
-                    <code style={{ color: 'var(--accent, #6366f1)', fontWeight: 600, fontSize: '0.74rem', wordBreak: 'break-all', display: 'block' }}>
-                      {typeof window !== 'undefined' ? window.location.origin : ''}
-                    </code>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                      Add this exact origin to <strong>Authorized JavaScript origins</strong> in Google Cloud Console.
-                    </div>
+                <>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 10 }}>
+                    PIN required to sync your encrypted data.
                   </div>
 
-                  <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                    OAuth 2.0 Web Client ID
-                  </label>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="e.g. 123456...apps.googleusercontent.com"
-                      value={clientId}
-                      onChange={e => setClientId(e.target.value)}
-                      style={{ flex: 1, fontSize: '0.75rem', padding: '6px 10px' }}
-                    />
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div style={{ position: 'relative', flex: 1 }}>
+                      <input
+                        type={showPin ? 'text' : 'password'}
+                        className={`form-input ${pinError ? 'input-error' : ''}`}
+                        placeholder="Enter 4+ digit sync PIN"
+                        value={pin}
+                        onChange={e => { setPin(e.target.value); setPinError(''); }}
+                        onKeyDown={e => { if (e.key === 'Enter') handleUnlock(); }}
+                        style={{ width: '100%', fontSize: '0.85rem', padding: '8px 40px 8px 12px' }}
+                        autoComplete="off"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPin(!showPin)}
+                        style={{
+                          position: 'absolute',
+                          right: 8,
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          background: 'none',
+                          border: 'none',
+                          fontSize: '0.9rem',
+                          cursor: 'pointer',
+                          opacity: 0.6
+                        }}
+                        aria-label={showPin ? 'Hide PIN' : 'Show PIN'}
+                      >
+                        {showPin ? '👁️' : '🔒'}
+                      </button>
+                    </div>
                     <button
-                      className="btn btn-secondary"
-                      onClick={handleSaveClientId}
-                      style={{ fontSize: '0.72rem', padding: '6px 12px' }}
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handleUnlock}
+                      disabled={isUnlocking}
+                      style={{ fontSize: '0.78rem', padding: '8px 16px', flexShrink: 0 }}
                     >
-                      Save
+                      {isUnlocking ? 'Unlocking...' : 'Unlock Sync'}
                     </button>
                   </div>
 
-                  {clientIdSavedMsg && (
-                    <div style={{
-                      marginTop: 8,
-                      padding: '6px 10px',
-                      borderRadius: 4,
-                      background: 'rgba(0, 229, 160, 0.1)',
-                      border: '1px solid rgba(0, 229, 160, 0.3)',
-                      color: 'var(--green)',
-                      fontSize: '0.72rem',
-                      fontWeight: 600
-                    }}>
-                      ✓ {clientIdSavedMsg}
+                  {pinError && (
+                    <div style={{ color: 'var(--expense)', fontSize: '0.7rem', fontWeight: 600, marginTop: 6 }}>
+                      ⚠️ {translateSyncError(pinError)}
                     </div>
                   )}
-                </div>
+                </>
               )}
             </div>
           </div>
-        </details>
-      </div>
 
-      {/* Preview Results Display */}
-      {previewResult && (
-        <div className="cs-section cs-section-preview">
-          <div className="settings-group-label" style={{ padding: '8px 0 6px', color: 'var(--text-primary, #ffffff)', fontWeight: 700 }}>Sync Preview Results (Dry-Run)</div>
-          <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', border: '1px solid var(--green)' }}>
-              {/* Safety Badge */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                  Action: <span style={{ color: 'var(--green)' }}>{getFriendlyActionName(previewResult.action)}</span>
-                </div>
-                <div style={{
+          {/* Column 1 on desktop: Cloud Operations (Sync & Backup) */}
+          <div className="cs-col cs-col-left">
+            {/* Card 2: Cloud Sync */}
+            <div className="cs-section cs-section-sync">
+              <div className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>☁️ Cloud Sync</span>
+                <span style={{
                   fontSize: '0.68rem',
                   fontWeight: 800,
                   padding: '2px 8px',
                   borderRadius: 4,
-                  background: previewResult.safetyStatus === 'PASSED_SAFE' ? 'rgba(0, 229, 160, 0.15)' : 'rgba(255, 77, 106, 0.15)',
-                  color: previewResult.safetyStatus === 'PASSED_SAFE' ? 'var(--green)' : 'var(--expense)'
+                  background: !isUnlocked
+                    ? 'rgba(255, 179, 0, 0.15)'
+                    : (isLiveDeltaSyncing
+                      ? 'rgba(74, 144, 226, 0.15)'
+                      : (deltaMetrics.pendingCount > 0 ? 'rgba(255, 179, 0, 0.15)' : 'rgba(0, 229, 160, 0.15)')),
+                  color: !isUnlocked
+                    ? 'var(--warning)'
+                    : (isLiveDeltaSyncing
+                      ? 'var(--accent)'
+                      : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)'))
                 }}>
-                  {previewResult.safetyStatus === 'PASSED_SAFE' ? '🛡️ PASSED SAFE' : '⚠️ MASS DELETION ABORT'}
-                </div>
+                  {!isUnlocked
+                    ? 'Sync Locked'
+                    : (isLiveDeltaSyncing
+                      ? 'Syncing…'
+                      : (deltaMetrics.pendingCount > 0 ? `${deltaMetrics.pendingCount} Waiting` : 'All Changes Up to Date'))}
+                </span>
               </div>
-
-              {/* Mass Deletion Warning */}
-              {previewResult.safetyStatus === 'SAFETY_ABORT_MASS_DELETION' && (
-                <div style={{
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  background: 'rgba(255, 77, 106, 0.18)',
-                  color: 'var(--expense)',
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  marginBottom: 12
-                }}>
-                  🛑 Safety Guardrail Triggered: The proposed sync contains excessive deletions exceeding the safety threshold ({DELETION_SAFETY_LIMIT_COUNT} or {DELETION_SAFETY_LIMIT_PERCENT * 100}%). Sync execution is blocked to protect your financial records.
-                </div>
-              )}
-
-              {/* Local Changes Breakdown */}
-              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                Local changes to apply:
-              </div>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: 8,
-                background: 'var(--bg-card2)',
-                borderRadius: 8,
-                padding: 10,
-                marginBottom: 12,
-                textAlign: 'center'
-              }}>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Inserts</div>
-                  <div style={{ fontSize: '1rem', fontWeight: 800, color: previewResult.plannedLocalChanges.inserts > 0 ? 'var(--green)' : 'var(--text-primary)' }}>
-                    {previewResult.plannedLocalChanges.inserts > 0 ? `+${previewResult.plannedLocalChanges.inserts}` : '0'}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Updates</div>
-                  <div style={{ fontSize: '1rem', fontWeight: 800, color: previewResult.plannedLocalChanges.updates > 0 ? 'var(--accent)' : 'var(--text-primary)' }}>
-                    {previewResult.plannedLocalChanges.updates > 0 ? `~${previewResult.plannedLocalChanges.updates}` : '0'}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Deletes</div>
-                  <div style={{ fontSize: '1rem', fontWeight: 800, color: previewResult.plannedLocalChanges.deletes > 0 ? 'var(--expense)' : 'var(--text-primary)' }}>
-                    {previewResult.plannedLocalChanges.deletes > 0 ? `-${previewResult.plannedLocalChanges.deletes}` : '0'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Entity Breakdown */}
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                <div>• Cloud Snapshot: <strong>{previewResult.cloudCounts.snapshot_exists ? 'Exists in Drive' : 'None (First Initial Sync)'}</strong></div>
-                <div>• Cloud Action: <strong>{getFriendlyActionName(previewResult.action)}</strong></div>
-                {previewResult.isFirstSync ? (
-                  <div>• Dataset to Upload: <strong>{previewResult.localCounts.transactions.toLocaleString()}</strong> transactions, <strong>{previewResult.localCounts.investment_transactions || 0}</strong> trades (1 encrypted snapshot)</div>
-                ) : (
-                  <div>
-                    • Local Entities Inspected: <strong>{previewResult.localCounts.transactions.toLocaleString()}</strong> transactions, <strong>{previewResult.localCounts.investment_transactions || 0}</strong> trades<br />
-                    • Cloud Changes: <strong>{previewResult.plannedCloudChanges.inserts}</strong> inserts, <strong>{previewResult.plannedCloudChanges.updates}</strong> updates, <strong>{previewResult.plannedCloudChanges.deletes}</strong> deletes
-                  </div>
-                )}
-                <div>• Conflicts Detected: <strong>{previewResult.conflicts.length}</strong></div>
-                <div>• Dry-Run Safety: <strong>0 Local DB Writes, 0 Drive Writes</strong></div>
-                {previewResult.diagnostics && typeof previewResult.diagnostics.identityMatchedTransactions === 'number' && (
-                  <div>
-                    • Identity Reconciliation: <strong>{previewResult.diagnostics.identityMatchedTransactions.toLocaleString()}</strong> transactions, <strong>{previewResult.diagnostics.identityMatchedInvestments || 0}</strong> trades paired (0 duplicate inserts)
-                  </div>
-                )}
-                {previewResult.diagnostics && (
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 4, opacity: 0.8 }}>
-                    ⏱️ Diagnostic Time: {previewResult.diagnostics.totalMs}ms (Download: {previewResult.diagnostics.driveDownloadMs}ms, Reconcile: {previewResult.diagnostics.reconciliationMs}ms, DB: {previewResult.diagnostics.localDbReadMs}ms)
-                  </div>
-                )}
-              </div>
-
-              {/* Conflict Breakdown (Read-Only) */}
-              {previewResult.conflicts.length > 0 && (
-                <div style={{ marginTop: 14, borderTop: '1px solid var(--border-light)', paddingTop: 10 }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--gold)', marginBottom: 8 }}>
-                    ⚠️ Detected Conflicts ({previewResult.conflicts.length})
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 200, overflowY: 'auto' }}>
-                    {previewResult.conflicts.map((c, idx) => (
-                      <div key={idx} style={{
-                        background: 'var(--bg-surface)',
-                        padding: '8px 10px',
-                        borderRadius: 6,
-                        border: '1px solid var(--border)',
-                        fontSize: '0.7rem'
-                      }}>
-                        <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 2 }}>
-                          {c.type} · {c.entityType} ({c.id})
-                        </div>
-                        {Array.isArray(c.differences) && c.differences.map((d, dIdx) => (
-                          <div key={dIdx} style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>
-                            • {d.field}: Local [{String(d.val1)}] vs Cloud [{String(d.val2)}]
-                          </div>
-                        ))}
+              <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
+                {/* Account Connection Sub-Row */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 10, borderBottom: '1px solid var(--border-light)', marginBottom: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      background: isAuthenticated ? 'var(--green)' : (isGoogleLinked() ? 'var(--warning)' : 'var(--text-muted)'),
+                      boxShadow: isAuthenticated ? '0 0 6px var(--green)' : (isGoogleLinked() ? '0 0 6px var(--warning)' : 'none')
+                    }} />
+                    <div>
+                      <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {isAuthenticated
+                          ? 'Google Drive'
+                          : (isGoogleLinked() ? 'Google Drive (Needs Reconnect)' : 'Not Connected to Google Drive')}
                       </div>
-                    ))}
+                      {isAuthenticated && (
+                        <div style={{ marginTop: 2 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--green)' }}>● Connected</span>
+                          </div>
+                          {googleUser.email && (
+                            <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--accent)', marginTop: 1 }}>
+                              {googleUser.displayName
+                                ? `${formatTitleCase(googleUser.displayName)} <${googleUser.email}>`
+                                : (googleUser.email ? `${formatTitleCase(googleUser.email.split('@')[0])} <${googleUser.email}>` : '')}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                        Used for encrypted FinMan cloud sync
+                      </div>
+                    </div>
+
                   </div>
 
-                  <div style={{ marginTop: 12 }}>
+                  {isGoogleLinked() ? (
+                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                      {!isAuthenticated && (
+                        <button
+                          className="btn btn-primary"
+                          onClick={handleConnect}
+                          disabled={isAuthenticating}
+                          style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                        >
+                          {isAuthenticating ? 'Connecting...' : 'Reconnect'}
+                        </button>
+                      )}
+                      {isAuthenticating && (
+                        <button
+                          className="btn btn-ghost"
+                          onClick={handleCancelConnect}
+                          style={{ fontSize: '0.75rem', padding: '4px 8px', color: 'var(--text-muted)' }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                      <button
+                        className="btn btn-ghost"
+                        onClick={handleDisconnect}
+                        style={{ fontSize: '0.75rem', color: 'var(--expense)', padding: '4px 10px' }}
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleConnect}
+                        disabled={isAuthenticating}
+                        style={{ fontSize: '0.78rem', padding: '6px 14px', flexShrink: 0 }}
+                      >
+                        {isAuthenticating ? 'Connecting...' : 'Connect Google'}
+                      </button>
+                      {isAuthenticating && (
+                        <button
+                          className="btn btn-ghost"
+                          onClick={handleCancelConnect}
+                          style={{ fontSize: '0.78rem', padding: '6px 10px', color: 'var(--text-muted)' }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {authError && (
+                  <div style={{
+                    marginBottom: 10,
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    background: 'rgba(255, 77, 106, 0.12)',
+                    color: 'var(--expense)',
+                    fontSize: '0.72rem',
+                    fontWeight: 600
+                  }}>
+                    ⚠️ {translateSyncError(authError)}
+                  </div>
+                )}
+
+                {/* Sync Metrics Table */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Status</span>
+                  <span style={{
+                    fontWeight: 700,
+                    color: !isUnlocked
+                      ? 'var(--warning)'
+                      : (isLiveDeltaSyncing
+                        ? 'var(--accent)'
+                        : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
+                          ? 'var(--expense)'
+                          : (String(deltaMetrics.status || '').startsWith('BLOCKED')
+                            ? 'var(--warning)'
+                            : (deltaMetrics.pendingCount > 0 ? 'var(--warning)' : 'var(--green)'))))
+                  }}>
+                    {!isUnlocked
+                      ? '🔒 Sync Locked (PIN Required)'
+                      : (isLiveDeltaSyncing
+                        ? 'Syncing...'
+                        : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR
+                          ? (String(deltaMetrics.latestError || '').toLowerCase().includes('time') ? 'Sync Paused (Timed Out)' : 'Sync Paused (Needs Attention)')
+                          : (deltaMetrics.status === 'BLOCKED_PEER_BASELINE'
+                            ? (deltaMetrics.hasNewerBaseline || deltaMetrics.newerBaselineDetected ? 'Aligning Baseline…' : 'Baseline Alignment Required')
+                            : (deltaMetrics.status === 'BLOCKED_SEQUENCE_GAP' || deltaMetrics.status === 'BLOCKED_DEPENDENCY'
+                              ? 'Sync Paused (Waiting for Updates)'
+                              : (deltaMetrics.pendingCount > 0 ? 'Changes Waiting' : 'Up to Date')))))}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Changes waiting</span>
+                  <span style={{ fontWeight: 700, color: deltaMetrics.pendingCount > 0 ? 'var(--warning)' : (!isUnlocked ? 'var(--text-secondary)' : 'var(--green)') }}>
+                    {deltaMetrics.pendingCount} {deltaMetrics.pendingCount === 1 ? 'change' : 'changes'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Last successful full sync</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {deltaMetrics.lastDeltaSyncedAt ? new Date(deltaMetrics.lastDeltaSyncedAt).toLocaleString() : 'Never'}
+                  </span>
+                </div>
+
+                {deltaMetrics.latestError && deltaMetrics.status === DELTA_SYNC_STATUS.ERROR && (
+                  <div style={{
+                    marginTop: 10,
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    background: 'rgba(255, 77, 106, 0.12)',
+                    color: 'var(--expense)',
+                    fontSize: '0.72rem',
+                    fontWeight: 600
+                  }}>
+                    🛑 {translateSyncError(deltaMetrics.latestError, {
+                      pendingCount: deltaMetrics.pendingCount,
+                      localDataVerified: deltaMetrics.pendingCount !== undefined,
+                      status: deltaMetrics.status
+                    })}
+                  </div>
+                )}
+
+                {deltaMetrics.lifecycleState === 'UNINITIALIZED' && localTransactionsCount > 0 ? (
+                  <div style={{
+                    marginTop: 12,
+                    padding: '12px 14px',
+                    borderRadius: 8,
+                    background: 'rgba(74, 144, 226, 0.1)',
+                    border: '1px solid rgba(74, 144, 226, 0.3)'
+                  }}>
+                    <div style={{ fontWeight: 800, fontSize: '0.82rem', color: 'var(--accent)', marginBottom: 4 }}>
+                      📱 Offline Records Ready to Sync
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.45, marginBottom: 10 }}>
+                      This device contains <strong>{localTransactionsCount.toLocaleString()} offline records</strong>. Publish this device as your authoritative cloud master to establish Snapshot v13 and activate automatic sync across all devices.
+                    </div>
                     <button
-                      type="button"
                       className="btn btn-primary"
                       onClick={handlePublishMasterClick}
                       disabled={isPublishingMaster || !isGoogleLinked()}
-                      style={{ width: '100%', fontSize: '0.78rem', fontWeight: 800, padding: '10px 14px' }}
+                      style={{ width: '100%', padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
                     >
-                      📱 Force Push This Device as Cloud Master (Keep All Local Edits)
+                      {isPublishingMaster ? 'Publishing Snapshot v13...' : '📱 Set as Master Device & Enable Sync'}
                     </button>
                   </div>
+                ) : (
+                  <button
+                    className={!isUnlocked ? "btn btn-secondary" : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR ? "btn btn-secondary" : "btn btn-primary")}
+                    onClick={!isUnlocked ? () => {
+                      const pinInput = document.querySelector('input[placeholder*="sync PIN"]');
+                      if (pinInput) pinInput.focus();
+                    } : handleSyncChangesNow}
+                    disabled={!isUnlocked ? false : (isLiveDeltaSyncing || isLoading || isSyncing || !isGoogleLinked())}
+                    style={{
+                      width: '100%',
+                      marginTop: 12,
+                      padding: '10px 14px',
+                      fontSize: '0.82rem',
+                      fontWeight: 800
+                    }}
+                  >
+                    {!isUnlocked
+                      ? '🔒 Unlock Sync with PIN to Sync'
+                      : (isLiveDeltaSyncing
+                        ? 'Syncing...'
+                        : (deltaMetrics.status === DELTA_SYNC_STATUS.ERROR ? '🔄 Retry Sync' : '⚡ Sync Now'))}
+                  </button>
+                )}
+
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 8 }}>
+                  {!isUnlocked ? (
+                    <span>• <strong>Sync Locked</strong>: Enter your PIN in Sync Security above to resume sync.</span>
+                  ) : (
+                    <span>• <strong>Sync Now</strong>: Uploads your latest edits and downloads changes from your other devices.</span>
+                  )}
                 </div>
-              )}
+              </div>
+            </div>
+
+            {/* Card 4: Cloud Backup */}
+            <div className="cs-section cs-section-backup">
+              <div className="settings-group-label" style={{ padding: '8px 0 6px', color: 'var(--text-primary, #ffffff)', fontWeight: 700 }}>📦 Cloud Backup</div>
+              <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 10 }}>
+                  Create a complete encrypted backup of your FinMan data in Google Drive.
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Local Records</span>
+                  <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{localTransactionsCount.toLocaleString()} transactions</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Last Full Backup</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {lastSyncInfo.lastSyncedAt ? new Date(lastSyncInfo.lastSyncedAt).toLocaleString() : 'Never'}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 12 }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleSyncNowClick}
+                    disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
+                    style={{ flex: '1 1 180px', padding: '10px 14px', fontSize: '0.82rem', fontWeight: 800 }}
+                  >
+                    {isLoading && operationType === 'sync_now' ? 'Preparing...' : '📦 Create Cloud Backup'}
+                  </button>
+
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handlePreview}
+                    disabled={isLoading || isSyncing || isDeltaSyncing || !isGoogleLinked()}
+                    style={{ flex: '1 1 180px', padding: '9px 14px', fontSize: '0.8rem', fontWeight: 600 }}
+                  >
+                    {isLoading && operationType === 'preview' ? 'Inspecting...' : '🔍 Preview Cloud Backup'}
+                  </button>
+
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handlePublishMasterClick}
+                    disabled={isPublishingMaster || isLiveDeltaSyncing || isLoading || isSyncing || !isGoogleLinked()}
+                    style={{
+                      flex: '1 1 100%',
+                      padding: '10px 14px',
+                      fontSize: '0.82rem',
+                      fontWeight: 800,
+                      border: '1px solid var(--accent)',
+                      color: 'var(--accent)',
+                      background: 'rgba(74, 144, 226, 0.08)'
+                    }}
+                  >
+                    {isPublishingMaster ? 'Publishing Cloud Master...' : '📱 Push as Master Backup (Force Push)'}
+                  </button>
+                </div>
+
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                  • <strong>Push as Master Backup</strong>: Force-pushes this device's records directly as the cloud master. Overrides conflicts and updates other devices.<br />
+                  • <strong>Create Cloud Backup</strong>: Encrypts and reconciles your database with existing cloud snapshots.<br />
+                  • <strong>Preview Cloud Backup</strong>: Performs a 100% read-only inspection. Zero database changes, zero Drive writes.
+                </div>
+
+                {errorMsg && (
+                  <div style={{
+                    marginTop: 12,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    background: 'rgba(255, 77, 106, 0.12)',
+                    color: 'var(--expense)',
+                    fontSize: '0.74rem',
+                    fontWeight: 600
+                  }}>
+                    🛑 {translateSyncError(errorMsg)}
+                  </div>
+                )}
+
+                {successMsg && (
+                  <div style={{
+                    marginTop: 12,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    background: 'rgba(0, 229, 160, 0.12)',
+                    color: 'var(--green)',
+                    fontSize: '0.74rem',
+                    fontWeight: 700
+                  }}>
+                    {successMsg}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        )}
-      </div> {/* end of cloud-sync-grid */}
-    </div> {/* end of cloud-sync-container */}
+
+          {/* Column 2 on desktop: Devices & Conflicts */}
+          <div className="cs-col cs-col-right">
+            {/* Card: Connected Devices */}
+            <div className="cs-section cs-section-devices">
+              <ConnectedDevicesCard
+                isAuthenticated={isAuthenticated}
+                localDeviceId={deltaMetrics.deviceId !== 'local_device' ? deltaMetrics.deviceId : null}
+                lastLocalSyncAt={deltaMetrics.lastDeltaSyncedAt}
+              />
+            </div>
+
+            {/* Card 3: Sync Conflicts */}
+            <div className="cs-section cs-section-conflicts">
+              <div id="sync-conflicts-section" className="settings-group-label" style={{ padding: '8px 0 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>⚖️ Sync Conflicts</span>
+                <span style={{
+                  fontSize: '0.68rem',
+                  fontWeight: 800,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  background: pendingConflicts.length > 0 ? 'rgba(255, 179, 0, 0.15)' : 'rgba(0, 229, 160, 0.15)',
+                  color: pendingConflicts.length > 0 ? 'var(--warning)' : 'var(--green)'
+                }}>
+                  {pendingConflicts.length > 0 ? `⚠️ ${pendingConflicts.length} Pending` : '0 Pending'}
+                </span>
+              </div>
+
+              <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem' }}>
+                {resolutionMsg && (
+                  <div style={{
+                    marginBottom: 12,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    background: resolutionMsg.type === 'success' ? 'rgba(0, 229, 160, 0.12)' : 'rgba(255, 77, 106, 0.12)',
+                    color: resolutionMsg.type === 'success' ? 'var(--green)' : 'var(--expense)',
+                    fontSize: '0.74rem',
+                    fontWeight: 700
+                  }}>
+                    {resolutionMsg.type === 'success' ? '✅ ' : '🛑 '}{resolutionMsg.text}
+                  </div>
+                )}
+
+                {pendingConflicts.length === 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
+                    <span style={{ fontSize: '1rem' }}>✅</span>
+                    <div>
+                      <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.78rem' }}>No Sync Conflicts</div>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>All your devices are in sync.</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      background: 'rgba(255, 179, 0, 0.08)',
+                      border: '1px solid rgba(255, 179, 0, 0.25)',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.72rem',
+                      lineHeight: 1.45
+                    }}>
+                      <div style={{ fontWeight: 800, color: 'var(--warning)', marginBottom: 3 }}>
+                        🛡️ Both versions are safely preserved while you review.
+                      </div>
+                      <div>
+                        This conflict affects only this record. Other transactions and accounts continue syncing normally. Choose which version should become authoritative.
+                      </div>
+                    </div>
+
+                    {pendingConflicts.length > 1 && (() => {
+                      const allIdentical = pendingConflicts.every(c => {
+                        const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
+                        return !diff.hasChanges;
+                      });
+
+                      return (
+                        <div style={{
+                          padding: '12px 14px',
+                          borderRadius: 10,
+                          background: 'var(--bg-card)',
+                          border: '1px solid var(--border-light)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 10
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                            <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                              ⚡ Bulk Resolution ({pendingConflicts.length} Pending)
+                            </div>
+                            {allIdentical && (
+                              <span style={{
+                                fontSize: '0.66rem',
+                                padding: '2px 8px',
+                                borderRadius: 4,
+                                background: 'rgba(0, 229, 160, 0.15)',
+                                color: 'var(--green)',
+                                fontWeight: 700
+                              }}>
+                                ✓ All records have identical data
+                              </span>
+                            )}
+                          </div>
+
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                            {allIdentical
+                              ? 'All pending records have identical values on both devices. You can resolve all of them with one tap to clear the conflict banner and resume automatic synchronization.'
+                              : 'Quickly resolve all pending conflicts across all affected collections in a single step.'}
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => handleOpenResolveAllConfirm(CONFLICT_RESOLUTION.KEEP_LOCAL)}
+                              disabled={!isUnlocked || isResolvingAll || Boolean(resolvingId)}
+                              style={{ padding: '9px 10px', fontSize: '0.74rem', fontWeight: 700, textAlign: 'center' }}
+                            >
+                              {isResolvingAll ? 'Resolving All…' : "📱 Keep This Device's Versions"}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              onClick={() => handleOpenResolveAllConfirm(CONFLICT_RESOLUTION.ACCEPT_REMOTE)}
+                              disabled={!isUnlocked || isResolvingAll || Boolean(resolvingId)}
+                              style={{ padding: '9px 10px', fontSize: '0.74rem', fontWeight: 700, textAlign: 'center' }}
+                            >
+                              {isResolvingAll ? 'Resolving All…' : "☁️ Accept Other Device's Versions"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {pendingConflicts.map((c) => {
+                      const isCurrentResolving = resolvingId === c.conflict_id;
+                      const formatted = formatConflictEntity(c);
+                      const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
+
+                      return (
+                        <div
+                          key={c.conflict_id}
+                          style={{
+                            border: '1px solid var(--border-light)',
+                            borderRadius: 10,
+                            padding: 14,
+                            background: 'var(--bg-surface)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 12
+                          }}
+                        >
+                          {/* Conflict Header */}
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                              <span style={{
+                                fontSize: '0.68rem',
+                                fontWeight: 800,
+                                padding: '2px 8px',
+                                borderRadius: 4,
+                                background: 'rgba(255, 179, 0, 0.15)',
+                                color: 'var(--warning)'
+                              }}>
+                                ⚠️ {formatted.friendlyType}
+                              </span>
+                              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                {formatted.collectionLabel}
+                              </span>
+                            </div>
+                            <div style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--text-primary)', wordBreak: 'break-word', marginTop: 4 }}>
+                              {formatted.primaryTitle}
+                            </div>
+                            {formatted.primarySubtitle && (
+                              <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--accent)', marginTop: 2 }}>
+                                {formatted.primarySubtitle}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* What Changed (Field Diff Highlights) */}
+                          {diff.changedFields.length > 0 && (
+                            <div style={{
+                              background: 'rgba(255, 255, 255, 0.03)',
+                              border: '1px solid var(--border-light)',
+                              borderRadius: 8,
+                              padding: '10px 12px'
+                            }}>
+                              <div style={{ fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--warning)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
+                                <span>⚡</span>
+                                <span>What Changed</span>
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                {diff.changedFields.map((field) => (
+                                  <div key={field.key} style={{
+                                    padding: '6px 8px',
+                                    borderRadius: 6,
+                                    background: 'rgba(255, 179, 0, 0.06)',
+                                    border: '1px solid rgba(255, 179, 0, 0.15)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: 2
+                                  }}>
+                                    <div style={{ fontWeight: 700, fontSize: '0.72rem', color: 'var(--text-primary)' }}>
+                                      {field.label}
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', flexWrap: 'wrap', gap: 4 }}>
+                                      <span style={{ color: 'var(--accent)' }}>
+                                        This Device: <strong>{field.localValue}</strong>
+                                      </span>
+                                      <span style={{ color: 'var(--warning)' }}>
+                                        Other Device: <strong>{field.remoteValue}</strong>
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Unchanged Fields Collapsible */}
+                          {diff.unchangedFields.length > 0 && (
+                            <details style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                              <summary style={{ cursor: 'pointer', fontWeight: 600, padding: '2px 0' }}>
+                                Show unchanged fields ({diff.unchangedFields.length})
+                              </summary>
+                              <div style={{ padding: '6px 8px', background: 'var(--bg-card)', borderRadius: 6, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {diff.unchangedFields.map((f) => (
+                                  <div key={f.key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem' }}>
+                                    <span>{f.label}:</span>
+                                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{f.localValue}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          )}
+
+                          {/* Side-by-Side Version Cards */}
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
+                            {/* Local Version */}
+                            <div style={{
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              background: 'rgba(74, 144, 226, 0.08)',
+                              border: '1px solid rgba(74, 144, 226, 0.2)'
+                            }}>
+                              <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent)', marginBottom: 2 }}>
+                                📱 This Device
+                              </div>
+                              <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                                Current version on this device
+                              </div>
+                              <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
+                                {formatted.localDescriptor.note || formatted.localDescriptor.title}
+                              </div>
+                              {formatted.localDescriptor.amount && (
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                                  Amount: {formatted.localDescriptor.amount}
+                                </div>
+                              )}
+                              {formatted.localDescriptor.date && (
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                                  Date: {formatted.localDescriptor.date}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Remote Version */}
+                            <div style={{
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              background: 'rgba(255, 179, 0, 0.08)',
+                              border: '1px solid rgba(255, 179, 0, 0.2)'
+                            }}>
+                              <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--warning)', marginBottom: 2 }}>
+                                ☁️ Other Device
+                              </div>
+                              <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                                Incoming version from cloud sync
+                              </div>
+                              <div style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
+                                {formatted.remoteDescriptor.note || formatted.remoteDescriptor.title}
+                              </div>
+                              {formatted.remoteDescriptor.amount && (
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                                  Amount: {formatted.remoteDescriptor.amount}
+                                </div>
+                              )}
+                              {formatted.remoteDescriptor.date && (
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                                  Date: {formatted.remoteDescriptor.date}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => handleOpenResolveConfirm(c, CONFLICT_RESOLUTION.KEEP_LOCAL)}
+                              disabled={!isUnlocked || isCurrentResolving}
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '8px 10px',
+                                borderRadius: 8,
+                                textAlign: 'center'
+                              }}
+                            >
+                              <span style={{ fontWeight: 800, fontSize: '0.76rem' }}>
+                                {isCurrentResolving ? 'Resolving...' : "📱 Keep This Device's Version"}
+                              </span>
+                              <span style={{ fontSize: '0.64rem', fontWeight: 400, opacity: 0.85, marginTop: 2 }}>
+                                Keep local edits and sync this version to your other devices
+                              </span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              onClick={() => handleOpenResolveConfirm(c, CONFLICT_RESOLUTION.ACCEPT_REMOTE)}
+                              disabled={!isUnlocked || isCurrentResolving}
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '8px 10px',
+                                borderRadius: 8,
+                                textAlign: 'center'
+                              }}
+                            >
+                              <span style={{ fontWeight: 800, fontSize: '0.76rem' }}>
+                                {isCurrentResolving ? 'Resolving...' : "☁️ Accept Other Device's Version"}
+                              </span>
+                              <span style={{ fontSize: '0.64rem', fontWeight: 400, opacity: 0.85, marginTop: 2 }}>
+                                Replace this device's version with incoming version and sync it
+                              </span>
+                            </button>
+                          </div>
+
+                          {!isUnlocked && (
+                            <div style={{ fontSize: '0.68rem', color: 'var(--warning)', fontWeight: 600 }}>
+                              🔒 Unlock the sync session above to resolve this conflict.
+                            </div>
+                          )}
+
+                          {/* Collapsible Technical Diagnostics */}
+                          <details style={{
+                            marginTop: 4,
+                            padding: '6px 10px',
+                            borderRadius: 6,
+                            background: 'rgba(0, 0, 0, 0.15)',
+                            border: '1px solid var(--border-light)',
+                            fontSize: '0.68rem',
+                            color: 'var(--text-muted)'
+                          }}>
+                            <summary style={{ cursor: 'pointer', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                              ⚙️ Technical Diagnostics (ID: {formatted.shortEntityId})
+                            </summary>
+                            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3, fontFamily: 'monospace', fontSize: '0.65rem' }}>
+                              <div><strong>Conflict ID:</strong> {c.conflict_id}</div>
+                              <div><strong>Collection:</strong> {c.collection}</div>
+                              <div><strong>Entity ID:</strong> {c.entity_id}</div>
+                              <div><strong>Conflict Type:</strong> {c.conflict_type}</div>
+                              <div><strong>Peer Device ID:</strong> {c.peer_device_id || '—'}</div>
+                              <div><strong>Event ID:</strong> {c.event_id || '—'}</div>
+                              <div><strong>Package ID:</strong> {c.package_id || '—'}</div>
+                              <div><strong>Base Checksum:</strong> {c.base_checksum ? c.base_checksum.slice(0, 16) + '...' : '—'}</div>
+                              <div><strong>Local Checksum:</strong> {c.local_checksum ? c.local_checksum.slice(0, 16) + '...' : '—'}</div>
+                              <div><strong>Remote Checksum:</strong> {c.remote_checksum ? c.remote_checksum.slice(0, 16) + '...' : '—'}</div>
+                            </div>
+                          </details>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Card 5: Advanced Settings & Diagnostics */}
+          <div className="cs-section cs-section-advanced">
+            <details className="settings-card" style={{ padding: 14, margin: '0 0 14px', fontSize: '0.75rem', cursor: 'pointer' }}>
+              <summary style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
+                <div>
+                  <div>⚙️ Advanced Settings &amp; Diagnostics</div>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 400, marginTop: 2 }}>
+                    Technical information for troubleshooting.
+                  </div>
+                </div>
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Expand / Collapse</span>
+              </summary>
+              <div style={{ marginTop: 12, borderTop: '1px solid var(--border-light)', paddingTop: 8, cursor: 'default' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Uploaded Sequence</span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {deltaMetrics.lastUploadedSequence}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Acknowledged Sequence</span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {deltaMetrics.lastAckedSequence}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Local Device ID</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                    {deltaMetrics.deviceId}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Lifecycle State</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {deltaMetrics.lifecycleState}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Local Base Snapshot ID</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                    {lastSyncInfo.lastSnapshotId || 'None'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Google Drive Scope</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                    {isAuthenticated ? 'drive.appdata (Sandboxed)' : 'None'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Encryption Standard</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-primary)' }}>
+                    AES-256-GCM (Zero-Knowledge)
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Storage Repository</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-primary)' }}>
+                    Google Drive (Sandboxed AppData)
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Local Transactions</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {localTransactionsCount.toLocaleString()}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+                  <div>
+                    <span style={{ color: 'var(--text-muted)' }}>Restore Safeguard</span>
+                    <div style={{ fontSize: '0.68rem', color: bootstrapEligibility?.isEligible ? 'var(--green)' : 'var(--text-muted)' }}>
+                      {bootstrapEligibility?.isEligible ? 'Eligible for Cloud Restore' : 'Destructive Restore Suppressed'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.68rem', padding: '3px 8px', color: 'var(--blue)', borderColor: 'rgba(59, 130, 246, 0.4)' }}
+                    onClick={() => setShowEligibilityModal(true)}
+                  >
+                    🛡️ View Diagnostics
+                  </button>
+                </div>
+                {/* Developer Diagnostics Section */}
+                <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      🛠️ Developer Diagnostics
+                    </span>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={async () => {
+                          setIsTestingNativeBackup(true);
+                          setNativeBackupStatus(null);
+                          try {
+                            const { runNativeBackupDiagnostic } = await import('../../services/snapshotDeviceImport.js');
+                            const res = await runNativeBackupDiagnostic();
+                            setNativeBackupStatus({
+                              success: true,
+                              message: `✓ Backup created & verified: ${res.backupPath?.split('/').pop() || 'backup.db'} (${res.durationMs}ms, ${res.counts?.transactions ?? 0} txns, integrity ok)`
+                            });
+                          } catch (err) {
+                            setNativeBackupStatus({
+                              success: false,
+                              message: `Backup failed: ${err.message}`
+                            });
+                          } finally {
+                            setIsTestingNativeBackup(false);
+                          }
+                        }}
+                        disabled={isTestingNativeBackup}
+                        style={{ fontSize: '0.68rem', padding: '4px 8px', background: 'rgba(0, 229, 160, 0.1)', borderColor: 'rgba(0, 229, 160, 0.3)', color: 'var(--green)' }}
+                        title="Safely creates and self-verifies native SQLite backup without modifying data or contacting cloud"
+                      >
+                        {isTestingNativeBackup ? '⏳ Backing up…' : '🧪 Create Backup'}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={async () => {
+                          setIsTestingNativeBackup(true);
+                          setNativeBackupStatus(null);
+                          try {
+                            const res = await verifyNativeBackupDiagnostic();
+                            setNativeBackupStatus({
+                              success: res.success,
+                              message: `🔍 Backup Verified: ${res.backupPath?.split('/').pop()} | Txns: ${res.actualCounts.transactions} (Match: ${res.countsMatch ? 'YES' : 'NO'}) | Integrity: ${res.integrity}`
+                            });
+                          } catch (err) {
+                            setNativeBackupStatus({
+                              success: false,
+                              message: `Verification failed: ${err.message}`
+                            });
+                          } finally {
+                            setIsTestingNativeBackup(false);
+                          }
+                        }}
+                        disabled={isTestingNativeBackup}
+                        style={{ fontSize: '0.68rem', padding: '4px 8px', background: 'rgba(64, 150, 255, 0.1)', borderColor: 'rgba(64, 150, 255, 0.3)', color: 'var(--accent, #4096ff)' }}
+                        title="Read-only inspection of physical backup file on disk without modifying operational data"
+                      >
+                        🔍 Verify Backup
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={async () => {
+                          const confirmed = window.confirm(
+                            "Are you sure you want to test SELF-RESTORE from your durable SQLite backup?\n\n" +
+                            "This will verify backup integrity and restore operational tables from the verified backup file."
+                          );
+                          if (!confirmed) return;
+
+                          setIsTestingNativeBackup(true);
+                          setNativeBackupStatus(null);
+                          try {
+                            const res = await executeSelfRestoreDiagnostic('CONFIRM_SELF_RESTORE');
+                            setNativeBackupStatus({
+                              success: res.success,
+                              message: `🔄 Self-Restore Success! Restored in ${res.restoreDurationMs}ms | Txns: ${res.operationalCountsAfterRestore.transactions} | Integrity: ${res.mainIntegrity}`
+                            });
+                            // Reload app state if available
+                            if (typeof load === 'function') load().catch(() => { });
+                          } catch (err) {
+                            setNativeBackupStatus({
+                              success: false,
+                              message: `Self-Restore failed: ${err.message}`
+                            });
+                          } finally {
+                            setIsTestingNativeBackup(false);
+                          }
+                        }}
+                        disabled={isTestingNativeBackup}
+                        style={{ fontSize: '0.68rem', padding: '4px 8px', background: 'rgba(255, 179, 0, 0.1)', borderColor: 'rgba(255, 179, 0, 0.3)', color: 'var(--warning, #ffb300)' }}
+                        title="Explicitly restore operational tables from the verified native SQLite backup"
+                      >
+                        🔄 Test Self-Restore
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => setShowEligibilityModal(true)}
+                        style={{ fontSize: '0.68rem', padding: '4px 8px', background: 'rgba(59, 130, 246, 0.1)', borderColor: 'rgba(59, 130, 246, 0.3)', color: 'var(--blue)' }}
+                        title="Audit device emptiness and cloud restore eligibility"
+                      >
+                        🛡️ View Diagnostics
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => {
+                          const diagData = deltaMetrics.latestDiagnostic || {
+                            status: deltaMetrics.status,
+                            lifecycleState: deltaMetrics.lifecycleState,
+                            pendingChanges: deltaMetrics.pendingCount,
+                            lastUploadedSequence: deltaMetrics.lastUploadedSequence,
+                            lastAckedSequence: deltaMetrics.lastAckedSequence,
+                            redactedDeviceId: (deltaMetrics.deviceId || '').length > 8
+                              ? `${(deltaMetrics.deviceId || '').slice(0, 4)}...${(deltaMetrics.deviceId || '').slice(-4)}`
+                              : (deltaMetrics.deviceId || 'local_device'),
+                            message: deltaMetrics.latestError ? String(deltaMetrics.latestError).slice(0, 200) : 'None',
+                            timestamp: new Date().toISOString()
+                          };
+                          navigator.clipboard.writeText(JSON.stringify(diagData, null, 2));
+                          setCopiedDiagnostics(true);
+                          setTimeout(() => setCopiedDiagnostics(false), 2500);
+                        }}
+                        style={{ fontSize: '0.68rem', padding: '4px 10px' }}
+                      >
+                        {copiedDiagnostics ? '✓ Copied Diagnostics!' : '📋 Copy Diagnostics'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {nativeBackupStatus && (
+                    <div style={{
+                      padding: '6px 10px',
+                      borderRadius: 6,
+                      background: nativeBackupStatus.success ? 'rgba(0, 229, 160, 0.12)' : 'rgba(255, 68, 68, 0.12)',
+                      border: `1px solid ${nativeBackupStatus.success ? 'rgba(0, 229, 160, 0.3)' : 'rgba(255, 68, 68, 0.3)'}`,
+                      color: nativeBackupStatus.success ? 'var(--green)' : 'var(--expense)',
+                      fontSize: '0.68rem',
+                      fontWeight: 600,
+                      marginBottom: 8
+                    }}>
+                      {nativeBackupStatus.message}
+                    </div>
+                  )}
+
+                  {deltaMetrics.latestDiagnostic ? (
+                    <div style={{
+                      padding: '8px 10px',
+                      borderRadius: 6,
+                      background: 'rgba(0, 0, 0, 0.2)',
+                      fontFamily: 'monospace',
+                      fontSize: '0.68rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 3,
+                      border: '1px solid var(--border-light)'
+                    }}>
+                      <div><strong style={{ color: 'var(--text-muted)' }}>Stage:</strong> <span style={{ color: 'var(--accent)' }}>{deltaMetrics.latestDiagnostic.stage}</span></div>
+                      <div><strong style={{ color: 'var(--text-muted)' }}>Error Code:</strong> <span style={{ color: 'var(--expense)' }}>{deltaMetrics.latestDiagnostic.code}</span></div>
+                      <div><strong style={{ color: 'var(--text-muted)' }}>Attempt ID:</strong> {deltaMetrics.latestDiagnostic.attemptId}</div>
+                      <div><strong style={{ color: 'var(--text-muted)' }}>Device:</strong> {deltaMetrics.latestDiagnostic.redactedDeviceId}</div>
+                      <div><strong style={{ color: 'var(--text-muted)' }}>Retryable:</strong> {deltaMetrics.latestDiagnostic.retryable ? 'Yes' : 'No'}</div>
+                      <div><strong style={{ color: 'var(--text-muted)' }}>Pending Changes:</strong> {deltaMetrics.latestDiagnostic.pendingChanges}</div>
+                      <div><strong style={{ color: 'var(--text-muted)' }}>Message:</strong> {deltaMetrics.latestDiagnostic.message}</div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                      All sync passes healthy. Zero unhandled diagnostic exceptions recorded.
+                    </div>
+                  )}
+                </div>
+
+                {/* Client ID Configuration Toggle inside Advanced */}
+                <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => setShowConfig(!showConfig)}
+                      style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textDecoration: 'underline', padding: 0 }}
+                    >
+                      {showConfig ? 'Hide OAuth Client ID Config' : 'Configure Custom OAuth Client ID'}
+                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Active Client ID:</span>
+                      <span style={{
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        fontWeight: 700,
+                        fontSize: '0.68rem',
+                        background: clientIdSource === 'CUSTOM_SAVED' ? 'rgba(0, 229, 160, 0.15)' : 'rgba(255, 179, 0, 0.15)',
+                        color: clientIdSource === 'CUSTOM_SAVED' ? 'var(--green)' : 'var(--warning, #ffb300)'
+                      }}>
+                        {clientIdSource === 'CUSTOM_SAVED' ? 'Custom / Saved to this origin' : 'Environment Default'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {showConfig && (
+                    <div style={{ marginTop: 8 }}>
+                      {/* Current Origin Display Banner */}
+                      <div style={{
+                        padding: '8px 12px',
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        borderRadius: 6,
+                        marginBottom: 10,
+                        border: '1px solid var(--border-light)'
+                      }}>
+                        <div style={{ color: 'var(--text-muted)', marginBottom: 3, fontSize: '0.68rem' }}>
+                          Current Browser Origin (for Google Cloud Console):
+                        </div>
+                        <code style={{ color: 'var(--accent, #6366f1)', fontWeight: 600, fontSize: '0.74rem', wordBreak: 'break-all', display: 'block' }}>
+                          {typeof window !== 'undefined' ? window.location.origin : ''}
+                        </code>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                          Add this exact origin to <strong>Authorized JavaScript origins</strong> in Google Cloud Console.
+                        </div>
+                      </div>
+
+                      <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                        OAuth 2.0 Web Client ID
+                      </label>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. 123456...apps.googleusercontent.com"
+                          value={clientId}
+                          onChange={e => setClientId(e.target.value)}
+                          style={{ flex: 1, fontSize: '0.75rem', padding: '6px 10px' }}
+                        />
+                        <button
+                          className="btn btn-secondary"
+                          onClick={handleSaveClientId}
+                          style={{ fontSize: '0.72rem', padding: '6px 12px' }}
+                        >
+                          Save
+                        </button>
+                      </div>
+
+                      {clientIdSavedMsg && (
+                        <div style={{
+                          marginTop: 8,
+                          padding: '6px 10px',
+                          borderRadius: 4,
+                          background: 'rgba(0, 229, 160, 0.1)',
+                          border: '1px solid rgba(0, 229, 160, 0.3)',
+                          color: 'var(--green)',
+                          fontSize: '0.72rem',
+                          fontWeight: 600
+                        }}>
+                          ✓ {clientIdSavedMsg}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </details>
+          </div>
+
+          {/* Preview Results Display */}
+          {previewResult && (
+            <div className="cs-section cs-section-preview">
+              <div className="settings-group-label" style={{ padding: '8px 0 6px', color: 'var(--text-primary, #ffffff)', fontWeight: 700 }}>Sync Preview Results (Dry-Run)</div>
+              <div className="settings-card" style={{ padding: 14, margin: '0 0 14px', border: '1px solid var(--green)' }}>
+                {/* Safety Badge */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Action: <span style={{ color: 'var(--green)' }}>{getFriendlyActionName(previewResult.action)}</span>
+                  </div>
+                  <div style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 800,
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    background: previewResult.safetyStatus === 'PASSED_SAFE' ? 'rgba(0, 229, 160, 0.15)' : 'rgba(255, 77, 106, 0.15)',
+                    color: previewResult.safetyStatus === 'PASSED_SAFE' ? 'var(--green)' : 'var(--expense)'
+                  }}>
+                    {previewResult.safetyStatus === 'PASSED_SAFE' ? '🛡️ PASSED SAFE' : '⚠️ MASS DELETION ABORT'}
+                  </div>
+                </div>
+
+                {/* Mass Deletion Warning */}
+                {previewResult.safetyStatus === 'SAFETY_ABORT_MASS_DELETION' && (
+                  <div style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    background: 'rgba(255, 77, 106, 0.18)',
+                    color: 'var(--expense)',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    marginBottom: 12
+                  }}>
+                    🛑 Safety Guardrail Triggered: The proposed sync contains excessive deletions exceeding the safety threshold ({DELETION_SAFETY_LIMIT_COUNT} or {DELETION_SAFETY_LIMIT_PERCENT * 100}%). Sync execution is blocked to protect your financial records.
+                  </div>
+                )}
+
+                {/* Local Changes Breakdown */}
+                <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                  Local changes to apply:
+                </div>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: 8,
+                  background: 'var(--bg-card2)',
+                  borderRadius: 8,
+                  padding: 10,
+                  marginBottom: 12,
+                  textAlign: 'center'
+                }}>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Inserts</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 800, color: previewResult.plannedLocalChanges.inserts > 0 ? 'var(--green)' : 'var(--text-primary)' }}>
+                      {previewResult.plannedLocalChanges.inserts > 0 ? `+${previewResult.plannedLocalChanges.inserts}` : '0'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Updates</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 800, color: previewResult.plannedLocalChanges.updates > 0 ? 'var(--accent)' : 'var(--text-primary)' }}>
+                      {previewResult.plannedLocalChanges.updates > 0 ? `~${previewResult.plannedLocalChanges.updates}` : '0'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Deletes</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 800, color: previewResult.plannedLocalChanges.deletes > 0 ? 'var(--expense)' : 'var(--text-primary)' }}>
+                      {previewResult.plannedLocalChanges.deletes > 0 ? `-${previewResult.plannedLocalChanges.deletes}` : '0'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Entity Breakdown */}
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                  <div>• Cloud Snapshot: <strong>{previewResult.cloudCounts.snapshot_exists ? 'Exists in Drive' : 'None (First Initial Sync)'}</strong></div>
+                  <div>• Cloud Action: <strong>{getFriendlyActionName(previewResult.action)}</strong></div>
+                  {previewResult.isFirstSync ? (
+                    <div>• Dataset to Upload: <strong>{previewResult.localCounts.transactions.toLocaleString()}</strong> transactions, <strong>{previewResult.localCounts.investment_transactions || 0}</strong> trades (1 encrypted snapshot)</div>
+                  ) : (
+                    <div>
+                      • Local Entities Inspected: <strong>{previewResult.localCounts.transactions.toLocaleString()}</strong> transactions, <strong>{previewResult.localCounts.investment_transactions || 0}</strong> trades<br />
+                      • Cloud Changes: <strong>{previewResult.plannedCloudChanges.inserts}</strong> inserts, <strong>{previewResult.plannedCloudChanges.updates}</strong> updates, <strong>{previewResult.plannedCloudChanges.deletes}</strong> deletes
+                    </div>
+                  )}
+                  <div>• Conflicts Detected: <strong>{previewResult.conflicts.length}</strong></div>
+                  <div>• Dry-Run Safety: <strong>0 Local DB Writes, 0 Drive Writes</strong></div>
+                  {previewResult.diagnostics && typeof previewResult.diagnostics.identityMatchedTransactions === 'number' && (
+                    <div>
+                      • Identity Reconciliation: <strong>{previewResult.diagnostics.identityMatchedTransactions.toLocaleString()}</strong> transactions, <strong>{previewResult.diagnostics.identityMatchedInvestments || 0}</strong> trades paired (0 duplicate inserts)
+                    </div>
+                  )}
+                  {previewResult.diagnostics && (
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 4, opacity: 0.8 }}>
+                      ⏱️ Diagnostic Time: {previewResult.diagnostics.totalMs}ms (Download: {previewResult.diagnostics.driveDownloadMs}ms, Reconcile: {previewResult.diagnostics.reconciliationMs}ms, DB: {previewResult.diagnostics.localDbReadMs}ms)
+                    </div>
+                  )}
+                </div>
+
+                {/* Conflict Breakdown (Read-Only) */}
+                {previewResult.conflicts.length > 0 && (
+                  <div style={{ marginTop: 14, borderTop: '1px solid var(--border-light)', paddingTop: 10 }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--gold)', marginBottom: 8 }}>
+                      ⚠️ Detected Conflicts ({previewResult.conflicts.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 200, overflowY: 'auto' }}>
+                      {previewResult.conflicts.map((c, idx) => (
+                        <div key={idx} style={{
+                          background: 'var(--bg-surface)',
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          border: '1px solid var(--border)',
+                          fontSize: '0.7rem'
+                        }}>
+                          <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 2 }}>
+                            {c.type} · {c.entityType} ({c.id})
+                          </div>
+                          {Array.isArray(c.differences) && c.differences.map((d, dIdx) => (
+                            <div key={dIdx} style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>
+                              • {d.field}: Local [{String(d.val1)}] vs Cloud [{String(d.val2)}]
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ marginTop: 12 }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={handlePublishMasterClick}
+                        disabled={isPublishingMaster || !isGoogleLinked()}
+                        style={{ width: '100%', fontSize: '0.78rem', fontWeight: 800, padding: '10px 14px' }}
+                      >
+                        📱 Force Push This Device as Cloud Master (Keep All Local Edits)
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div> {/* end of cloud-sync-grid */}
+      </div> {/* end of cloud-sync-container */}
 
       {/* Confirmation Bottom-Sheet Modal */}
       {showConfirmModal && previewResult && (() => {
@@ -3068,11 +3295,11 @@ export default function CloudSyncManager({ onBack }) {
         </>
       )}
 
-      {/* Bootstrap Eligibility & Device Safeguard Diagnostics Modal */}
+      {/* Restore Safeguard Diagnostic Modal */}
       {showEligibilityModal && bootstrapEligibility && (
         <>
           <div
-            className="dash-popup-backdrop"
+            className="dash-popup-overlay"
             style={{ zIndex: 10002 }}
             onClick={() => setShowEligibilityModal(false)}
           />
@@ -3150,7 +3377,7 @@ export default function CloudSyncManager({ onBack }) {
                 <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                   Suppression Reasons
                 </div>
-                <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5, textAlign: 'left' }}>
                   {bootstrapEligibility.reasons.map((r, i) => (
                     <li key={i}>{r}</li>
                   ))}
@@ -3169,6 +3396,7 @@ export default function CloudSyncManager({ onBack }) {
           </div>
         </>
       )}
+
     </div>
   );
 }

@@ -35,6 +35,8 @@ export default function ConnectedDevicesCard({
   const [editingDeviceId, setEditingDeviceId] = useState(null);
   const [editingNameValue, setEditingNameValue] = useState('');
   const [isListExpanded, setIsListExpanded] = useState(false);
+  const [upgradeModal, setUpgradeModal] = useState(null);
+  const [removeModal, setRemoveModal] = useState(null);
 
   const handleStartRename = (dev) => {
     setEditingDeviceId(dev.deviceId);
@@ -114,7 +116,7 @@ export default function ConnectedDevicesCard({
         const currentDev = fetched.find(d => d.isCurrentDevice);
         const currentVer = currentDev?.baseCloudVersion || 0;
         const newerPeer = fetched.find(d => !d.isCurrentDevice && d.baseCloudVersion > currentVer && d.baseSnapshotId !== currentDev?.baseSnapshotId && d.lineageStatus === 'RECOVERABLE_NEWER');
-        if (newerPeer && currentVer > 0 && !isUpgrading) {
+        if (newerPeer && currentVer > 0 && !isUpgrading && !upgradeModal) {
           import('../../services/deltaSyncCoordinator.js').then(async ({ checkAndAutoReconcileCloudSnapshot, triggerAutomaticSync, SYNC_TRIGGER }) => {
             try {
               const { getValidAccessToken } = await import('../../services/googleAuth.js');
@@ -255,48 +257,105 @@ export default function ConnectedDevicesCard({
     }
   };
 
-  const handleUpgradeToNewerSnapshot = async (dev) => {
-    setIsUpgrading(true);
-    try {
-      const { checkAndAutoReconcileCloudSnapshot, triggerAutomaticSync, SYNC_TRIGGER } = await import('../../services/deltaSyncCoordinator.js');
-      const { getValidAccessToken } = await import('../../services/googleAuth.js');
-      const { getSyncSessionKey } = await import('../../services/syncSession.js');
-      const token = await getValidAccessToken(false);
-      const sessionKey = getSyncSessionKey();
+  const handleStartUpgrade = (dev) => {
+    setUpgradeModal({
+      dev,
+      pin: '',
+      error: '',
+      isRunning: false,
+      statusMessage: '',
+      result: null
+    });
+  };
 
-      const res = await checkAndAutoReconcileCloudSnapshot({
+  const handleConfirmUpgrade = async (e) => {
+    if (e) e.preventDefault();
+    if (!upgradeModal || upgradeModal.isRunning) return;
+    const pin = (upgradeModal.pin || '').trim();
+    if (pin.length < 4) {
+      setUpgradeModal(prev => prev ? ({ ...prev, error: 'Please enter your 4+ digit Sync PIN.' }) : null);
+      return;
+    }
+    setUpgradeModal(prev => prev ? ({ ...prev, isRunning: true, error: '', statusMessage: 'Connecting to Google Drive…' }) : null);
+    
+    // Acquire screen wake lock so Android OS does not dim/freeze process during streaming recovery
+    const { setKeepScreenOn } = await import('../../utils/wakeLockHelper.js').catch(() => ({ setKeepScreenOn: () => {} }));
+    if (typeof setKeepScreenOn === 'function') await setKeepScreenOn(true).catch(() => {});
+
+    try {
+      const { executeExplicitSnapshotRecovery } = await import('../../services/deltaSyncCoordinator.js');
+      const { getValidAccessToken } = await import('../../services/googleAuth.js');
+      const token = await getValidAccessToken(true);
+
+      const res = await executeExplicitSnapshotRecovery({
+        dev: upgradeModal.dev,
+        pin,
         accessToken: token,
-        sessionKey,
         driveClient,
-        targetSnapshotId: dev?.baseSnapshotId,
-        targetCloudVersion: dev?.baseCloudVersion
+        targetSnapshotId: upgradeModal.dev?.baseSnapshotId,
+        targetCloudVersion: upgradeModal.dev?.baseCloudVersion,
+        timeoutMs: 600000, // 10 minutes bounded recovery window
+        onProgress: (p) => {
+          setUpgradeModal(prev => prev ? ({ ...prev, statusMessage: p.message || p.stage || 'Processing snapshot…' }) : null);
+        }
       });
-      if (res?.reconciled) {
-        await triggerAutomaticSync(SYNC_TRIGGER.MANUAL, { accessToken: token, sessionKey });
-        if (typeof load === 'function') await load().catch(() => { });
+
+      if (res?.cancelled) {
+        setUpgradeModal(null);
+        return;
+      }
+
+      if (res?.success || res?.reconciled) {
+        if (typeof load === 'function') await load().catch(() => {});
         await fetchDevices();
-        alert(`Successfully synchronized with Snapshot v${res.cloudVersion || dev?.baseCloudVersion || 14}! Your device is now up to date with all latest records.`);
+        setUpgradeModal(prev => prev ? ({
+          ...prev,
+          isRunning: false,
+          result: {
+            success: true,
+            message: `Successfully synchronized with Snapshot v${res.cloudVersion || upgradeModal.dev?.baseCloudVersion || 16}! Your device is now up to date with all latest records.`
+          }
+        }) : null);
       } else if (res?.error) {
-        alert(`Update failed: ${res.error}`);
+        setUpgradeModal(prev => prev ? ({
+          ...prev,
+          isRunning: false,
+          error: res.error
+        }) : null);
       } else {
-        await triggerAutomaticSync(SYNC_TRIGGER.MANUAL, { accessToken: token, sessionKey });
-        await fetchDevices();
-        alert(`Baseline update check complete: ${res.reason || res.discoveryStatus || 'Device records are aligned.'}`);
+        setUpgradeModal(prev => prev ? ({
+          ...prev,
+          isRunning: false,
+          result: {
+            success: true,
+            message: `Baseline update check complete: ${res.reason || 'Device records are aligned.'}`
+          }
+        }) : null);
       }
     } catch (err) {
       console.warn('Failed to upgrade to newer snapshot:', err);
-      alert(`Update failed: ${err.message}`);
+      setUpgradeModal(prev => prev ? ({
+        ...prev,
+        isRunning: false,
+        error: err.message || 'Snapshot recovery failed.'
+      }) : null);
     } finally {
-      setIsUpgrading(false);
+      if (typeof setKeepScreenOn === 'function') await setKeepScreenOn(false).catch(() => {});
     }
   };
 
-  const handleRemoveDevice = async (dev) => {
+  const handleStartRemove = (dev) => {
+    setRemoveModal({ dev, isRunning: false, error: '' });
+  };
+  const handleRemoveDevice = (dev) => handleStartRemove(dev);
+
+  const handleConfirmRemove = async () => {
+    if (!removeModal || removeModal.isRunning) return;
+    const dev = removeModal.dev;
     const fileId = dev?.driveFileId || dev?.drive_file_id;
     if (!fileId && !dev?.deviceId) return;
-    const confirm = window.confirm(`Remove device "${dev.deviceName || dev.deviceId}" from your Google Drive cloud vault? This will unlink it from your connected devices list.`);
-    if (!confirm) return;
 
+    setRemoveModal(prev => prev ? ({ ...prev, isRunning: true, error: '' }) : null);
     try {
       setRemovingId(dev.deviceId);
       const { getValidAccessToken } = await import('../../services/googleAuth.js');
@@ -316,9 +375,10 @@ export default function ConnectedDevicesCard({
       await fetchDevices();
       const { triggerAutomaticSync, SYNC_TRIGGER } = await import('../../services/deltaSyncCoordinator.js');
       await triggerAutomaticSync(SYNC_TRIGGER.MANUAL).catch(() => {});
+      setRemoveModal(null);
     } catch (err) {
       console.warn('Failed to remove device:', err);
-      alert(`Failed to remove device: ${err.message}`);
+      setRemoveModal(prev => prev ? ({ ...prev, isRunning: false, error: err.message || 'Failed to remove device.' }) : null);
     } finally {
       setRemovingId(null);
     }
@@ -820,7 +880,7 @@ export default function ConnectedDevicesCard({
                         <button
                           type="button"
                           className="btn btn-primary"
-                          onClick={() => handleUpgradeToNewerSnapshot(dev)}
+                          onClick={() => handleStartUpgrade(dev)}
                           disabled={isUpgrading}
                           style={{
                             fontSize: '0.68rem',
@@ -856,7 +916,7 @@ export default function ConnectedDevicesCard({
                         <button
                           type="button"
                           className="btn btn-ghost"
-                          onClick={() => handleRemoveDevice(dev)}
+                          onClick={() => handleStartRemove(dev)}
                           disabled={removingId === dev.deviceId}
                           style={{
                             fontSize: '0.64rem',
@@ -917,6 +977,244 @@ export default function ConnectedDevicesCard({
           </div>
         )}
       </div>
+
+      {/* App-Specific Styled Upgrade Modal (Centered Dialog) */}
+      {upgradeModal && (
+        <>
+          <div
+            className="dash-popup-overlay"
+            style={{ zIndex: 10005 }}
+            onClick={() => !upgradeModal.isRunning && setUpgradeModal(null)}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              bottom: 'auto',
+              right: 'auto',
+              zIndex: 10006,
+              padding: '24px 22px',
+              maxWidth: 440,
+              width: 'calc(100% - 32px)',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: '20px',
+              boxShadow: '0 16px 48px rgba(0, 0, 0, 0.5)',
+              boxSizing: 'border-box',
+              maxHeight: '90vh',
+              overflowY: 'auto'
+            }}
+          >
+            {upgradeModal.result ? (
+              <div style={{ width: '100%', textAlign: 'center' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>
+                  {upgradeModal.result.success ? '🎉' : 'ℹ️'}
+                </div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>
+                  {upgradeModal.result.success ? 'Snapshot Synchronized' : 'Baseline Update'}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 18 }}>
+                  {upgradeModal.result.message}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setUpgradeModal(null)}
+                  style={{ width: '100%', padding: '10px 16px', fontWeight: 700 }}
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleConfirmUpgrade} style={{ width: '100%', textAlign: 'left' }}>
+                <div style={{ textAlign: 'center', marginBottom: 14 }}>
+                  <div style={{ fontSize: '2rem', marginBottom: 4 }}>🔄</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Sync with Snapshot v{upgradeModal.dev?.baseCloudVersion || 16}
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                    Align this device with the latest snapshot published by {upgradeModal.dev?.deviceName || 'peer device'}.
+                  </div>
+                </div>
+
+                {upgradeModal.error && (
+                  <div style={{
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    background: 'rgba(255, 77, 106, 0.12)',
+                    border: '1px solid rgba(255, 77, 106, 0.3)',
+                    color: 'var(--expense, #ff4d6a)',
+                    fontSize: '0.74rem',
+                    lineHeight: 1.4,
+                    marginBottom: 12
+                  }}>
+                    ⚠️ {upgradeModal.error}
+                  </div>
+                )}
+
+                {upgradeModal.isRunning ? (
+                  <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                    <div className="spinner" style={{ margin: '0 auto 10px', width: 28, height: 28 }} />
+                    <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Synchronizing with Snapshot v{upgradeModal.dev?.baseCloudVersion || 16}…
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                      {upgradeModal.statusMessage || 'Downloading snapshot & staging database…'}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '0.74rem',
+                      fontWeight: 700,
+                      color: 'var(--text-primary)',
+                      marginBottom: 6
+                    }}>
+                      Enter your 4-digit Sync PIN:
+                    </label>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={8}
+                      autoFocus
+                      placeholder="Enter Sync PIN"
+                      value={upgradeModal.pin || ''}
+                      onChange={(e) => setUpgradeModal(prev => prev ? ({ ...prev, pin: e.target.value, error: '' }) : null)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        fontSize: '1rem',
+                        fontWeight: 700,
+                        letterSpacing: '0.15em',
+                        textAlign: 'center',
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-input, rgba(255,255,255,0.05))',
+                        color: 'var(--text-primary)',
+                        marginBottom: 14,
+                        boxSizing: 'border-box'
+                      }}
+                    />
+
+                    <div style={{
+                      display: 'flex',
+                      gap: 10,
+                      justifyContent: 'flex-end',
+                      marginTop: 6
+                    }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => setUpgradeModal(null)}
+                        style={{ flex: 1, padding: '10px 14px', fontWeight: 600 }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="btn btn-primary"
+                        disabled={!upgradeModal.pin || upgradeModal.pin.trim().length < 4}
+                        style={{ flex: 1, padding: '10px 14px', fontWeight: 700 }}
+                      >
+                        Confirm & Sync
+                      </button>
+                    </div>
+                  </>
+                )}
+              </form>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* App-Specific Styled Remove Device Modal (Centered Dialog) */}
+      {removeModal && (
+        <>
+          <div
+            className="dash-popup-overlay"
+            style={{ zIndex: 10005 }}
+            onClick={() => !removeModal.isRunning && setRemoveModal(null)}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              bottom: 'auto',
+              right: 'auto',
+              zIndex: 10006,
+              padding: '24px 22px',
+              maxWidth: 440,
+              width: 'calc(100% - 32px)',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: '20px',
+              boxShadow: '0 16px 48px rgba(0, 0, 0, 0.5)',
+              boxSizing: 'border-box',
+              textAlign: 'center',
+              maxHeight: '90vh',
+              overflowY: 'auto'
+            }}
+          >
+            <div style={{ fontSize: '2.2rem', marginBottom: 8 }}>🗑️</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>
+              Remove Device from Cloud Vault?
+            </div>
+            <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 14 }}>
+              Are you sure you want to remove <strong>"{removeModal.dev?.deviceName || removeModal.dev?.deviceId}"</strong> from your Google Drive cloud vault? This will unlink it from your connected devices list.
+            </div>
+
+            {removeModal.error && (
+              <div style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                background: 'rgba(255, 77, 106, 0.12)',
+                border: '1px solid rgba(255, 77, 106, 0.3)',
+                color: 'var(--expense, #ff4d6a)',
+                fontSize: '0.74rem',
+                lineHeight: 1.4,
+                marginBottom: 14
+              }}>
+                ⚠️ {removeModal.error}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={removeModal.isRunning}
+                onClick={() => setRemoveModal(null)}
+                style={{ flex: 1, padding: '10px 14px', fontWeight: 600 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={removeModal.isRunning}
+                onClick={handleConfirmRemove}
+                style={{
+                  flex: 1,
+                  padding: '10px 14px',
+                  fontWeight: 700,
+                  background: 'var(--expense, #ff4d6a)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8
+                }}
+              >
+                {removeModal.isRunning ? 'Removing…' : 'Remove Device'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }

@@ -49,6 +49,7 @@ import {
 import { decryptBackupData, encryptBackupData } from '../utils/cryptoBackup.js';
 import { findAppDataFile, findAppDataFiles, readAppDataFile, uploadAppDataFile } from './googleDriveSync.js';
 import { setKeepScreenOn } from '../utils/wakeLockHelper.js';
+import { isRecoverySafetyLocked, checkRecoverySafetyLockAsync } from './recoveryLock.js';
 
 export {
   assertDatabaseBootstrapEmpty,
@@ -623,6 +624,12 @@ export async function setDeviceLifecycleState(state, deviceId = null) {
  * Discovers existing repository metadata from Google Drive (read-only).
  */
 export async function discoverCloudRepository(options = {}) {
+  // Check persistent recovery safety lock
+  if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
+    console.warn('[discoverCloudRepository] Suppressed: Recovery safety lock is ACTIVE.');
+    return { status: 'RECOVERY_LOCKED', error: 'Recovery safety lock is ACTIVE on this device' };
+  }
+
   const driveClient = options.driveClient || _syncConfig.driveClient;
   let accessToken = options.accessToken;
   if (!accessToken && _syncConfig.getAccessToken) {
@@ -871,7 +878,122 @@ export async function hydrateMissingSnapshotLineage(options = {}) {
  * baseline snapshot than this initialized device currently holds. If so, safely
  * reconciles the existing device without losing local unpushed mutations or device identity.
  */
+/**
+ * Dedicated Explicit User-Initiated Snapshot Recovery Entry Point.
+ * 
+ * Allows an explicit user-confirmed snapshot recovery to execute while the
+ * Phase A Recovery Safety Lock is ACTIVE.
+ * 
+ * INVARIANTS:
+ * 1. Only called by explicit user action (e.g. clicking "Sync with Snapshot vX").
+ * 2. Background sync, auto-reconciliation, delta polling, and upload remain BLOCKED.
+ * 3. Does not prematurely clear the recovery lock or unlock background sync.
+ * 4. Requires explicit PIN confirmation.
+ * 5. Uses Phase B memory-safe native pipeline on Android.
+ * 6. Keeps the recovery lock active throughout download, staging, and promotion.
+ * 7. Clears the recovery lock ONLY upon 100% verified completion and manifest alignment.
+ * 8. On failure, retains the recovery lock and restores the durable pre-import backup.
+ */
+export async function executeExplicitSnapshotRecovery(options = {}) {
+  const {
+    dev = null,
+    driveClient = _syncConfig.driveClient,
+    onProgress = () => {},
+    targetSnapshotId = options.targetSnapshotId || dev?.baseSnapshotId,
+    targetCloudVersion = options.targetCloudVersion || dev?.baseCloudVersion
+  } = options;
+
+  let accessToken = options.accessToken;
+  if (!accessToken && _syncConfig.getAccessToken) {
+    accessToken = await _syncConfig.getAccessToken().catch(() => null);
+  }
+  if (!accessToken) {
+    try {
+      const { getValidAccessToken } = await import('./googleAuth.js');
+      accessToken = await getValidAccessToken(true);
+    } catch {}
+  }
+  if (!accessToken) {
+    throw new Error('Google Drive authentication is required for snapshot recovery.');
+  }
+
+  // Resolve PIN: explicit option > sessionKey > stored persisted PIN confirmation > prompt
+  let effectivePin = options.pin;
+  if (!effectivePin) {
+    const { getSyncSessionKey } = await import('./syncSession.js');
+    const sessionKey = getSyncSessionKey();
+    if (sessionKey && typeof sessionKey === 'string' && sessionKey.trim()) {
+      effectivePin = sessionKey.trim();
+    }
+  }
+
+  if (!effectivePin) {
+    const { getStoredPersistedPin } = await import('./syncSession.js');
+    const storedPin = await getStoredPersistedPin().catch(() => null);
+    if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
+      const promptMsg = `Enter your 4-digit Sync PIN to confirm recovery with Snapshot v${targetCloudVersion || 16}:`;
+      const entered = window.prompt(promptMsg, storedPin || '');
+      if (entered === null) {
+        return { success: false, cancelled: true, reason: 'USER_CANCELLED' };
+      }
+      effectivePin = entered.trim();
+    } else if (storedPin) {
+      effectivePin = storedPin;
+    }
+  }
+
+  if (!effectivePin || typeof effectivePin !== 'string' || effectivePin.trim().length < 4) {
+    throw new Error('Valid 4-digit Sync PIN is required to confirm snapshot recovery.');
+  }
+
+  // Verify PIN against stored persisted token if one exists to fail early on wrong PIN
+  const { getStoredPersistedPin } = await import('./syncSession.js');
+  const stored = await getStoredPersistedPin().catch(() => null);
+  if (stored && stored !== effectivePin.trim()) {
+    throw new Error('Incorrect Sync PIN. Snapshot recovery aborted.');
+  }
+
+  // Invoke the Phase B memory-safe recovery engine directly (it manages the recovery lock lifecycle)
+  const { reconcileExistingDeviceWithSnapshot } = await import('./snapshotDeviceImport.js');
+  const result = await reconcileExistingDeviceWithSnapshot({
+    accessToken,
+    pin: effectivePin.trim(),
+    driveClient,
+    targetSnapshotId,
+    targetCloudVersion: targetCloudVersion ? Number(targetCloudVersion) : null,
+    confirmation: 'CONFIRM_RECONCILE_EXISTING_DEVICE',
+    replayInboundDeltas: options.replayInboundDeltas !== false,
+    strictDeltaApplication: options.strictDeltaApplication || false,
+    sourceFilePath: options.sourceFilePath || null,
+    timeoutMs: options.timeoutMs || 600000,
+    onProgress
+  });
+
+  // Once 100% verified and recovery lock is cleared inside reconcileExistingDeviceWithSnapshot,
+  // unlock the session with the confirmed PIN so normal app usage resumes smoothly
+  try {
+    const { unlockSyncSession } = await import('./syncSession.js');
+    await unlockSyncSession(effectivePin.trim(), { persist: true });
+  } catch (unlockErr) {
+    console.warn('[executeExplicitSnapshotRecovery] Session unlock notice:', unlockErr?.message);
+  }
+
+  return {
+    success: true,
+    reconciled: true,
+    cloudVersion: result.cloudVersion || targetCloudVersion,
+    snapshotId: result.snapshotId || targetSnapshotId,
+    ...result
+  };
+}
+
 export async function checkAndAutoReconcileCloudSnapshot(options = {}) {
+  // Check persistent recovery safety lock
+  if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
+    console.warn('[checkAndAutoReconcileCloudSnapshot] Suppressed: Recovery safety lock is ACTIVE.');
+    return { reconciled: false, reason: 'RECOVERY_SAFETY_LOCK_ACTIVE' };
+  }
+
   const driveClient = options.driveClient || _syncConfig.driveClient;
   let accessToken = options.accessToken;
   if (!accessToken && _syncConfig.getAccessToken) {
@@ -930,6 +1052,10 @@ export async function checkAndAutoReconcileCloudSnapshot(options = {}) {
       const isTargetMatch = Boolean(options.targetSnapshotId && cloudPayload.snapshot_id === options.targetSnapshotId);
 
       if ((isNewerVersion || isDifferentSnapshot || isTargetMatch) && cloudVersion >= localCloudVersion) {
+        if (typeof window !== 'undefined' && window.__finmanSkipAutoReconcile) {
+          console.warn('[checkAndAutoReconcileCloudSnapshot] Automatic baseline reconciliation paused by window.__finmanSkipAutoReconcile diagnostic flag.');
+          return { reconciled: false, reason: 'AUTO_RECONCILE_PAUSED_BY_DIAGNOSTIC_FLAG' };
+        }
         console.log(`[checkAndAutoReconcileCloudSnapshot] Reconciling baseline from v${localCloudVersion} (${localSnapshotId}) to v${cloudVersion} (${cloudPayload.snapshot_id})…`);
         const { reconcileExistingDeviceWithSnapshot } = await import('./snapshotDeviceImport.js');
         const reconcileRes = await reconcileExistingDeviceWithSnapshot({
@@ -1543,6 +1669,10 @@ export function initializeDeltaSyncRuntime() {
 
   const triggerAutoSyncIfReady = async (trigger) => {
     try {
+      if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
+        console.warn(`[deltaSyncCoordinator] Auto-sync suppressed (${trigger}): Recovery safety lock is ACTIVE.`);
+        return;
+      }
       const state = await getDeviceLifecycleState();
       if (state !== DEVICE_LIFECYCLE.ACTIVE) return;
       const token = _syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null;
@@ -1557,6 +1687,7 @@ export function initializeDeltaSyncRuntime() {
   let unsubscribeSession = null;
   import('./syncSession.js').then(({ subscribeSyncSession }) => {
     unsubscribeSession = subscribeSyncSession(async (isUnlocked, key) => {
+      if (isRecoverySafetyLocked()) return;
       if (isUnlocked && key) {
         await triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
       }
@@ -1567,6 +1698,7 @@ export function initializeDeltaSyncRuntime() {
   let unsubscribeAuth = null;
   import('./googleAuth.js').then(({ subscribeGoogleAuth }) => {
     unsubscribeAuth = subscribeGoogleAuth(async (isAuthenticated, token) => {
+      if (isRecoverySafetyLocked()) return;
       if (isAuthenticated && token) {
         await triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
       }
@@ -1575,12 +1707,14 @@ export function initializeDeltaSyncRuntime() {
 
   // 4. Register visibilitychange & focus listeners (foreground wake for ACTIVE devices)
   const handleVisibilityChange = async () => {
+    if (isRecoverySafetyLocked()) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
       await triggerAutoSyncIfReady(SYNC_TRIGGER.FOREGROUND);
     }
   };
 
   const handleFocus = async () => {
+    if (isRecoverySafetyLocked()) return;
     await triggerAutoSyncIfReady(SYNC_TRIGGER.FOREGROUND);
   };
 
@@ -1592,13 +1726,19 @@ export function initializeDeltaSyncRuntime() {
   }
 
   // 5. Trigger startup sync check immediately and with staged retries for async token restoration
-  triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
-  const startupTimer1 = setTimeout(() => triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP), 1500);
-  const startupTimer2 = setTimeout(() => triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP), 4000);
+  if (!isRecoverySafetyLocked()) {
+    triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
+  }
+  const startupTimer1 = setTimeout(() => {
+    if (!isRecoverySafetyLocked()) triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
+  }, 1500);
+  const startupTimer2 = setTimeout(() => {
+    if (!isRecoverySafetyLocked()) triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
+  }, 4000);
 
   // 6. Periodic background auto-sync timer (every 5 minutes)
   const periodicSyncTimer = setInterval(() => {
-    triggerAutoSyncIfReady(SYNC_TRIGGER.PERIODIC);
+    if (!isRecoverySafetyLocked()) triggerAutoSyncIfReady(SYNC_TRIGGER.PERIODIC);
   }, 300000);
   if (typeof periodicSyncTimer?.unref === 'function') periodicSyncTimer.unref();
 
@@ -1762,6 +1902,10 @@ export async function withMasterSyncLock(taskFn, lockOptions = {}) {
  * Schedules an automatic sync run based on trigger type and debounce rules.
  */
 export function scheduleSync(trigger = SYNC_TRIGGER.MUTATION) {
+  if (isRecoverySafetyLocked()) {
+    console.warn(`[deltaSyncCoordinator] scheduleSync suppressed (${trigger}): Recovery safety lock is ACTIVE.`);
+    return;
+  }
   if (!_syncConfig.enabled) return;
   if (_isBootstrapInProgress) return;
 
@@ -1810,6 +1954,10 @@ function _flushSyncTimers() {
  */
 export async function triggerAutomaticSync(trigger = SYNC_TRIGGER.MANUAL, options = {}) {
   _flushSyncTimers();
+  if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
+    console.warn(`[triggerAutomaticSync] Suppressed (${trigger}): Recovery safety lock is ACTIVE.`);
+    return { status: 'RECOVERY_LOCKED', message: 'Recovery safety lock is ACTIVE' };
+  }
   if (_isBootstrapInProgress) {
     return { status: 'BLOCKED_BOOTSTRAP_IN_PROGRESS' };
   }
@@ -1842,6 +1990,11 @@ export async function triggerAutomaticSync(trigger = SYNC_TRIGGER.MANUAL, option
  * Executes a complete sync cycle (Push -> Pull -> Reconcile) under the Master Sync Lock.
  */
 export async function executeFullSyncPass(options = {}) {
+  if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
+    console.warn('[executeFullSyncPass] Aborted: Recovery safety lock is ACTIVE.');
+    return { success: false, status: 'RECOVERY_LOCKED', reason: 'Recovery safety lock is ACTIVE' };
+  }
+
   const trigger = options.trigger || SYNC_TRIGGER.MANUAL;
   const driveClient = options.driveClient || _syncConfig.driveClient;
   const getAccessToken = _syncConfig.getAccessToken;

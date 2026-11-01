@@ -33,42 +33,61 @@ export const rowToTxn = (r) => {
     SubAccount: r.sub_account || '', sub_account: r.sub_account || '',
     FromSubAccount: r.from_sub_account || '', from_sub_account: r.from_sub_account || '',
     ToSubAccount: r.to_sub_account || '', to_sub_account: r.to_sub_account || '',
-    InvestmentAccount: r.investment_account || '',
-    ActualAmount: parseFloat(r.actual_amount || 0) || (r.actual_amount === 0 ? 0 : ''),
-    TotalCharges: parseFloat(r.total_charges || 0) || 0,
-    BrokerageCharges: parseFloat(r.brokerage_charges || 0) || (r.brokerage_charges === 0 ? 0 : ''),
-    ExchangeCharges: parseFloat(r.exchange_charges || 0) || (r.exchange_charges === 0 ? 0 : ''),
-    STTCharges: parseFloat(r.stt_charges || 0) || (r.stt_charges === 0 ? 0 : ''),
-    SEBICharges: parseFloat(r.sebi_charges || 0) || (r.sebi_charges === 0 ? 0 : ''),
-    StampDutyCharges: parseFloat(r.stamp_duty_charges || 0) || (r.stamp_duty_charges === 0 ? 0 : ''),
-    GSTCharges: parseFloat(r.gst_charges || 0) || (r.gst_charges === 0 ? 0 : ''),
-    DPCharges: parseFloat(r.dp_charges || 0) || (r.dp_charges === 0 ? 0 : ''),
-    OtherCharges: parseFloat(r.other_charges || 0) || (r.other_charges === 0 ? 0 : ''),
-    SecurityDisplayName: r.security_display_name || '',
-    SettlementMode: r.settlement_mode || 'ACTUAL',
+    InvestmentAccount: r.investment_account || '', investment_account: r.investment_account || '',
+    ActualAmount: parseFloat(r.actual_amount || 0) || (r.actual_amount === 0 ? 0 : ''), actual_amount: parseFloat(r.actual_amount || 0) || 0,
+    TotalCharges: parseFloat(r.total_charges || 0) || 0, total_charges: parseFloat(r.total_charges || 0) || 0,
+    BrokerageCharges: parseFloat(r.brokerage_charges || 0) || (r.brokerage_charges === 0 ? 0 : ''), brokerage_charges: parseFloat(r.brokerage_charges || 0) || 0,
+    ExchangeCharges: parseFloat(r.exchange_charges || 0) || (r.exchange_charges === 0 ? 0 : ''), exchange_charges: parseFloat(r.exchange_charges || 0) || 0,
+    STTCharges: parseFloat(r.stt_charges || 0) || (r.stt_charges === 0 ? 0 : ''), stt_charges: parseFloat(r.stt_charges || 0) || 0,
+    SEBICharges: parseFloat(r.sebi_charges || 0) || (r.sebi_charges === 0 ? 0 : ''), sebi_charges: parseFloat(r.sebi_charges || 0) || 0,
+    StampDutyCharges: parseFloat(r.stamp_duty_charges || 0) || (r.stamp_duty_charges === 0 ? 0 : ''), stamp_duty_charges: parseFloat(r.stamp_duty_charges || 0) || 0,
+    GSTCharges: parseFloat(r.gst_charges || 0) || (r.gst_charges === 0 ? 0 : ''), gst_charges: parseFloat(r.gst_charges || 0) || 0,
+    DPCharges: parseFloat(r.dp_charges || 0) || (r.dp_charges === 0 ? 0 : ''), dp_charges: parseFloat(r.dp_charges || 0) || 0,
+    OtherCharges: parseFloat(r.other_charges || 0) || (r.other_charges === 0 ? 0 : ''), other_charges: parseFloat(r.other_charges || 0) || 0,
+    SecurityDisplayName: r.security_display_name || '', security_display_name: r.security_display_name || '',
+    SettlementMode: r.settlement_mode || 'ACTUAL', settlement_mode: r.settlement_mode || 'ACTUAL',
   };
   
   if (r.investment_transaction_type || r.brokerage) {
+    const invAcct = r.investment_account || (r.investment_transaction_type === 'SELL' ? (r.from_account || r.account) : (r.to_account || r.account || r.category)) || '';
+    const invType = r.investment_transaction_type || '';
+    const broker = r.brokerage || '';
+    const sym = r.security_symbol || '';
+    const dispName = r.security_display_name || '';
+    const isin = r.security_isin || '';
+    const qty = parseFloat(r.quantity) || 0;
+    const uPrice = parseFloat(r.unit_price) || 0;
+    const tVal = parseFloat(r.trade_value) || 0;
+    const cBasis = parseFloat(r.cost_basis) || 0;
+    const cImpact = parseFloat(r.cash_impact) || 0;
+    const posQtyChange = parseFloat(r.position_qty_change) || 0;
+    const rPnl = parseFloat(r.realized_pnl) || 0;
+    const trId = r.trade_id || '';
+    const ordId = r.order_id || '';
+    const exch = r.exchange || '';
+    const seg = r.segment || '';
+    const src = r.source || '';
+
     return {
       ...base,
-      InvestmentAccount: r.investment_account || (r.investment_transaction_type === 'SELL' ? (r.from_account || r.account) : (r.to_account || r.account || r.category)) || '',
-      InvestmentTransactionType: r.investment_transaction_type || '',
-      Brokerage: r.brokerage || '',
-      SecuritySymbol: r.security_symbol || '',
-      SecurityDisplayName: r.security_display_name || '',
-      SecurityISIN: r.security_isin || '',
-      Quantity: parseFloat(r.quantity) || 0,
-      UnitPrice: parseFloat(r.unit_price) || 0,
-      TradeValue: parseFloat(r.trade_value) || 0,
-      CostBasis: parseFloat(r.cost_basis) || 0,
-      CashImpact: parseFloat(r.cash_impact) || 0,
-      PositionQuantityChange: parseFloat(r.position_qty_change) || 0,
-      RealizedPnl: parseFloat(r.realized_pnl) || 0,
-      TradeId: r.trade_id || '',
-      OrderId: r.order_id || '',
-      Exchange: r.exchange || '',
-      Segment: r.segment || '',
-      Source: r.source || '',
+      InvestmentAccount: invAcct, investment_account: invAcct,
+      InvestmentTransactionType: invType, investment_transaction_type: invType,
+      Brokerage: broker, brokerage: broker,
+      SecuritySymbol: sym, security_symbol: sym,
+      SecurityDisplayName: dispName, security_display_name: dispName,
+      SecurityISIN: isin, security_isin: isin,
+      Quantity: qty, quantity: qty,
+      UnitPrice: uPrice, unit_price: uPrice,
+      TradeValue: tVal, trade_value: tVal,
+      CostBasis: cBasis, cost_basis: cBasis,
+      CashImpact: cImpact, cash_impact: cImpact,
+      PositionQuantityChange: posQtyChange, position_qty_change: posQtyChange,
+      RealizedPnl: rPnl, realized_pnl: rPnl,
+      TradeId: trId, trade_id: trId,
+      OrderId: ordId, order_id: ordId,
+      Exchange: exch, exchange: exch,
+      Segment: seg, segment: seg,
+      Source: src, source: src,
       ActualAmount: parseFloat(r.actual_amount || 0) || (r.actual_amount === 0 ? 0 : ''),
       TotalCharges: parseFloat(r.total_charges || 0) || 0,
       BrokerageCharges: parseFloat(r.brokerage_charges || 0) || (r.brokerage_charges === 0 ? 0 : ''),

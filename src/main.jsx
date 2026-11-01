@@ -2,6 +2,22 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './styles/globals.css';
+import {
+  verifyNativeBackupDiagnostic,
+  executeSelfRestoreDiagnostic
+} from './utils/nativeRecoveryDiagnostic.js';
+import { checkRecoverySafetyLockAsync } from './services/recoveryLock.js';
+
+// Enforce immediate bootstrap recovery safety lock before React mounts or auto-sync can initiate
+if (typeof window !== 'undefined') {
+  checkRecoverySafetyLockAsync().catch(() => {});
+}
+
+// Global diagnostic hooks for physical Android verification (statically bundled)
+if (typeof window !== 'undefined') {
+  window.__finmanVerifyNativeBackup = verifyNativeBackupDiagnostic;
+  window.__finmanExecuteSelfRestore = executeSelfRestoreDiagnostic;
+}
 
 // Global bypass for native OS copy/paste selection tooltips on touch screens,
 // while preserving the "auto-replace on focus" numeric input typing experience.

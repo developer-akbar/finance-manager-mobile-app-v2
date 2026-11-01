@@ -46,9 +46,23 @@ export const setSetting = async (key, value, options = {}) => {
   }
 };
 
+export const LARGE_BLOB_SETTINGS_KEYS = [
+  'pre_recovery_durable_backup',
+  'pre_recovery_quarantined_deltas',
+  'sync_base_manifest'
+];
+
 export const getAllSettings = async () => {
   try {
-    const r = await getDB().query('SELECT * FROM settings');
+    const placeholders = LARGE_BLOB_SETTINGS_KEYS.map(() => '?').join(',');
+    const r = await getDB().query(
+      `SELECT * FROM settings WHERE key NOT IN (${placeholders})`,
+      LARGE_BLOB_SETTINGS_KEYS
+    );
     return Object.fromEntries((r.values || []).map(x => [x.key, x.value]));
   } catch { return {}; }
+};
+
+export const getLargeBlobSetting = async (key, fallback = null) => {
+  return await getSetting(key, fallback);
 };

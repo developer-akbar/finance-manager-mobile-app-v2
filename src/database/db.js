@@ -33,6 +33,20 @@ const STORE_DEFS = [
   { name:'sync_conflicts',          key:'conflict_id' },
 ];
 
+export const SYNCED_SETTINGS_WHITELIST = [
+  'customTags',
+  'theme',
+  'headerColor',
+  'fontSize',
+  'fontFamily',
+  'fontDataWeight',
+  'default_currency',
+  'budget_start_day',
+  'portfolio_benchmark',
+  'profileName',
+  'name'
+];
+
 const storeKey = (store) => STORE_DEFS.find(s => s.name === store)?.key ?? 'id';
 
 let _idb = null;
@@ -137,6 +151,7 @@ const idbPutBatch = (db, store, items) => new Promise((res, rej) => {
 const parseWhere = (clause, vals) => {
   let vi = 0;
   return clause.split(/\s+AND\s+/i).map(p => {
+    const notInM = p.trim().match(/^(\w+)\s+NOT\s+IN\s*\(([^)]+)\)/i);
     const inM = p.trim().match(/^(\w+)\s+IN\s*\(([^)]+)\)/i);
     const lm  = p.trim().match(/^(\w+)\s+LIKE\s+\?/i);
     const lte = p.trim().match(/^(\w+)\s*<=\s*\?/);
@@ -146,10 +161,28 @@ const parseWhere = (clause, vals) => {
     const lowerEm = p.trim().match(/^LOWER\((\w+)\)\s*=\s*\?/i);
     const em  = p.trim().match(/^(\w+)\s*=\s*\?/);
     const om  = p.trim().match(/^\((.+)\)/);  // OR groups like (a=? OR b=? OR c=?)
+    if (notInM) {
+      const inner = notInM[2].trim();
+      let notInVals;
+      if (inner.includes('?')) {
+        const qCount = (inner.match(/\?/g) || []).length;
+        notInVals = vals.slice(vi, vi + qCount);
+        vi += qCount;
+      } else {
+        notInVals = inner.split(',').map(s => s.trim().replace(/^['"]|['"]$/g, ''));
+      }
+      return { col: notInM[1], op: 'NOT IN', val: notInVals };
+    }
     if (inM) {
-      const qCount = (inM[2].match(/\?/g) || []).length;
-      const inVals = vals.slice(vi, vi + qCount);
-      vi += qCount;
+      const inner = inM[2].trim();
+      let inVals;
+      if (inner.includes('?')) {
+        const qCount = (inner.match(/\?/g) || []).length;
+        inVals = vals.slice(vi, vi + qCount);
+        vi += qCount;
+      } else {
+        inVals = inner.split(',').map(s => s.trim().replace(/^['"]|['"]$/g, ''));
+      }
       return { col: inM[1], op: 'IN', val: inVals };
     }
     if (lm)  return { col:lm[1],  op:'LIKE', val:vals[vi++] };
@@ -180,6 +213,7 @@ const matchCond = (row, c) => {
   if (c.op === 'OR')   return c.subs.some(s => matchCond(row, s));
   const rawVal = row[c.col];
   const rv = String(rawVal ?? '');
+  if (c.op === 'NOT IN') return Array.isArray(c.val) && !c.val.map(x => String(x ?? '')).includes(rv);
   if (c.op === 'IN')   return Array.isArray(c.val) && c.val.map(x => String(x ?? '')).includes(rv);
   if (c.op === 'LOWER_EQ') return rv.toLowerCase() === String(c.val ?? '').toLowerCase();
   if (c.op === '=')    return rv === String(c.val ?? '');
@@ -214,8 +248,11 @@ const parseAndRun = async (db, sql, vals = []) => {
 
   // ── SELECT ──
   if (u.startsWith('SELECT')) {
-    const fm = s.match(/FROM\s+(\w+)/i); if (!fm) return { values:[] };
+    const fm = s.match(/FROM\s+(?:main\.)?(\w+)/i); if (!fm) return { values:[] };
     const store = fm[1];
+    if (store === 'sqlite_master') {
+      return { values: STORE_DEFS.map(s => ({ name: s.name })) };
+    }
     const pk = storeKey(store);
     const wm = s.match(/WHERE\s+(.+?)(?:\s+ORDER|\s+LIMIT|$)/i);
     let rows;
@@ -238,6 +275,12 @@ const parseAndRun = async (db, sql, vals = []) => {
       const parts = om[1].trim().split(',').map(p => { const [col,dir]=p.trim().split(/\s+/); return {col,desc:(dir||'').toUpperCase()==='DESC'}; });
       rows.sort((a,b) => { for(const {col,desc} of parts){const av=a[col]??'',bv=b[col]??'';const cmp=av<bv?-1:av>bv?1:0;if(cmp)return desc?-cmp:cmp;} return 0; });
     }
+    if (/SELECT\s+COUNT\(\*\)/i.test(s)) {
+      const aliasMatch = s.match(/SELECT\s+COUNT\(\*\)(?:\s+AS\s+(\w+))?/i);
+      const alias = aliasMatch?.[1] || 'count';
+      return { values: [{ [alias]: rows.length, count: rows.length }] };
+    }
+
     const lm = s.match(/LIMIT\s+(\d+)/i); if (lm) rows = rows.slice(0, +lm[1]);
     return { values: rows };
   }
@@ -246,11 +289,24 @@ const parseAndRun = async (db, sql, vals = []) => {
   if (u.startsWith('INSERT')) {
     const orIgnore  = /INSERT OR IGNORE/i.test(s);
     const orReplace = /INSERT OR REPLACE/i.test(s);
-    const tm = s.match(/INTO\s+(\w+)/i);          if (!tm) return { changes:{changes:0} };
+    const tm = s.match(/INTO\s+(?:main\.)?(\w+)/i);          if (!tm) return { changes:{changes:0} };
     const cm = s.match(/\(([^)]+)\)\s+VALUES/i);  if (!cm) return { changes:{changes:0} };
     const cols = cm[1].split(',').map(c => c.trim());
+    let insertVals = vals;
+    if (!insertVals || insertVals.length === 0) {
+      const vm = s.match(/VALUES\s*\(([^)]+)\)/i);
+      if (vm) {
+        insertVals = vm[1].split(',').map(v => {
+          const t = v.trim();
+          if (/^['"].*['"]$/.test(t)) return t.slice(1, -1);
+          if (!isNaN(Number(t))) return Number(t);
+          if (t.toLowerCase() === 'null') return null;
+          return t;
+        });
+      }
+    }
     const obj  = {};
-    cols.forEach((col, i) => { obj[col] = vals[i] ?? null; });
+    cols.forEach((col, i) => { obj[col] = insertVals[i] ?? null; });
     const pk = storeKey(tm[1]);
 
     if (orIgnore) {
@@ -268,7 +324,7 @@ const parseAndRun = async (db, sql, vals = []) => {
 
   // ── UPDATE ──
   if (u.startsWith('UPDATE')) {
-    const tm = s.match(/UPDATE\s+(\w+)\s+SET/i); if (!tm) return { changes:{changes:0} };
+    const tm = s.match(/UPDATE\s+(?:main\.)?(\w+)\s+SET/i); if (!tm) return { changes:{changes:0} };
     const sm = s.match(/SET\s+(.+?)\s+WHERE/i);
     const wm = s.match(/WHERE\s+(.+)$/i);
     if (!sm || !wm) return { changes:{changes:0} };
@@ -303,7 +359,7 @@ const parseAndRun = async (db, sql, vals = []) => {
 
   // ── DELETE ──
   if (u.startsWith('DELETE')) {
-    const tm = s.match(/FROM\s+(\w+)/i); if (!tm) return { changes:{changes:0} };
+    const tm = s.match(/FROM\s+(?:main\.)?(\w+)/i); if (!tm) return { changes:{changes:0} };
     const wm = s.match(/WHERE\s+(.+)$/i);
     if (!wm) { await idbClear(db, tm[1]); return { changes:{changes:1} }; }
     const pk = storeKey(tm[1]);
@@ -367,6 +423,26 @@ const makeWebDB = (idb) => ({
         reject(err);
       }
     });
+  },
+  isNativeSQLite: false,
+  checkSQLiteVersion: async () => ({ version: 'web_idb', isVacuumIntoSupported: false }),
+  getDatabasePath: async () => '',
+  promoteStagingSnapshot: async (stagingDataOrPath) => {
+    let entities = null;
+    if (stagingDataOrPath && typeof stagingDataOrPath === 'object') {
+      entities = stagingDataOrPath.entities || stagingDataOrPath;
+    } else if (typeof globalThis !== 'undefined' && globalThis.__mockStagingDbEntities) {
+      entities = globalThis.__mockStagingDbEntities;
+    }
+    if (entities && typeof entities === 'object') {
+      const { populateLocalEntitiesBootstrap } = await import('../services/cloudSyncEngine.js');
+      await populateLocalEntitiesBootstrap(makeWebDB(idb), entities, { allowRecoveryReplacement: true });
+      const distinctBrokerages = Array.isArray(entities.brokerages)
+        ? Array.from(new Set(entities.brokerages.map(b => (b.name || b.NAME || '').trim().toLowerCase()).filter(Boolean)))
+        : [];
+      return { success: true, promotedTables: Object.keys(entities), distinctBrokerages };
+    }
+    return { success: true, distinctBrokerages: [] };
   },
 });
 
@@ -459,6 +535,11 @@ const openSQLite = async () => {
           }
           await db.run(sql, vals);
           added += chunk.length;
+
+          // Cooperative event loop yield every 20 sub-batches (~500 records) to prevent ANR and allow GC
+          if ((i / ROWS_PER_BATCH) % 20 === 0 && i > 0) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+          }
         }
       }
       await db.run('COMMIT;');
@@ -466,6 +547,461 @@ const openSQLite = async () => {
     } catch (err) {
       try { await db.run('ROLLBACK;'); } catch {}
       throw err;
+    }
+  };
+
+  attachNativeBackupMethods(db);
+  return db;
+};
+
+export const normalizeColumnKey = (name) => {
+  if (!name) return '';
+  return String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+};
+
+const COLUMN_ALIASES = {
+  'positionquantitychange': 'position_qty_change',
+  'positionqtychange': 'position_qty_change',
+  'incomeexpense': 'type',
+  'realizedpl': 'realized_pnl',
+  'realizedpnl': 'realized_pnl'
+};
+
+export const matchTableColumns = (pragmaTarget = [], pragmaSource = []) => {
+  const targetExactMap = new Map();
+  const targetNormMap = new Map();
+
+  for (const c of pragmaTarget) {
+    const colName = c?.name || c?.NAME;
+    if (!colName) continue;
+    targetExactMap.set(String(colName).toLowerCase(), colName);
+    targetNormMap.set(normalizeColumnKey(colName), colName);
+  }
+
+  const matched = [];
+  for (const sc of pragmaSource) {
+    const sColName = sc?.name || sc?.NAME;
+    if (!sColName) continue;
+    const lower = String(sColName).toLowerCase();
+    const norm = normalizeColumnKey(sColName);
+
+    let targetName = targetExactMap.get(lower) || targetNormMap.get(norm);
+    if (!targetName && COLUMN_ALIASES[norm]) {
+      const alias = COLUMN_ALIASES[norm];
+      targetName = targetExactMap.get(alias) || targetNormMap.get(normalizeColumnKey(alias));
+    }
+
+    if (targetName && !matched.some(m => m.target === targetName)) {
+      matched.push({ target: targetName, source: sColName });
+    }
+  }
+  return matched;
+};
+
+export const attachNativeBackupMethods = (db) => {
+  db.isNativeSQLite = true;
+
+  const safeDeleteFile = async (filePath) => {
+    if (!filePath) return;
+    try {
+      const { Filesystem } = await import('@capacitor/filesystem');
+      await Filesystem.deleteFile({ path: filePath });
+      return;
+    } catch {
+      if (typeof process !== 'undefined' && process.versions?.node) {
+        try {
+          const fs = await import('fs');
+          if (fs.existsSync(filePath)) {
+            await fs.promises.unlink(filePath).catch(() => {});
+          }
+        } catch {}
+      }
+    }
+  };
+
+  const safeRenameFile = async (fromPath, toPath) => {
+    if (fromPath === toPath) return;
+    try {
+      const { Filesystem } = await import('@capacitor/filesystem');
+      await Filesystem.rename({ from: fromPath, to: toPath });
+      return;
+    } catch (capErr) {
+      if (typeof process !== 'undefined' && process.versions?.node) {
+        try {
+          const fs = await import('fs');
+          if (fs.existsSync(fromPath)) {
+            await fs.promises.rename(fromPath, toPath);
+            return;
+          }
+          // In Node test harnesses simulating native SQLite, mocked paths may not exist on disk
+          return;
+        } catch (fsErr) {
+          throw new Error(`File promotion failed from ${fromPath} to ${toPath}: ${fsErr?.message || capErr?.message}`);
+        }
+      }
+      throw capErr;
+    }
+  };
+
+  // Execute an administrative SQL statement strictly outside any transaction
+  // (Required for VACUUM, ATTACH, DETACH, PRAGMA wal_checkpoint, and PRAGMA foreign_keys)
+  // Capacitor SQLite defaults transaction to true in run() and execute(), which causes
+  // "error code 1: cannot VACUUM from within a transaction".
+  const execNonTransactional = async (sql) => {
+    if (typeof db.execute === 'function') {
+      try {
+        return await db.execute(sql, false);
+      } catch (execErr) {
+        if (typeof db.run === 'function') {
+          return await db.run(sql, [], false);
+        }
+        throw execErr;
+      }
+    }
+    if (typeof db.run === 'function') {
+      return await db.run(sql, [], false);
+    }
+  };
+
+  db.execNonTransactional = execNonTransactional;
+
+  if (!db.checkSQLiteVersion) {
+    db.checkSQLiteVersion = async () => {
+      try {
+        const res = await db.query('SELECT sqlite_version() AS version;');
+        const versionStr = res.values?.[0]?.version || '0.0.0';
+        const parts = versionStr.split('.').map(n => parseInt(n, 10) || 0);
+        const isVacuumIntoSupported = (parts[0] > 3) || (parts[0] === 3 && parts[1] >= 27);
+        return { version: versionStr, isVacuumIntoSupported };
+      } catch (err) {
+        return { version: '0.0.0', isVacuumIntoSupported: false, error: err.message };
+      }
+    };
+  }
+
+  db.getDatabasePath = async () => {
+    try {
+      const urlRes = await db.getUrl();
+      const raw = urlRes?.url || '';
+      return raw.startsWith('file://') ? raw.replace('file://', '') : raw;
+    } catch {
+      return '';
+    }
+  };
+
+  db.createNativeBackup = async (targetPath, options = {}) => {
+    const startTime = performance.now();
+    const verCheck = await db.checkSQLiteVersion();
+    if (!verCheck.isVacuumIntoSupported) {
+      throw new Error(`SQLITE_VERSION_UNSUPPORTED: VACUUM INTO requires SQLite >= 3.27.0 (found ${verCheck.version})`);
+    }
+
+    // Verify there is no lingering uncommitted transaction active before attempting VACUUM
+    if (typeof db.isTransactionActive === 'function') {
+      try {
+        const activeRes = await db.isTransactionActive();
+        if (activeRes?.result) {
+          throw new Error('CANNOT_VACUUM_IN_TRANSACTION: Database has an active transaction before backup');
+        }
+      } catch (txErr) {
+        if (txErr.message?.includes('CANNOT_VACUUM_IN_TRANSACTION')) throw txErr;
+      }
+    }
+
+    // Capture pre-backup table counts for integrity validation
+    const [txCountRes, invCountRes, acctCountRes, catCountRes] = await Promise.all([
+      db.query('SELECT count(*) as count FROM transactions').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM investment_transactions').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM accounts').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM categories').catch(() => ({ values: [{ count: 0 }] }))
+    ]);
+    const expectedCounts = {
+      transactions: txCountRes.values?.[0]?.count ?? 0,
+      investment_transactions: invCountRes.values?.[0]?.count ?? 0,
+      accounts: acctCountRes.values?.[0]?.count ?? 0,
+      categories: catCountRes.values?.[0]?.count ?? 0
+    };
+
+    const tempPath = options.tempPath || `${targetPath}.tmp_${Date.now()}`;
+
+    // Clean up any stale temp file from previous aborted attempts (VACUUM INTO fails if destination exists)
+    await safeDeleteFile(tempPath);
+
+    // Flush dirty pages from WAL journal into the main database file before VACUUM
+    // db.query() uses selectSQL which returns row values without starting a transaction
+    try {
+      await db.query('PRAGMA wal_checkpoint(TRUNCATE);');
+    } catch (e) {
+      console.warn('wal_checkpoint pragma warning before backup:', e?.message);
+    }
+
+    try {
+      // Execute VACUUM INTO strictly outside any transaction using execNonTransactional
+      await execNonTransactional(`VACUUM INTO '${tempPath}';`);
+
+      // Self-validate backup by attaching it outside any transaction
+      try {
+        await execNonTransactional(`ATTACH DATABASE '${tempPath}' AS verify_bkp;`);
+
+        const integrityRes = await db.query('PRAGMA verify_bkp.integrity_check;');
+        const integrityStatus = integrityRes.values?.[0]?.integrity_check || integrityRes.values?.[0]?.['integrity_check'] || '';
+        if (integrityStatus.toLowerCase() !== 'ok') {
+          throw new Error(`Backup database integrity check failed: ${integrityStatus}`);
+        }
+
+        const [bTxRes, bInvRes, bAcctRes, bCatRes] = await Promise.all([
+          db.query('SELECT count(*) as count FROM verify_bkp.transactions'),
+          db.query('SELECT count(*) as count FROM verify_bkp.investment_transactions'),
+          db.query('SELECT count(*) as count FROM verify_bkp.accounts'),
+          db.query('SELECT count(*) as count FROM verify_bkp.categories')
+        ]);
+
+        const backupCounts = {
+          transactions: bTxRes.values?.[0]?.count ?? 0,
+          investment_transactions: bInvRes.values?.[0]?.count ?? 0,
+          accounts: bAcctRes.values?.[0]?.count ?? 0,
+          categories: bCatRes.values?.[0]?.count ?? 0
+        };
+
+        if (backupCounts.transactions !== expectedCounts.transactions ||
+            backupCounts.investment_transactions !== expectedCounts.investment_transactions ||
+            backupCounts.accounts !== expectedCounts.accounts ||
+            backupCounts.categories !== expectedCounts.categories) {
+          throw new Error(`Backup validation count mismatch: expected txns=${expectedCounts.transactions}, got ${backupCounts.transactions}`);
+        }
+      } finally {
+        try {
+          await execNonTransactional('DETACH DATABASE verify_bkp;');
+        } catch (detachErr) {
+          console.warn('Failed to detach verify_bkp:', detachErr?.message);
+        }
+      }
+
+      // Promote verified temporary backup file to final target path atomically
+      let finalPath = targetPath;
+      if (tempPath !== targetPath) {
+        await safeRenameFile(tempPath, targetPath);
+      }
+
+      const durationMs = performance.now() - startTime;
+      return {
+        success: true,
+        backupPath: finalPath,
+        durationMs,
+        counts: expectedCounts,
+        verified: true
+      };
+    } catch (err) {
+      // Guarantee temporary backup file cleanup on failure
+      await safeDeleteFile(tempPath);
+      throw err;
+    }
+  };
+
+  db.restoreNativeBackup = async (backupPath) => {
+    const startTime = performance.now();
+    try {
+      await db.query('PRAGMA wal_checkpoint(TRUNCATE);');
+    } catch {}
+
+    // Disable foreign keys OUTSIDE the active transaction.
+    // Changing PRAGMA foreign_keys inside an active transaction is a no-op in SQLite.
+    try {
+      await execNonTransactional('PRAGMA foreign_keys = OFF;');
+    } catch (fkErr) {
+      console.warn('Warning: PRAGMA foreign_keys = OFF failed before restore:', fkErr?.message);
+    }
+
+    await execNonTransactional(`ATTACH DATABASE '${backupPath}' AS restore_bkp;`);
+    try {
+      const integrityRes = await db.query('PRAGMA restore_bkp.integrity_check;');
+      const status = integrityRes.values?.[0]?.integrity_check || '';
+      if (status.toLowerCase() !== 'ok') {
+        throw new Error(`Backup database failed integrity check: ${status}`);
+      }
+
+      const tablesRes = await db.query(`SELECT name FROM restore_bkp.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';`);
+      const tableNames = (tablesRes.values || []).map(r => r?.name || r?.NAME || '').filter(Boolean);
+      const mainTablesRes = await db.query(`SELECT name FROM main.sqlite_master WHERE type='table';`);
+      const mainTableSet = new Set((mainTablesRes.values || []).map(r => (r?.name || r?.NAME || '').toLowerCase()).filter(Boolean));
+
+      // Explicit transaction: pass transaction = false so plugin does not nest beginTransaction()
+      await db.run('BEGIN IMMEDIATE TRANSACTION;', [], false);
+      try {
+        for (const tbl of tableNames) {
+          if (tbl.startsWith('sqlite_') || tbl === 'android_metadata' || tbl === 'room_master_table') continue;
+          if (!mainTableSet.has(tbl.toLowerCase())) continue;
+
+          const pragmaMain = (await db.query(`PRAGMA main.table_info(${tbl});`)).values || [];
+          const pragmaBackup = (await db.query(`PRAGMA restore_bkp.table_info(${tbl});`)).values || [];
+
+          const matchedCols = matchTableColumns(pragmaMain, pragmaBackup);
+
+          await db.run(`DELETE FROM main.${tbl};`, [], false);
+          if (matchedCols.length > 0) {
+            const mainColList = matchedCols.map(c => `"${c.target}"`).join(', ');
+            const backupColList = matchedCols.map(c => `"${c.source}"`).join(', ');
+            await db.run(`INSERT OR REPLACE INTO main.${tbl} (${mainColList}) SELECT ${backupColList} FROM restore_bkp.${tbl};`, [], false);
+          } else {
+            await db.run(`INSERT OR REPLACE INTO main.${tbl} SELECT * FROM restore_bkp.${tbl};`, [], false);
+          }
+        }
+        try {
+          await db.run('DELETE FROM main.sqlite_sequence;', [], false);
+          await db.run('INSERT OR IGNORE INTO main.sqlite_sequence SELECT * FROM restore_bkp.sqlite_sequence;', [], false);
+        } catch {}
+        await db.run('COMMIT;', [], false);
+      } catch (txErr) {
+        try { await db.run('ROLLBACK;', [], false); } catch {}
+        throw txErr;
+      }
+
+      // Re-enable foreign keys OUTSIDE transaction and verify referential integrity
+      try {
+        await execNonTransactional('PRAGMA foreign_keys = ON;');
+        const fkCheck = await db.query('PRAGMA foreign_key_check;');
+        if (fkCheck.values && fkCheck.values.length > 0) {
+          console.warn(`Foreign key check warnings post-restore: ${fkCheck.values.length} violations found.`);
+        }
+      } catch (fkErr) {
+        console.warn('Warning: PRAGMA foreign_keys = ON failed after restore:', fkErr?.message);
+      }
+
+      return {
+        success: true,
+        restoredTables: tableNames,
+        durationMs: performance.now() - startTime
+      };
+    } finally {
+      try {
+        await execNonTransactional('DETACH DATABASE restore_bkp;');
+      } catch (detachErr) {
+        console.warn('Failed to detach restore_bkp:', detachErr?.message);
+      }
+      try {
+        await execNonTransactional('PRAGMA foreign_keys = ON;');
+        await db.query('PRAGMA wal_checkpoint(TRUNCATE);');
+      } catch {}
+    }
+  };
+
+  db.promoteStagingSnapshot = async (stagingPath) => {
+    const startTime = performance.now();
+    try {
+      await db.query('PRAGMA wal_checkpoint(TRUNCATE);');
+    } catch {}
+
+    try {
+      await execNonTransactional('PRAGMA foreign_keys = OFF;');
+    } catch (fkErr) {
+      console.warn('Warning: PRAGMA foreign_keys = OFF failed before staging promotion:', fkErr?.message);
+    }
+
+    await execNonTransactional(`ATTACH DATABASE '${stagingPath}' AS staging_snap;`);
+    try {
+      const integrityRes = await db.query('PRAGMA staging_snap.integrity_check;');
+      const status = integrityRes.values?.[0]?.integrity_check || '';
+      if (status.toLowerCase() !== 'ok') {
+        throw new Error(`Staging snapshot database failed integrity check: ${status}`);
+      }
+
+      const tablesRes = await db.query(`SELECT name FROM staging_snap.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';`);
+      const tableNames = (tablesRes.values || []).map(r => r?.name || r?.NAME || '').filter(Boolean);
+      const mainTablesRes = await db.query(`SELECT name FROM main.sqlite_master WHERE type='table';`);
+      const mainTableSet = new Set((mainTablesRes.values || []).map(r => (r?.name || r?.NAME || '').toLowerCase()).filter(Boolean));
+
+      await db.run('BEGIN IMMEDIATE TRANSACTION;', [], false);
+      try {
+        const EXCLUDED_STAGING_TABLES = [
+          'sync_local_state',
+          'sync_delta_queue',
+          'sync_peer_state',
+          'sync_staged_packages',
+          'sync_staged_events',
+          'sync_process_locks',
+          'sync_conflicts',
+          'android_metadata',
+          'room_master_table'
+        ];
+
+        for (const tbl of tableNames) {
+          if (EXCLUDED_STAGING_TABLES.includes(tbl) || tbl.startsWith('sqlite_') || tbl === 'android_metadata') {
+            continue;
+          }
+          if (!mainTableSet.has(tbl.toLowerCase())) {
+            continue;
+          }
+
+          if (tbl === 'settings') {
+            const stagingSettings = (await db.query('SELECT key, value FROM staging_snap.settings;')).values || [];
+            for (const s of stagingSettings) {
+              if (s && s.key && SYNCED_SETTINGS_WHITELIST.includes(s.key)) {
+                await db.run(
+                  'INSERT OR REPLACE INTO main.settings (key, value) VALUES (?, ?);',
+                  [s.key, String(s.value ?? '')],
+                  false
+                );
+              }
+            }
+            continue;
+          }
+
+          const pragmaMain = (await db.query(`PRAGMA main.table_info(${tbl});`)).values || [];
+          const pragmaStaging = (await db.query(`PRAGMA staging_snap.table_info(${tbl});`)).values || [];
+
+          const matchedCols = matchTableColumns(pragmaMain, pragmaStaging);
+
+          await db.run(`DELETE FROM main.${tbl};`, [], false);
+          if (matchedCols.length > 0) {
+            const mainColList = matchedCols.map(c => `"${c.target}"`).join(', ');
+            const stagingColList = matchedCols.map(c => `"${c.source}"`).join(', ');
+            await db.run(`INSERT OR REPLACE INTO main.${tbl} (${mainColList}) SELECT ${stagingColList} FROM staging_snap.${tbl};`, [], false);
+          } else {
+            await db.run(`INSERT OR REPLACE INTO main.${tbl} SELECT * FROM staging_snap.${tbl};`, [], false);
+          }
+        }
+        try {
+          await db.run('DELETE FROM main.sqlite_sequence;', [], false);
+          await db.run('INSERT OR IGNORE INTO main.sqlite_sequence SELECT * FROM staging_snap.sqlite_sequence;', [], false);
+        } catch {}
+        await db.run('COMMIT;', [], false);
+      } catch (txErr) {
+        try { await db.run('ROLLBACK;', [], false); } catch {}
+        throw txErr;
+      }
+
+      try {
+        await execNonTransactional('PRAGMA foreign_keys = ON;');
+        const fkCheck = await db.query('PRAGMA foreign_key_check;');
+        if (fkCheck.values && fkCheck.values.length > 0) {
+          console.warn(`Foreign key check warnings post-staging promotion: ${fkCheck.values.length} violations found.`);
+        }
+      } catch (fkErr) {
+        console.warn('Warning: PRAGMA foreign_keys = ON failed after staging promotion:', fkErr?.message);
+      }
+
+      let distinctBrokerages = [];
+      try {
+        const brokRes = await db.query('SELECT DISTINCT LOWER(TRIM(name)) as name FROM staging_snap.brokerages WHERE name IS NOT NULL AND TRIM(name) != "";');
+        distinctBrokerages = (brokRes.values || []).map(r => r.name).filter(Boolean);
+      } catch {}
+
+      return {
+        success: true,
+        promotedTables: tableNames,
+        distinctBrokerages,
+        durationMs: performance.now() - startTime
+      };
+    } finally {
+      try {
+        await execNonTransactional('DETACH DATABASE staging_snap;');
+      } catch (detachErr) {
+        console.warn('Failed to detach staging_snap:', detachErr?.message);
+      }
+      try {
+        await execNonTransactional('PRAGMA foreign_keys = ON;');
+        await db.query('PRAGMA wal_checkpoint(TRUNCATE);');
+      } catch {}
     }
   };
 

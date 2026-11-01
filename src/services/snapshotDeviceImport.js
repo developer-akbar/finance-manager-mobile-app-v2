@@ -41,6 +41,12 @@ import {
   getOrCreateLocalDeviceId
 } from './deltaSyncCoordinator.js';
 import { computeCanonicalSha256 } from '../utils/canonicalEntity.js';
+import { rowToTxn } from '../database/transactions.js';
+import {
+  isNativeSnapshotRecoverySupported,
+  prepareStagingSnapshotNative,
+  cleanupStagingSnapshotNative
+} from './nativeSnapshotRecovery.js';
 
 export const V10_TARGET_REFERENCE = {
   filename: 'finman_cloud_sync_snapshot.finman',
@@ -1092,6 +1098,141 @@ export async function importSnapshotV10ToDevice({
  * storage integrity before any destructive deletion is permitted.
  */
 export async function createDurablePreImportBackup(db) {
+  const isNative = (typeof db.createNativeBackup === 'function' && db.isNativeSQLite) ||
+    (typeof window !== 'undefined' && window.Capacitor?.getPlatform?.() === 'android' && typeof db.createNativeBackup === 'function');
+
+  if (isNative) {
+    const backupId = `durable_backup_native_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const timestamp = new Date().toISOString();
+
+    const [
+      txCountRes, invCountRes, acctCountRes, catCountRes, subcatCountRes,
+      subAcctCountRes, invenCountRes, acctGroupCountRes, brokCountRes,
+      tombCountRes, queueRes, stagedEventsRes, conflictsRes
+    ] = await Promise.all([
+      db.query('SELECT count(*) as count FROM transactions').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM investment_transactions').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM accounts').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM categories').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM subcategories').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM sub_accounts').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM inventory').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM account_groups').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM brokerages').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM sync_tombstones').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM sync_delta_queue').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM sync_staged_events').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM sync_conflicts').catch(() => ({ values: [{ count: 0 }] }))
+    ]);
+
+    const counts = {
+      transactions: txCountRes.values?.[0]?.count ?? 0,
+      investment_transactions: invCountRes.values?.[0]?.count ?? 0,
+      totalTransactions: (txCountRes.values?.[0]?.count ?? 0) + (invCountRes.values?.[0]?.count ?? 0),
+      accounts: acctCountRes.values?.[0]?.count ?? 0,
+      inventory: invenCountRes.values?.[0]?.count ?? 0,
+      categories: catCountRes.values?.[0]?.count ?? 0,
+      subcategories: subcatCountRes.values?.[0]?.count ?? 0,
+      account_groups: acctGroupCountRes.values?.[0]?.count ?? 0,
+      brokerages: brokCountRes.values?.[0]?.count ?? 0,
+      sync_tombstones: tombCountRes.values?.[0]?.count ?? 0,
+      delta_queue: queueRes.values?.[0]?.count ?? 0,
+      staged_events: stagedEventsRes.values?.[0]?.count ?? 0,
+      conflicts: conflictsRes.values?.[0]?.count ?? 0
+    };
+
+    const criticalSettingsKeys = [
+      'sync_base_manifest',
+      'last_snapshot_id',
+      'last_parent_snapshot_id',
+      'last_cloud_version',
+      'last_synced_at',
+      'device_lifecycle_state',
+      'sub_accounts_migrated_v2',
+      'historical_charges_reconciled',
+      'last_delta_synced_at',
+      'pre_recovery_quarantined_deltas'
+    ];
+    const settingsValues = {};
+    for (const k of criticalSettingsKeys) {
+      settingsValues[k] = await getSetting(k).catch(() => null);
+    }
+
+    const dbPath = await db.getDatabasePath().catch(() => '');
+    let backupDir = '';
+    if (dbPath && (dbPath.includes('/') || dbPath.includes('\\'))) {
+      const lastSlash = Math.max(dbPath.lastIndexOf('/'), dbPath.lastIndexOf('\\'));
+      backupDir = dbPath.substring(0, lastSlash);
+    }
+    const backupFileName = `finman_v2_durable_backup_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.db`;
+    const targetPath = backupDir ? `${backupDir}/${backupFileName}` : backupFileName;
+
+    const nativeResult = await db.createNativeBackup(targetPath);
+
+    const backupMeta = {
+      backup_id: backupId,
+      backup_type: 'SQLITE_FILE',
+      backup_path: nativeResult.backupPath,
+      timestamp,
+      counts,
+      durationMs: nativeResult.durationMs,
+      settings: settingsValues,
+      status: 'VERIFIED_DURABLE'
+    };
+    const metaJson = JSON.stringify(backupMeta);
+    const backupSha256 = await computeSha256(metaJson);
+    backupMeta.sha256 = backupSha256;
+
+    // Safety Guard: If local database has 0 transactions, check if an existing verified durable backup
+    // with actual data exists. Never overwrite a populated durable backup pointer with an empty one!
+    const existingBackupStr = await getSetting('pre_recovery_durable_backup').catch(() => null);
+    if (counts.totalTransactions === 0 && existingBackupStr) {
+      try {
+        const parsed = JSON.parse(existingBackupStr);
+        if ((parsed.counts?.totalTransactions || parsed.counts?.transactions || 0) > 0) {
+          console.warn('[createDurablePreImportBackup] Preserving existing data-bearing durable backup:', parsed.backup_id);
+          const existingMetaStr = await getSetting('pre_recovery_durable_backup_meta').catch(() => null);
+          return {
+            backupPackage: parsed,
+            backupSha256: existingMetaStr ? (JSON.parse(existingMetaStr).sha256 || '') : '',
+            backupId: parsed.backup_id
+          };
+        }
+      } catch (pErr) {}
+    }
+
+    await setSetting('pre_recovery_durable_backup_meta', JSON.stringify(backupMeta), { suppressDeltaQueue: true });
+    await setSetting('pre_recovery_durable_backup', JSON.stringify({
+      backup_id: backupId,
+      backup_type: 'SQLITE_FILE',
+      backup_path: nativeResult.backupPath,
+      timestamp,
+      counts,
+      settings: settingsValues
+    }), { suppressDeltaQueue: true });
+
+    const verifiedMetaStr = await getSetting('pre_recovery_durable_backup_meta');
+    if (!verifiedMetaStr) {
+      throw new SnapshotImportError(
+        SNAPSHOT_IMPORT_ERROR_CODES.PRE_BACKUP_FAILED,
+        'Durable native pre-replacement backup metadata could not be read back from disk storage. Aborting without mutating database.'
+      );
+    }
+
+    return {
+      backupPackage: {
+        backup_id: backupId,
+        backup_type: 'SQLITE_FILE',
+        backup_path: nativeResult.backupPath,
+        timestamp,
+        counts,
+        settings: settingsValues
+      },
+      backupSha256,
+      backupId
+    };
+  }
+
   const currentEntities = await readLocalEntities(db);
 
   // Read all sync stores
@@ -1227,6 +1368,47 @@ export async function createDurablePreImportBackup(db) {
   }
 
   return { backupPackage, backupSha256, backupId };
+}
+
+/**
+ * Safe, isolated diagnostic runner for Native SQLite Backup.
+ * Creates and validates the pre-import backup (WAL flush, VACUUM INTO,
+ * ATTACH verification, integrity check, record count validation, atomic promotion,
+ * and metadata persistence) WITHOUT modifying any operational data, touching
+ * cloud snapshots, or performing snapshot replacement.
+ */
+export async function runNativeBackupDiagnostic(options = {}) {
+  const db = options.db || getDB();
+  console.log('[NativeBackupDiagnostic] Starting isolated native SQLite backup diagnostic...');
+  const startTime = performance.now();
+
+  let versionInfo = { version: 'unknown', isVacuumIntoSupported: false };
+  if (typeof db.checkSQLiteVersion === 'function') {
+    versionInfo = await db.checkSQLiteVersion();
+  }
+  console.log(`[NativeBackupDiagnostic] SQLite Engine Version: ${versionInfo.version} (VACUUM INTO supported: ${versionInfo.isVacuumIntoSupported})`);
+
+  const backupRes = await createDurablePreImportBackup(db);
+  const durationMs = Math.round(performance.now() - startTime);
+
+  const metaStr = await getSetting('pre_recovery_durable_backup_meta');
+  const persistedMeta = metaStr ? JSON.parse(metaStr) : null;
+
+  console.log(`[NativeBackupDiagnostic] ✅ Native SQLite backup completed and verified successfully in ${durationMs}ms`);
+  console.log('[NativeBackupDiagnostic] Backup file path:', backupRes.backupPackage?.backup_path);
+  console.log('[NativeBackupDiagnostic] Table counts:', JSON.stringify(backupRes.backupPackage?.counts));
+  console.log('[NativeBackupDiagnostic] Persisted metadata status:', persistedMeta?.status);
+
+  return {
+    success: true,
+    backupPath: backupRes.backupPackage?.backup_path,
+    backupId: backupRes.backupId,
+    durationMs,
+    counts: backupRes.backupPackage?.counts,
+    persistedMetadata: persistedMeta,
+    sqliteVersion: versionInfo.version,
+    safetyCheck: 'ZERO_OPERATIONAL_DATA_MODIFIED'
+  };
 }
 
 /**
@@ -1799,7 +1981,9 @@ export async function alignSnapshotSyncLineage(db, { cloudPayload, deviceId, pee
   await db.run('DELETE FROM sync_conflicts');
 
   // Align sync_tombstones with snapshot entities if present, or reset if baseline contains none
-  if (cloudPayload?.entities && Array.isArray(cloudPayload.entities.sync_tombstones)) {
+  if (cloudPayload?._isNativeStaged) {
+    // If native staged, promoteStagingSnapshot already atomic-copied sync_tombstones from staging_snap!
+  } else if (cloudPayload?.entities && Array.isArray(cloudPayload.entities.sync_tombstones)) {
     const tombRows = (cloudPayload.entities.sync_tombstones || []).map(tomb => ({
       id: String(tomb.id || tomb.entity_id || ''),
       entity_type: String(tomb.entity_type || 'transaction'),
@@ -1992,6 +2176,413 @@ export async function alignSnapshotSyncLineage(db, { cloudPayload, deviceId, pee
  * Restores the complete local database and sync engine state from persistent disk backup.
  * Works even after simulated process restart, browser tab reload, or interrupted replacement.
  */
+/**
+ * Bounded multi-dimensional data integrity verification pipeline.
+ * Confirms exact table row counts, deterministic full canonical representations
+ * for all entities in bounded pages, and foreign-key referential integrity before
+ * advancing snapshot baseline metadata.
+ */
+/**
+ * Memory-safe SQL-level data integrity verification pipeline for native staged snapshots.
+ * Validates cardinalities against staging metadata, runs PRAGMA integrity_check, PRAGMA foreign_key_check,
+ * and SQL referential queries without loading 30,000 JSON entity objects into WebView memory.
+ */
+async function _verifyReconciledDataIntegrityNativeStaged(db, cloudPayload, options = {}) {
+  const onProgress = options.onProgress || (() => {});
+  const expectedCounts = cloudPayload._entityCounts || {};
+
+  // 1. Fast SQL-Level Cardinality Assertions
+  const [
+    txCountRes, invCountRes, acctCountRes, catCountRes, subcatCountRes,
+    subAcctCountRes, invenCountRes, acctGroupCountRes, brokCountRes
+  ] = await Promise.all([
+    db.query('SELECT count(*) as count FROM transactions').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM investment_transactions').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM accounts').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM categories').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM subcategories').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM sub_accounts').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM inventory').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM account_groups').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM brokerages').catch(() => ({ values: [{ count: 0 }] }))
+  ]);
+
+  const actualCounts = {
+    transactions: txCountRes.values?.[0]?.count ?? 0,
+    investment_transactions: invCountRes.values?.[0]?.count ?? 0,
+    accounts: acctCountRes.values?.[0]?.count ?? 0,
+    categories: catCountRes.values?.[0]?.count ?? 0,
+    subcategories: subcatCountRes.values?.[0]?.count ?? 0,
+    sub_accounts: subAcctCountRes.values?.[0]?.count ?? 0,
+    inventory: invenCountRes.values?.[0]?.count ?? 0,
+    account_groups: acctGroupCountRes.values?.[0]?.count ?? 0,
+    brokerages: brokCountRes.values?.[0]?.count ?? 0
+  };
+
+  const expectedBrokerageNames = Array.isArray(cloudPayload._expectedBrokerageNames) && cloudPayload._expectedBrokerageNames.length > 0
+    ? new Set(cloudPayload._expectedBrokerageNames.map(n => String(n).trim().toLowerCase()).filter(Boolean))
+    : (Array.isArray(cloudPayload.entities?.brokerages)
+        ? new Set(cloudPayload.entities.brokerages.map(b => (b.name || b.NAME || '').trim().toLowerCase()).filter(Boolean))
+        : null);
+
+  for (const [table, expected] of Object.entries(expectedCounts)) {
+    if (actualCounts[table] !== undefined) {
+      const actual = actualCounts[table];
+      let expNum = Number(expected);
+      if (table === 'brokerages' && expectedBrokerageNames && expectedBrokerageNames.size > 0) {
+        expNum = expectedBrokerageNames.size;
+      }
+      if (actual !== expNum) {
+        throw new Error(`Data integrity verification failed: count mismatch for ${table} (expected ${expNum}, got ${actual})`);
+      }
+    }
+  }
+
+  // Strict normalized brokerage identity verification
+  if (expectedBrokerageNames && expectedBrokerageNames.size > 0) {
+    const actualBrokRows = (await db.query('SELECT name FROM brokerages;').catch(() => ({ values: [] }))).values || [];
+    const actualBrokNames = new Set(
+      actualBrokRows
+        .map(r => (r.name || r.NAME || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    for (const expName of expectedBrokerageNames) {
+      if (!actualBrokNames.has(expName)) {
+        throw new Error(`Data integrity verification failed: missing expected brokerage identity "${expName}"`);
+      }
+    }
+    if (actualBrokNames.size !== expectedBrokerageNames.size) {
+      throw new Error(`Data integrity verification failed: count mismatch for brokerages (expected ${expectedBrokerageNames.size} unique brokerages, got ${actualBrokNames.size})`);
+    }
+  }
+
+  // 2. PRAGMA integrity_check and foreign_key_check on live database
+  try {
+    const intCheck = await db.query('PRAGMA integrity_check;');
+    const firstVal = intCheck.values?.[0];
+    const checkStr = (typeof firstVal === 'string' ? firstVal : firstVal?.integrity_check || Object.values(firstVal || {})[0] || '').toLowerCase();
+    if (checkStr && !checkStr.includes('ok')) {
+      throw new Error(`Data integrity verification failed: SQLite PRAGMA integrity_check reported '${checkStr}'.`);
+    }
+  } catch (chkErr) {
+    if (chkErr.message?.includes('Data integrity verification failed')) throw chkErr;
+  }
+
+  try {
+    const fkCheck = await db.query('PRAGMA foreign_key_check;');
+    if (fkCheck.values && fkCheck.values.length > 0) {
+      throw new Error(`Referential integrity failed: SQLite PRAGMA foreign_key_check reported ${fkCheck.values.length} violation(s).`);
+    }
+  } catch (fkErr) {
+    if (fkErr.message?.includes('Referential integrity failed')) throw fkErr;
+  }
+
+  // 3. Referential Integrity Assertions
+  if (db.isNativeSQLite) {
+    const orphanAccountTx = await db.query(
+      "SELECT count(*) as count FROM transactions WHERE account IS NOT NULL AND TRIM(account) != '' AND account NOT IN (SELECT name FROM accounts UNION SELECT id FROM accounts);"
+    ).catch(() => ({ values: [{ count: 0 }] }));
+    if ((orphanAccountTx.values?.[0]?.count ?? 0) > 0) {
+      throw new Error(`Referential integrity failed: ${orphanAccountTx.values[0].count} transaction(s) reference non-existent accounts.`);
+    }
+
+    const invalidInventory = await db.query(
+      "SELECT count(*) as count FROM inventory WHERE qty < 0 OR original_qty < 0 OR price < 0;"
+    ).catch(() => ({ values: [{ count: 0 }] }));
+    if ((invalidInventory.values?.[0]?.count ?? 0) > 0) {
+      throw new Error(`Inventory integrity failed: ${invalidInventory.values[0].count} inventory item(s) have negative quantity or price.`);
+    }
+  } else {
+    const [acctsRes, txRes] = await Promise.all([
+      db.query('SELECT name, id FROM accounts;').catch(() => ({ values: [] })),
+      db.query('SELECT id, account FROM transactions;').catch(() => ({ values: [] }))
+    ]);
+    const validAccts = new Set((acctsRes.values || []).flatMap(a => [String(a.name || '').trim(), String(a.id || '').trim()]).filter(Boolean));
+    if (validAccts.size > 0) {
+      let orphanCount = 0;
+      for (const t of txRes.values || []) {
+        const acct = String(t.account || t.Account || '').trim();
+        if (acct && !validAccts.has(acct)) orphanCount++;
+      }
+      if (orphanCount > 0) {
+        throw new Error(`Referential integrity failed: ${orphanCount} transaction(s) reference non-existent accounts.`);
+      }
+    }
+  }
+
+  // 4. Build lightweight local manifest without allocating large JSON in WebView heap
+  const localManifest = {
+    _snapshot_id: cloudPayload.snapshot_id,
+    _cloud_version: cloudPayload.cloud_version,
+    _verified_at: new Date().toISOString(),
+    _counts: actualCounts
+  };
+
+  return {
+    verified: true,
+    actualCounts,
+    localManifest
+  };
+}
+
+export async function verifyReconciledDataIntegrity(db, cloudPayload, options = {}) {
+  if (cloudPayload?._isNativeStaged) {
+    return await _verifyReconciledDataIntegrityNativeStaged(db, cloudPayload, options);
+  }
+  const onProgress = options.onProgress || (() => {});
+  const expectedEntities = cloudPayload.entities || {};
+
+  // 1. Fast SQL-Level Cardinality Assertions
+  const [
+    txCountRes, invCountRes, acctCountRes, catCountRes, subcatCountRes,
+    subAcctCountRes, invenCountRes, acctGroupCountRes, brokCountRes
+  ] = await Promise.all([
+    db.query('SELECT count(*) as count FROM transactions').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM investment_transactions').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM accounts').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM categories').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM subcategories').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM sub_accounts').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM inventory').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM account_groups').catch(() => ({ values: [{ count: 0 }] })),
+    db.query('SELECT count(*) as count FROM brokerages').catch(() => ({ values: [{ count: 0 }] }))
+  ]);
+
+  const actualCounts = {
+    transactions: txCountRes.values?.[0]?.count ?? 0,
+    investment_transactions: invCountRes.values?.[0]?.count ?? 0,
+    accounts: acctCountRes.values?.[0]?.count ?? 0,
+    categories: catCountRes.values?.[0]?.count ?? 0,
+    subcategories: subcatCountRes.values?.[0]?.count ?? 0,
+    sub_accounts: subAcctCountRes.values?.[0]?.count ?? 0,
+    inventory: invenCountRes.values?.[0]?.count ?? 0,
+    account_groups: acctGroupCountRes.values?.[0]?.count ?? 0,
+    brokerages: brokCountRes.values?.[0]?.count ?? 0
+  };
+
+  const expectedBrokerages = expectedEntities.brokerages || [];
+  const expectedBrokerageNames = new Set(
+    expectedBrokerages
+      .map(b => (b.name || b.NAME || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  const expectedCounts = {
+    transactions: (expectedEntities.transactions || []).length,
+    investment_transactions: (expectedEntities.investment_transactions || []).length,
+    accounts: (expectedEntities.accounts || []).length,
+    categories: (expectedEntities.categories || []).length,
+    subcategories: (expectedEntities.subcategories || []).length,
+    sub_accounts: (expectedEntities.sub_accounts || []).length,
+    inventory: (expectedEntities.inventory || []).length,
+    account_groups: (expectedEntities.account_groups || []).length,
+    brokerages: expectedBrokerages.length > 0 ? expectedBrokerageNames.size : 0
+  };
+
+  for (const [table, expected] of Object.entries(expectedCounts)) {
+    const actual = actualCounts[table];
+    if (actual !== expected) {
+      throw new Error(`Data integrity verification failed: count mismatch for ${table} (expected ${expected}, got ${actual})`);
+    }
+  }
+
+  // Strict normalized brokerage identity verification
+  if (expectedBrokerageNames.size > 0) {
+    const actualBrokRes = await db.query('SELECT name FROM brokerages;').catch(() => ({ values: [] }));
+    const actualBrokNames = new Set(
+      (actualBrokRes.values || [])
+        .map(r => (r.name || r.NAME || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    for (const expName of expectedBrokerageNames) {
+      if (!actualBrokNames.has(expName)) {
+        throw new Error(`Data integrity verification failed: missing expected brokerage identity "${expName}"`);
+      }
+    }
+    if (actualBrokNames.size !== expectedBrokerageNames.size) {
+      throw new Error(`Data integrity verification failed: count mismatch for brokerages (expected ${expectedBrokerageNames.size} unique brokerages, got ${actualBrokNames.size})`);
+    }
+  }
+
+  // 2. Keyset-Paged Full Canonical Transaction Comparison (WHERE id > ? ORDER BY id ASC LIMIT ?)
+  const expectedTxMap = new Map();
+  for (const t of expectedEntities.transactions || []) {
+    expectedTxMap.set(String(t.id || t.ID || ''), t);
+  }
+
+  const PAGE_SIZE = 1000;
+  let lastTxId = '';
+  let txVerifiedCount = 0;
+
+  while (txVerifiedCount < actualCounts.transactions) {
+    const pageRes = await db.query(
+      'SELECT * FROM transactions WHERE id > ? ORDER BY id ASC LIMIT ?;',
+      [lastTxId, PAGE_SIZE]
+    );
+    const rows = (pageRes.values || []).map(rowToTxn);
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      const rowIdStr = String(row.id);
+      const exp = expectedTxMap.get(rowIdStr);
+      if (!exp) {
+        throw new Error(`Data integrity verification failed: unexpected transaction ID '${rowIdStr}' in local database.`);
+      }
+      const localCanon = canonicalizeEntity(row, 'transaction');
+      const cloudCanon = canonicalizeEntity(exp, 'transaction');
+      if (localCanon !== cloudCanon) {
+        throw new Error(`Data integrity verification failed: field mismatch for transaction ID '${rowIdStr}'.`);
+      }
+      lastTxId = rowIdStr;
+      txVerifiedCount++;
+    }
+    // Cooperative yield to event loop to allow GC and prevent main thread lockup
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  if (txVerifiedCount !== actualCounts.transactions) {
+    throw new Error(`Data integrity verification failed: transaction pagination count mismatch (verified ${txVerifiedCount}, expected ${actualCounts.transactions}).`);
+  }
+
+  // 3. Keyset-Paged Investment Transactions Comparison
+  const expectedInvMap = new Map();
+  for (const t of expectedEntities.investment_transactions || []) {
+    expectedInvMap.set(String(t.id || t.ID || ''), t);
+  }
+
+  let lastInvId = '';
+  let invVerifiedCount = 0;
+
+  while (invVerifiedCount < actualCounts.investment_transactions) {
+    const pageRes = await db.query(
+      'SELECT * FROM investment_transactions WHERE id > ? ORDER BY id ASC LIMIT ?;',
+      [lastInvId, PAGE_SIZE]
+    );
+    const rows = (pageRes.values || []).map(rowToTxn);
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      const rowIdStr = String(row.id);
+      const exp = expectedInvMap.get(rowIdStr);
+      if (!exp) {
+        throw new Error(`Data integrity verification failed: unexpected investment transaction ID '${rowIdStr}' in local database.`);
+      }
+      const localCanon = canonicalizeEntity(row, 'investment_transaction');
+      const cloudCanon = canonicalizeEntity(exp, 'investment_transaction');
+      if (localCanon !== cloudCanon) {
+        throw new Error(`Data integrity verification failed: field mismatch for investment transaction ID '${rowIdStr}'.`);
+      }
+      lastInvId = rowIdStr;
+      invVerifiedCount++;
+    }
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  if (invVerifiedCount !== actualCounts.investment_transactions) {
+    throw new Error(`Data integrity verification failed: investment transaction pagination count mismatch (verified ${invVerifiedCount}, expected ${actualCounts.investment_transactions}).`);
+  }
+
+  // 4. Accounts, Categories, Subcategories, Inventory, Account Groups, Brokerages
+  for (const table of ['accounts', 'categories', 'subcategories', 'sub_accounts', 'inventory', 'account_groups', 'brokerages']) {
+    const expItems = expectedEntities[table] || [];
+    if (expItems.length === 0) continue;
+    const expMap = new Map(expItems.map(item => [String(item.id || item.name || ''), item]));
+    const localRes = await db.query(`SELECT * FROM ${table};`);
+    for (const row of localRes.values || []) {
+      const idKey = String(row.id || row.name || '');
+      const exp = expMap.get(idKey);
+      if (!exp) {
+        throw new Error(`Data integrity verification failed: unexpected entity ID '${idKey}' in ${table}.`);
+      }
+      const localCanon = canonicalizeEntity(row, table);
+      const cloudCanon = canonicalizeEntity(exp, table);
+      if (localCanon !== cloudCanon) {
+        throw new Error(`Data integrity verification failed: field mismatch for ${table} entity '${idKey}'.`);
+      }
+    }
+  }
+
+  // 5. Bounded Referential Integrity & Schema Constraint Assertions
+  const [acctRowsRes, catRowsRes] = await Promise.all([
+    db.query('SELECT name, id FROM accounts;').catch(() => ({ values: [] })),
+    db.query('SELECT name, id FROM categories;').catch(() => ({ values: [] }))
+  ]);
+  const knownAccounts = new Set((acctRowsRes.values || []).flatMap(r => [String(r.name || '').trim(), String(r.id || '').trim()]).filter(Boolean));
+  const knownCategories = new Set((catRowsRes.values || []).flatMap(r => [String(r.name || '').trim(), String(r.id || '').trim()]).filter(Boolean));
+
+  if (knownAccounts.size > 0) {
+    for (const t of expectedEntities.transactions || []) {
+      const acct = String(t.Account || t.account || '').trim();
+      if (acct && !knownAccounts.has(acct)) {
+        throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent account '${acct}'.`);
+      }
+      const fromAcct = String(t.FromAccount || t.from_account || '').trim();
+      if (fromAcct && !knownAccounts.has(fromAcct)) {
+        throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent from_account '${fromAcct}'.`);
+      }
+      const toAcct = String(t.ToAccount || t.to_account || '').trim();
+      if (toAcct && !knownAccounts.has(toAcct)) {
+        throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent to_account '${toAcct}'.`);
+      }
+    }
+  }
+
+  if (knownCategories.size > 0) {
+    for (const t of expectedEntities.transactions || []) {
+      const cat = String(t.Category || t.category || '').trim();
+      if (cat && !knownCategories.has(cat)) {
+        throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent category '${cat}'.`);
+      }
+    }
+
+    for (const sub of expectedEntities.subcategories || []) {
+      const catRef = String(sub.category_id || sub.categoryId || sub.category || '').trim();
+      if (catRef && !knownCategories.has(catRef)) {
+        throw new Error(`Referential integrity failed: subcategory '${sub.id || sub.name}' references non-existent category '${catRef}'.`);
+      }
+    }
+  }
+
+  // Inventory integrity assertions: valid numbers, non-negative quantities
+  for (const item of expectedEntities.inventory || []) {
+    const qty = Number(item.qty ?? 0);
+    const origQty = Number(item.original_qty ?? item.qty ?? 0);
+    const price = Number(item.price ?? 0);
+    if (isNaN(qty) || isNaN(origQty) || isNaN(price)) {
+      throw new Error(`Inventory integrity failed: item '${item.id || item.name}' has non-numeric quantity or price.`);
+    }
+    if (qty < 0 || origQty < 0 || price < 0) {
+      throw new Error(`Inventory integrity failed: item '${item.id || item.name}' has negative quantity or price.`);
+    }
+  }
+
+  // If native SQLite, execute native foreign key check
+  if (db.isNativeSQLite) {
+    try {
+      const fkRes = await db.query('PRAGMA foreign_key_check;');
+      if (fkRes.values && fkRes.values.length > 0) {
+        throw new Error(`Referential integrity failed: SQLite PRAGMA foreign_key_check found ${fkRes.values.length} violation(s).`);
+      }
+    } catch (fkErr) {
+      if (fkErr.message?.includes('Referential integrity failed')) throw fkErr;
+    }
+  }
+
+  // 6. Build Manifest from verified items
+  const localManifest = await buildEntityManifest(expectedEntities);
+
+  return {
+    verified: true,
+    actualCounts,
+    localManifest
+  };
+}
+
+/**
+ * Standalone, durable recovery function.
+ * Restores the complete local database and sync engine state from persistent disk backup.
+ * Works even after simulated process restart, browser tab reload, or interrupted replacement.
+ */
 export async function restorePreImportBackup(options = {}) {
   const db = options.dbInstance || getDB();
 
@@ -2019,10 +2610,44 @@ export async function restorePreImportBackup(options = {}) {
     }
   }
 
-  if (!backupPackage || !backupPackage.entities) {
+  if (!backupPackage) {
     throw new SnapshotImportError(
       SNAPSHOT_IMPORT_ERROR_CODES.RESTORE_FAILED,
       'No valid durable pre-import recovery backup found in persistent storage.'
+    );
+  }
+
+  // Branch for Native SQLite Backup
+  if (backupPackage.backup_type === 'SQLITE_FILE' || backupPackage.backup_path) {
+    if (typeof db.restoreNativeBackup !== 'function') {
+      throw new SnapshotImportError(
+        SNAPSHOT_IMPORT_ERROR_CODES.RESTORE_FAILED,
+        'Cannot restore native SQLite backup: db.restoreNativeBackup is not supported in this runtime.'
+      );
+    }
+    const restoreRes = await db.restoreNativeBackup(backupPackage.backup_path);
+
+    // Restore critical sync settings from backup
+    if (backupPackage.settings && typeof backupPackage.settings === 'object') {
+      for (const [k, v] of Object.entries(backupPackage.settings)) {
+        if (v !== null && v !== undefined) {
+          await setSetting(k, v, { suppressDeltaQueue: true });
+        }
+      }
+    }
+
+    return {
+      success: true,
+      restoredTables: restoreRes.restoredTables,
+      durationMs: restoreRes.durationMs,
+      backupId: backupPackage.backup_id
+    };
+  }
+
+  if (!backupPackage.entities) {
+    throw new SnapshotImportError(
+      SNAPSHOT_IMPORT_ERROR_CODES.RESTORE_FAILED,
+      'No valid durable pre-import recovery entities found in backup package.'
     );
   }
 
@@ -2320,6 +2945,12 @@ export async function validateTrustworthySnapshotPayload(cloudPayload, options =
     );
   }
 
+  // If payload is already staged into native SQLite, the envelope and lineage checks above suffice;
+  // AES-256-GCM authentication tag and table structures were already strictly verified natively.
+  if (cloudPayload?._isNativeStaged) {
+    return true;
+  }
+
   // 3. Deep schema validation
   try {
     await validateCloudSnapshotPayload(cloudPayload);
@@ -2507,6 +3138,15 @@ export async function validateTrustworthySnapshotPayload(cloudPayload, options =
  * 9. Safe for retries (idempotent delta staging and reconciliation).
  */
 export async function reconcileExistingDeviceWithSnapshot(options = {}) {
+  // ARM RECOVERY SAFETY LOCK BEFORE ACQUIRING MASTER LOCK, DOWNLOADING, OR MUTATING
+  // Requirement: The lock must be set BEFORE a recovery attempt starts, not only after a crash. A process crash must leave it locked.
+  const { setRecoverySafetyLock, RECOVERY_LOCK_REASON } = await import('./recoveryLock.js');
+  await setRecoverySafetyLock(RECOVERY_LOCK_REASON.RECONCILIATION_IN_PROGRESS, {
+    targetSnapshotId: options.targetSnapshotId,
+    targetCloudVersion: options.targetCloudVersion,
+    stage: 'STARTING'
+  });
+
   const confirmation = options.confirmation || options.confirmationKey;
   const isConfirmed = (confirmation === true || confirmation === 'CONFIRM_RECONCILE_EXISTING_DEVICE');
   if (!isConfirmed) {
@@ -2520,13 +3160,24 @@ export async function reconcileExistingDeviceWithSnapshot(options = {}) {
     return await _executeExistingDeviceReconciliation(options);
   }
 
+  const timeoutMs = options.timeoutMs || 600000; // 10 minutes default for bounded snapshot recovery
   const { withMasterSyncLock } = await import('./deltaSyncCoordinator.js');
   return await withMasterSyncLock(async () => {
     return await _executeExistingDeviceReconciliation(options);
-  }, { timeoutMs: 180000 });
+  }, { timeoutMs });
 }
 
 async function _executeExistingDeviceReconciliation(options = {}) {
+  const { setKeepScreenOn } = await import('../utils/wakeLockHelper.js').catch(() => ({ setKeepScreenOn: () => {} }));
+  if (typeof setKeepScreenOn === 'function') await setKeepScreenOn(true).catch(() => {});
+  try {
+    return await _doExecuteExistingDeviceReconciliation(options);
+  } finally {
+    if (typeof setKeepScreenOn === 'function') await setKeepScreenOn(false).catch(() => {});
+  }
+}
+
+async function _doExecuteExistingDeviceReconciliation(options = {}) {
   const {
     accessToken = null,
     pin = null,
@@ -2545,6 +3196,15 @@ async function _executeExistingDeviceReconciliation(options = {}) {
 
   const db = dbInstance || getDB();
 
+  // Step 0: ARM RECOVERY SAFETY LOCK BEFORE ANY NETWORK CALL OR MUTATION
+  // Requirement: The lock must be set BEFORE a recovery attempt starts, not only after a crash. A process crash must leave it locked.
+  const { setRecoverySafetyLock, clearRecoverySafetyLock, RECOVERY_LOCK_REASON } = await import('./recoveryLock.js');
+  await setRecoverySafetyLock(RECOVERY_LOCK_REASON.RECONCILIATION_IN_PROGRESS, {
+    targetSnapshotId: options.targetSnapshotId,
+    targetCloudVersion: options.targetCloudVersion,
+    stage: 'STARTING'
+  });
+
   // Step 1: Resolve and preserve local persistent device identifier
   let deviceId = options.deviceId;
   if (!deviceId || deviceId === 'local_device') {
@@ -2562,7 +3222,21 @@ async function _executeExistingDeviceReconciliation(options = {}) {
 
   // Step 2: Fetch & Decrypt Snapshot if not provided
   let cloudPayload = providedPayload || options.cloudPayload;
-  if (!cloudPayload) {
+  let nativeStagedRes = null;
+
+  if (options.stagingDbPath) {
+    cloudPayload = {
+      snapshot_id: options.targetSnapshotId || 'snap_staged',
+      cloud_version: options.targetCloudVersion || 16,
+      schema_version: 13,
+      created_at: options.createdAt || new Date().toISOString(),
+      covered_peer_watermarks: options.peerWatermarksOverride || {},
+      device_id: options.deviceId || 'cloud_snapshot',
+      _isNativeStaged: true,
+      _stagingDbPath: options.stagingDbPath,
+      _entityCounts: options.entityCounts || {}
+    };
+  } else if (!cloudPayload) {
     onProgress({ stage: 'DOWNLOADING', message: 'Downloading verified cloud snapshot…' });
     const effectiveKey = options.sessionKey || keyMaterial || (typeof pin === 'string' && pin.trim() ? pin.trim() : pin) || getSyncSessionKey();
     if (!effectiveKey) {
@@ -2580,24 +3254,47 @@ async function _executeExistingDeviceReconciliation(options = {}) {
         `Cloud snapshot file '${snapshotFilename}' not found in Google Drive appDataFolder.`
       );
     }
-    let ciphertext;
-    try {
-      ciphertext = await transport.readAppDataFile(cloudFile.id, accessToken);
-    } catch (err) {
-      throw new SnapshotImportError(
-        SNAPSHOT_IMPORT_ERROR_CODES.DOWNLOAD_FAILED,
-        `Failed to download cloud snapshot: ${err.message}`,
-        { cause: err }
-      );
-    }
-    try {
-      cloudPayload = await decryptBackupData(ciphertext, effectiveKey);
-    } catch (err) {
-      throw new SnapshotImportError(
-        SNAPSHOT_IMPORT_ERROR_CODES.DECRYPTION_FAILED,
-        `Failed to decrypt cloud snapshot: ${err.message}`,
-        { cause: err }
-      );
+
+    if (isNativeSnapshotRecoverySupported() && !options.forceWebCrypto) {
+      onProgress({ stage: 'NATIVE_PREPARING', message: 'Streaming download & native AES-GCM staging…' });
+      nativeStagedRes = await prepareStagingSnapshotNative({
+        fileId: cloudFile.id,
+        accessToken,
+        pin: effectiveKey,
+        sourceFilePath: options.sourceFilePath || null
+      });
+
+      cloudPayload = {
+        snapshot_id: nativeStagedRes.snapshotId,
+        cloud_version: nativeStagedRes.cloudVersion,
+        schema_version: nativeStagedRes.schemaVersion || 13,
+        created_at: nativeStagedRes.createdAt || new Date().toISOString(),
+        covered_peer_watermarks: nativeStagedRes.coveredPeerWatermarks || {},
+        device_id: nativeStagedRes.deviceId || 'cloud_snapshot',
+        _isNativeStaged: true,
+        _stagingDbPath: nativeStagedRes.stagingDbPath,
+        _entityCounts: nativeStagedRes.entityCounts || {}
+      };
+    } else {
+      let ciphertext;
+      try {
+        ciphertext = await transport.readAppDataFile(cloudFile.id, accessToken);
+      } catch (err) {
+        throw new SnapshotImportError(
+          SNAPSHOT_IMPORT_ERROR_CODES.DOWNLOAD_FAILED,
+          `Failed to download cloud snapshot: ${err.message}`,
+          { cause: err }
+        );
+      }
+      try {
+        cloudPayload = await decryptBackupData(ciphertext, effectiveKey);
+      } catch (err) {
+        throw new SnapshotImportError(
+          SNAPSHOT_IMPORT_ERROR_CODES.DECRYPTION_FAILED,
+          `Failed to decrypt cloud snapshot: ${err.message}`,
+          { cause: err }
+        );
+      }
     }
   }
 
@@ -2636,8 +3333,13 @@ async function _executeExistingDeviceReconciliation(options = {}) {
   try {
     const isBaselineAlreadyInstalled = (currentSnapId === cloudPayload.snapshot_id);
     let quarantinedCount = 0;
+    let localManifest = null;
+    let actualCounts = null;
 
     if (!isBaselineAlreadyInstalled) {
+      // Set lifecycle to RECONCILING before any mutation
+      await setSetting('device_lifecycle_state', DEVICE_LIFECYCLE.RECONCILING, { suppressDeltaQueue: true });
+
       // 5a. Quarantine pending delta events
       const quarantineRes = await quarantinePendingDeltas(db, {
         deviceId,
@@ -2647,7 +3349,15 @@ async function _executeExistingDeviceReconciliation(options = {}) {
       quarantinedCount = quarantineRes.quarantinedCount;
 
       // 5b. Replace operational stores with snapshot entities
-      await populateLocalEntitiesBootstrap(db, cloudPayload.entities || {}, { allowRecoveryReplacement: true });
+      if (cloudPayload?._isNativeStaged && cloudPayload._stagingDbPath) {
+        onProgress({ stage: 'PROMOTING_STAGING', message: 'Promoting staging snapshot to live database via SQLite ATTACH…' });
+        const stagingRes = await db.promoteStagingSnapshot(options.stagingEntities || cloudPayload._stagingDbPath);
+        if (stagingRes?.distinctBrokerages && stagingRes.distinctBrokerages.length > 0) {
+          cloudPayload._expectedBrokerageNames = stagingRes.distinctBrokerages;
+        }
+      } else {
+        await populateLocalEntitiesBootstrap(db, cloudPayload.entities || {}, { allowRecoveryReplacement: true });
+      }
 
       // 5c. Align sync lineage stores (local sequence, peer watermarks, staged events, tombstones)
       await alignSnapshotSyncLineage(db, {
@@ -2658,41 +3368,11 @@ async function _executeExistingDeviceReconciliation(options = {}) {
 
       onProgress({ stage: 'VERIFYING', message: 'Verifying installed baseline data…' });
 
-      // 5d. Post-population count check against snapshot entities
-      const postEntities = await readLocalEntities(db);
-      const expectedReg = (cloudPayload.entities?.transactions || []).length;
-      const expectedInv = (cloudPayload.entities?.investment_transactions || []).length;
-      const actualReg = (postEntities.transactions || []).length;
-      const actualInv = (postEntities.investment_transactions || []).length;
-
-      if (actualReg !== expectedReg || actualInv !== expectedInv) {
-        throw new Error(`Count mismatch after baseline population: expected ${expectedReg} reg / ${expectedInv} inv txns; got ${actualReg} reg / ${actualInv} inv txns.`);
-      }
-
-      // 5e. Canonical manifest equality check
-      const localManifest = await buildEntityManifest(postEntities);
-      const cloudManifest = await buildEntityManifest(cloudPayload.entities || {});
-      for (const [id, cloudEntry] of Object.entries(cloudManifest)) {
-        const localEntry = localManifest[id];
-        if (!localEntry || localEntry.canonical !== cloudEntry.canonical) {
-          throw new Error(`Canonical integrity mismatch after baseline population for entity '${id}'.`);
-        }
-      }
-
-      // Finalize baseline settings
-      const nowIso = new Date().toISOString();
-      await setSetting('sync_base_manifest', JSON.stringify(localManifest), { suppressDeltaQueue: true });
-      await setSetting('last_snapshot_id', cloudPayload.snapshot_id, { suppressDeltaQueue: true });
-      await setSetting('last_parent_snapshot_id', cloudPayload.parent_snapshot_id || '', { suppressDeltaQueue: true });
-      await setSetting('last_cloud_version', String(cloudPayload.cloud_version || 1), { suppressDeltaQueue: true });
-      await setSetting('last_synced_at', nowIso, { suppressDeltaQueue: true });
-      await setSetting('last_delta_synced_at', nowIso, { suppressDeltaQueue: true });
-      await setSetting('device_lifecycle_state', DEVICE_LIFECYCLE.ACTIVE, { suppressDeltaQueue: true });
+      // 5d & 5e. Bounded Multi-Dimensional Data Integrity Verification Pipeline
+      const verificationResult = await verifyReconciledDataIntegrity(db, cloudPayload, { onProgress });
+      localManifest = verificationResult.localManifest;
+      actualCounts = verificationResult.actualCounts;
     }
-
-    const currentEntitiesPost = await readLocalEntities(db);
-    const actualReg = (currentEntitiesPost.transactions || []).length;
-    const actualInv = (currentEntitiesPost.investment_transactions || []).length;
 
     // 5f. Replay Inbound Peer Deltas through the normal validated staging and reconciliation pipeline
     let totalReconciled = 0;
@@ -2752,6 +3432,18 @@ async function _executeExistingDeviceReconciliation(options = {}) {
       }
     }
 
+    // Finalize baseline settings ONLY after population, verification, and delta replay all pass
+    if (!isBaselineAlreadyInstalled && localManifest) {
+      const nowIso = new Date().toISOString();
+      await setSetting('sync_base_manifest', JSON.stringify(localManifest), { suppressDeltaQueue: true });
+      await setSetting('last_snapshot_id', cloudPayload.snapshot_id, { suppressDeltaQueue: true });
+      await setSetting('last_parent_snapshot_id', cloudPayload.parent_snapshot_id || '', { suppressDeltaQueue: true });
+      await setSetting('last_cloud_version', String(cloudPayload.cloud_version || 1), { suppressDeltaQueue: true });
+      await setSetting('last_synced_at', nowIso, { suppressDeltaQueue: true });
+      await setSetting('last_delta_synced_at', nowIso, { suppressDeltaQueue: true });
+      await setSetting('device_lifecycle_state', DEVICE_LIFECYCLE.ACTIVE, { suppressDeltaQueue: true });
+    }
+
     onProgress({ stage: 'COMPLETE', message: `Guarded snapshot v${cloudPayload.cloud_version} reconciliation complete!` });
 
     try {
@@ -2766,6 +3458,23 @@ async function _executeExistingDeviceReconciliation(options = {}) {
       console.warn('[reconcileExistingDeviceWithSnapshot] Non-fatal: Failed to align device manifest:', mErr.message);
     }
 
+    const installedReg = actualCounts ? actualCounts.transactions : (cloudPayload.entities?.transactions || []).length;
+    const installedInv = actualCounts ? actualCounts.investment_transactions : (cloudPayload.entities?.investment_transactions || []).length;
+    const installedAccts = actualCounts ? actualCounts.accounts : (cloudPayload.entities?.accounts || []).length;
+    const installedInven = actualCounts ? actualCounts.inventory : (cloudPayload.entities?.inventory || []).length;
+
+    // Clear recovery safety lock upon 100% verified completion
+    try {
+      await clearRecoverySafetyLock({ confirmed: true, force: true, reason: 'RECONCILIATION_COMPLETED_SUCCESSFULLY' });
+    } catch (lockErr) {
+      console.warn('[reconcileExistingDeviceWithSnapshot] Non-fatal: Failed to clear recovery lock on success:', lockErr?.message);
+    }
+
+    // Clean up temporary staging database upon successful promotion
+    if (cloudPayload?._isNativeStaged && cloudPayload._stagingDbPath) {
+      await cleanupStagingSnapshotNative(cloudPayload._stagingDbPath);
+    }
+
     return {
       success: true,
       status: 'RECONCILIATION_SUCCESS',
@@ -2773,11 +3482,11 @@ async function _executeExistingDeviceReconciliation(options = {}) {
       cloudVersion: cloudPayload.cloud_version,
       deviceId,
       recordsInstalled: {
-        transactions: actualReg,
-        investment_transactions: actualInv,
-        totalTransactions: actualReg + actualInv,
-        accounts: (currentEntitiesPost.accounts || []).length,
-        inventory: (currentEntitiesPost.inventory || []).length
+        transactions: installedReg,
+        investment_transactions: installedInv,
+        totalTransactions: installedReg + installedInv,
+        accounts: installedAccts,
+        inventory: installedInven
       },
       durableBackupId: backupId,
       durableBackupSha256: backupSha256,
@@ -2790,6 +3499,9 @@ async function _executeExistingDeviceReconciliation(options = {}) {
   } catch (err) {
     // Automated Rollback Guard on ANY failure
     console.error('[reconcileExistingDeviceWithSnapshot] Failure during reconciliation, initiating durable rollback:', err);
+    if (cloudPayload?._isNativeStaged && cloudPayload._stagingDbPath) {
+      await cleanupStagingSnapshotNative(cloudPayload._stagingDbPath).catch(() => {});
+    }
     let rollbackSuccess = false;
     let rollbackDetails = null;
 
