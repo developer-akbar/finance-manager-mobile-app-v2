@@ -928,8 +928,11 @@ test('FinMan Stock Inventory — Quantity Decrement & Reconciliation Suite', asy
     assert.ok(consumeRes, 'Installment consumption succeeded');
     const updatedTxns = await getTransactions();
     const instTxn = updatedTxns.find(t => t.type === 'Expense' && t.description && t.description.includes('Colgate Toothpaste'));
-    assert.ok(instTxn, 'Installment transaction created');
-    assert.ok(instTxn.description.startsWith('Personal Dental Care\n\nUsed 1 pack of Colgate Toothpaste'), `Description should have userDescription prepended, got: ${instTxn.description}`);
+    assert.ok(
+      instTxn.description.startsWith('Personal Dental Care\n\nInstalment Use 1 pack of Colgate Toothpaste') ||
+      instTxn.description.startsWith('Personal Dental Care\n\nUsed 1 pack of Colgate Toothpaste'),
+      `Description should have userDescription prepended, got: ${instTxn.description}`
+    );
     assert.ok(instTxn.recurring_rule_id, 'Recurring rule id generated');
 
     // Verify recurring rule exists and has 3 total parts (or instalments)
@@ -938,6 +941,40 @@ test('FinMan Stock Inventory — Quantity Decrement & Reconciliation Suite', asy
     const rule = rules.find(r => r.id === instTxn.recurring_rule_id);
     assert.ok(rule, 'Recurring rule exists in database');
     assert.equal(rule.total_instalments || rule.total_parts, 3, 'Total instalments/parts configured to 3');
+
+    // Verify installment tagging contract:
+    // Part 1 carries #stock_ref_; Parts 2..3 carry only #stock #instalment
+    const instParts = updatedTxns
+      .filter(t => t.recurring_rule_id === instTxn.recurring_rule_id)
+      .sort((a, b) => (a.note || '').localeCompare(b.note || ''));
+    assert.equal(instParts.length, 3, 'Exactly 3 scheduled parts created');
+    assert.ok(instParts[0].tags.includes('#stock_ref_'), 'Part 1 must retain #stock_ref_');
+    assert.equal(instParts[1].tags.includes('#stock_ref_'), false, 'Part 2 must NOT contain #stock_ref_');
+    assert.equal(instParts[2].tags.includes('#stock_ref_'), false, 'Part 3 must NOT contain #stock_ref_');
+    assert.equal(instParts[1].tags, '#stock #instalment', 'Part 2 retains #stock #instalment');
+    assert.equal(instParts[2].tags, '#stock #instalment', 'Part 3 retains #stock #instalment');
+
+    // Verify normalization decrements physical stock exactly once (not 3 times)
+    const normalizedBatches = extractNormalizedBatchesFromTransactions(updatedTxns);
+    const postColgate = normalizedBatches.find(b => (b.cleanedName || b.canonicalProduct || '').toLowerCase().includes('colgate'));
+    assert.ok(postColgate, 'Colgate batch found post-consumption');
+    assert.equal(postColgate.dynamicDeductions.length, 1, 'Only Part 1 added a dynamic deduction');
+    assert.equal(postColgate.remainingQty, 1, '2 purchased - 1 deducted = 1 remaining');
+
+    // Verify Stock Activity History treats Parts 2 and 3 as financial payments with qtyDelta: 0
+    const { extractProductStockActivity } = await import('../utils/stockActivityHistory.js');
+    const actResult = extractProductStockActivity({
+      productName: 'Colgate Toothpaste',
+      transactions: updatedTxns,
+      batches: normalizedBatches
+    });
+    assert.equal(actResult.summary.totalConsumedQty, 1, 'Physical consumed quantity across all installments is exactly 1');
+    const finPayments = actResult.activities.filter(a => a.type === 'installment_payment');
+    assert.equal(finPayments.length, 2, 'Two subsequent parts recorded as financial installment payments');
+    finPayments.forEach(p => {
+      assert.equal(p.isPhysical, false, 'Subsequent installment parts are not physical deductions');
+      assert.equal(p.qtyDelta, 0, 'qtyDelta is 0 for financial installment payments');
+    });
   });
 
 });

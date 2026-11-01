@@ -472,7 +472,7 @@ export function extractProductStockActivity({
     const isInstalmentFollowup = (tags.includes('#instalment') || desc.toLowerCase().includes('instalment')) &&
       !tags.includes('#stock_ref_');
     if (isInstalmentFollowup) {
-      const nameMatch = desc.match(/(?:Instalment Use|Consumed)\s+[\d\/\.\s\w]+\s+of\s+([^(]+)/i);
+      const nameMatch = desc.match(/(?:Instalment Use|Consumed|Used)\s+[\d\/\.\s\w]+\s+of\s+([^(]+)/i);
       if (nameMatch) {
         const candidate = cleanRawItemName(nameMatch[1].trim()).toLowerCase();
         const candCanon = getCanonicalProductName(candidate).toLowerCase();

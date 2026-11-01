@@ -468,7 +468,7 @@ export const parseStockLine = (rawLine, txn = {}, lineIdx = 0) => {
 export const LEGACY_HISTORICAL_REF_MAP = Object.freeze({
   '9ba4ff10-0847-40dd-9398-d5903ba598ec': '2026-04-28_98e275ea-49da-4234-ab95-ccc78912f85b_4', // Santoor Soap (03/09/2026)
   'e970fc35-b2a3-4bc9-856f-359e434b52a2': '2026-01-18_f3577d73-845b-4ba4-9059-6de68e1200ad_4', // Dabur Amla (02/09/2026)
-  '08279080-c81c-459e-a6a4-f83528defeab': '2026-07-04_37817ebc-60a3-4f8e-90ab-08f7a0455b75_4', // Cinthol (02/09/2026)
+  '08279080-c81c-459e-a6a4-f83528defeab': '2026-04-28_98e275ea-49da-4234-ab95-ccc78912f85b_3', // Cinthol (02/09/2026)
   'de34ffd0-8639-4a05-81fd-f429eab188e4': '2026-08-07_6e3ffd37-3455-43c4-ab27-89d04f402aea_6', // Cooking Oil (22/08 & 30/08/2026)
 });
 

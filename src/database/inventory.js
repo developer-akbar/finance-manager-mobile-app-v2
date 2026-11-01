@@ -534,7 +534,7 @@ export const consumeInventoryItem = async (
 
   let labelPrefix = 'Used';
   if (usageType === 'lend') labelPrefix = 'Lent';
-  else if (usageType === 'instalment') labelPrefix = 'Instalment Use';
+  else if (usageType === 'instalment' || usageType === 'installment') labelPrefix = 'Instalment Use';
 
   const totalQtyStr = formatFraction(qtyToConsume);
   const totalConsumedStr = useSubUnit
@@ -615,7 +615,9 @@ export const consumeInventoryItem = async (
       entity: rule
     });
 
-    for (const inst of schedule) {
+    for (let idx = 0; idx < schedule.length; idx++) {
+      const inst = schedule[idx];
+      const isFirstPart = idx === 0;
       const [iy, im, id2] = inst.date.split('-');
       const instTxnDate = `${id2}/${im}/${iy}`;
       const instTxnId = uuid();
@@ -641,7 +643,7 @@ export const consumeInventoryItem = async (
           created_at: now,
           updated_at: now,
           recurring_rule_id: ruleId,
-          tags: `#stock #instalment ${stockTags}`,
+          tags: isFirstPart && stockTags ? `#stock #instalment ${stockTags}` : `#stock #instalment`,
           split_group_id: '',
           receipt_image: '',
           warranty_expiry: '',
