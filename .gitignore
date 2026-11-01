@@ -16,5 +16,10 @@ finman_CAS_*.csv
 # Diagnostic & Investigation Scripts
 scripts/
 scratch/
+# Temporary local SQLite databases and backups
+*.db
 
-
+# Temporary root diagnostic screenshots and scripts
+/*.png
+/*.py
+/check_dbs.cjs

@@ -51,6 +51,7 @@ import {
   bootstrapNewDevice,
   DEVICE_LIFECYCLE,
   isDatabasePopulatedWithUserData,
+  checkDatabaseBootstrapEligibility,
   publishAuthoritativeDeviceSnapshot
 } from '../../services/deltaSyncCoordinator.js';
 import {
@@ -104,6 +105,8 @@ export default function CloudSyncManager({ onBack }) {
 
   // New-Device Restore Backup Modal State (WhatsApp-style flow)
   const [restorePromptState, setRestorePromptState] = useState(null);
+  const [bootstrapEligibility, setBootstrapEligibility] = useState(null);
+  const [showEligibilityModal, setShowEligibilityModal] = useState(false);
 
   // In-Memory Session Key State (Never Persisted to Storage)
   const [isUnlocked, setIsUnlocked] = useState(() => isSyncUnlocked());
@@ -277,11 +280,23 @@ export default function CloudSyncManager({ onBack }) {
           const user = getStoredGoogleUser();
           setGoogleUser(user);
 
+          checkDatabaseBootstrapEligibility().then(el => {
+            if (mounted) setBootstrapEligibility(el);
+          }).catch(() => { });
+
           const token = getStoredToken();
           if (token && !user.email) {
             syncGoogleUserInfo(token).then(u => {
               if (mounted && u?.emailAddress) {
                 setGoogleUser({ email: u.emailAddress, displayName: u.displayName || '' });
+              }
+            }).catch(() => { });
+          }
+
+          if (token) {
+            getDeviceLifecycleState().then(lc => {
+              if (lc === DEVICE_LIFECYCLE.UNINITIALIZED || lc === DEVICE_LIFECYCLE.JOINING) {
+                checkNewDeviceBackup(token);
               }
             }).catch(() => { });
           }
@@ -294,6 +309,11 @@ export default function CloudSyncManager({ onBack }) {
                   syncGoogleUserInfo(validToken).then(u => {
                     if (mounted && u?.emailAddress) {
                       setGoogleUser({ email: u.emailAddress, displayName: u.displayName || '' });
+                    }
+                  }).catch(() => { });
+                  getDeviceLifecycleState().then(lc => {
+                    if (lc === DEVICE_LIFECYCLE.UNINITIALIZED || lc === DEVICE_LIFECYCLE.JOINING) {
+                      checkNewDeviceBackup(validToken);
                     }
                   }).catch(() => { });
                 }
@@ -405,9 +425,10 @@ export default function CloudSyncManager({ onBack }) {
   const checkNewDeviceBackup = async (token) => {
     try {
       // Fail-closed safeguard: Never offer Restore Backup on a populated device
-      const isPopulated = await isDatabasePopulatedWithUserData();
-      if (isPopulated) {
-        console.log('[CloudSyncManager] Device contains local financial or user data, or emptiness cannot be verified. Suppressing cloud restore prompt.');
+      const eligibility = await checkDatabaseBootstrapEligibility();
+      setBootstrapEligibility(eligibility);
+      if (!eligibility.isEligible) {
+        console.log(`[CloudSyncManager] Restore backup prompt suppressed: ${eligibility.summary}`);
         return;
       }
 
@@ -2131,12 +2152,37 @@ export default function CloudSyncManager({ onBack }) {
                 {localTransactionsCount.toLocaleString()}
               </span>
             </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border-light)' }}>
+              <div>
+                <span style={{ color: 'var(--text-muted)' }}>Restore Safeguard</span>
+                <div style={{ fontSize: '0.68rem', color: bootstrapEligibility?.isEligible ? 'var(--green)' : 'var(--text-muted)' }}>
+                  {bootstrapEligibility?.isEligible ? 'Eligible for Cloud Restore' : 'Destructive Restore Suppressed'}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ fontSize: '0.68rem', padding: '3px 8px', color: 'var(--blue)', borderColor: 'rgba(59, 130, 246, 0.4)' }}
+                onClick={() => setShowEligibilityModal(true)}
+              >
+                🛡️ View Diagnostics
+              </button>
+            </div>
             {/* Developer Diagnostics Section */}
             <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 10, marginTop: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                 <span style={{ fontWeight: 700, fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
                   🛠️ Developer Diagnostics
                 </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowEligibilityModal(true)}
+                  style={{ fontSize: '0.68rem', padding: '4px 8px', background: 'rgba(59, 130, 246, 0.1)', borderColor: 'rgba(59, 130, 246, 0.3)', color: 'var(--blue)' }}
+                  title="Audit device emptiness and cloud restore eligibility"
+                >
+                  🛡️ View Diagnostics
+                </button>
                 <button
                   type="button"
                   className="btn btn-secondary"
@@ -3022,6 +3068,107 @@ export default function CloudSyncManager({ onBack }) {
         </>
       )}
 
+      {/* Bootstrap Eligibility & Device Safeguard Diagnostics Modal */}
+      {showEligibilityModal && bootstrapEligibility && (
+        <>
+          <div
+            className="dash-popup-backdrop"
+            style={{ zIndex: 10002 }}
+            onClick={() => setShowEligibilityModal(false)}
+          />
+          <div
+            className="dash-popup-sheet"
+            style={{
+              zIndex: 10003,
+              padding: '24px 24px calc(var(--safe-bottom) + 24px)',
+              maxWidth: 480,
+              margin: '0 auto'
+            }}
+          >
+            <div className="dash-popup-sheet-handle" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <span style={{ fontSize: '1.5rem' }}>🛡️</span>
+              <div>
+                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                  Cloud Restore Safeguard
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  Bootstrap Emptiness & Device Safety Audit
+                </div>
+              </div>
+            </div>
+
+            <div style={{
+              background: bootstrapEligibility.isEligible ? 'rgba(0, 229, 160, 0.08)' : 'rgba(255, 170, 0, 0.08)',
+              border: `1px solid ${bootstrapEligibility.isEligible ? 'rgba(0, 229, 160, 0.25)' : 'rgba(255, 170, 0, 0.25)'}`,
+              borderRadius: 8,
+              padding: '12px 14px',
+              marginBottom: 16,
+              fontSize: '0.8rem',
+              color: 'var(--text-primary)',
+              lineHeight: 1.5
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: 4, color: bootstrapEligibility.isEligible ? 'var(--green)' : '#f59e0b' }}>
+                {bootstrapEligibility.isEligible ? '✅ Device Eligible for Cloud Restore' : '🔒 Destructive Restore Suppressed'}
+              </div>
+              <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                {bootstrapEligibility.summary}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Detected Records & State
+              </div>
+              <div style={{
+                background: 'var(--bg-card, rgba(255,255,255,0.03))',
+                border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+                borderRadius: 8,
+                padding: '10px 14px',
+                fontSize: '0.78rem',
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '8px 14px'
+              }}>
+                <div><strong>Transactions:</strong> {bootstrapEligibility.details?.transactions ?? 0}</div>
+                <div><strong>Investments:</strong> {bootstrapEligibility.details?.investment_transactions ?? 0}</div>
+                <div><strong>Accounts:</strong> {bootstrapEligibility.details?.accounts ?? 0}</div>
+                <div><strong>Categories:</strong> {bootstrapEligibility.details?.categories ?? 0}</div>
+                <div><strong>Pending Queue:</strong> {bootstrapEligibility.details?.sync_delta_queue ?? 0}</div>
+                <div><strong>Tombstones:</strong> {bootstrapEligibility.details?.sync_tombstones ?? 0}</div>
+                <div><strong>Staged Events:</strong> {bootstrapEligibility.details?.sync_staged_events ?? 0}</div>
+                <div><strong>Conflicts:</strong> {bootstrapEligibility.details?.sync_conflicts ?? 0}</div>
+                <div style={{ gridColumn: 'span 2' }}>
+                  <strong>Lifecycle:</strong> {bootstrapEligibility.details?.lifecycle || 'UNINITIALIZED'}
+                  {bootstrapEligibility.details?.baseSnapshotId ? ` (${bootstrapEligibility.details.baseSnapshotId})` : ''}
+                </div>
+              </div>
+            </div>
+
+            {Array.isArray(bootstrapEligibility.reasons) && bootstrapEligibility.reasons.length > 0 && (
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Suppression Reasons
+                </div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  {bootstrapEligibility.reasons.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ width: '100%', padding: '10px 0', fontSize: '0.85rem', fontWeight: 700 }}
+              onClick={() => setShowEligibilityModal(false)}
+            >
+              Close
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

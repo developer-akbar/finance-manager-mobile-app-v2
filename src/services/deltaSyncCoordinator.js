@@ -43,6 +43,7 @@ import {
   readLocalEntities,
   assertDatabaseBootstrapEmpty,
   isDatabasePopulatedWithUserData,
+  checkDatabaseBootstrapEligibility,
   createCanonicalSnapshotPayload
 } from './cloudSyncEngine.js';
 import { decryptBackupData, encryptBackupData } from '../utils/cryptoBackup.js';
@@ -51,7 +52,8 @@ import { setKeepScreenOn } from '../utils/wakeLockHelper.js';
 
 export {
   assertDatabaseBootstrapEmpty,
-  isDatabasePopulatedWithUserData
+  isDatabasePopulatedWithUserData,
+  checkDatabaseBootstrapEligibility
 };
 
 export {

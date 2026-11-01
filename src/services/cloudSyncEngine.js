@@ -21,7 +21,7 @@ import { encryptBackupData, decryptBackupData } from '../utils/cryptoBackup.js';
 import { findAppDataFile, readAppDataFile, uploadAppDataFile, listFileRevisions, readRevisionContent, listAppDataFiles } from './googleDriveSync.js';
 import { bundleRelatedTransactions, findTransactionDifferences } from '../utils/finmanPayload.js';
 import { getSyncSessionKey } from './syncSession.js';
-import { DEFAULT_ACCOUNTS } from '../database/defaults.js';
+import { DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES } from '../database/defaults.js';
 
 export const SNAPSHOT_FILENAME = 'finman_cloud_sync_snapshot.finman';
 export const CURRENT_ENGINE_VERSION = 1;
@@ -2149,6 +2149,22 @@ function planIsNoOp(baseManifest, localEntities) {
  * Check if local database is genuinely empty of user financial data for clean bootstrap.
  * Fails closed if localEntities is missing or not an object.
  */
+export const getDefaultSeedAccountNames = () => {
+  const names = new Set(['cash', 'bank account', 'bank accounts']);
+  (DEFAULT_ACCOUNTS || []).forEach(a => {
+    if (a?.name) names.add(String(a.name).trim().toLowerCase());
+  });
+  return names;
+};
+
+export const getDefaultSeedCategoryNames = () => {
+  const names = new Set();
+  (DEFAULT_CATEGORIES || []).forEach(c => {
+    if (c?.name) names.add(String(c.name).trim().toLowerCase());
+  });
+  return names;
+};
+
 export function isDatabaseBootstrapEmpty(localEntities) {
   if (!localEntities || typeof localEntities !== 'object') return false;
   const txnCount = (localEntities.transactions || []).length;
@@ -2156,23 +2172,30 @@ export function isDatabaseBootstrapEmpty(localEntities) {
   const inventoryCount = (localEntities.inventory || []).length;
   const budgetCount = (localEntities.budgets || []).length;
   const recurringCount = (localEntities.recurring_rules || []).length;
+  const financialTombstoneCount = (localEntities.sync_tombstones || []).filter(t => {
+    const type = (t.entity_type || t.tombstoneType || '').toLowerCase();
+    return ['transaction', 'transactions', 'investment_transaction', 'investment_transactions', 'inventory', 'recurring_rule', 'budget', 'investment_plan'].includes(type);
+  }).length;
   const tombstoneCount = (localEntities.sync_tombstones || []).length;
   const planCount = (localEntities.investment_plans || []).length;
   const queueCount = (localEntities.sync_delta_queue || []).length;
-  const brokerageCount = (localEntities.brokerages || []).length;
+  const stagedCount = (localEntities.sync_staged_events || []).length;
+  const conflictCount = (localEntities.sync_conflicts || []).length;
   const accountsList = localEntities.accounts || [];
+  const categoriesList = localEntities.categories || [];
 
+  const defaultAccountNames = getDefaultSeedAccountNames();
   const hasCustomAccounts = (() => {
     if (!Array.isArray(accountsList) || accountsList.length === 0) return false;
-    const defaultNames = new Set([
-      'cash', 'bank account', 'bank accounts',
-      'hdfc savings', 'sbi savings', 'icici current', 'cash wallet',
-      'hdfc credit card', 'sbi credit card', 'share market',
-      'liquid mutual funds', 'mutual funds tax saver', 'ppf',
-      'home loan', 'car loan'
-    ]);
-    if (accountsList.length > 14) return true;
-    return accountsList.some(a => !a || !a.name || !defaultNames.has(String(a.name).trim().toLowerCase()));
+    if (accountsList.length > (DEFAULT_ACCOUNTS?.length || 12) + 2) return true;
+    return accountsList.some(a => !a || !a.name || !defaultAccountNames.has(String(a.name).trim().toLowerCase()));
+  })();
+
+  const defaultCategoryNames = getDefaultSeedCategoryNames();
+  const hasCustomCategories = (() => {
+    if (!Array.isArray(categoriesList) || categoriesList.length === 0) return false;
+    if (categoriesList.length > (DEFAULT_CATEGORIES?.length || 16) + 2) return true;
+    return categoriesList.some(c => !c || !c.name || !defaultCategoryNames.has(String(c.name).trim().toLowerCase()));
   })();
 
   return (
@@ -2181,28 +2204,49 @@ export function isDatabaseBootstrapEmpty(localEntities) {
     inventoryCount === 0 &&
     budgetCount === 0 &&
     recurringCount === 0 &&
-    tombstoneCount === 0 &&
+    financialTombstoneCount === 0 &&
     planCount === 0 &&
     queueCount === 0 &&
-    !hasCustomAccounts
+    stagedCount === 0 &&
+    conflictCount === 0 &&
+    !hasCustomAccounts &&
+    !hasCustomCategories
   );
 }
 
 /**
- * Fail-Closed Assertion: Verifies that the physical database has ZERO user financial or account data before destructive bootstrap.
- * Queries transactions, investment_transactions, inventory, recurring_rules, budgets,
- * investment_plans, sync_tombstones, sync_delta_queue, and user accounts.
- * Throws BOOTSTRAP_SAFEGUARD_FAILED on query failure, and BOOTSTRAP_SAFEGUARD_REJECTED on populated data.
+ * Diagnostic & Safety Checker: Evaluates whether the local database is genuinely empty
+ * and eligible for initial cloud restore prompt, or populated / unverified where restore must be suppressed.
+ * Returns a structured result with detailed reasons instead of a generic boolean.
  */
-export async function assertDatabaseBootstrapEmpty(dbInstance = null, options = {}) {
-  const db = dbInstance || getDB();
+export async function checkDatabaseBootstrapEligibility(dbInstance = null, options = {}) {
+  let db = dbInstance || getDB();
   if (!db) {
-    throw new Error('BOOTSTRAP_SAFEGUARD_FAILED: Database handle is unavailable. Failing closed to protect local data.');
+    try {
+      const { initDB } = await import('../database/db.js');
+      db = await initDB();
+    } catch {
+      db = null;
+    }
+  }
+
+  if (!db) {
+    return {
+      isEligible: false,
+      isPopulated: true,
+      reasons: ['Database handle is unavailable'],
+      summary: 'Database handle is unavailable. Emptiness cannot be verified (failing closed).',
+      details: {},
+      error: 'Database handle is unavailable'
+    };
   }
 
   const checkQueue = options.checkQueue !== false;
+  const checkStaged = options.checkStaged !== false;
+  const checkConflicts = options.checkConflicts !== false;
+  const checkBaseline = options.checkBaseline !== false;
 
-  let txnsRes, invTxnsRes, invRes, rulesRes, budgetsRes, plansRes, tombstonesRes, queueRes, acctsRes;
+  let txnsRes, invTxnsRes, invRes, rulesRes, budgetsRes, plansRes, tombstonesRes, financialTombstonesRes, queueRes, stagedRes, conflictsRes, acctsRes, catsRes, localStateRes, settingsRes;
   try {
     [
       txnsRes,
@@ -2212,8 +2256,14 @@ export async function assertDatabaseBootstrapEmpty(dbInstance = null, options = 
       budgetsRes,
       plansRes,
       tombstonesRes,
+      financialTombstonesRes,
       queueRes,
-      acctsRes
+      stagedRes,
+      conflictsRes,
+      acctsRes,
+      catsRes,
+      localStateRes,
+      settingsRes
     ] = await Promise.all([
       db.query('SELECT count(*) as count FROM transactions'),
       db.query('SELECT count(*) as count FROM investment_transactions'),
@@ -2222,12 +2272,25 @@ export async function assertDatabaseBootstrapEmpty(dbInstance = null, options = 
       db.query('SELECT count(*) as count FROM budgets'),
       db.query('SELECT count(*) as count FROM investment_plans'),
       db.query('SELECT count(*) as count FROM sync_tombstones'),
+      db.query("SELECT count(*) as count FROM sync_tombstones WHERE entity_type IN ('transaction', 'transactions', 'investment_transaction', 'investment_transactions', 'inventory', 'recurring_rule', 'budget', 'investment_plan')").catch(() => ({ values: [{ count: 0 }] })),
       checkQueue ? db.query('SELECT count(*) as count FROM sync_delta_queue') : Promise.resolve({ values: [{ count: 0 }] }),
-      db.query('SELECT * FROM accounts')
+      db.query('SELECT count(*) as count FROM sync_staged_events').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT count(*) as count FROM sync_conflicts').catch(() => ({ values: [{ count: 0 }] })),
+      db.query('SELECT * FROM accounts'),
+      db.query('SELECT * FROM categories').catch(() => ({ values: [] })),
+      db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] })),
+      db.query('SELECT * FROM settings WHERE key = ?', ['last_snapshot_id']).catch(() => ({ values: [] }))
     ]);
   } catch (err) {
-    // FAIL CLOSED: If any database query fails or table state cannot be proven empty, strictly reject bootstrap
-    throw new Error(`BOOTSTRAP_SAFEGUARD_FAILED: Database emptiness query failed (${err.message}). Failing closed to protect local data.`);
+    // FAIL CLOSED: If any database query fails, record error and reject restore
+    return {
+      isEligible: false,
+      isPopulated: true,
+      reasons: [`Database query failed (${err.message})`],
+      summary: `Emptiness query failed (${err.message}). Failing closed to protect local data.`,
+      details: {},
+      error: err.message
+    };
   }
 
   const txnCount = Number(txnsRes?.values?.[0]?.count ?? txnsRes?.values?.length ?? 0);
@@ -2237,21 +2300,15 @@ export async function assertDatabaseBootstrapEmpty(dbInstance = null, options = 
   const budgetCount = Number(budgetsRes?.values?.[0]?.count ?? budgetsRes?.values?.length ?? 0);
   const planCount = Number(plansRes?.values?.[0]?.count ?? plansRes?.values?.length ?? 0);
   const tombstoneCount = Number(tombstonesRes?.values?.[0]?.count ?? tombstonesRes?.values?.length ?? 0);
+  const financialTombstoneCount = Number(financialTombstonesRes?.values?.[0]?.count ?? financialTombstonesRes?.values?.length ?? 0);
   const queueCount = Number(queueRes?.values?.[0]?.count ?? queueRes?.values?.length ?? 0);
-  const accountsList = acctsRes?.values || [];
+  const stagedCount = Number(stagedRes?.values?.[0]?.count ?? stagedRes?.values?.length ?? 0);
+  const conflictCount = Number(conflictsRes?.values?.[0]?.count ?? conflictsRes?.values?.length ?? 0);
 
-  const hasCustomAccounts = (() => {
-    if (!Array.isArray(accountsList) || accountsList.length === 0) return false;
-    const defaultNames = new Set([
-      'cash', 'bank account', 'bank accounts',
-      'hdfc savings', 'sbi savings', 'icici current', 'cash wallet',
-      'hdfc credit card', 'sbi credit card', 'share market',
-      'liquid mutual funds', 'mutual funds tax saver', 'ppf',
-      'home loan', 'car loan'
-    ]);
-    if (accountsList.length > 14) return true;
-    return accountsList.some(a => !a || !a.name || !defaultNames.has(String(a.name).trim().toLowerCase()));
-  })();
+  const accountsList = acctsRes?.values || [];
+  const categoriesList = catsRes?.values || [];
+  const localStateRow = localStateRes?.values?.[0] || null;
+  const lastSnapSetting = settingsRes?.values?.[0]?.value || null;
 
   const reasons = [];
   if (txnCount > 0) reasons.push(`${txnCount} transactions`);
@@ -2260,12 +2317,95 @@ export async function assertDatabaseBootstrapEmpty(dbInstance = null, options = 
   if (recurringCount > 0) reasons.push(`${recurringCount} recurring rules`);
   if (budgetCount > 0) reasons.push(`${budgetCount} budgets`);
   if (planCount > 0) reasons.push(`${planCount} investment plans`);
-  if (tombstoneCount > 0) reasons.push(`${tombstoneCount} sync tombstones`);
+  // If there are deleted financial records in tombstones, strictly fail safeguard
+  if (financialTombstoneCount > 0) {
+    reasons.push(`${financialTombstoneCount} sync tombstones`);
+  } else if (tombstoneCount > 0 && (txnCount > 0 || invTxnCount > 0 || queueCount > 0 || accountsList.length > 14 || categoriesList.length > 18)) {
+    reasons.push(`${tombstoneCount} sync tombstones`);
+  }
   if (checkQueue && queueCount > 0) reasons.push(`${queueCount} pending sync queue entries`);
-  if (hasCustomAccounts) reasons.push(`${accountsList.length} user accounts`);
+  if (checkStaged && stagedCount > 0) reasons.push(`${stagedCount} unprocessed staged sync events`);
+  if (checkConflicts && conflictCount > 0) reasons.push(`${conflictCount} unresolved sync conflicts`);
 
-  if (reasons.length > 0) {
-    throw new Error(`BOOTSTRAP_SAFEGUARD_REJECTED: BOOTSTRAP_VERIFICATION_FAILED: Local database is populated with ${reasons.join(', ')}. Destructive bootstrap rejected to prevent data loss.`);
+  // Check user-created accounts vs default seed accounts
+  const defaultAccountNames = getDefaultSeedAccountNames();
+  if (accountsList.length > (DEFAULT_ACCOUNTS?.length || 12) + 2) {
+    reasons.push(`${accountsList.length} user accounts configured`);
+  } else if (accountsList.length > 0) {
+    const customAccts = accountsList.filter(a => !a || !a.name || !defaultAccountNames.has(String(a.name).trim().toLowerCase()));
+    if (customAccts.length > 0) {
+      reasons.push(`${customAccts.length} custom user accounts (${customAccts.map(a => a.name).slice(0, 3).join(', ')})`);
+    }
+  }
+
+  // Check user-created categories vs default seed categories
+  const defaultCategoryNames = getDefaultSeedCategoryNames();
+  if (categoriesList.length > (DEFAULT_CATEGORIES?.length || 16) + 2) {
+    reasons.push(`${categoriesList.length} user categories configured`);
+  } else if (categoriesList.length > 0) {
+    const customCats = categoriesList.filter(c => !c || !c.name || !defaultCategoryNames.has(String(c.name).trim().toLowerCase()));
+    if (customCats.length > 0) {
+      reasons.push(`${customCats.length} custom user categories (${customCats.map(c => c.name).slice(0, 3).join(', ')})`);
+    }
+  }
+
+  // Check active baseline metadata
+  const baseSnapId = localStateRow?.base_snapshot_id || '';
+  const lifecycle = localStateRow?.lifecycle_state || '';
+  if (checkBaseline) {
+    if (baseSnapId && String(baseSnapId).trim().length > 0) {
+      reasons.push(`established snapshot baseline (${baseSnapId})`);
+    } else if (lastSnapSetting && String(lastSnapSetting).trim().length > 0) {
+      reasons.push(`established snapshot baseline in settings (${lastSnapSetting})`);
+    } else if (lifecycle === 'ACTIVE') {
+      reasons.push('device lifecycle is already ACTIVE');
+    }
+  }
+
+  const isEligible = reasons.length === 0;
+  const isPopulated = !isEligible;
+  const summary = isEligible
+    ? 'Device is verified empty and eligible for cloud restore.'
+    : `Device contains local data or active sync state (${reasons.join(', ')}).`;
+
+  return {
+    isEligible,
+    isPopulated,
+    reasons,
+    summary,
+    details: {
+      transactions: txnCount,
+      investment_transactions: invTxnCount,
+      inventory: inventoryCount,
+      recurring_rules: recurringCount,
+      budgets: budgetCount,
+      investment_plans: planCount,
+      sync_tombstones: tombstoneCount,
+      sync_delta_queue: queueCount,
+      sync_staged_events: stagedCount,
+      sync_conflicts: conflictCount,
+      accounts: accountsList.length,
+      categories: categoriesList.length,
+      lifecycle: lifecycle || 'UNINITIALIZED',
+      baseSnapshotId: baseSnapId || null
+    },
+    error: null
+  };
+}
+
+/**
+ * Fail-Closed Assertion: Verifies that the physical database has ZERO user financial or account data before destructive bootstrap.
+ * Queries transactions, investment_transactions, inventory, recurring_rules, budgets,
+ * investment_plans, sync_tombstones, sync_delta_queue, staged events, conflicts, and user accounts/categories.
+ * Throws BOOTSTRAP_SAFEGUARD_FAILED on query failure, and BOOTSTRAP_SAFEGUARD_REJECTED on populated data.
+ */
+export async function assertDatabaseBootstrapEmpty(dbInstance = null, options = {}) {
+  const eligibility = await checkDatabaseBootstrapEligibility(dbInstance, options);
+  if (!eligibility.isEligible) {
+    if (eligibility.error) {
+      throw new Error(`BOOTSTRAP_SAFEGUARD_FAILED: Database emptiness query failed (${eligibility.error}). Failing closed to protect local data.`);
+    }
+    throw new Error(`BOOTSTRAP_SAFEGUARD_REJECTED: BOOTSTRAP_VERIFICATION_FAILED: Local database is populated with ${eligibility.reasons.join(', ')}. Destructive bootstrap rejected to prevent data loss.`);
   }
 
   return true;
@@ -2277,8 +2417,8 @@ export async function assertDatabaseBootstrapEmpty(dbInstance = null, options = 
  */
 export async function isDatabasePopulatedWithUserData(dbInstance = null) {
   try {
-    await assertDatabaseBootstrapEmpty(dbInstance);
-    return false; // Verified genuinely empty
+    const eligibility = await checkDatabaseBootstrapEligibility(dbInstance);
+    return !eligibility.isEligible;
   } catch {
     // Fail Closed: Treat populated or unverified state as populated (do not offer restore)
     return true;
@@ -2611,7 +2751,7 @@ export async function applyLocalEntityDelete(db, del) {
 export async function populateLocalEntitiesBootstrap(db, entities, options = {}) {
   // Defensive Guard: Reject populated databases immediately before any DELETE or replacement operation
   if (!options?.allowRecoveryReplacement) {
-    await assertDatabaseBootstrapEmpty(db, options);
+    await assertDatabaseBootstrapEmpty(db, { checkStaged: false, checkConflicts: false, checkBaseline: false, ...options });
   }
 
   // 1. Clear default seed tables if present
