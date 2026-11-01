@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, toDDMMYYYY, inputToStorage, calculateAge, checkIsRedeemed, getUserFacingTags } from '../../utils/format.js';
+import { formatINR, formatTime, formatDate, txnType, txnAmount, toInputDate, toDDMMYYYY, inputToStorage, calculateAge, checkIsRedeemed, getUserFacingTags, normalizeDescriptionForView } from '../../utils/format.js';
+export { normalizeDescriptionForView };
 import { parseInstalmentInfo, getInstalmentSeriesStats } from '../../database/recurring.js';
 import { resolveInvestmentAccounts } from '../../utils/brokerageAccounting.js';
 import { bundleRelatedTransactions, serializeTransactions } from '../../utils/finmanPayload.js';
@@ -12,7 +13,7 @@ import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
 export default function TransactionItem({ transaction: t, selected, onLongPress, onTap, showDate = false, overrideType, backInterceptRef, onCopy, runningBalance = null, isNewestInGroup = false }) {
-  const { state } = useApp();
+  const { state, showDescription = true } = useApp();
   const [modalMode, setModalMode] = useState(null); // null | 'detail' | 'edit'
   const pressTimer = React.useRef(null);
   const handlerRef = React.useRef(null);
@@ -80,6 +81,10 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
   const xferAccountLabel = !isInvestment && isTransfer && t.Note ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}` : '';
 
   const rawDescription = String(t.Description || t.description || '').trim();
+  const singleLineDesc = React.useMemo(() => {
+    if (!rawDescription) return '';
+    return rawDescription.replace(/[\r\n]+/g, ' ').trim();
+  }, [rawDescription]);
 
   React.useEffect(() => {
     if (!backInterceptRef) return;
@@ -154,7 +159,8 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
         <div className={`txn-dot txn-dot-${cls}`} />
 
         {/* ── DESKTOP DENSE LEDGER COLUMNS (>= 1024px) ── */}
-        <div className="txn-desktop-ledger">
+        <div className={`txn-desktop-ledger ${!showDescription ? 'no-desc' : ''}`}>
+
           {/* Col 1: Date & Time */}
           <div className="td-col td-date">
             <span className="td-date-val">{t.Date || '—'}</span>
@@ -207,9 +213,11 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
           </div>
 
           {/* Col 6: Description */}
-          <div className="td-col td-actual-desc" title={rawDescription || undefined}>
-            {rawDescription ? <span className="td-desc-text">{rawDescription}</span> : null}
-          </div>
+          {showDescription && (
+            <div className="td-col td-actual-desc" title={rawDescription || undefined}>
+              {rawDescription ? <span className="td-desc-text">{rawDescription}</span> : null}
+            </div>
+          )}
 
           {/* Col 7: Amount (far right) */}
           <div className="td-col td-amount">
@@ -224,22 +232,29 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
         {/* ── MOBILE / TABLET COMPACT CARD VIEW (< 1024px) ── */}
         <div className="txn-mobile-view">
           <div className="txn-mid">
-            <div className="txn-note-l">
-              {label}
-              {t.receipt_image && <span style={{ marginLeft: 6, fontSize: '0.72rem' }}>🧾</span>}
-              {t.warranty_expiry && <span style={{ marginLeft: 4, fontSize: '0.72rem' }}>🛡️</span>}
-              {ageStr && (
-                <span
-                  className="txn-age-text"
-                  style={{
-                    marginLeft: 8,
-                    fontSize: '0.7rem',
-                    color: 'var(--text-muted)',
-                    fontWeight: 'normal',
-                    whiteSpace: 'nowrap'
-                  }}
-                >
-                  ({ageStr})
+            <div className={`txn-note-row ${showDescription && singleLineDesc ? 'has-desc' : ''}`}>
+              <div className="txn-note-l">
+                <span className="txn-note-text" title={label}>{label}</span>
+                {t.receipt_image && <span className="txn-meta-icon" style={{ marginLeft: 6, fontSize: '0.72rem' }}>🧾</span>}
+                {t.warranty_expiry && <span className="txn-meta-icon" style={{ marginLeft: 4, fontSize: '0.72rem' }}>🛡️</span>}
+                {ageStr && (
+                  <span
+                    className="txn-age-text"
+                    style={{
+                      marginLeft: 8,
+                      fontSize: '0.7rem',
+                      color: 'var(--text-muted)',
+                      fontWeight: 'normal',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    ({ageStr})
+                  </span>
+                )}
+              </div>
+              {showDescription && singleLineDesc && (
+                <span className="txn-desc-inline" title={rawDescription}>
+                  {singleLineDesc}
                 </span>
               )}
             </div>
@@ -341,7 +356,7 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
 
 // ── Detail sheet ─────────────────────────────────────────────────────────────
 export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
-  const { deleteTransaction, updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments, state } = useApp();
+  const { deleteTransaction, updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments, state, showDescription = true } = useApp();
   const [showDelete, setShowDelete] = useState(false);
   const [showCopyPicker, setShowCopyPicker] = useState(false);
   const [showPlanModal, setShowPlanModal] = useState(false);
@@ -603,7 +618,9 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
                 <DPRow label="Net Sale Proceeds" value={formatINR(invActualAmt > 0 ? invActualAmt : Math.max(0, invGrossVal - invTotalCharges))} />
               )}
               {invType === 'SELL' && <DPRow label="Realized P&L" value={`${invRealizedPnl >= 0 ? '+' : ''}${formatINR(invRealizedPnl)}`} />}
-              {t.Description && <DPRow label="Description" value={t.Description} />}
+              {showDescription && t.Description && normalizeDescriptionForView(t.Description) && (
+                <DPRow label="Description" value={normalizeDescriptionForView(t.Description)} isPreWrap={true} />
+              )}
               {getUserFacingTags(t.Tags).length > 0 && <DPRow label="Tags" value={getUserFacingTags(t.Tags).join(', ')} />}
             </>
           ) : (
@@ -619,7 +636,9 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
                 {t.Subcategory && t.Subcategory !== 'Default' && <DPRow label="Subcategory" value={t.Subcategory} />}
               </>}
               {t.Note && <DPRow label="Note" value={t.Note} />}
-              {t.Description && <DPRow label="Description" value={t.Description} />}
+              {showDescription && t.Description && normalizeDescriptionForView(t.Description) && (
+                <DPRow label="Description" value={normalizeDescriptionForView(t.Description)} isPreWrap={true} />
+              )}
               {getUserFacingTags(t.Tags).length > 0 && <DPRow label="Tags" value={getUserFacingTags(t.Tags).join(', ')} />}
               {isInstalment && instalmentStats && (
                 <DPRow
@@ -814,11 +833,11 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
   );
 }
 
-function DPRow({ label, value }) {
+function DPRow({ label, value, isPreWrap = false }) {
   return (
     <div className="dp-row">
       <div className="dp-row-label">{label}</div>
-      <div className="dp-row-value">{value}</div>
+      <div className={`dp-row-value ${isPreWrap ? 'dp-row-prewrap' : ''}`}>{value}</div>
     </div>
   );
 }

@@ -54,7 +54,7 @@ const REPEAT_OPTIONS = [
 
 function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
   const [mode, setMode] = React.useState(null);           // null | 'instalment' | 'repeat'
-  const [scheduleMode, setSchedule] = React.useState('start_of_month'); // default: start of month
+  const [scheduleMode, setSchedule] = React.useState('on_date'); // default: on the day
   const [days, setDays] = React.useState('');             // instalment days
   const [months, setMonths] = React.useState('');             // instalment months (alt input)
   const [inputMode, setInputMode] = React.useState('months');       // 'months' | 'days'
@@ -196,35 +196,46 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
             {/* Schedule mode options */}
             {[
               {
-                id: 'start_of_month', label: 'Start of month',
-                sub: mode === 'instalment'
-                  ? 'Remaining days this month, then 1st of each month (good for recharges)'
-                  : 'Repeats on the 1st of each period'
-              },
-              {
                 id: 'on_date', label: mode === 'instalment' ? 'On the day' : 'On the date',
                 sub: mode === 'instalment'
                   ? `Same date each month (e.g. ${startDate ? startDate.slice(8) : '22'}nd of each month)`
                   : 'Repeats on the same date each period'
               },
-            ].map(opt => (
-              <div key={opt.id} onClick={() => setSchedule(opt.id)}
-                style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px', borderRadius: 10, marginBottom: 8,
-                  background: scheduleMode === opt.id ? 'rgba(0,229,160,0.10)' : 'var(--bg-card2)',
-                  border: `1.5px solid ${scheduleMode === opt.id ? 'var(--accent)' : 'var(--border)'}`, cursor: 'pointer'
-                }}>
-                <div style={{
-                  width: 18, height: 18, borderRadius: '50%', marginTop: 2, flexShrink: 0,
-                  border: `2px solid ${scheduleMode === opt.id ? 'var(--accent)' : 'var(--border)'}`,
-                  background: scheduleMode === opt.id ? 'var(--accent)' : 'transparent'
-                }} />
-                <div>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: scheduleMode === opt.id ? 'var(--accent)' : 'var(--text-primary)' }}>{opt.label}</div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 }}>{opt.sub}</div>
+              {
+                id: 'start_of_month', label: 'Start of month',
+                sub: mode === 'instalment'
+                  ? 'Remaining days this month, then 1st of each month (good for recharges)'
+                  : 'Repeats on the 1st of each period'
+              },
+            ].map(opt => {
+              const isSelected = scheduleMode === opt.id;
+              return (
+                <div key={opt.id} onClick={() => setSchedule(opt.id)}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px', borderRadius: 10, marginBottom: 8,
+                    background: isSelected ? 'rgba(0,229,160,0.12)' : 'var(--bg-card2)',
+                    border: isSelected ? '2px solid var(--green, #00e5a0)' : '1.5px solid var(--border)',
+                    boxShadow: isSelected ? '0 0 0 1px var(--green, #00e5a0)' : 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}>
+                  <div style={{
+                    width: 22, height: 22, borderRadius: '50%', marginTop: 2, flexShrink: 0,
+                    border: isSelected ? '2px solid var(--green, #00e5a0)' : '2px solid var(--text-muted, #64748b)',
+                    background: isSelected ? 'var(--bg-card)' : 'transparent',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                  }}>
+                    {isSelected && (
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--green, #00e5a0)' }} />
+                    )}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: isSelected ? 'var(--green, #00e5a0)' : 'var(--text-primary)' }}>{opt.label}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 }}>{opt.sub}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setStep(2)}>← Back</button>
               <button className="btn btn-primary" style={{ flex: 2 }}
@@ -495,7 +506,7 @@ export default function AddTransaction({
   prefillSubAccount = null,
   backInterceptRef = null, onSaveInstalment = null
 }) {
-  const { state, navigate, addTransaction, updateTransaction, deleteTransaction, createRecurringRule, modifyRecurringRule, removeRecurringRule, updateInstalmentSiblings, advancePlanDueDate, load } = useApp();
+  const { state, navigate, addTransaction, updateTransaction, deleteTransaction, createRecurringRule, modifyRecurringRule, removeRecurringRule, updateInstalmentSiblings, advancePlanDueDate, load, showDescription } = useApp();
   const { accounts = [], categories = {}, transactions = [], investmentPlans = [] } = state || {};
   const isEdit = !!editTransaction;
 
@@ -729,11 +740,6 @@ export default function AddTransaction({
       // Strip (x/x) instalment suffix from Note so user sees clean note in edit form
       const cleanNote = stripInstalmentSuffix(t.Note || t.note || '');
       let dispAmt = String(t.TradeValue || t.trade_value || t.INR || t.Amount || t.amount || '');
-      if (t.split_group_id && !t.split_group_id.startsWith('inv_charge_')) {
-        const groupTxns = (transactions || []).filter(item => item.split_group_id === t.split_group_id);
-        const groupSum = groupTxns.reduce((sum, item) => sum + (parseFloat(item.INR || item.Amount || 0) || 0), 0);
-        if (groupSum > 0) dispAmt = String(groupSum);
-      }
       const dispActual = t.ActualAmount !== undefined && t.ActualAmount !== null && t.ActualAmount !== ''
         ? String(t.ActualAmount)
         : (t.actual_amount !== undefined && t.actual_amount !== null && t.actual_amount !== '' ? String(t.actual_amount) : '');
@@ -1303,7 +1309,7 @@ export default function AddTransaction({
   }, [isSplitEdit, editTransaction, transactions]);
 
   // Split Transaction state
-  const [isSplit, setIsSplit] = useState(() => isSplitEdit);
+  const [isSplit, setIsSplit] = useState(false);
   const [splits, setSplits] = useState(() => {
     if (isSplitEdit && splitGroupTransactions.length > 0) {
       return splitGroupTransactions.map((t, idx) => ({
@@ -1353,25 +1359,7 @@ export default function AddTransaction({
     }, 60);
   }, []);
 
-  // Hydrate splits and form.amount if transactions loaded asynchronously in edit mode
-  useEffect(() => {
-    if (isSplitEdit && splitGroupTransactions.length > 0) {
-      setSplits(prev => {
-        if (prev.some(p => p.transactionId)) return prev;
-        return splitGroupTransactions.map((t, idx) => ({
-          id: t._id || t.id || ('s' + (idx + 1)),
-          transactionId: t._id || t.id,
-          category: t.Category || t.category || '',
-          subcategory: (t.Subcategory || t.subcategory || 'Default') === 'Default' ? '' : (t.Subcategory || t.subcategory || ''),
-          amount: String(t.INR || t.Amount || t.amount || ''),
-          note: t.Note || t.note || '',
-          description: t.Description || t.description || ''
-        }));
-      });
-      const groupSum = splitGroupTransactions.reduce((sum, t) => sum + (parseFloat(t.INR || t.Amount || 0) || 0), 0);
-      setForm(p => ({ ...p, amount: String(groupSum || p.amount) }));
-    }
-  }, [isSplitEdit, splitGroupTransactions]);
+  // Retain splits state for when the user explicitly chooses to split this transaction
 
   const allocatedSplitSum = useMemo(() => {
     return splits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
@@ -3360,15 +3348,6 @@ export default function AddTransaction({
           if (isInstalmentEdit) {
             await updateInstalmentSiblings(editTransaction.recurring_rule_id, data, editTransaction);
           } else if (isEdit) {
-            if (isSplitEdit && !isSplit) {
-              data.split_group_id = '';
-              for (const sibling of splitGroupTransactions) {
-                const sId = String(sibling._id || sibling.id);
-                if (sId !== String(editTransaction._id || editTransaction.id)) {
-                  await deleteTransaction(sId);
-                }
-              }
-            }
             await updateTransaction(editTransaction._id, data);
           } else {
             await addTransaction(data);
@@ -4789,8 +4768,8 @@ export default function AddTransaction({
             </div>
           )}
 
-          {/* Description Section (hidden when isSplit) */}
-          {!isSplit && (
+          {/* Description Section (hidden when isSplit or showDescription is false) */}
+          {!isSplit && (showDescription !== false) && (
             <div className="description-section">
               <div className="form-group">
                 <textarea ref={el => { textInputRef(el); descriptionRef.current = el; }} className="form-input" rows={1} value={form.description}

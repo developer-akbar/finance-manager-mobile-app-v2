@@ -74,6 +74,10 @@
     width: 100%;
     font-size: 0.80rem;
   }
+
+  .txn-desktop-ledger.no-desc {
+    grid-template-columns: 95px 68px minmax(105px, 135px) minmax(100px, 125px) 1fr 100px;
+  }
 }
 
 /* ── DESKTOP LEDGER LAYOUT (>= 1024px, 1280px, 1440px, 1920px) ── */
@@ -103,6 +107,59 @@
     width: 100%;
     font-size: 0.84rem;
   }
+
+  .txn-desktop-ledger.no-desc {
+    grid-template-columns: 105px 75px minmax(120px, 180px) minmax(120px, 160px) 1fr 115px;
+  }
+}
+
+/* ── Mobile Transaction Note Row & Inline Description ── */
+.txn-note-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.txn-note-row .txn-note-l {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex-shrink: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.txn-note-row.has-desc .txn-note-l {
+  max-width: 55%;
+  flex-shrink: 1;
+}
+
+.txn-note-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.txn-desc-inline {
+  font-size: 0.73rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+  line-height: 1.3;
+}
+
+.txn-desc-inline::before {
+  content: '·';
+  margin-right: 6px;
+  opacity: 0.6;
 }
 
 /* ── LEDGER COLUMN STYLING (Shared for >= 768px) ── */
@@ -371,6 +428,13 @@
   font-weight: var(--fw-data);
   color: var(--text-primary);
   word-break: break-word;
+}
+
+.dp-row-value.dp-row-prewrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 
 .dp-actions {

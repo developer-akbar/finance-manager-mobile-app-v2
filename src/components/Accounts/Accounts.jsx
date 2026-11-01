@@ -244,8 +244,8 @@ function computeBalance(txns, acctName, subAccountName = null) {
     const acct = t.Account || t.FromAccount || '';
     const dest = t.ToAccount || '';
 
-    if (type === 'Income') { if (acct === acctName) bal += amt; }
-    else if (type === 'Expense') { if (acct === acctName) bal -= amt; }
+    if (type === 'Income') { if ((dest || acct) === acctName) bal += amt; }
+    else if (type === 'Expense') { if ((acct || dest) === acctName) bal -= amt; }
     else if (type === 'Transfer-Out') {
       if (acct === acctName) bal -= amt;
       if (dest === acctName) bal += amt;
@@ -1419,6 +1419,7 @@ export default function Accounts({ backInterceptRef } = {}) {
     const isShareMarket = name === 'Share Market';
     const isMFTaxSaver = name === 'Mutual Funds Tax Saver';
     const isLiquidMF = name === 'Liquid Mutual Funds';
+    const isInv = isShareMarket || mfBalances.mfAccts.has(name);
 
     const KNOWN_INVESTMENT_PLATFORMS_SET = new Set(['Fareeda Groww', 'Ammi Groww', 'Fareeda ETMoney', 'Ak ETMoney', 'Zerodha', 'Groww', 'ETMoney', 'Scripbox']);
 
@@ -1439,6 +1440,7 @@ export default function Accounts({ backInterceptRef } = {}) {
 
     const hasSubs = subAccountsToRender.length > 0;
     const isAcctExpanded = expandedAccounts.has(name);
+
 
     let parentRow;
     if (isCreditCard(acctObj)) {
@@ -1516,20 +1518,60 @@ export default function Accounts({ backInterceptRef } = {}) {
     }
 
     if (hasSubs) {
+      const subBalancesMap = subAcctBalances[name] || {};
+      const subSum = Object.values(subBalancesMap).reduce((s, v) => s + v, 0);
+      const unallocated = bal - subSum;
+      const hasUnallocated = Math.abs(unallocated) > 0.01;
+
       return (
         <React.Fragment key={name}>
           {parentRow}
-          {isAcctExpanded && [...subAccountsToRender]
-            .sort((a, b) => {
-              const balA = subAcctBalances[name]?.[a.name] ?? 0;
-              const balB = subAcctBalances[name]?.[b.name] ?? 0;
-              return balB - balA;
-            })
-            .map(sub => {
-              const subBal = subAcctBalances[name]?.[sub.name] ?? 0;
-              return (
+          {isAcctExpanded && (
+            <>
+              {[...subAccountsToRender]
+                .sort((a, b) => {
+                  const balA = subAcctBalances[name]?.[a.name] ?? 0;
+                  const balB = subAcctBalances[name]?.[b.name] ?? 0;
+                  return balB - balA;
+                })
+                .map(sub => {
+                  const subBal = subAcctBalances[name]?.[sub.name] ?? 0;
+                  return (
+                    <div
+                      key={`${name}-${sub.name}`}
+                      className="acct-row"
+                      style={{
+                        paddingLeft: '28px',
+                        background: 'var(--bg-card2)',
+                        borderBottom: '1px solid var(--border-light)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                        minWidth: 0
+                      }}
+                      onClick={() => {
+                        setDrill(name);
+                        setDrillSub(sub.name);
+                      }}
+                    >
+                      <div className="acct-row-name" style={{ flex: 1, fontSize: '0.8rem', opacity: 0.9, minWidth: 0 }}>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub.name}</div>
+                        {isShareMarket && shareMarketBalances[sub.name] && (
+                          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 'normal', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            Cash {shareMarketBalances[sub.name].cashBalance < 0 ? '−' : ''}{formatINR(Math.abs(shareMarketBalances[sub.name].cashBalance))} · Invested {formatINR(shareMarketBalances[sub.name].investedCost)}
+                          </div>
+                        )}
+                      </div>
+                      <div className={`acct-row-bal ${subBal >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: '0.8rem', marginRight: 6 }}>
+                        {subBal < 0 ? '−' : ''}{formatINR(Math.abs(subBal))}
+                      </div>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="9" height="9" style={{ flexShrink: 0 }}><path d="M9 18l6-6-6-6" /></svg>
+                    </div>
+                  );
+                })}
+              {hasUnallocated && (
                 <div
-                  key={`${name}-${sub.name}`}
+                  key={`${name}-unallocated`}
                   className="acct-row"
                   style={{
                     paddingLeft: '28px',
@@ -1542,24 +1584,20 @@ export default function Accounts({ backInterceptRef } = {}) {
                   }}
                   onClick={() => {
                     setDrill(name);
-                    setDrillSub(sub.name);
+                    setDrillSub('');
                   }}
                 >
                   <div className="acct-row-name" style={{ flex: 1, fontSize: '0.8rem', opacity: 0.9, minWidth: 0 }}>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub.name}</div>
-                    {isShareMarket && shareMarketBalances[sub.name] && (
-                      <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 'normal', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        Cash {shareMarketBalances[sub.name].cashBalance < 0 ? '−' : ''}{formatINR(Math.abs(shareMarketBalances[sub.name].cashBalance))} · Invested {formatINR(shareMarketBalances[sub.name].investedCost)}
-                      </div>
-                    )}
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic', color: 'var(--text-secondary)' }}>Direct / Unallocated</div>
                   </div>
-                  <div className={`acct-row-bal ${subBal >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: '0.8rem', marginRight: 6 }}>
-                    {subBal < 0 ? '−' : ''}{formatINR(Math.abs(subBal))}
+                  <div className={`acct-row-bal ${unallocated >= 0 ? 'pos' : 'neg'}`} style={{ fontSize: '0.8rem', marginRight: 6 }}>
+                    {unallocated < 0 ? '−' : ''}{formatINR(Math.abs(unallocated))}
                   </div>
                   <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="9" height="9" style={{ flexShrink: 0 }}><path d="M9 18l6-6-6-6" /></svg>
                 </div>
-              );
-            })}
+              )}
+            </>
+          )}
         </React.Fragment>
       );
     }

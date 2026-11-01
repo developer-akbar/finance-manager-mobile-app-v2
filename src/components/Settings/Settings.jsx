@@ -2842,7 +2842,7 @@ function BudgetsManager({ onBack }) {
 // Appearance Manager
 // ─────────────────────────────────────────────
 function AppearanceManager({ onBack }) {
-  const { state, updateSettings, setTheme, setHeaderColor, setFontSize, setFontFamily, setFontDataWeight } = useApp();
+  const { state, updateSettings, setTheme, setHeaderColor, setFontSize, setFontFamily, setFontDataWeight, showDescription, setShowDescription } = useApp();
   const { theme, fontSize } = state;
   const headerColor = state.headerColor || state.settings?.headerColor || 'default';
   const fontDataWeight = state.fontDataWeight || 'regular';
@@ -3047,6 +3047,30 @@ function AppearanceManager({ onBack }) {
               )}
             </div>
           ))}
+        </div>
+
+        {/* Transaction Details */}
+        <div className="mgr-section-label">Transaction Details</div>
+        <div className="settings-card" style={{ margin: '0 var(--page-px) 16px' }}>
+          <div className="settings-row" style={{ alignItems: 'center' }}>
+            <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.12)' }}>
+              📝
+            </div>
+            <div className="settings-row-content">
+              <div className="settings-row-title">Show Description</div>
+              <div className="settings-row-sub">Display the Description field across all screen sizes</div>
+            </div>
+            <label className="toggle-switch" title="Toggle description field display">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-checked={showDescription !== false}
+                checked={showDescription !== false}
+                onChange={e => setShowDescription(e.target.checked)}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
         </div>
 
         <div className="h-8" />
@@ -3266,22 +3290,25 @@ export default function Settings({ backInterceptRef } = {}) {
       </div>
 
       <div className="settings-hub-grid">
-        {/* Column 1: Appearance & System */}
+        {/* Column 1: About & Appearance */}
         <div className="settings-hub-group">
+          <div className="settings-group-label">About</div>
+          <div className="settings-card">
+            <div className="settings-row" style={{ cursor: 'default' }}>
+              <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.12)' }}>💰</div>
+              <div className="settings-row-content">
+                <div className="settings-row-title">FinMan</div>
+                <div className="settings-row-sub">v2.2.1.3 — Built for you by Akbar 💚</div>
+              </div>
+            </div>
+          </div>
+
           <div className="settings-group-label">Appearance &amp; System</div>
           <div className="settings-card">
             <div className="settings-row" onClick={() => setScreen('appearance')}>
               <div className="settings-row-icon" style={{ background: 'rgba(255,193,7,0.15)' }}>🎨</div>
               <div className="settings-row-content"><div className="settings-row-title">Appearance</div><div className="settings-row-sub">Theme, font size, and font family</div></div>
               <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="14" height="14"><path d="M9 18l6-6-6-6" /></svg>
-            </div>
-          </div>
-
-          <div className="settings-group-label">About</div>
-          <div className="settings-card">
-            <div className="settings-row">
-              <div className="settings-row-icon" style={{ background: 'rgba(0,229,160,0.12)' }}>💰</div>
-              <div className="settings-row-content"><div className="settings-row-title">FinMan</div><div className="settings-row-sub">v2.2.1.3 — Built for you by Akbar 💚</div></div>
             </div>
           </div>
         </div>

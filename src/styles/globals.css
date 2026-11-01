@@ -18,6 +18,8 @@
   --green:      #00e5a0;
   --green-dark: #00b87a;
   --green-dim:  rgba(0,229,160,0.08);
+  --accent:     #00e5a0;
+  --accent-dim: rgba(0,229,160,0.12);
   --income:      #4d9fff;
   --income-bg:   rgba(77,159,255,0.12);
   --expense:     #ff4d6a;
@@ -52,6 +54,8 @@
   --green:      #00b87a;
   --green-dark: #009060;
   --green-dim:  rgba(0,184,122,0.1);
+  --accent:     #00b87a;
+  --accent-dim: rgba(0,184,122,0.12);
   --income:      #1a6eff;
   --income-bg:   rgba(26,110,255,0.10);
   --expense:     #e02040;

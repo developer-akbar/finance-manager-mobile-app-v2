@@ -420,49 +420,72 @@
   }
 }
 
-/* Toggle Switch styles */
+/* Toggle Switch styles — Accessible High-Contrast Switch Control */
 .toggle-switch {
   position: relative;
-  display: inline-block;
-  width: 46px;
-  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  width: 50px;
+  height: 28px;
   flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
 }
 
 .toggle-switch input {
   opacity: 0;
   width: 0;
   height: 0;
+  position: absolute;
 }
 
 .toggle-slider {
   position: absolute;
   cursor: pointer;
   inset: 0;
-  background-color: var(--border);
-  transition: .3s;
-  border-radius: 34px;
+  background-color: #64748b; /* Highly visible slate-grey track for OFF */
+  transition: background-color 0.22s ease, box-shadow 0.22s ease;
+  border-radius: 9999px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="light"] .toggle-slider {
+  background-color: #94a3b8; /* Slate grey in light mode */
 }
 
 .toggle-slider:before {
   position: absolute;
   content: "";
-  height: 20px;
-  width: 20px;
+  height: 22px;
+  width: 22px;
   left: 3px;
-  bottom: 3px;
-  background-color: white;
-  transition: .3s;
+  top: 3px;
+  background-color: #ffffff;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
   border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
 }
 
-input:checked+.toggle-slider {
-  background-color: var(--accent);
+/* ON State — Vibrant accent green track with thumb on the right */
+.toggle-switch input:checked + .toggle-slider {
+  background-color: var(--green, #00e5a0);
 }
 
-input:checked+.toggle-slider:before {
-  transform: translateX(20px);
+[data-theme="light"] .toggle-switch input:checked + .toggle-slider {
+  background-color: var(--green, #00b87a);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(22px);
+}
+
+.toggle-switch:hover .toggle-slider {
+  filter: brightness(1.08);
+}
+
+.toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--green, #00e5a0);
+  outline-offset: 2px;
 }
 
 /* ── Progress bar for CSV / Backup Imports ────────────────────────────────── */

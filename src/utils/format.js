@@ -469,3 +469,22 @@ export const filterNoteSuggestions = (suggestions, query, limit = 15) => {
 
 export { calculateIncomeMilestones, MILESTONE_DEFINITIONS } from './milestones.js';
 export { extractPersonName } from './debtTrackerUtils.js';
+
+/**
+ * Normalizes multi-line description text for View popup presentation only.
+ * - Preserves existing newlines and paragraph breaks.
+ * - Trims leading and trailing empty lines/whitespace.
+ * - Cleans lines containing only whitespace.
+ * - Collapses 3 or more consecutive empty lines down to at most 2 (3 newlines).
+ * - Does NOT mutate stored description data.
+ * @param {string} desc
+ * @returns {string}
+ */
+export const normalizeDescriptionForView = (desc) => {
+  if (!desc || typeof desc !== 'string') return '';
+  let text = desc.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  text = text.trim();
+  text = text.replace(/^[ \t]+$/gm, '');
+  text = text.replace(/\n{4,}/g, '\n\n\n');
+  return text;
+};
