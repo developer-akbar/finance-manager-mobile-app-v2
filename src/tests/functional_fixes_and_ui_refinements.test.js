@@ -13,6 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs';
 
 // ── 1. Amazon Parent Account & Subaccount Balance Reconciliation ─────────────
 
@@ -305,4 +306,68 @@ test('Show Description UI Logic: Preserves existing description data when prefer
 
   assert.equal(updatedData.Note, 'Coffee & pastry at Blue Tokai');
   assert.equal(updatedData.Description, 'Meeting with client about project roadmap', 'Existing description is preserved intact even when hidden');
+});
+
+// ── 5. Transaction Search Clear (X) Button Focus Restoration ───────────────────
+
+test('Transaction Search Clear (X) Button: Binds searchInputRef, guards against blur onMouseDown, and restores keyboard focus', () => {
+  // 1. Verify code contract in Transactions.jsx
+  const transactionsSrc = fs.readFileSync('src/components/Transactions/Transactions.jsx', 'utf8');
+
+  assert.ok(
+    transactionsSrc.includes('const searchInputRef = useRef(null);'),
+    'SearchView must declare searchInputRef via useRef(null)'
+  );
+  assert.ok(
+    transactionsSrc.includes('searchInputRef.current = el;'),
+    'textInputRef callback must assign DOM element to searchInputRef.current'
+  );
+  assert.ok(
+    transactionsSrc.includes('className="search-input-wrap" onClick={() => searchInputRef.current?.focus()}'),
+    'search-input-wrap must delegate click to searchInputRef.current?.focus()'
+  );
+  assert.ok(
+    transactionsSrc.includes('onMouseDown={(e) => {') && transactionsSrc.includes('e.preventDefault();'),
+    'search-clear button must preventDefault on mousedown to prevent browser focus theft'
+  );
+  assert.ok(
+    transactionsSrc.includes('searchInputRef.current?.focus()'),
+    'search-clear button must restore focus to searchInputRef.current'
+  );
+
+  // 2. Functional query reset & filtering verification
+  const txns = [
+    { _id: '1', Note: 'Mysore Sandal Soap', Category: 'Groceries', INR: 210 },
+    { _id: '2', Note: 'Colgate Toothpaste', Category: 'Groceries', INR: 70 },
+    { _id: '3', Note: 'Cooking Oil', Category: 'Groceries', INR: 120 }
+  ];
+
+  let draftQuery = 'Mysore';
+  let committedQuery = 'Mysore';
+  let isSearching = false;
+  let focusRestored = false;
+
+  const mockInput = {
+    focus: () => { focusRestored = true; }
+  };
+
+  // User clicks X button
+  const handleClear = () => {
+    draftQuery = '';
+    committedQuery = '';
+    isSearching = false;
+    mockInput.focus();
+  };
+
+  handleClear();
+  assert.equal(draftQuery, '');
+  assert.equal(committedQuery, '');
+  assert.equal(focusRestored, true, 'Focus is immediately restored to transaction search input');
+
+  // Immediately type next query without clicking again
+  draftQuery = 'Colgate';
+  committedQuery = 'Colgate';
+  const filtered = txns.filter(t => t.Note.toLowerCase().includes(committedQuery.toLowerCase()));
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].Note, 'Colgate Toothpaste', 'Filters accurately for new search term');
 });

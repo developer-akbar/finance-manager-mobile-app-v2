@@ -481,8 +481,11 @@
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   transition: all 0.12s ease;
+  box-sizing: border-box;
+  width: 100%;
+  overflow: hidden;
 }
 
 .stock-act-item:hover {
@@ -494,29 +497,34 @@
   cursor: pointer;
 }
 
-/* Primary Line */
+/* Row 1: Header (Type badge + Date/Time + Optional Top Amount) */
 .stock-act-top-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .stock-act-type-col {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  flex-wrap: wrap;
   min-width: 0;
 }
 
 .stock-act-badge {
   font-size: 0.65rem;
   font-weight: 700;
-  padding: 2px 6px;
+  padding: 3px 8px;
   border-radius: 5px;
   text-transform: uppercase;
   letter-spacing: 0.3px;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .stock-act-badge.purchase {
@@ -550,21 +558,49 @@
 }
 
 .stock-act-date {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   color: var(--text-muted);
   white-space: nowrap;
 }
 
-.stock-act-val-col {
+.stock-act-top-meta {
+  margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+}
+
+.stock-act-amount-badge {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(0, 229, 160, 0.08);
+  padding: 2px 7px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+/* Row 2: Quantity Delta + Running Balance */
+.stock-act-qty-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 1px 0;
+}
+
+.stock-act-delta-col {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .stock-act-delta {
-  font-size: 0.8rem;
+  font-size: 0.94rem;
   font-weight: 800;
-  white-space: nowrap;
+  word-break: break-word;
+  line-height: 1.25;
 }
 
 .stock-act-delta.positive {
@@ -585,6 +621,26 @@
 
 .stock-act-delta.neutral {
   color: #c084fc;
+}
+
+.stock-act-bal-col {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.stock-act-bal-pill {
+  font-size: 0.72rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.stock-act-bal-pill strong {
+  color: var(--text-primary);
 }
 
 /* Concise Summary Styling */
@@ -625,34 +681,58 @@
   opacity: 0.9;
 }
 
-.stock-act-bal-pill {
-  font-size: 0.68rem;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  padding: 2px 6px;
-  border-radius: 5px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.stock-act-bal-pill strong {
-  color: var(--text-primary);
-}
-
-/* Compact Meta Line */
+/* Row 3: Meta chips + Actions */
 .stock-act-compact-meta-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  font-size: 0.68rem;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
 }
 
 .stock-act-compact-chips {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex-wrap: wrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.stock-act-actions-wrap {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+  .stock-act-item {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .stock-act-top-row {
+    gap: 6px;
+  }
+  .stock-act-type-col {
+    gap: 6px;
+  }
+  .stock-act-badge {
+    font-size: 0.6rem;
+    padding: 2px 6px;
+  }
+  .stock-act-date {
+    font-size: 0.68rem;
+  }
+  .stock-act-qty-row {
+    gap: 8px;
+  }
+  .stock-act-delta {
+    font-size: 0.86rem;
+  }
+  .stock-act-bal-pill {
+    font-size: 0.65rem;
+    padding: 2px 5px;
+  }
 }
 
 .stock-act-tag {

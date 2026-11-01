@@ -21,7 +21,8 @@ import {
 } from './stockInventoryNormalization.js';
 import {
   aggregateProductPhysicalQuantities,
-  calculateBatchPhysicalDetails
+  calculateBatchPhysicalDetails,
+  resolvePackageAndMeasurementUnits
 } from './stockPhysicalQuantity.js';
 import { formatINR } from './format.js';
 
@@ -66,26 +67,13 @@ export const formatFraction = (val) => {
 };
 
 export const getDiscreteUnitLabel = (qty, batchOrUnit) => {
+  const itemOrBatch = typeof batchOrUnit === 'object' && batchOrUnit !== null
+    ? batchOrUnit
+    : { unit: batchOrUnit };
+  const units = resolvePackageAndMeasurementUnits(itemOrBatch);
   const absQty = Math.abs(qty);
   const isSingular = Math.abs(absQty - 1) < 0.001;
-
-  if (typeof batchOrUnit === 'object' && batchOrUnit !== null) {
-    const hasPhysical = Boolean(batchOrUnit.sub_unit || (batchOrUnit.unit && ['kg', 'g', 'l', 'ml'].includes(batchOrUnit.unit.toLowerCase())));
-    if (hasPhysical) {
-      return isSingular ? 'pack' : 'packs';
-    }
-    const rawUnit = (batchOrUnit.unit || 'pcs').toLowerCase();
-    if (['pack', 'packs', 'box', 'boxes', 'bottle', 'bottles', 'can', 'cans', 'tin', 'tins'].includes(rawUnit)) {
-      return isSingular ? (rawUnit.endsWith('s') ? rawUnit.slice(0, -1) : rawUnit) : (rawUnit.endsWith('s') ? rawUnit : `${rawUnit}s`);
-    }
-    return isSingular ? 'pack' : 'packs';
-  }
-
-  const str = String(batchOrUnit || 'pcs').toLowerCase();
-  if (['kg', 'g', 'l', 'ml'].includes(str)) {
-    return isSingular ? 'pack' : 'packs';
-  }
-  return str === 'pcs' || str === 'pc' ? 'pcs' : (isSingular ? str : `${str}s`);
+  return isSingular ? units.packageLabelSingular : units.packageLabelPlural;
 };
 
 
@@ -472,7 +460,7 @@ export function extractProductStockActivity({
     const isInstalmentFollowup = (tags.includes('#instalment') || desc.toLowerCase().includes('instalment')) &&
       !tags.includes('#stock_ref_');
     if (isInstalmentFollowup) {
-      const nameMatch = desc.match(/(?:Instalment Use|Consumed|Used)\s+[\d\/\.\s\w]+\s+of\s+([^(]+)/i);
+      const nameMatch = desc.match(/(?:Instalment Use|Consumed|Used|for)\s+[\d\/\.\s\w]+\s+of\s+([^(]+?)(?:\s+used\s+on|\s*\(|$)/i);
       if (nameMatch) {
         const candidate = cleanRawItemName(nameMatch[1].trim()).toLowerCase();
         const candCanon = getCanonicalProductName(candidate).toLowerCase();

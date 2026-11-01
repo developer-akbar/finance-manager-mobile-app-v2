@@ -659,7 +659,9 @@ function MonthlyView({ transactions, year, setYear, onMonthClick }) {
 // ── Search view ───────────────────────────────────────────────────────────────
 function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy }) {
   const { state } = useApp();
+  const searchInputRef = useRef(null);
   const textInputRef = (el) => {
+    searchInputRef.current = el;
     if (!el) return;
     el.setAttribute('autocomplete', 'on');
     el.setAttribute('autocorrect', 'on');
@@ -1137,7 +1139,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
             <button className="back-btn" onClick={onClose} title="Back">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
             </button>
-            <div className="search-input-wrap">
+            <div className="search-input-wrap" onClick={() => searchInputRef.current?.focus()}>
               <button
                 type="button"
                 className="search-commit-btn"
@@ -1158,9 +1160,30 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
                 onBlur={() => setTimeout(() => setNoteSugs([]), 180)}
                 placeholder="Search note, category, account…"/>
               {(draftQuery || committedQuery) && (
-                <button type="button" className="search-clear" onClick={() => {
-                  setDraftQuery(''); setCommittedQuery(''); setIsSearching(false); setNoteSugs([]);
-                }} title="Clear search">✕</button>
+                <button
+                  type="button"
+                  className="search-clear"
+                  onMouseDown={(e) => {
+                    // Prevent mouse click from blurring the search input
+                    e.preventDefault();
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDraftQuery('');
+                    setCommittedQuery('');
+                    setIsSearching(false);
+                    setNoteSugs([]);
+                    searchInputRef.current?.focus();
+                    requestAnimationFrame(() => {
+                      searchInputRef.current?.focus();
+                    });
+                  }}
+                  title="Clear search"
+                  aria-label="Clear search"
+                >
+                  ✕
+                </button>
               )}
               {noteSugs.length > 0 && (
                 <div className="note-sug-list" style={{top:'calc(100% + 4px)'}}>

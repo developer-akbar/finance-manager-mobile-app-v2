@@ -9,11 +9,13 @@
  */
 
 // Dimension mapping
-const UNIT_DIMENSIONS = {
+export const UNIT_DIMENSIONS = {
   l: 'volume',
   ltr: 'volume',
+  ltrs: 'volume',
   liter: 'volume',
   liters: 'volume',
+  litre: 'volume',
   litres: 'volume',
   ml: 'volume',
   mls: 'volume',
@@ -37,11 +39,13 @@ const UNIT_DIMENSIONS = {
   unit: 'count'
 };
 
-const STANDARD_UNITS = {
+export const STANDARD_UNITS = {
   l: 'L',
   ltr: 'L',
+  ltrs: 'L',
   liter: 'L',
   liters: 'L',
+  litre: 'L',
   litres: 'L',
   ml: 'ml',
   mls: 'ml',
@@ -81,7 +85,7 @@ export function parseBatchPhysicalQuantity(variantStr = '', rawNameStr = '', pur
 
   // 1. Nested Triple Multiplier pattern:
   // Pattern 1A: Unit at first position e.g. "125g*5*2"
-  const tripleMatchA = combined.match(/(\d+(\.\d+)?)\s*(g|gm|gms|kg|ml|l|ltr)\s*\*\s*(\d+)\s*\*\s*(\d+)/i);
+  const tripleMatchA = combined.match(/(\d+(\.\d+)?)\s*(g|gm|gms|kg|ml|l|ltr|ltrs|liter|liters|litre|litres)\s*\*\s*(\d+)\s*\*\s*(\d+)/i);
   if (tripleMatchA) {
     const sizeVal = parseFloat(tripleMatchA[1]);
     const rawUnit = tripleMatchA[3].toLowerCase();
@@ -106,7 +110,7 @@ export function parseBatchPhysicalQuantity(variantStr = '', rawNameStr = '', pur
   }
 
   // Pattern 1B: Unit at middle position e.g. "6*100g*4"
-  const tripleMatchB = combined.match(/(\d+)\s*\*\s*(\d+(\.\d+)?)\s*(g|gm|gms|kg|ml|l|ltr)\s*\*\s*(\d+)/i);
+  const tripleMatchB = combined.match(/(\d+)\s*\*\s*(\d+(\.\d+)?)\s*(g|gm|gms|kg|ml|l|ltr|ltrs|liter|liters|litre|litres)\s*\*\s*(\d+)/i);
   if (tripleMatchB) {
     const p1 = parseFloat(tripleMatchB[1]);
     const sizeVal = parseFloat(tripleMatchB[2]);
@@ -245,7 +249,7 @@ export function parseBatchPhysicalQuantity(variantStr = '', rawNameStr = '', pur
 
   // 5. Recoverable patterns from rawName when variant is "Standard" or missing:
   // e.g. "pestro 4*750ml", "Cinthol 9*100g", "Pestro glass cleaner 3*500ml"
-  const rawMultiplierMatch = raw.match(/(\d+)\s*\*\s*(\d+(\.\d+)?)\s*(g|gm|gms|kg|ml|l|ltr)/i);
+  const rawMultiplierMatch = raw.match(/(\d+)\s*\*\s*(\d+(\.\d+)?)\s*(g|gm|gms|kg|ml|l|ltr|ltrs|liter|liters|litre|litres)/i);
   if (rawMultiplierMatch) {
     const count = parseFloat(rawMultiplierMatch[1]);
     const sizeVal = parseFloat(rawMultiplierMatch[2]);
@@ -316,9 +320,9 @@ export function calculateBatchPhysicalDetails(batch) {
   
   if (meta.confidence === 'unknown' || meta.unitPhysicalQty === null || !meta.physicalUnit) {
     if (batch.sub_unit && batch.sub_qty > 0) {
-      const rawU = String(batch.sub_unit).toLowerCase();
+      const rawU = String(batch.sub_unit).toLowerCase().trim();
       const stdUnit = STANDARD_UNITS[rawU] || batch.sub_unit;
-      const dim = UNIT_DIMENSIONS[rawU] || 'mass';
+      const dim = UNIT_DIMENSIONS[rawU] || (['l', 'ltr', 'ltrs', 'liter', 'liters', 'litre', 'litres', 'ml', 'mls'].includes(rawU) ? 'volume' : 'mass');
       const pQty = parseFloat(batch.purchasedQty) || 0;
       const rQty = parseFloat(batch.remainingQty) || 0;
       const cQty = batch.consumedQty !== undefined ? (parseFloat(batch.consumedQty) || 0) : Math.max(0, pQty - rQty);
@@ -401,25 +405,26 @@ export function aggregateProductPhysicalQuantities(batches = []) {
 
     if (details.isConfident && details.unit) {
       hasConfidentData = true;
-      const u = details.unit;
+      const rawU = String(details.unit || '').trim().toLowerCase();
+      const u = STANDARD_UNITS[rawU] || details.unit;
 
-      if (u === 'L') {
+      if (u === 'L' || rawU === 'l' || rawU === 'ltr' || rawU === 'litre' || rawU === 'liter' || (details.dimension === 'volume' && u !== 'ml')) {
         totals.volumeL.purchased += details.purchasedPhysical;
         totals.volumeL.consumed += details.consumedPhysical;
         totals.volumeL.remaining += details.remainingPhysical;
-      } else if (u === 'ml') {
+      } else if (u === 'ml' || rawU === 'ml') {
         totals.volumeml.purchased += details.purchasedPhysical;
         totals.volumeml.consumed += details.consumedPhysical;
         totals.volumeml.remaining += details.remainingPhysical;
-      } else if (u === 'kg') {
+      } else if (u === 'kg' || rawU === 'kg' || (details.dimension === 'mass' && u !== 'g')) {
         totals.massKg.purchased += details.purchasedPhysical;
         totals.massKg.consumed += details.consumedPhysical;
         totals.massKg.remaining += details.remainingPhysical;
-      } else if (u === 'g') {
+      } else if (u === 'g' || rawU === 'g' || rawU === 'gm' || rawU === 'gms') {
         totals.massG.purchased += details.purchasedPhysical;
         totals.massG.consumed += details.consumedPhysical;
         totals.massG.remaining += details.remainingPhysical;
-      } else if (u === 'pcs') {
+      } else if (u === 'pcs' || details.dimension === 'count') {
         totals.countPcs.purchased += details.purchasedPhysical;
         totals.countPcs.consumed += details.consumedPhysical;
         totals.countPcs.remaining += details.remainingPhysical;
@@ -512,4 +517,109 @@ function formatNum(n) {
 function formatComma(n) {
   if (n === 0) return '0';
   return n.toLocaleString('en-IN');
+}
+
+/**
+ * Resolves packaging unit and base measurement unit dynamically from batch or product metadata.
+ * Distinguishes packaging (pack, bottle, box, piece) from base measurement (g, kg, ml, L, pc).
+ * 
+ * @param {Object} itemOrBatch 
+ * @returns {Object} { packageUnit, measurementUnit, quantityPerPackage, hasDistinctMeasurement, packageLabelSingular, packageLabelPlural, measurementLabel }
+ */
+export function resolvePackageAndMeasurementUnits(itemOrBatch) {
+  if (!itemOrBatch) {
+    return {
+      packageUnit: 'pack',
+      measurementUnit: 'pcs',
+      quantityPerPackage: 1,
+      hasDistinctMeasurement: false,
+      packageLabelSingular: 'pack',
+      packageLabelPlural: 'packs',
+      measurementLabel: 'pcs'
+    };
+  }
+
+  const rawSubUnit = String(itemOrBatch.sub_unit || '').trim();
+  const rawUnit = String(itemOrBatch.unit || '').trim();
+  const subQty = parseFloat(itemOrBatch.sub_qty) || 1;
+  const name = String(itemOrBatch.cleanedName || itemOrBatch.rawName || itemOrBatch.name || '').toLowerCase();
+  const variant = String(itemOrBatch.variant || '').toLowerCase();
+
+  const stdSubUnit = STANDARD_UNITS[rawSubUnit.toLowerCase()] || rawSubUnit;
+  const stdUnit = STANDARD_UNITS[rawUnit.toLowerCase()] || rawUnit;
+
+  // 1. Identify base measurement unit (g, kg, ml, L, pc)
+  let measurementUnit = stdSubUnit;
+  if (!measurementUnit && ['L', 'ml', 'kg', 'g', 'pcs', 'pc'].includes(stdUnit)) {
+    measurementUnit = stdUnit;
+  }
+  if (!measurementUnit) {
+    const meta = parseBatchPhysicalQuantity(variant, name, 1);
+    if (meta.physicalUnit) {
+      measurementUnit = meta.physicalUnit;
+    }
+  }
+  if (!measurementUnit) {
+    measurementUnit = 'pcs';
+  }
+  if (measurementUnit.toLowerCase() === 'litre' || measurementUnit.toLowerCase() === 'liter') {
+    measurementUnit = 'L';
+  }
+
+  // 2. Identify packaging unit (pack, bottle, box, piece)
+  let packageUnit = 'pack';
+  const lowerUnit = rawUnit.toLowerCase();
+  const lowerSubUnit = rawSubUnit.toLowerCase();
+
+  if (['bottle', 'bottles', 'btl'].includes(lowerUnit) || ['bottle', 'bottles', 'btl'].includes(lowerSubUnit) || variant.includes('bottle')) {
+    packageUnit = 'bottle';
+  } else if (['box', 'boxes'].includes(lowerUnit) || ['box', 'boxes'].includes(lowerSubUnit) || variant.includes('box')) {
+    packageUnit = 'box';
+  } else if (['piece', 'pieces', 'pc'].includes(lowerUnit)) {
+    packageUnit = subQty > 1 ? 'pack' : 'piece';
+  } else if (['pack', 'packs', 'packet', 'packets', 'pouch'].includes(lowerUnit)) {
+    packageUnit = 'pack';
+  } else if (['kg', 'g', 'l', 'ml', 'litre', 'litres', 'liter', 'liters'].includes(lowerUnit)) {
+    // If unit was conflated with measurement unit (e.g. Mysore Sandal unit: 'g')
+    if (variant.includes('bottle')) {
+      packageUnit = 'bottle';
+    } else if (variant.includes('box')) {
+      packageUnit = 'box';
+    } else {
+      packageUnit = 'pack';
+    }
+  }
+
+  // 3. Determine whether distinct measurement unit exists
+  const isPureDiscretePiece = (packageUnit === 'piece' || packageUnit === 'pc') && (measurementUnit === 'pcs' || measurementUnit === 'pc') && subQty <= 1;
+  const isDuplicateSameUnit = packageUnit.toLowerCase() === measurementUnit.toLowerCase();
+  const hasDistinctMeasurement = !isPureDiscretePiece && !isDuplicateSameUnit && (subQty > 1 || ['L', 'ml', 'kg', 'g'].includes(measurementUnit));
+
+  const packageLabelSingular = packageUnit === 'piece' ? 'piece' : (packageUnit === 'box' ? 'box' : (packageUnit === 'bottle' ? 'bottle' : 'pack'));
+  const packageLabelPlural = packageUnit === 'piece' ? 'pieces' : (packageUnit === 'box' ? 'boxes' : (packageUnit === 'bottle' ? 'bottles' : 'packs'));
+
+  return {
+    packageUnit,
+    measurementUnit,
+    quantityPerPackage: subQty,
+    hasDistinctMeasurement,
+    packageLabelSingular,
+    packageLabelPlural,
+    measurementLabel: measurementUnit
+  };
+}
+
+/**
+ * Pluralization helper for packaging and measurement units.
+ */
+export function formatUnitLabel(unit, count = 1) {
+  const isSingular = Math.abs(count - 1) < 0.001;
+  const u = String(unit || '').toLowerCase();
+  if (u === 'pack' || u === 'packs') return isSingular ? 'pack' : 'packs';
+  if (u === 'bottle' || u === 'bottles') return isSingular ? 'bottle' : 'bottles';
+  if (u === 'box' || u === 'boxes') return isSingular ? 'box' : 'boxes';
+  if (u === 'piece' || u === 'pieces') return isSingular ? 'piece' : 'pieces';
+  if (u === 'pc' || u === 'pcs') return isSingular ? 'pc' : 'pcs';
+  if (['kg', 'g', 'l', 'ml'].includes(u)) return STANDARD_UNITS[u] || u;
+  return isSingular ? u : `${u}s`;
 }

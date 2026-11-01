@@ -9,7 +9,7 @@ import {
   parseStockLine,
   DEFAULT_STOCK_CATEGORIES
 } from '../../utils/stockInventoryNormalization.js';
-import { aggregateProductPhysicalQuantities } from '../../utils/stockPhysicalQuantity.js';
+import { aggregateProductPhysicalQuantities, resolvePackageAndMeasurementUnits, formatUnitLabel } from '../../utils/stockPhysicalQuantity.js';
 import {
   getInventoryItems,
   addInventoryPurchase,
@@ -123,6 +123,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState('in_stock'); // 'in_stock', 'out_of_stock', 'all'
   const [search, setSearch] = useState('');
+  const searchInputRef = useRef(null);
 
   // Product Detail View state
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -948,7 +949,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
     setConsumingBatch(batch);
     setConsumingItemName(batch.cleanedName || batch.name);
     setConsumingItemBatchDate(batch.purchasedDate || '');
-    setConsumeQty(String(Math.min(1, batch.remainingQty > 0 ? batch.remainingQty : 1)));
+    const totalAvailPacks = batch.remainingQty > 0 ? batch.remainingQty : 0;
+    setConsumeQty(String(totalAvailPacks));
     setConsumeUserNote('');
     setConsumeDescription('');
     setConsumeDate(new Date().toISOString().split('T')[0]);
@@ -965,6 +967,32 @@ export default function StockManager({ onBack, backInterceptRef }) {
     setConsumeError('');
   };
 
+  const handleToggleConsumeUnitMode = (newMode) => {
+    if (newMode === consumeUnitMode || !consumingBatch) return;
+    const units = resolvePackageAndMeasurementUnits(consumingBatch);
+    const subQty = units.quantityPerPackage || 1;
+    const currentVal = parseFloat(consumeQty);
+
+    if (newMode === 'sub') {
+      if (!isNaN(currentVal) && currentVal > 0) {
+        const converted = Number((currentVal * subQty).toFixed(3));
+        setConsumeQty(String(converted));
+      } else {
+        const totalAvailSub = Number(((consumingBatch.remainingQty || 0) * subQty).toFixed(3));
+        setConsumeQty(String(totalAvailSub));
+      }
+    } else {
+      if (!isNaN(currentVal) && currentVal > 0 && subQty > 0) {
+        const converted = Number((currentVal / subQty).toFixed(3));
+        setConsumeQty(String(converted));
+      } else {
+        setConsumeQty(String(consumingBatch.remainingQty || 0));
+      }
+    }
+    setConsumeUnitMode(newMode);
+    setConsumeError('');
+  };
+
   const handleConsume = async () => {
     if (isConsumingRef.current || isSavingConsume) return;
     setConsumeError('');
@@ -972,6 +1000,21 @@ export default function StockManager({ onBack, backInterceptRef }) {
     if (isNaN(qty) || qty <= 0) {
       setConsumeError('Please enter a valid quantity.');
       return;
+    }
+
+    if (consumingBatch) {
+      const units = resolvePackageAndMeasurementUnits(consumingBatch);
+      const maxAvailable = consumeUnitMode === 'sub'
+        ? (consumingBatch.remainingQty || 0) * (units.quantityPerPackage || 1)
+        : (consumingBatch.remainingQty || 0);
+
+      if (qty > maxAvailable + 0.0001) {
+        const uLabel = consumeUnitMode === 'sub'
+          ? units.measurementLabel
+          : (maxAvailable === 1 ? units.packageLabelSingular : units.packageLabelPlural);
+        setConsumeError(`Cannot consume more than available (${formatFraction(maxAvailable)} ${uLabel}).`);
+        return;
+      }
     }
 
     if (usageType === 'lend' && !personName.trim()) {
@@ -1813,11 +1856,15 @@ export default function StockManager({ onBack, backInterceptRef }) {
               </div>
 
               {/* Search Bar */}
-              <div className="stock-search-bar">
+              <div
+                className="stock-search-bar"
+                onClick={() => searchInputRef.current?.focus()}
+              >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14" style={{ stroke: 'var(--text-muted)' }}>
                   <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
                 </svg>
                 <input
+                  ref={searchInputRef}
                   type="text"
                   className="stock-search-input"
                   placeholder="Search products, variants, or stores..."
@@ -1826,8 +1873,22 @@ export default function StockManager({ onBack, backInterceptRef }) {
                 />
                 {search && (
                   <button
-                    onClick={() => setSearch('')}
-                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.9rem', cursor: 'pointer' }}
+                    type="button"
+                    onMouseDown={(e) => {
+                      // Prevent mouse interaction from stealing focus from the search input
+                      e.preventDefault();
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSearch('');
+                      searchInputRef.current?.focus();
+                      requestAnimationFrame(() => {
+                        searchInputRef.current?.focus();
+                      });
+                    }}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.9rem', cursor: 'pointer', padding: '2px 6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    aria-label="Clear search"
                   >
                     ✕
                   </button>
@@ -1864,13 +1925,22 @@ export default function StockManager({ onBack, backInterceptRef }) {
                         </div>
                         <div className="stock-item-qty-col" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <div className={`stock-item-qty ${isOut ? 'out' : ''}`} style={{ fontSize: '0.82rem', fontWeight: 900 }}>
-                              {isOut
-                                ? 'Out of Stock'
-                                : (prodPhysical?.hasPhysicalData && prodPhysical.remainingDisplay
-                                    ? `${formatFraction(prod.totalRemainingQty)} packs (${prodPhysical.remainingDisplay})`
-                                    : `${formatFraction(prod.totalRemainingQty)} in stock`)}
-                            </div>
+                            {(() => {
+                                const sampleBatch = prod.batches?.[0];
+                                const units = resolvePackageAndMeasurementUnits(sampleBatch);
+                                const remPacks = prod.totalRemainingQty;
+                                const packLabel = remPacks === 1 ? units.packageLabelSingular : units.packageLabelPlural;
+                                const hasPhys = prodPhysical?.hasPhysicalData && prodPhysical.remainingDisplay && prodPhysical.remainingDisplay !== '0';
+                                return (
+                                  <div className={`stock-item-qty ${isOut ? 'out' : ''}`} style={{ fontSize: '0.82rem', fontWeight: 900 }}>
+                                    {isOut
+                                      ? 'Out of Stock'
+                                      : (hasPhys
+                                          ? `${formatFraction(remPacks)} ${packLabel} (${prodPhysical.remainingDisplay})`
+                                          : `${formatFraction(remPacks)} ${packLabel} in stock`)}
+                                  </div>
+                                );
+                              })()}
                             <button
                               type="button"
                               className="stock-btn-action history"
@@ -2225,15 +2295,23 @@ export default function StockManager({ onBack, backInterceptRef }) {
                 <div className="stock-builder-lbl" style={{ color: 'var(--accent)', fontWeight: 800, fontSize: '0.88rem' }}>
                   Use Item: {consumingItemName} ({consumingItemBatchDate || 'Batch'})
                 </div>
-                <div className="stock-avail-pill">
-                  <span>📦 Total Available:</span>
-                  <strong>{formatFraction(consumingBatch?.remainingQty || 0)} {consumingBatch?.unit || 'pcs'}</strong>
-                  {consumingBatch?.sub_qty > 1 && (
-                    <span style={{ opacity: 0.85, fontSize: '0.68rem' }}>
-                      ({formatFraction((consumingBatch.remainingQty || 0) * consumingBatch.sub_qty)} {consumingBatch.sub_unit})
-                    </span>
-                  )}
-                </div>
+                {(() => {
+                  const units = resolvePackageAndMeasurementUnits(consumingBatch);
+                  const remPacks = consumingBatch?.remainingQty || 0;
+                  const packLabel = remPacks === 1 ? units.packageLabelSingular : units.packageLabelPlural;
+                  const remSub = remPacks * (units.quantityPerPackage || 1);
+                  return (
+                    <div className="stock-avail-pill">
+                      <span>📦 Total Available:</span>
+                      <strong>{formatFraction(remPacks)} {packLabel}</strong>
+                      {units.hasDistinctMeasurement && (
+                        <span style={{ opacity: 0.85, fontSize: '0.72rem' }}>
+                          ({formatFraction(remSub)} {units.measurementLabel})
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               <button
                 type="button"
@@ -2314,31 +2392,46 @@ export default function StockManager({ onBack, backInterceptRef }) {
             <div className="mgr-edit-field">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                 <label className="stock-builder-lbl" style={{ margin: 0 }}>Quantity to Use</label>
-                {consumingBatch?.sub_qty > 1 && (
-                  <div className="stock-mode-toggle-group">
-                    <button
-                      type="button"
-                      className={`stock-mode-toggle-btn ${consumeUnitMode === 'pack' ? 'active' : ''}`}
-                      onClick={() => setConsumeUnitMode('pack')}
-                    >
-                      {consumingBatch?.unit || 'Packs'}
-                    </button>
-                    <button
-                      type="button"
-                      className={`stock-mode-toggle-btn ${consumeUnitMode === 'sub' ? 'active' : ''}`}
-                      onClick={() => setConsumeUnitMode('sub')}
-                    >
-                      {consumingBatch?.sub_unit || 'Units'}
-                    </button>
-                  </div>
-                )}
+                {(() => {
+                  const units = resolvePackageAndMeasurementUnits(consumingBatch);
+                  if (!units.hasDistinctMeasurement) return null;
+                  const remPacks = consumingBatch?.remainingQty || 0;
+                  const packLabel = remPacks === 1 ? units.packageLabelSingular : units.packageLabelPlural;
+                  return (
+                    <div className="stock-mode-toggle-group">
+                      <button
+                        type="button"
+                        className={`stock-mode-toggle-btn ${consumeUnitMode === 'pack' ? 'active' : ''}`}
+                        onClick={() => handleToggleConsumeUnitMode('pack')}
+                      >
+                        {packLabel}
+                      </button>
+                      <button
+                        type="button"
+                        className={`stock-mode-toggle-btn ${consumeUnitMode === 'sub' ? 'active' : ''}`}
+                        onClick={() => handleToggleConsumeUnitMode('sub')}
+                      >
+                        {units.measurementLabel}
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
               <input
                 type="number"
                 step="any"
                 disabled={isSavingConsume}
                 className={`form-input ${consumeError ? 'err' : ''}`}
-                placeholder={`Max ${formatFraction(consumingBatch?.remainingQty || 0)}`}
+                placeholder={(() => {
+                  const units = resolvePackageAndMeasurementUnits(consumingBatch);
+                  const max = consumeUnitMode === 'sub'
+                    ? (consumingBatch?.remainingQty || 0) * (units.quantityPerPackage || 1)
+                    : (consumingBatch?.remainingQty || 0);
+                  const label = consumeUnitMode === 'sub'
+                    ? units.measurementLabel
+                    : (max === 1 ? units.packageLabelSingular : units.packageLabelPlural);
+                  return `Max ${formatFraction(max)} ${label}`;
+                })()}
                 value={consumeQty}
                 onChange={e => {
                   setConsumeQty(e.target.value);

@@ -404,7 +404,7 @@ export default function StockActivityDrawer({
                     className={`stock-act-item ${compactMode ? 'compact' : ''} ${isExpanded ? 'expanded' : ''}`}
                     onClick={() => compactMode && toggleCardExpand(act.id)}
                   >
-                    {/* Primary Line: Type, Date, Delta, Running Balance */}
+                    {/* Row 1: Type badge & Date/Time & Optional Amount */}
                     <div className="stock-act-top-row">
                       <div className="stock-act-type-col">
                         <span className={`stock-act-badge ${act.type}`}>
@@ -419,18 +419,28 @@ export default function StockActivityDrawer({
                           {act.date} {act.time ? `• ${act.time}` : ''}
                         </span>
                       </div>
+                      {act.amount > 0 && (
+                        <div className="stock-act-top-meta">
+                          <span className="stock-act-amount-badge">{formatINR(act.amount)}</span>
+                        </div>
+                      )}
+                    </div>
 
-                      <div className="stock-act-val-col">
+                    {/* Row 2: Quantity Consumed/Purchased/Lent & Running Balance */}
+                    <div className="stock-act-qty-row">
+                      <div className="stock-act-delta-col">
                         <span className={`stock-act-delta ${act.type === 'purchase' ? 'positive' : act.type === 'consume' ? 'negative' : act.type === 'lend' ? 'lend' : act.type === 'return' ? 'return' : 'neutral'}`}>
                           {act.qtyStr}
                         </span>
+                      </div>
+                      <div className="stock-act-bal-col">
                         <span className="stock-act-bal-pill" title="Verified running stock balance after this transaction">
                           Bal: <strong>{act.balanceStr}</strong>
                         </span>
                       </div>
                     </div>
 
-                    {/* Secondary Line in Compact mode: Quick Chips & Amount */}
+                    {/* Row 3: Store / Merchant / Person / Variant chips & Expand action */}
                     <div className="stock-act-compact-meta-row">
                       <div className="stock-act-compact-chips">
                         {act.store && <span className="stock-act-tag store">🏪 {act.store}</span>}
@@ -438,11 +448,8 @@ export default function StockActivityDrawer({
                         {act.installmentInfo && <span className="stock-act-tag inst">💳 {act.installmentInfo}</span>}
                         {act.variant && act.variant !== 'Standard' && <span className="stock-act-tag var">🏷️ {act.variant}</span>}
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
-                        {act.amount > 0 && (
-                          <span className="stock-act-amount">{formatINR(act.amount)}</span>
-                        )}
-                        {compactMode && (
+                      {compactMode && (
+                        <div className="stock-act-actions-wrap">
                           <button
                             type="button"
                             className="stock-act-expand-btn"
@@ -454,8 +461,8 @@ export default function StockActivityDrawer({
                           >
                             {isExpanded ? '▲' : '▼'}
                           </button>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Expanded Content (Progressive Disclosure) */}

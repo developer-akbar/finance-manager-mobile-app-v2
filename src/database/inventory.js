@@ -3,6 +3,7 @@ import { v4 as uuid } from 'uuid';
 import { addTransaction } from './transactions.js';
 import { saveRecurringRule, buildInstalmentSchedule, buildInstalmentNote } from './recurring.js';
 import { parseStockLine, getCanonicalProductName } from '../utils/stockInventoryNormalization.js';
+import { resolvePackageAndMeasurementUnits } from '../utils/stockPhysicalQuantity.js';
 import { executeAtomicMutation, executeAtomicBatch } from './atomicMutation.js';
 import { computeEntityDiff } from '../utils/entityDiff.js';
 
@@ -401,7 +402,12 @@ export const consumeInventoryItem = async (
     }
   }
 
-  const subQtyVal = parseFloat(item.sub_qty) || 1;
+  const itemUnits = resolvePackageAndMeasurementUnits(item);
+  const subQtyVal = parseFloat(item.sub_qty) || itemUnits.quantityPerPackage || 1;
+  const baseUnit = itemUnits.measurementLabel;
+  const packLabelSingular = itemUnits.packageLabelSingular;
+  const packLabelPlural = itemUnits.packageLabelPlural;
+
   let finalQtyToConsume = qtyToConsume;
   if (useSubUnit && subQtyVal > 0) {
     finalQtyToConsume = qtyToConsume / subQtyVal;
@@ -467,10 +473,15 @@ export const consumeInventoryItem = async (
       ? new Date(item.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
       : 'unknown date';
     const batchStore = item.notes ? ` from ${item.notes}` : '';
+    const curPkgLabel = Math.abs(deductFromCurrent - 1) < 0.001 ? packLabelSingular : packLabelPlural;
     const consumedStrCurrent = useSubUnit
-      ? `${formatFraction(deductFromCurrent * subQtyVal)} ${item.sub_unit || 'g'}`
-      : `${formatFraction(deductFromCurrent)} ${item.unit || 'pcs'}`;
-    detailsList.push(`${consumedStrCurrent} (bought on ${batchDate}${batchStore})`);
+      ? `${formatFraction(deductFromCurrent * subQtyVal)} ${baseUnit}`
+      : `${formatFraction(deductFromCurrent)} ${curPkgLabel}`;
+    if (Math.abs(deductFromCurrent - finalQtyToConsume) < 0.0001) {
+      detailsList.push(`bought on ${batchDate}${batchStore}`);
+    } else {
+      detailsList.push(`${consumedStrCurrent} bought on ${batchDate}${batchStore}`);
+    }
   }
 
   // Other batches next
@@ -515,15 +526,18 @@ export const consumeInventoryItem = async (
           if (resolved) otherBatchRef = resolved;
         }
         deductions.push({ id: otherBatchRef, qty: deductFromOther });
-        const otherSubQty = parseFloat(other.sub_qty) || 1;
+        const otherUnits = resolvePackageAndMeasurementUnits(other);
+        const otherSubQty = parseFloat(other.sub_qty) || otherUnits.quantityPerPackage || 1;
+        const otherBaseUnit = otherUnits.measurementLabel;
+        const otherPkgLabel = Math.abs(deductFromOther - 1) < 0.001 ? otherUnits.packageLabelSingular : otherUnits.packageLabelPlural;
         const otherDate = other.purchased_date
           ? new Date(other.purchased_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
           : 'unknown date';
         const otherStore = other.notes ? ` from ${other.notes}` : '';
         const consumedStrOther = useSubUnit
-          ? `${formatFraction(deductFromOther * otherSubQty)} ${other.sub_unit || 'g'}`
-          : `${formatFraction(deductFromOther)} ${other.unit || 'pcs'}`;
-        detailsList.push(`${consumedStrOther} (bought on ${otherDate}${otherStore})`);
+          ? `${formatFraction(deductFromOther * otherSubQty)} ${otherBaseUnit}`
+          : `${formatFraction(deductFromOther)} ${otherPkgLabel}`;
+        detailsList.push(`${consumedStrOther} bought on ${otherDate}${otherStore}`);
       }
     }
   }
@@ -534,14 +548,23 @@ export const consumeInventoryItem = async (
 
   let labelPrefix = 'Used';
   if (usageType === 'lend') labelPrefix = 'Lent';
-  else if (usageType === 'instalment' || usageType === 'installment') labelPrefix = 'Instalment Use';
+  // Instalment usage prefix remains 'Used' (physical consumption is Used, payment is split)
 
   const totalQtyStr = formatFraction(qtyToConsume);
-  const totalConsumedStr = useSubUnit
-    ? `${totalQtyStr} ${item.sub_unit || 'g'}`
-    : `${totalQtyStr} ${item.unit || 'pcs'}`;
+  let totalConsumedStr = '';
+  if (useSubUnit) {
+    totalConsumedStr = `${totalQtyStr} ${baseUnit} of ${item.name}`;
+  } else {
+    const pkgLabel = Math.abs(qtyToConsume - 1) < 0.001 ? packLabelSingular : packLabelPlural;
+    if (itemUnits.hasDistinctMeasurement && subQtyVal > 0) {
+      const totalPhysicalQty = formatFraction(qtyToConsume * subQtyVal);
+      totalConsumedStr = `${totalQtyStr} ${pkgLabel} of ${item.name} (${totalPhysicalQty} ${baseUnit})`;
+    } else {
+      totalConsumedStr = `${totalQtyStr} ${pkgLabel} of ${item.name}`;
+    }
+  }
 
-  let description = `${labelPrefix} ${totalConsumedStr} of ${item.name} (${detailsList.join(', ')})`;
+  let description = `${labelPrefix} ${totalConsumedStr} (${detailsList.join(', ')})`;
   if (usageType === 'lend') {
     const trimmedUserNote = (userNote || '').trim();
     const cleanUserNotePerson = trimmedUserNote.replace(/^(to\s*:?|lend\s*to\s*:?|given\s*to\s*:?)\s+/i, '').trim();
@@ -549,7 +572,7 @@ export const consumeInventoryItem = async (
       description = `${description} - ${trimmedUserNote}`;
     }
   }
-  if (userDescription && userDescription.trim()) {
+  if (userDescription && typeof userDescription === 'string' && userDescription.trim()) {
     description = `${userDescription.trim()}\n\n${description}`;
   }
   const stockTags = deductions.map(d => `#stock_ref_${d.id}:${d.qty}`).join(' ');
@@ -608,6 +631,11 @@ export const consumeInventoryItem = async (
     rule.end_date = schedule[schedule.length - 1]?.date || '';
     rule.amount_per_part = schedule[0]?.amount || 0;
 
+    const amountPerPart = schedule[0]?.amount || 0;
+    const splitNote = `Payment split into ${schedule.length} installments of ₹${amountPerPart} each.`;
+    const firstPartDescription = `${description}. ${splitNote}`;
+    rule.description = firstPartDescription;
+
     ops.push({
       storeName: 'recurring_rules',
       id: ruleId,
@@ -621,6 +649,17 @@ export const consumeInventoryItem = async (
       const [iy, im, id2] = inst.date.split('-');
       const instTxnDate = `${id2}/${im}/${iy}`;
       const instTxnId = uuid();
+
+      let partDescription = '';
+      if (isFirstPart) {
+        partDescription = firstPartDescription;
+      } else {
+        const instPartDesc = `Installment payment ${inst.part} of ${inst.total} (₹${inst.amount}) for ${totalConsumedStr} used on ${formattedDate} (${detailsList.join(', ')}). Payment split into ${schedule.length} installments.`;
+        partDescription = (userDescription && typeof userDescription === 'string' && userDescription.trim())
+          ? `${userDescription.trim()}\n\n${instPartDesc}`
+          : instPartDesc;
+      }
+
       ops.push({
         storeName: 'transactions',
         id: instTxnId,
@@ -635,7 +674,7 @@ export const consumeInventoryItem = async (
           category: category,
           subcategory: subcategory || 'Default',
           note: buildInstalmentNote(baseInstalmentNote, inst.part, inst.total),
-          description: description,
+          description: partDescription,
           inr: inst.amount,
           amount: String(inst.amount),
           currency: 'INR',

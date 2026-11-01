@@ -927,7 +927,7 @@ test('FinMan Stock Inventory — Quantity Decrement & Reconciliation Suite', asy
 
     assert.ok(consumeRes, 'Installment consumption succeeded');
     const updatedTxns = await getTransactions();
-    const instTxn = updatedTxns.find(t => t.type === 'Expense' && t.description && t.description.includes('Colgate Toothpaste'));
+    const instTxn = updatedTxns.find(t => t.type === 'Expense' && t.description && t.description.includes('Colgate Toothpaste') && (t.note || '').includes('1/3'));
     assert.ok(
       instTxn.description.startsWith('Personal Dental Care\n\nInstalment Use 1 pack of Colgate Toothpaste') ||
       instTxn.description.startsWith('Personal Dental Care\n\nUsed 1 pack of Colgate Toothpaste'),
