@@ -667,6 +667,9 @@ public class NativeSnapshotRecoveryPlugin extends Plugin {
         java.util.Set<String> knownCols = new java.util.HashSet<>();
         knownCols.add(pkCol.toLowerCase());
 
+        boolean isBrokerages = "brokerages".equalsIgnoreCase(tableName);
+        java.util.Map<String, ContentValues> seenBrokerages = isBrokerages ? new java.util.HashMap<>() : null;
+
         StatementCache stmtCache = new StatementCache(db);
         db.beginTransaction();
         try {
@@ -698,6 +701,44 @@ public class NativeSnapshotRecoveryPlugin extends Plugin {
                     }
                 }
                 reader.endObject();
+
+                if (isBrokerages) {
+                    String bName = cv.getAsString("name");
+                    if (bName == null || bName.trim().isEmpty()) {
+                        bName = cv.getAsString("id");
+                    }
+                    String normName = (bName != null ? bName.trim().toLowerCase() : "");
+                    String canonId = "brk_" + normName.replaceAll("[^a-z0-9_]", "_");
+                    if ("zerodha".equals(normName) || "brk_zerodha".equals(normName)) canonId = "brk_zerodha";
+                    else if ("groww".equals(normName) || "brk_groww".equals(normName)) canonId = "brk_groww";
+                    cv.put("id", canonId);
+
+                    if (seenBrokerages != null) {
+                        if (seenBrokerages.containsKey(normName)) {
+                            ContentValues existing = seenBrokerages.get(normName);
+                            String existBank = existing.getAsString("bank_account");
+                            String newBank = cv.getAsString("bank_account");
+                            if (existBank != null && newBank != null && !existBank.trim().isEmpty() && !newBank.trim().isEmpty() && !existBank.trim().equalsIgnoreCase(newBank.trim())) {
+                                throw new IllegalStateException("Snapshot reconciliation failed: Conflicting bank_account for brokerage \"" + bName + "\" (\"" + existBank + "\" vs \"" + newBank + "\")");
+                            }
+                            String existOwner = existing.getAsString("owner");
+                            String newOwner = cv.getAsString("owner");
+                            if (existOwner != null && newOwner != null && !existOwner.trim().isEmpty() && !newOwner.trim().isEmpty() && !existOwner.trim().equalsIgnoreCase(newOwner.trim())) {
+                                throw new IllegalStateException("Snapshot reconciliation failed: Conflicting owner for brokerage \"" + bName + "\" (\"" + existOwner + "\" vs \"" + newOwner + "\")");
+                            }
+                            if ((existBank == null || existBank.trim().isEmpty()) && newBank != null) {
+                                existing.put("bank_account", newBank);
+                            }
+                            if ((existOwner == null || existOwner.trim().isEmpty()) && newOwner != null) {
+                                existing.put("owner", newOwner);
+                            }
+                            // Skip inserting duplicate row so count reflects distinct canonical brokerages
+                            continue;
+                        } else {
+                            seenBrokerages.put(normName, new ContentValues(cv));
+                        }
+                    }
+                }
 
                 insertWithQuotedColumns(db, tableName, cv, stmtCache);
                 count++;

@@ -946,6 +946,46 @@ export const attachNativeBackupMethods = (db) => {
             continue;
           }
 
+          if (tbl === 'brokerages') {
+            const stagingBrokRes = await db.query('SELECT * FROM staging_snap.brokerages;').catch(() => ({ values: [] }));
+            const stagingBroks = stagingBrokRes.values || [];
+            const seenByNorm = new Map();
+            for (const brk of stagingBroks) {
+              if (!brk || !brk.name) continue;
+              const normName = String(brk.name).trim().toLowerCase();
+              const canonId = getCanonicalBrokerageId(brk);
+              const bank = String(brk.bank_account || '').trim();
+              const owner = String(brk.owner || '').trim();
+              if (seenByNorm.has(normName)) {
+                const existing = seenByNorm.get(normName);
+                if (existing.bank && bank && existing.bank.toLowerCase() !== bank.toLowerCase()) {
+                  throw new Error(`Snapshot reconciliation failed: Conflicting bank_account for brokerage "${brk.name}" ("${existing.bank}" vs "${bank}")`);
+                }
+                if (existing.owner && owner && existing.owner.toLowerCase() !== owner.toLowerCase()) {
+                  throw new Error(`Snapshot reconciliation failed: Conflicting owner for brokerage "${brk.name}" ("${existing.owner}" vs "${owner}")`);
+                }
+                if (!existing.bank && bank) existing.bank = bank;
+                if (!existing.owner && owner) existing.owner = owner;
+              } else {
+                seenByNorm.set(normName, {
+                  id: canonId,
+                  name: String(brk.name).trim(),
+                  bank,
+                  owner
+                });
+              }
+            }
+            await db.run('DELETE FROM main.brokerages;', [], false);
+            for (const b of seenByNorm.values()) {
+              await db.run(
+                'INSERT OR REPLACE INTO main.brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?);',
+                [b.id, b.name, b.bank, b.owner],
+                false
+              );
+            }
+            continue;
+          }
+
           const pragmaMain = (await db.query(`PRAGMA main.table_info(${tbl});`)).values || [];
           const pragmaStaging = (await db.query(`PRAGMA staging_snap.table_info(${tbl});`)).values || [];
 
@@ -1375,6 +1415,85 @@ export const ensureSyncSchema = async (db) => {
   await safeAddCol('recurring_rules', "updated_at TEXT DEFAULT ''");
 };
 
+/**
+ * Resolve canonical brokerage identity from item object or name string.
+ * Deterministic mapping: Zerodha -> brk_zerodha, Groww -> brk_groww.
+ */
+export function getCanonicalBrokerageId(itemOrName) {
+  if (typeof itemOrName === 'object' && itemOrName !== null) {
+    const rawId = String(itemOrName.id || itemOrName.ID || '').trim();
+    if (rawId.startsWith('brk_')) return rawId;
+  }
+  const raw = typeof itemOrName === 'string'
+    ? itemOrName
+    : (itemOrName?.name || itemOrName?.id || itemOrName?.NAME || itemOrName?.ID || '');
+  const norm = String(raw).trim().toLowerCase();
+  if (norm === 'zerodha' || norm === 'brk_zerodha') return 'brk_zerodha';
+  if (norm === 'groww' || norm === 'brk_groww') return 'brk_groww';
+  if (norm.startsWith('brk_')) return norm;
+  return `brk_${norm.replace(/[^a-z0-9_]/g, '_')}`;
+}
+
+/**
+ * Safe, idempotent migration for existing brokerage records.
+ * Canonicalizes IDs to deterministic names, preserves complete metadata,
+ * fails closed on conflicting metadata, and deduplicates multiple UUID rows.
+ */
+export async function migrateExistingBrokerages(db) {
+  try {
+    const res = await db.query('SELECT * FROM brokerages;').catch(() => ({ values: [] }));
+    const rows = res.values || [];
+    if (rows.length === 0) return;
+
+    const seenByNorm = new Map();
+    let migrationNeeded = false;
+
+    for (const r of rows) {
+      if (!r || !r.name) continue;
+      const norm = String(r.name).trim().toLowerCase();
+      const canonId = getCanonicalBrokerageId(r);
+      if (r.id !== canonId) {
+        migrationNeeded = true;
+      }
+      const bank = String(r.bank_account || '').trim();
+      const owner = String(r.owner || '').trim();
+
+      if (seenByNorm.has(norm)) {
+        migrationNeeded = true;
+        const existing = seenByNorm.get(norm);
+        if (existing.bank && bank && existing.bank.toLowerCase() !== bank.toLowerCase()) {
+          throw new Error(`Brokerage migration failed: Conflicting bank_account for "${r.name}" ("${existing.bank}" vs "${bank}")`);
+        }
+        if (existing.owner && owner && existing.owner.toLowerCase() !== owner.toLowerCase()) {
+          throw new Error(`Brokerage migration failed: Conflicting owner for "${r.name}" ("${existing.owner}" vs "${owner}")`);
+        }
+        if (!existing.bank && bank) existing.bank = bank;
+        if (!existing.owner && owner) existing.owner = owner;
+      } else {
+        seenByNorm.set(norm, {
+          id: canonId,
+          name: String(r.name).trim(),
+          bank,
+          owner
+        });
+      }
+    }
+
+    if (!migrationNeeded) return;
+
+    await db.run('DELETE FROM brokerages;');
+    for (const b of seenByNorm.values()) {
+      await db.run(
+        'INSERT OR REPLACE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?);',
+        [b.id, b.name, b.bank, b.owner]
+      );
+    }
+  } catch (err) {
+    console.error('Brokerage migration error:', err);
+    throw err;
+  }
+}
+
 let _db = null;
 let _initPromise = null;
 
@@ -1392,17 +1511,23 @@ export const initDB = async () => {
       }
       await applySchema(_db);
 
-      // Seed default brokerages config if empty
+      // Seed default brokerages config with deterministic canonical IDs if empty
       try {
         const res = await _db.query('SELECT COUNT(*) as count FROM brokerages');
         const count = res.values?.[0]?.count ?? 0;
         if (count === 0) {
-          const { v4: uuid } = await import('uuid');
-          await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, [uuid(), 'Zerodha', 'HDFC', 'Akbar']);
-          await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, [uuid(), 'Groww', 'Canara', 'Fareeda']);
+          await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, ['brk_zerodha', 'Zerodha', 'HDFC', 'Akbar']);
+          await _db.run(`INSERT OR IGNORE INTO brokerages (id, name, bank_account, owner) VALUES (?, ?, ?, ?)`, ['brk_groww', 'Groww', 'Canara', 'Fareeda']);
         }
       } catch (err) {
         console.error('Failed to seed brokerages:', err);
+      }
+
+      // Safe, idempotent migration for existing brokerage records
+      try {
+        await migrateExistingBrokerages(_db);
+      } catch (err) {
+        console.error('Failed to migrate brokerages:', err);
       }
 
       return _db;

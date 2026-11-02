@@ -540,8 +540,10 @@ export default function ConnectedDevicesCard({
                 currentDevice?.baseSnapshotId &&
                 dev.baseSnapshotId === currentDevice.baseSnapshotId
               );
+              const maxCloudVersion = Math.max(...devices.map(d => d.baseCloudVersion || 0), currentVersion);
               const isPeerNewer = dev.baseCloudVersion > currentVersion && !isSameSnapshot && currentVersion > 0;
               const isCurrent = dev.isCurrentDevice;
+              const isCurrentUpgradeAvailable = maxCloudVersion > currentVersion && currentVersion > 0;
               let typeIcon = '📲';
               if (isCurrent) {
                 const isNative = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.();
@@ -858,7 +860,8 @@ export default function ConnectedDevicesCard({
                     </div>
                   )}
 
-                  {isPeerNewer && !dev.notUploadedYet && !isCurrent && (
+                  {/* Upgrade option only shown on current device */}
+                  {isCurrent && isCurrentUpgradeAvailable && (
                     <div
                       style={{
                         padding: '8px 10px',
@@ -874,13 +877,13 @@ export default function ConnectedDevicesCard({
                       }}
                     >
                       <div>
-                        🔄 <strong>Newer Snapshot Baseline Available (v{dev.baseCloudVersion}):</strong> {dev.deviceName} has published a newer snapshot baseline with latest records. Update this device to synchronize.
+                        🔄 <strong>Newer Snapshot Baseline Available (v{maxCloudVersion}):</strong> A newer snapshot baseline with latest records has been published. Upgrade this device to synchronize.
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 2 }}>
                         <button
                           type="button"
                           className="btn btn-primary"
-                          onClick={() => handleStartUpgrade(dev)}
+                          onClick={() => handleStartUpgrade(devices.find(d => d.baseCloudVersion === maxCloudVersion) || dev)}
                           disabled={isUpgrading}
                           style={{
                             fontSize: '0.68rem',
@@ -888,13 +891,31 @@ export default function ConnectedDevicesCard({
                             fontWeight: 700
                           }}
                         >
-                          {isUpgrading ? 'Updating…' : `⚡ Sync with Snapshot v${dev.baseCloudVersion}`}
+                          {isUpgrading ? 'Updating…' : `⚡ Upgrade This Device to Snapshot v${maxCloudVersion}`}
                         </button>
                       </div>
                     </div>
                   )}
 
-                  {dev.lineageStatus === PEER_LINEAGE_STATUS.INCOMPATIBLE_BLOCKED && !isPeerNewer && !dev.notUploadedYet && !isCurrent && (
+                  {/* Informational notice for peer devices with newer baseline */}
+                  {isPeerNewer && !dev.notUploadedYet && !isCurrent && (
+                    <div
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        background: 'rgba(0, 210, 255, 0.08)',
+                        border: '1px solid rgba(0, 210, 255, 0.25)',
+                        color: 'var(--primary, #00d2ff)',
+                        fontSize: '0.66rem',
+                        lineHeight: 1.4
+                      }}
+                    >
+                      ℹ️ <strong>Newer Snapshot Baseline Published (v{dev.baseCloudVersion}):</strong> {dev.deviceName} has published Snapshot v{dev.baseCloudVersion}. Use the upgrade option on This Device to synchronize.
+                    </div>
+                  )}
+
+                  {/* Informational notice & stale removal for peer devices on older baseline */}
+                  {!isCurrent && (dev.baseCloudVersion < currentVersion || dev.lineageStatus === PEER_LINEAGE_STATUS.INCOMPATIBLE_BLOCKED) && !isPeerNewer && !dev.notUploadedYet && (
                     <div
                       style={{
                         padding: '8px 10px',
@@ -910,7 +931,7 @@ export default function ConnectedDevicesCard({
                       }}
                     >
                       <div>
-                        ⚠️ <strong>Incompatible Snapshot Baseline (v{dev.baseCloudVersion}):</strong> This device last synced on snapshot {dev.baseSnapshotId || `v${dev.baseCloudVersion}`}. To resume delta exchange, open FinMan on that device so it can fast-forward to the latest cloud data, or remove it from the cloud vault below.
+                        ⚠️ <strong>Incompatible Snapshot Baseline (v{dev.baseCloudVersion || 'older'}):</strong> {dev.deviceName} is on Snapshot v{dev.baseCloudVersion || 'older'}. To update this device, open FinMan on {dev.deviceName} and perform its own sync.
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 2 }}>
                         <button

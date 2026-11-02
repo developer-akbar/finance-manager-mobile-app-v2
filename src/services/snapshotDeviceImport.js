@@ -20,7 +20,7 @@
  *    before finalizing local sync settings (sync_base_manifest, last_snapshot_id, last_synced_at).
  */
 
-import { getDB, getRawIDB } from '../database/db.js';
+import { getDB, getRawIDB, getCanonicalBrokerageId } from '../database/db.js';
 import { setSetting, getSetting } from '../database/settings.js';
 import { decryptBackupData } from '../utils/cryptoBackup.js';
 import { getSyncSessionKey } from './syncSession.js';
@@ -2241,18 +2241,35 @@ async function _verifyReconciledDataIntegrityNativeStaged(db, cloudPayload, opti
   // Strict normalized brokerage identity verification
   if (expectedBrokerageNames && expectedBrokerageNames.size > 0) {
     const actualBrokRows = (await db.query('SELECT name FROM brokerages;').catch(() => ({ values: [] }))).values || [];
+    
+    // Check 1: Actual row count equals expected unique identities
+    if (actualBrokRows.length !== expectedBrokerageNames.size) {
+      throw new Error(`Data integrity verification failed: count mismatch for brokerages (expected ${expectedBrokerageNames.size} unique brokerages, got ${actualBrokRows.length} rows)`);
+    }
+
     const actualBrokNames = new Set(
       actualBrokRows
         .map(r => (r.name || r.NAME || '').trim().toLowerCase())
         .filter(Boolean)
     );
+
+    // Check 2: Expected unique brokerage identities count
+    if (actualBrokNames.size !== expectedBrokerageNames.size) {
+      throw new Error(`Data integrity verification failed: count mismatch for brokerages (expected ${expectedBrokerageNames.size} unique brokerages, got ${actualBrokNames.size})`);
+    }
+
+    // Check 3: Exact identity presence (no missing identities)
     for (const expName of expectedBrokerageNames) {
       if (!actualBrokNames.has(expName)) {
         throw new Error(`Data integrity verification failed: missing expected brokerage identity "${expName}"`);
       }
     }
-    if (actualBrokNames.size !== expectedBrokerageNames.size) {
-      throw new Error(`Data integrity verification failed: count mismatch for brokerages (expected ${expectedBrokerageNames.size} unique brokerages, got ${actualBrokNames.size})`);
+
+    // Check 4: No unexpected identities
+    for (const actName of actualBrokNames) {
+      if (!expectedBrokerageNames.has(actName)) {
+        throw new Error(`Data integrity verification failed: unexpected brokerage identity "${actName}" found in database`);
+      }
     }
   }
 
@@ -2389,18 +2406,36 @@ export async function verifyReconciledDataIntegrity(db, cloudPayload, options = 
   // Strict normalized brokerage identity verification
   if (expectedBrokerageNames.size > 0) {
     const actualBrokRes = await db.query('SELECT name FROM brokerages;').catch(() => ({ values: [] }));
+    const actualBrokRows = actualBrokRes.values || [];
+
+    // Check 1: Actual row count equals expected unique identities
+    if (actualBrokRows.length !== expectedBrokerageNames.size) {
+      throw new Error(`Data integrity verification failed: count mismatch for brokerages (expected ${expectedBrokerageNames.size} unique brokerages, got ${actualBrokRows.length} rows)`);
+    }
+
     const actualBrokNames = new Set(
-      (actualBrokRes.values || [])
+      actualBrokRows
         .map(r => (r.name || r.NAME || '').trim().toLowerCase())
         .filter(Boolean)
     );
+
+    // Check 2: Expected unique brokerage identities count
+    if (actualBrokNames.size !== expectedBrokerageNames.size) {
+      throw new Error(`Data integrity verification failed: count mismatch for brokerages (expected ${expectedBrokerageNames.size} unique brokerages, got ${actualBrokNames.size})`);
+    }
+
+    // Check 3: Exact identity presence (no missing identities)
     for (const expName of expectedBrokerageNames) {
       if (!actualBrokNames.has(expName)) {
         throw new Error(`Data integrity verification failed: missing expected brokerage identity "${expName}"`);
       }
     }
-    if (actualBrokNames.size !== expectedBrokerageNames.size) {
-      throw new Error(`Data integrity verification failed: count mismatch for brokerages (expected ${expectedBrokerageNames.size} unique brokerages, got ${actualBrokNames.size})`);
+
+    // Check 4: No unexpected identities
+    for (const actName of actualBrokNames) {
+      if (!expectedBrokerageNames.has(actName)) {
+        throw new Error(`Data integrity verification failed: unexpected brokerage identity "${actName}" found in database`);
+      }
     }
   }
 
@@ -2486,11 +2521,23 @@ export async function verifyReconciledDataIntegrity(db, cloudPayload, options = 
   for (const table of ['accounts', 'categories', 'subcategories', 'sub_accounts', 'inventory', 'account_groups', 'brokerages']) {
     const expItems = expectedEntities[table] || [];
     if (expItems.length === 0) continue;
-    const expMap = new Map(expItems.map(item => [String(item.id || item.name || ''), item]));
+    const expMap = new Map();
+    for (const item of expItems) {
+      if (table === 'brokerages') {
+        const norm = (item.name || '').trim().toLowerCase();
+        expMap.set(norm, item);
+        expMap.set(getCanonicalBrokerageId(item), item);
+      } else {
+        expMap.set(String(item.id || item.name || ''), item);
+      }
+    }
     const localRes = await db.query(`SELECT * FROM ${table};`);
     for (const row of localRes.values || []) {
       const idKey = String(row.id || row.name || '');
-      const exp = expMap.get(idKey);
+      let exp = expMap.get(idKey);
+      if (!exp && table === 'brokerages') {
+        exp = expMap.get(String(row.name || '').trim().toLowerCase()) || expMap.get(getCanonicalBrokerageId(row));
+      }
       if (!exp) {
         throw new Error(`Data integrity verification failed: unexpected entity ID '${idKey}' in ${table}.`);
       }

@@ -13,7 +13,7 @@
  * - Atomic Local Staged Execution
  */
 
-import { getDB } from '../database/db.js';
+import { getDB, getCanonicalBrokerageId } from '../database/db.js';
 import { getTransactions, rowToTxn, bulkImport } from '../database/transactions.js';
 import { getTombstones, recordTombstonesBatch } from '../database/tombstones.js';
 import { getSetting, setSetting } from '../database/settings.js';
@@ -188,10 +188,11 @@ export function canonicalizeEntity(entity, entityType = 'transaction') {
   }
 
   if (entityType === 'brokerage' || entityType === 'brokerages') {
+    const canonId = getCanonicalBrokerageId(entity);
     const name = String(entity.name || entity.id || '').trim();
     const bankAccount = String(entity.bank_account || entity.bankAccount || '').trim();
     const owner = String(entity.owner || '').trim();
-    return `${id}|${name}|${bankAccount}|${owner}`;
+    return `${canonId}|${name}|${bankAccount}|${owner}`;
   }
 
   if (entityType === 'setting' || entityType === 'settings') {
@@ -244,7 +245,12 @@ export function getManifestEntityKey(entityType, rawId) {
   else if (normType === 'subcategory') typePrefix = 'subcategories';
   else if (normType === 'sub_account') typePrefix = 'sub_accounts';
   else if (normType === 'account_group') typePrefix = 'account_groups';
-  else if (normType === 'brokerage') typePrefix = 'brokerages';
+  else if (normType === 'brokerage' || normType === 'brokerages') {
+    const rawStr = String(rawId).trim();
+    const unPrefixed = rawStr.startsWith('brokerages:') ? rawStr.substring('brokerages:'.length) : rawStr;
+    const canonId = getCanonicalBrokerageId(unPrefixed);
+    return `brokerages:${canonId}`;
+  }
   else if (normType === 'inventory') typePrefix = 'inventory';
   else if (!normType.endsWith('s')) typePrefix = `${normType}s`;
 
@@ -271,7 +277,10 @@ export async function buildEntityManifest(entitiesMap) {
     }
     if (!Array.isArray(items)) continue;
     for (const item of items) {
-      const rawId = String(item.id || item.ID || item._id || item.key || item.name || '');
+      let rawId = String(item.id || item.ID || item._id || item.key || item.name || '');
+      if (entityType === 'brokerage' || entityType === 'brokerages') {
+        rawId = getCanonicalBrokerageId(item);
+      }
       if (!rawId) continue;
       const id = getManifestEntityKey(entityType, rawId);
       const canonical = canonicalizeEntity(item, entityType);
@@ -392,6 +401,37 @@ export async function createCanonicalSnapshotPayload({
 
   if (!sortedEntities.transactions) sortedEntities.transactions = [];
   if (!sortedEntities.investment_transactions) sortedEntities.investment_transactions = [];
+
+  // Deduplicate brokerages in snapshots according to canonical identity policy
+  if (Array.isArray(sortedEntities.brokerages)) {
+    const seenBroks = new Map();
+    for (const b of sortedEntities.brokerages) {
+      if (!b || !b.name) continue;
+      const normName = String(b.name).trim().toLowerCase();
+      const canonId = getCanonicalBrokerageId(b);
+      const bank = String(b.bank_account || b.bankAccount || '').trim();
+      const owner = String(b.owner || '').trim();
+      if (seenBroks.has(normName)) {
+        const existing = seenBroks.get(normName);
+        if (existing.bank && bank && existing.bank.toLowerCase() !== bank.toLowerCase()) {
+          throw new Error(`Conflicting bank_account for brokerage "${b.name}" ("${existing.bank}" vs "${bank}")`);
+        }
+        if (existing.owner && owner && existing.owner.toLowerCase() !== owner.toLowerCase()) {
+          throw new Error(`Conflicting owner for brokerage "${b.name}" ("${existing.owner}" vs "${owner}")`);
+        }
+        if (!existing.bank && bank) existing.bank = bank;
+        if (!existing.owner && owner) existing.owner = owner;
+      } else {
+        seenBroks.set(normName, {
+          id: canonId,
+          name: String(b.name).trim(),
+          bank_account: bank,
+          owner
+        });
+      }
+    }
+    sortedEntities.brokerages = Array.from(seenBroks.values()).sort((a, b) => a.id.localeCompare(b.id));
+  }
 
   // Capture authoritative covered peer watermarks
   let peerWatermarksObj = null;
@@ -684,7 +724,10 @@ export async function reconcile3Way({
     }
     if (!Array.isArray(items)) continue;
     for (const item of items) {
-      const rawId = String(item.id || item.ID || item._id || item.key || item.name || '');
+      let rawId = String(item.id || item.ID || item._id || item.key || item.name || '');
+      if (type === 'brokerage' || type === 'brokerages') {
+        rawId = getCanonicalBrokerageId(item);
+      }
       if (rawId) {
         const id = getManifestEntityKey(type, rawId);
         localMap.set(id, { item, type, rawId, canonical: canonicalizeEntity(item, type) });
@@ -709,7 +752,10 @@ export async function reconcile3Way({
     }
     if (!Array.isArray(items)) continue;
     for (const item of items) {
-      const rawId = String(item.id || item.ID || item._id || item.key || item.name || '');
+      let rawId = String(item.id || item.ID || item._id || item.key || item.name || '');
+      if (type === 'brokerage' || type === 'brokerages') {
+        rawId = getCanonicalBrokerageId(item);
+      }
       if (rawId) {
         const id = getManifestEntityKey(type, rawId);
         cloudMap.set(id, { item, type, rawId, canonical: canonicalizeEntity(item, type) });
@@ -2668,7 +2714,46 @@ export async function applyLocalEntityInsertOrUpdate(db, item, collectionType = 
 
   if (collection === 'brokerages' || collection === 'brokerage') {
     const brk = item;
-    await db.run(`INSERT OR REPLACE INTO brokerages (id,name,bank_account,owner) VALUES (?,?,?,?)`, [brk.id || brk.name, brk.name, brk.bank_account || '', brk.owner || '']);
+    const canonId = getCanonicalBrokerageId(brk);
+    const normName = String(brk.name || '').trim().toLowerCase();
+    const bank = String(brk.bank_account || brk.bankAccount || '').trim();
+    const owner = String(brk.owner || '').trim();
+
+    // Query all existing brokerages and match in JS (fully compatible with SQLite and WebIDB)
+    const existingRowsRes = await db.query('SELECT * FROM brokerages;').catch(() => ({ values: [] }));
+    const allBrokerages = existingRowsRes.values || [];
+    const matchedRows = allBrokerages.filter(r => {
+      const rNorm = String(r.name || '').trim().toLowerCase();
+      return rNorm === normName || r.id === canonId || (brk.id && r.id === brk.id);
+    });
+
+    let mergedBank = bank;
+    let mergedOwner = owner;
+
+    for (const r of matchedRows) {
+      const exBank = String(r.bank_account || '').trim();
+      const exOwner = String(r.owner || '').trim();
+      if (exBank && bank && exBank.toLowerCase() !== bank.toLowerCase()) {
+        throw new Error(`Snapshot reconciliation failed: Conflicting bank_account for brokerage "${brk.name}" ("${exBank}" vs "${bank}")`);
+      }
+      if (exOwner && owner && exOwner.toLowerCase() !== owner.toLowerCase()) {
+        throw new Error(`Snapshot reconciliation failed: Conflicting owner for brokerage "${brk.name}" ("${exOwner}" vs "${owner}")`);
+      }
+      if (!mergedBank && exBank) mergedBank = exBank;
+      if (!mergedOwner && exOwner) mergedOwner = exOwner;
+    }
+
+    // Clean up any obsolete duplicate rows with old random UUIDs for this brokerage
+    for (const r of matchedRows) {
+      if (r.id !== canonId) {
+        await db.run('DELETE FROM brokerages WHERE id = ?;', [r.id]).catch(() => {});
+      }
+    }
+
+    await db.run(
+      `INSERT OR REPLACE INTO brokerages (id,name,bank_account,owner) VALUES (?,?,?,?)`,
+      [canonId, brk.name ? brk.name.trim() : canonId, mergedBank, mergedOwner]
+    );
     return;
   }
 
@@ -2932,10 +3017,37 @@ export async function populateLocalEntitiesBootstrap(db, entities, options = {})
     }
   }
 
-  // 14. Brokerages
+  // 14. Brokerages (Deduplicated with deterministic canonical IDs and fail-closed conflict validation)
   if (Array.isArray(entities.brokerages)) {
+    const seenByNorm = new Map();
     for (const brk of entities.brokerages) {
-      await db.run(`INSERT INTO brokerages (id,name,bank_account,owner) VALUES (?,?,?,?)`, [brk.id || brk.name, brk.name, brk.bank_account || '', brk.owner || '']);
+      if (!brk || !brk.name) continue;
+      const normName = String(brk.name).trim().toLowerCase();
+      const canonId = getCanonicalBrokerageId(brk);
+      const bank = String(brk.bank_account || brk.bankAccount || '').trim();
+      const owner = String(brk.owner || '').trim();
+
+      if (seenByNorm.has(normName)) {
+        const existing = seenByNorm.get(normName);
+        if (existing.bank && bank && existing.bank.toLowerCase() !== bank.toLowerCase()) {
+          throw new Error(`Snapshot reconciliation failed: Conflicting bank_account for brokerage "${brk.name}" ("${existing.bank}" vs "${bank}")`);
+        }
+        if (existing.owner && owner && existing.owner.toLowerCase() !== owner.toLowerCase()) {
+          throw new Error(`Snapshot reconciliation failed: Conflicting owner for brokerage "${brk.name}" ("${existing.owner}" vs "${owner}")`);
+        }
+        if (!existing.bank && bank) existing.bank = bank;
+        if (!existing.owner && owner) existing.owner = owner;
+      } else {
+        seenByNorm.set(normName, {
+          id: canonId,
+          name: String(brk.name).trim(),
+          bank,
+          owner
+        });
+      }
+    }
+    for (const b of seenByNorm.values()) {
+      await db.run(`INSERT OR REPLACE INTO brokerages (id,name,bank_account,owner) VALUES (?,?,?,?)`, [b.id, b.name, b.bank, b.owner]);
     }
   }
 
