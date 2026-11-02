@@ -2550,26 +2550,67 @@ export async function verifyReconciledDataIntegrity(db, cloudPayload, options = 
   }
 
   // 5. Bounded Referential Integrity & Schema Constraint Assertions
-  const [acctRowsRes, catRowsRes] = await Promise.all([
+  const [acctRowsRes, catRowsRes, subAcctRowsRes] = await Promise.all([
     db.query('SELECT name, id FROM accounts;').catch(() => ({ values: [] })),
-    db.query('SELECT name, id FROM categories;').catch(() => ({ values: [] }))
+    db.query('SELECT name, id FROM categories;').catch(() => ({ values: [] })),
+    db.query('SELECT name, id FROM sub_accounts;').catch(() => ({ values: [] }))
   ]);
   const knownAccounts = new Set((acctRowsRes.values || []).flatMap(r => [String(r.name || '').trim(), String(r.id || '').trim()]).filter(Boolean));
+  const knownAccountsLower = new Set([...knownAccounts].map(s => s.toLowerCase()));
   const knownCategories = new Set((catRowsRes.values || []).flatMap(r => [String(r.name || '').trim(), String(r.id || '').trim()]).filter(Boolean));
+  const knownCategoriesLower = new Set([...knownCategories].map(s => s.toLowerCase()));
+  const knownSubAccounts = new Set((subAcctRowsRes.values || []).flatMap(r => [String(r.name || '').trim(), String(r.id || '').trim()]).filter(Boolean));
+  const knownSubAccountsLower = new Set([...knownSubAccounts].map(s => s.toLowerCase()));
+  const RESERVED_TRANSFER_WORDS = new Set(['transfer', 'transfer-out', 'transfer-in']);
+
+  const isValidAccountTarget = (acctName) => {
+    if (!acctName) return true;
+    return knownAccounts.has(acctName) ||
+      knownAccountsLower.has(acctName.toLowerCase()) ||
+      knownSubAccounts.has(acctName) ||
+      knownSubAccountsLower.has(acctName.toLowerCase());
+  };
+
+  const isValidCategoryTarget = (catName) => {
+    if (!catName) return true;
+    return knownCategories.has(catName) ||
+      knownCategoriesLower.has(catName.toLowerCase());
+  };
 
   if (knownAccounts.size > 0) {
     for (const t of expectedEntities.transactions || []) {
       const acct = String(t.Account || t.account || '').trim();
-      if (acct && !knownAccounts.has(acct)) {
+      if (acct && !isValidAccountTarget(acct)) {
         throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent account '${acct}'.`);
       }
       const fromAcct = String(t.FromAccount || t.from_account || '').trim();
-      if (fromAcct && !knownAccounts.has(fromAcct)) {
+      if (fromAcct && !isValidAccountTarget(fromAcct)) {
         throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent from_account '${fromAcct}'.`);
       }
       const toAcct = String(t.ToAccount || t.to_account || '').trim();
-      if (toAcct && !knownAccounts.has(toAcct)) {
+      if (toAcct && !isValidAccountTarget(toAcct)) {
         throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent to_account '${toAcct}'.`);
+      }
+    }
+
+    if (Array.isArray(expectedEntities.investment_transactions)) {
+      for (const t of expectedEntities.investment_transactions) {
+        const acct = String(t.Account || t.account || '').trim();
+        if (acct && !isValidAccountTarget(acct)) {
+          throw new Error(`Referential integrity failed: investment transaction '${t.id}' references non-existent account '${acct}'.`);
+        }
+        const fromAcct = String(t.FromAccount || t.from_account || '').trim();
+        if (fromAcct && !isValidAccountTarget(fromAcct)) {
+          throw new Error(`Referential integrity failed: investment transaction '${t.id}' references non-existent from_account '${fromAcct}'.`);
+        }
+        const toAcct = String(t.ToAccount || t.to_account || '').trim();
+        if (toAcct && !isValidAccountTarget(toAcct)) {
+          throw new Error(`Referential integrity failed: investment transaction '${t.id}' references non-existent to_account '${toAcct}'.`);
+        }
+        const invAcct = String(t.InvestmentAccount || t.investment_account || '').trim();
+        if (invAcct && !isValidAccountTarget(invAcct) && !isValidCategoryTarget(invAcct)) {
+          throw new Error(`Referential integrity failed: investment transaction '${t.id}' references non-existent investment_account '${invAcct}'.`);
+        }
       }
     }
   }
@@ -2577,14 +2618,57 @@ export async function verifyReconciledDataIntegrity(db, cloudPayload, options = 
   if (knownCategories.size > 0) {
     for (const t of expectedEntities.transactions || []) {
       const cat = String(t.Category || t.category || '').trim();
-      if (cat && !knownCategories.has(cat)) {
-        throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent category '${cat}'.`);
+      if (!cat) continue;
+
+      const typeStr = String(t['Income/Expense'] || t.type || '').trim().toLowerCase();
+      const isTransfer = typeStr.startsWith('transfer');
+
+      if (isTransfer) {
+        // In FinMan transfers, the category field holds the destination account or transfer role
+        const isValidTransferTarget =
+          isValidAccountTarget(cat) ||
+          isValidCategoryTarget(cat) ||
+          RESERVED_TRANSFER_WORDS.has(cat.toLowerCase());
+
+        if (!isValidTransferTarget) {
+          throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent destination account or category '${cat}'.`);
+        }
+      } else {
+        // Standard expense/income transactions must reference a known category ID or name
+        if (!isValidCategoryTarget(cat)) {
+          throw new Error(`Referential integrity failed: transaction '${t.id}' references non-existent category '${cat}'.`);
+        }
+      }
+    }
+
+    if (Array.isArray(expectedEntities.investment_transactions)) {
+      for (const t of expectedEntities.investment_transactions) {
+        const cat = String(t.Category || t.category || '').trim();
+        if (!cat) continue;
+
+        const typeStr = String(t['Income/Expense'] || t.type || '').trim().toLowerCase();
+        const isTransfer = typeStr.startsWith('transfer');
+
+        if (isTransfer) {
+          const isValidTransferTarget =
+            isValidAccountTarget(cat) ||
+            isValidCategoryTarget(cat) ||
+            RESERVED_TRANSFER_WORDS.has(cat.toLowerCase());
+
+          if (!isValidTransferTarget) {
+            throw new Error(`Referential integrity failed: investment transaction '${t.id}' references non-existent destination account or category '${cat}'.`);
+          }
+        } else {
+          if (!isValidCategoryTarget(cat)) {
+            throw new Error(`Referential integrity failed: investment transaction '${t.id}' references non-existent category '${cat}'.`);
+          }
+        }
       }
     }
 
     for (const sub of expectedEntities.subcategories || []) {
       const catRef = String(sub.category_id || sub.categoryId || sub.category || '').trim();
-      if (catRef && !knownCategories.has(catRef)) {
+      if (catRef && !isValidCategoryTarget(catRef)) {
         throw new Error(`Referential integrity failed: subcategory '${sub.id || sub.name}' references non-existent category '${catRef}'.`);
       }
     }
