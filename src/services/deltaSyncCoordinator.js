@@ -1146,7 +1146,15 @@ export async function publishAuthoritativeDeviceSnapshot(options = {}) {
     onProgress('Reading local database records…');
     // 1. Read local entities and verify non-empty
     const localEntities = await readLocalEntities(db);
-    const totalLocalTxns = (localEntities.transactions || []).length + (localEntities.investment_transactions || []).length;
+    const { getFinancialTransactionCounts } = await import('../database/transactions.js');
+    const verifiedCounts = await getFinancialTransactionCounts(db);
+    const totalLocalTxns = verifiedCounts ? verifiedCounts.unique_total : (() => {
+      const idSet = new Set([
+        ...(localEntities.transactions || []).map(t => t.id),
+        ...(localEntities.investment_transactions || []).map(t => t.id)
+      ]);
+      return idSet.size;
+    })();
     if (totalLocalTxns === 0) {
       throw new Error('Cannot publish empty local database as authoritative master.');
     }
@@ -1294,6 +1302,14 @@ export async function publishAuthoritativeDeviceSnapshot(options = {}) {
     initialManifest.last_sequence = currentAllocatedSeq;
     initialManifest.watermarks = peerWatermarks;
     initialManifest.record_count = totalLocalTxns;
+    if (verifiedCounts) {
+      initialManifest.count_type = 'DEDUPLICATED_UNIQUE';
+      initialManifest.counts = {
+        transactions: verifiedCounts.transactions,
+        investment_transactions: verifiedCounts.investment_transactions,
+        unique_total: verifiedCounts.unique_total
+      };
+    }
 
     onProgress('Publishing device manifest…');
     await writeOwnDeviceManifest({

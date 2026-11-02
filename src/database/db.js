@@ -248,6 +248,21 @@ const parseAndRun = async (db, sql, vals = []) => {
 
   // ── SELECT ──
   if (u.startsWith('SELECT')) {
+    // Support subquery UNION count: SELECT COUNT(*) AS count FROM ( SELECT id FROM transactions UNION SELECT id FROM investment_transactions )
+    if (/SELECT\s+COUNT\(\*\).+FROM\s*\(\s*SELECT\s+id\s+FROM\s+(?:main\.)?transactions\s+UNION\s+SELECT\s+id\s+FROM\s+(?:main\.)?investment_transactions\s*\)/i.test(s)) {
+      const [tRows, invRows] = await Promise.all([
+        idbAll(db, 'transactions'),
+        idbAll(db, 'investment_transactions')
+      ]);
+      const uniqueIds = new Set([
+        ...tRows.map(r => r.id).filter(Boolean),
+        ...invRows.map(r => r.id).filter(Boolean)
+      ]);
+      const aliasMatch = s.match(/SELECT\s+COUNT\(\*\)(?:\s+AS\s+(\w+))?/i);
+      const alias = aliasMatch?.[1] || 'count';
+      return { values: [{ [alias]: uniqueIds.size, count: uniqueIds.size }] };
+    }
+
     const fm = s.match(/FROM\s+(?:main\.)?(\w+)/i); if (!fm) return { values:[] };
     const store = fm[1];
     if (store === 'sqlite_master') {

@@ -466,22 +466,40 @@ export async function ensureOwnDeviceManifestSynced(options = {}) {
     const needsSeqUpdate = localMaxSeq > (manifest.last_sequence || 0);
     const needsNameUpdate = Boolean(resolvedName && manifest.device_name !== resolvedName);
 
-    let localRecordCount = 0;
+    let verifiedCounts = null;
     try {
-      const txRes = await db.query('SELECT COUNT(*) as count FROM transactions');
-      localRecordCount = Number(txRes.values?.[0]?.count || 0);
-    } catch {}
+      const { getFinancialTransactionCounts } = await import('../database/transactions.js');
+      verifiedCounts = await getFinancialTransactionCounts(db);
+    } catch (countErr) {
+      console.warn('[Manifest] Failed to query verified counts:', countErr);
+    }
 
-    if (force || needsSnapshotUpdate || needsVersionUpdate || needsSeqUpdate || needsNameUpdate || (localRecordCount > 0 && manifest.record_count !== localRecordCount)) {
+    const needsCountUpdate = Boolean(
+      verifiedCounts && (
+        manifest.record_count !== verifiedCounts.unique_total ||
+        manifest.count_type !== 'DEDUPLICATED_UNIQUE' ||
+        !manifest.counts ||
+        manifest.counts.unique_total !== verifiedCounts.unique_total ||
+        manifest.counts.transactions !== verifiedCounts.transactions ||
+        manifest.counts.investment_transactions !== verifiedCounts.investment_transactions
+      )
+    );
+
+    if (force || needsSnapshotUpdate || needsVersionUpdate || needsSeqUpdate || needsNameUpdate || needsCountUpdate) {
       manifest.base_snapshot_id = currentBaseSnapshotId;
       manifest.base_cloud_version = currentBaseCloudVersion || manifest.base_cloud_version || 14;
       manifest.last_sequence = Math.max(manifest.last_sequence || 0, localMaxSeq);
       manifest.watermarks = manifest.watermarks || {};
       manifest.watermarks.last_uploaded_sequence = manifest.last_sequence;
-      manifest.manifest_revision = (manifest.manifest_revision || 0) + 1;
-      manifest.revision = manifest.manifest_revision;
-      manifest.updated_at = new Date().toISOString();
-      if (localRecordCount > 0) manifest.record_count = localRecordCount;
+      if (verifiedCounts) {
+        manifest.record_count = verifiedCounts.unique_total;
+        manifest.count_type = 'DEDUPLICATED_UNIQUE';
+        manifest.counts = {
+          transactions: verifiedCounts.transactions,
+          investment_transactions: verifiedCounts.investment_transactions,
+          unique_total: verifiedCounts.unique_total
+        };
+      }
       if (resolvedName) manifest.device_name = resolvedName;
 
       await writeOwnDeviceManifest(manifest, accessToken, driveClient);
@@ -1080,6 +1098,12 @@ export async function listAllCloudDeviceManifests(options = {}) {
       driveFileId: m.drive_file_id || null,
       lifecycleState: m.device_lifecycle_state || m.lifecycle_state || 'ACTIVE',
       recordCount: Number(m.record_count ?? m.recordCount ?? 0) || null,
+      countType: m.count_type || m.countType || null,
+      counts: (m.counts && typeof m.counts === 'object') ? {
+        transactions: Number(m.counts.transactions ?? m.counts.regular ?? 0),
+        investment_transactions: Number(m.counts.investment_transactions ?? m.counts.investment ?? 0),
+        unique_total: Number(m.counts.unique_total ?? m.record_count ?? 0)
+      } : null,
       lineageStatus,
       lineageReason
     };

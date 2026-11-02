@@ -1143,6 +1143,107 @@ export const getTransactionCount = async () => {
   return (res.values?.[0]?.n) ?? 0;
 };
 
+/**
+ * Retrieves verified financial transaction counts across both ordinary transactions
+ * and investment transactions, deduplicating by transaction ID.
+ *
+ * Strictly enforces that BOTH tables must be queryable.
+ * If either table query fails, returns null (never silently falls back to ordinary-only).
+ *
+ * @param {Object} [db] - Database connection (defaults to getDB())
+ * @returns {Promise<{ unique_total: number, transactions: number, investment_transactions: number }|null>}
+ */
+export const getFinancialTransactionCounts = async (db = getDB()) => {
+  try {
+    if (!db || typeof db.query !== 'function') return null;
+
+    // Both queries must succeed independently; if either table query fails, return null
+    const [regularRes, invRes] = await Promise.all([
+      db.query('SELECT COUNT(*) AS count FROM transactions'),
+      db.query('SELECT COUNT(*) AS count FROM investment_transactions')
+    ]);
+
+    const txCount = regularRes?.values?.[0]?.count;
+    const invCount = invRes?.values?.[0]?.count;
+
+    if (txCount === undefined || invCount === undefined) {
+      return null;
+    }
+
+    const transactions = Number(txCount);
+    const investment_transactions = Number(invCount);
+
+    if (isNaN(transactions) || isNaN(investment_transactions)) {
+      return null;
+    }
+
+    // Fast path: both tables empty
+    if (transactions === 0 && investment_transactions === 0) {
+      return {
+        transactions: 0,
+        investment_transactions: 0,
+        unique_total: 0
+      };
+    }
+
+    // Try unified subquery UNION
+    let unique_total = null;
+    try {
+      const unionRes = await db.query(`
+        SELECT COUNT(*) AS count FROM (
+          SELECT id FROM transactions
+          UNION
+          SELECT id FROM investment_transactions
+        )
+      `);
+      const rawCount = unionRes?.values?.[0]?.count;
+      if (rawCount !== undefined && rawCount !== null) {
+        unique_total = Number(rawCount);
+      }
+    } catch (unionErr) {
+      // Driver does not support subquery UNION
+    }
+
+    // For environments/drivers where subquery UNION returns 0 despite non-empty tables (or is unsupported),
+    // compute exact unique ID count across both tables
+    if (unique_total === null || isNaN(unique_total) || (unique_total === 0 && (transactions > 0 || investment_transactions > 0))) {
+      const [tIdRes, invIdRes] = await Promise.all([
+        db.query('SELECT id FROM transactions'),
+        db.query('SELECT id FROM investment_transactions')
+      ]);
+      if (!tIdRes?.values || !invIdRes?.values) {
+        return null;
+      }
+      const idSet = new Set([
+        ...tIdRes.values.map(r => r.id).filter(Boolean),
+        ...invIdRes.values.map(r => r.id).filter(Boolean)
+      ]);
+      unique_total = idSet.size;
+    }
+
+    return {
+      transactions,
+      investment_transactions,
+      unique_total
+    };
+  } catch (err) {
+    console.warn('[Transactions] Failed to query verified financial transaction counts:', err);
+    return null;
+  }
+};
+
+/**
+ * Returns the verified unique financial transaction total across both tables,
+ * or null if unverified or unavailable.
+ *
+ * @param {Object} [db] - Database connection (defaults to getDB())
+ * @returns {Promise<number|null>}
+ */
+export const getUniqueFinancialTransactionCount = async (db = getDB()) => {
+  const counts = await getFinancialTransactionCounts(db);
+  return counts ? counts.unique_total : null;
+};
+
 // Analyse rows before import:
 //   fileDupeCount  = rows with identical stableKey within the file itself
 //   dbDupeCount    = rows whose stableKey already exists in the DB (merge scenario)

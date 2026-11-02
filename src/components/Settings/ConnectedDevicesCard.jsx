@@ -813,9 +813,21 @@ export default function ConnectedDevicesCard({
                     <div>
                       <span style={{ color: 'var(--text-muted)' }}>Local Records: </span>
                       <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-                        {isCurrent
-                          ? `${(state?.transactions?.length || 0).toLocaleString()} transactions`
-                          : (dev.recordCount ? `${dev.recordCount.toLocaleString()} transactions` : 'In sync with baseline')}
+                        {(() => {
+                          if (isCurrent) {
+                            const count = state?.transactions?.length;
+                            return (count !== undefined && count !== null && !isNaN(count))
+                              ? `${count.toLocaleString()} transactions`
+                              : 'Count unavailable';
+                          }
+                          if (dev.recordCount === null || dev.recordCount === undefined || isNaN(dev.recordCount)) {
+                            return 'Count unavailable';
+                          }
+                          if (dev.countType === 'DEDUPLICATED_UNIQUE') {
+                            return `${dev.recordCount.toLocaleString()} transactions`;
+                          }
+                          return `${dev.recordCount.toLocaleString()} transactions (Legacy count · pending device refresh)`;
+                        })()}
                       </span>
                     </div>
                     <div>
