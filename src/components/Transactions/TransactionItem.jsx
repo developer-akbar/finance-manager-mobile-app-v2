@@ -361,6 +361,7 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
   const [showCopyPicker, setShowCopyPicker] = useState(false);
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
+  const [copiedTxnId, setCopiedTxnId] = useState(false);
   const [viewingReceipt, setViewingReceipt] = useState(false);
 
   const type = txnType(t);
@@ -454,6 +455,47 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
       _copyMode: 'original',
     });
     onClose();
+  };
+
+  const handleCopyTxnId = async (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const idToCopy = String(t.id || t._id || t.ID || '').trim();
+    if (!idToCopy) return;
+    try {
+      let copied = false;
+      if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+          await navigator.clipboard.writeText(idToCopy);
+          copied = true;
+        } catch (clipErr) {
+          console.warn('[DetailSheet] navigator.clipboard failed, falling back to execCommand:', clipErr);
+        }
+      }
+      if (!copied && typeof document !== 'undefined') {
+        const textarea = document.createElement('textarea');
+        textarea.value = idToCopy;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        textarea.style.top = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      if (copied) {
+        setCopiedTxnId(true);
+        toast.success('Copied Txn ID');
+        setTimeout(() => setCopiedTxnId(false), 2000);
+      }
+    } catch (err) {
+      console.warn('Failed to copy transaction ID:', err);
+      toast.error('Failed to copy Txn ID');
+    }
   };
 
   const handleCopyForSync = async () => {
@@ -712,7 +754,43 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
             lineHeight: 1.5
           }}>
             <div style={{ fontWeight: 800, color: 'var(--green)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.65rem' }}>🔍 Developer Debug Info</div>
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><strong>Txn ID:</strong> {t._id || t.ID}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', marginBottom: 2 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <strong>Txn ID:</strong> {t.id || t._id || t.ID}
+              </span>
+              <button
+                type="button"
+                onClick={handleCopyTxnId}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: copiedTxnId ? 'rgba(0, 229, 160, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                  border: `1px solid ${copiedTxnId ? 'var(--green, #00e5a0)' : 'var(--border)'}`,
+                  borderRadius: '5px',
+                  padding: '2px 5px',
+                  cursor: 'pointer',
+                  color: copiedTxnId ? 'var(--green, #00e5a0)' : 'var(--text-muted)',
+                  fontSize: '0.65rem',
+                  lineHeight: 1,
+                  transition: 'all 0.15s ease',
+                  flexShrink: 0
+                }}
+                title={copiedTxnId ? "Copied Txn ID!" : "Copy Transaction ID"}
+                aria-label="Copy Transaction ID"
+              >
+                {copiedTxnId ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                )}
+              </button>
+            </div>
             <div><strong>Created At:</strong> {t.created_at ? new Date(t.created_at).toLocaleString('en-IN') : '—'}</div>
             <div><strong>Last Modified:</strong> {t.updated_at ? new Date(t.updated_at).toLocaleString('en-IN') : '—'}</div>
             {t.recurring_rule_id && <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><strong>Recurring Rule ID:</strong> {t.recurring_rule_id}</div>}

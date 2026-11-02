@@ -856,7 +856,9 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
 
       // Standard text search with scope flags
       let isMatch = false;
-      if (scopeNotes && t.Note && t.Note.toLowerCase().includes(q)) isMatch = true;
+      const txnId = String(t.id || t._id || t.ID || '').toLowerCase();
+      if (txnId && txnId.includes(q)) isMatch = true;
+      else if (scopeNotes && t.Note && t.Note.toLowerCase().includes(q)) isMatch = true;
       else if (scopeDesc && t.Description && t.Description.toLowerCase().includes(q)) isMatch = true;
       else if (scopeTags && t.Tags) {
         const userTags = getUserFacingTags(t.Tags).map(x => x.toLowerCase());
@@ -1158,7 +1160,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
                   }
                 }}
                 onBlur={() => setTimeout(() => setNoteSugs([]), 180)}
-                placeholder="Search note, category, account…"/>
+                placeholder="Search note, category, account, ID…"/>
               {(draftQuery || committedQuery) && (
                 <button
                   type="button"
