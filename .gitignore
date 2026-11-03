@@ -28,3 +28,7 @@ scratch/
 /*.png
 /*.py
 /check_dbs.cjs
+
+# Local backups and recovery snapshots
+*.bak
+/office_laptop_pre_recovery_*.json
