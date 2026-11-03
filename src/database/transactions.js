@@ -4,6 +4,7 @@ import { recordTombstone, recordTombstonesBatch } from './tombstones.js';
 import { executeAtomicMutation, executeAtomicBatch } from './atomicMutation.js';
 import { parseDescriptionStockInfo, parseStockLine, LEGACY_HISTORICAL_REF_MAP } from '../utils/stockInventoryNormalization.js';
 import { buildInstalmentNote } from './recurring.js';
+import { getCurrentDeviceId } from '../services/deviceAudit.js';
 
 export { parseDescriptionStockInfo };
 
@@ -24,6 +25,8 @@ export const rowToTxn = (r) => {
     Currency: r.currency || 'INR', currency: r.currency || 'INR',
     'Income/Expense': r.type || 'Expense', type: r.type || 'Expense',
     created_at: r.created_at, updated_at: r.updated_at,
+    created_by_device_id: r.created_by_device_id || r.CreatedByDeviceId || null,
+    updated_by_device_id: r.updated_by_device_id || r.UpdatedByDeviceId || null,
     recurring_rule_id: r.recurring_rule_id || '',
     Tags: r.tags || '', tags: r.tags || '',
     split_group_id: r.split_group_id || '',
@@ -206,6 +209,9 @@ export const getTransactions = async (filters = {}) => {
 export const addTransaction = async (data) => {
   const id  = data.id || data.ID || data._id || uuid();
   const now = new Date().toISOString();
+  const localDevId = await getCurrentDeviceId().catch(() => null);
+  const createdBy = data.created_by_device_id || data.CreatedByDeviceId || localDevId || null;
+  const updatedBy = data.updated_by_device_id || data.UpdatedByDeviceId || createdBy || null;
   
   const isInv = !!(data.InvestmentTransactionType || data.Brokerage);
   const storeName = isInv ? 'investment_transactions' : 'transactions';
@@ -248,7 +254,9 @@ export const addTransaction = async (data) => {
       actual_amount:actualAmt, total_charges:totCharges, brokerage_charges:brokCharges, exchange_charges:exCharges,
       stt_charges:sttCh, sebi_charges:sebiCh, stamp_duty_charges:stampCh, gst_charges:gstCh, dp_charges:dpCh, other_charges:otherCh,
       security_display_name:secDispName,
-      settlement_mode:setMode
+      settlement_mode:setMode,
+      created_by_device_id: createdBy,
+      updated_by_device_id: updatedBy
     };
   } else {
     const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : 0)))) || 0;
@@ -264,7 +272,9 @@ export const addTransaction = async (data) => {
       receipt_image:data.receipt_image||'', warranty_expiry:data.warranty_expiry||'', serial_no:data.serial_no||'',
       sub_account:data.SubAccount||data.sub_account||'',
       from_sub_account:data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
-      to_sub_account:data.ToSubAccount||data.to_sub_account||''
+      to_sub_account:data.ToSubAccount||data.to_sub_account||'',
+      created_by_device_id: createdBy,
+      updated_by_device_id: updatedBy
     };
   }
 
@@ -302,7 +312,9 @@ export const addTransaction = async (data) => {
       type: 'Expense',
       created_at: now,
       updated_at: now,
-      split_group_id: `inv_charge_${id}`
+      split_group_id: `inv_charge_${id}`,
+      created_by_device_id: createdBy,
+      updated_by_device_id: updatedBy
     };
     allOps.push({
       storeName: 'transactions',
@@ -597,6 +609,10 @@ export const updateTransaction = async (idOrData, maybeData) => {
   try {
     const res = await db.query('SELECT * FROM transactions WHERE id = ?', [id]);
     oldTxn = res.values?.[0];
+    if (!oldTxn) {
+      const resInv = await db.query('SELECT * FROM investment_transactions WHERE id = ?', [id]);
+      oldTxn = resInv.values?.[0];
+    }
     if (oldTxn) {
       if (synchronizedTags === undefined || synchronizedTags === null) {
         synchronizedTags = oldTxn.tags || oldTxn.Tags || '';
@@ -617,6 +633,10 @@ export const updateTransaction = async (idOrData, maybeData) => {
   if (synchronizedTags === undefined || synchronizedTags === null) {
     synchronizedTags = '';
   }
+
+  const localDevId = await getCurrentDeviceId().catch(() => null);
+  const preservedCreator = oldTxn?.created_by_device_id || oldTxn?.CreatedByDeviceId || data.created_by_device_id || null;
+  const modifier = data.updated_by_device_id || data.UpdatedByDeviceId || localDevId || null;
 
   const isInv = !!(data.InvestmentTransactionType || data.Brokerage);
   const storeName = isInv ? 'investment_transactions' : 'transactions';
@@ -681,7 +701,9 @@ export const updateTransaction = async (idOrData, maybeData) => {
       actual_amount: actualAmt, total_charges: totCharges, brokerage_charges: brokCharges, exchange_charges: exCharges,
       stt_charges: sttCh, sebi_charges: sebiCh, stamp_duty_charges: stampCh, gst_charges: gstCh, dp_charges: dpCh, other_charges: otherCh,
       security_display_name: secDispName,
-      settlement_mode: setMode
+      settlement_mode: setMode,
+      created_by_device_id: preservedCreator,
+      updated_by_device_id: modifier
     };
   } else {
     const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (oldTxn?.INR !== undefined ? oldTxn.INR : (oldTxn?.inr !== undefined ? oldTxn.inr : 0)))))) || 0;
@@ -707,7 +729,9 @@ export const updateTransaction = async (idOrData, maybeData) => {
       serial_no: data.serial_no !== undefined ? data.serial_no : (oldTxn?.serial_no || ''),
       sub_account: data.SubAccount || data.sub_account || oldTxn?.sub_account || oldTxn?.SubAccount || '',
       from_sub_account: data.FromSubAccount || data.from_sub_account || data.SubAccount || data.sub_account || oldTxn?.from_sub_account || oldTxn?.FromSubAccount || '',
-      to_sub_account: data.ToSubAccount || data.to_sub_account || oldTxn?.to_sub_account || oldTxn?.ToSubAccount || ''
+      to_sub_account: data.ToSubAccount || data.to_sub_account || oldTxn?.to_sub_account || oldTxn?.ToSubAccount || '',
+      created_by_device_id: preservedCreator,
+      updated_by_device_id: modifier
     };
   }
 
@@ -835,7 +859,9 @@ export const convertTransactionToInstalment = async ({
     from_sub_account: updatedTransactionData.FromSubAccount !== undefined ? updatedTransactionData.FromSubAccount : (oldTxn.from_sub_account || ''),
     to_sub_account: updatedTransactionData.ToSubAccount !== undefined ? updatedTransactionData.ToSubAccount : (oldTxn.to_sub_account || ''),
     created_at: oldTxn.created_at || now,
-    updated_at: now
+    updated_at: now,
+    created_by_device_id: oldTxn.created_by_device_id || oldTxn.CreatedByDeviceId || null,
+    updated_by_device_id: await getCurrentDeviceId().catch(() => null)
   };
   operations.push({
     storeName: 'transactions',
@@ -847,6 +873,7 @@ export const convertTransactionToInstalment = async ({
 
   // 5. Create sibling transactions Parts 2..N
   const siblingRows = [];
+  const localDevId = await getCurrentDeviceId().catch(() => null);
   for (let i = 1; i < schedule.length; i++) {
     const inst = schedule[i];
     const [iy, im, id2] = inst.date.split('-');
@@ -877,7 +904,9 @@ export const convertTransactionToInstalment = async ({
       from_sub_account: updatedPart1Row.from_sub_account,
       to_sub_account: updatedPart1Row.to_sub_account,
       created_at: now,
-      updated_at: now
+      updated_at: now,
+      created_by_device_id: localDevId || null,
+      updated_by_device_id: localDevId || null
     };
     siblingRows.push(sibRow);
     operations.push({
@@ -1357,6 +1386,7 @@ export const analyseImport = async (rows) => {
 export const bulkImport = async (rows, { firstImport = false } = {}) => {
   const db  = getDB();
   const now = new Date().toISOString();
+  const localDevId = await getCurrentDeviceId().catch(() => null);
   let imported = 0, skipped = 0;
 
   const genItems = [];
@@ -1449,7 +1479,9 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
         order_id: String(r.OrderId || '').trim(),
         exchange: String(r.Exchange || '').trim(),
         segment: String(r.Segment || '').trim(),
-        source: String(r.Source || '').trim()
+        source: String(r.Source || '').trim(),
+        created_by_device_id: r.created_by_device_id || r.CreatedByDeviceId || r['Created By Device ID'] || localDevId || null,
+        updated_by_device_id: r.updated_by_device_id || r.UpdatedByDeviceId || r['Last Modified Device ID'] || localDevId || null
       });
     } else {
       genItems.push({
@@ -1477,7 +1509,9 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
         serial_no: String(r.serial_no || '').trim(),
         sub_account: String(r.SubAccount || r.sub_account || '').trim(),
         from_sub_account: String(r.FromSubAccount || r.from_sub_account || r.SubAccount || r.sub_account || '').trim(),
-        to_sub_account: String(r.ToSubAccount || r.to_sub_account || '').trim()
+        to_sub_account: String(r.ToSubAccount || r.to_sub_account || '').trim(),
+        created_by_device_id: r.created_by_device_id || r.CreatedByDeviceId || r['Created By Device ID'] || localDevId || null,
+        updated_by_device_id: r.updated_by_device_id || r.UpdatedByDeviceId || r['Last Modified Device ID'] || localDevId || null
       });
     }
   }

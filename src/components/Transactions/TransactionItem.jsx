@@ -9,6 +9,7 @@ import { toast } from '../Common/Toast.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import ReceiptViewer from '../Common/ReceiptViewer.jsx';
 import InvestmentPlansModal from '../Investments/InvestmentPlansModal.jsx';
+import { resolveDeviceAuditInfo } from '../../services/deviceAudit.js';
 import './TransactionItem.css';
 
 // ── Shared TXN row (used across screens) ────────────────────────────────────
@@ -363,6 +364,9 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
   const [showDebug, setShowDebug] = useState(false);
   const [copiedTxnId, setCopiedTxnId] = useState(false);
   const [viewingReceipt, setViewingReceipt] = useState(false);
+
+  const createdAudit = resolveDeviceAuditInfo(t.created_by_device_id);
+  const updatedAudit = resolveDeviceAuditInfo(t.updated_by_device_id);
 
   const type = txnType(t);
   const amount = txnAmount(t);
@@ -792,7 +796,33 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
               </button>
             </div>
             <div><strong>Created At:</strong> {t.created_at ? new Date(t.created_at).toLocaleString('en-IN') : '—'}</div>
+            <div>
+              <strong>Created By:</strong>{' '}
+              {createdAudit.isLegacy ? (
+                <span style={{ color: 'var(--text-muted)' }}>Unknown (Legacy)</span>
+              ) : createdAudit.deviceName ? (
+                <>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{createdAudit.deviceName}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginLeft: '6px' }}>({createdAudit.deviceId})</span>
+                </>
+              ) : (
+                <span style={{ fontFamily: 'monospace' }}>{createdAudit.deviceId}</span>
+              )}
+            </div>
             <div><strong>Last Modified:</strong> {t.updated_at ? new Date(t.updated_at).toLocaleString('en-IN') : '—'}</div>
+            <div>
+              <strong>Last Modified By:</strong>{' '}
+              {updatedAudit.isLegacy ? (
+                <span style={{ color: 'var(--text-muted)' }}>Unknown (Legacy)</span>
+              ) : updatedAudit.deviceName ? (
+                <>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{updatedAudit.deviceName}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginLeft: '6px' }}>({updatedAudit.deviceId})</span>
+                </>
+              ) : (
+                <span style={{ fontFamily: 'monospace' }}>{updatedAudit.deviceId}</span>
+              )}
+            </div>
             {t.recurring_rule_id && <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><strong>Recurring Rule ID:</strong> {t.recurring_rule_id}</div>}
             <div><strong>Raw INR Value:</strong> {t.INR}</div>
             <div><strong>Currency:</strong> {t.Currency}</div>

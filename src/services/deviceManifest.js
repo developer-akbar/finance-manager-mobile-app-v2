@@ -500,7 +500,13 @@ export async function ensureOwnDeviceManifestSynced(options = {}) {
           unique_total: verifiedCounts.unique_total
         };
       }
-      if (resolvedName) manifest.device_name = resolvedName;
+      if (resolvedName) {
+        manifest.device_name = resolvedName;
+        try {
+          const { registerDeviceAuditName } = await import('./deviceAudit.js');
+          registerDeviceAuditName(deviceId, resolvedName);
+        } catch {}
+      }
 
       await writeOwnDeviceManifest(manifest, accessToken, driveClient);
       console.log(`[Manifest] Aligned own device manifest for ${deviceId} on Google Drive to Snapshot v${manifest.base_cloud_version} (${manifest.base_snapshot_id})`);
@@ -1125,6 +1131,11 @@ export async function listAllCloudDeviceManifests(options = {}) {
       ensureOwnDeviceManifestSynced({ deviceId: localDeviceId, accessToken, driveClient, force: true }).catch(() => {});
     }
   }
+
+  try {
+    const { cacheDeviceRegistry } = await import('./deviceAudit.js');
+    cacheDeviceRegistry(normalizedDevices);
+  } catch {}
 
   return {
     devices: normalizedDevices,
