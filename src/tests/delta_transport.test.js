@@ -48,6 +48,7 @@ import {
 } from '../services/deviceManifest.js';
 import { bytesToBase64, base64ToBytes } from '../utils/cryptoBackup.js';
 import { getDeltaSyncMetrics } from '../services/deltaSyncCoordinator.js';
+import { resetRecoveryLockMemoryCache } from '../services/recoveryLock.js';
 
 const TEST_SESSION_KEY = 'test-secret-passphrase-finman-v3-delta-transport';
 const BASE_SNAPSHOT_ID = 'snap_1790493064581_jbhnf8';
@@ -164,6 +165,7 @@ test('FinMan Phase 7.3 — Delta Transport & Peer Staging Comprehensive Suite (T
   let mockDrive;
 
   t.beforeEach(async () => {
+    resetRecoveryLockMemoryCache();
     closeDB();
     globalThis.indexedDB = new IDBFactory();
     mockDrive = new MockGoogleDriveTransportStorage();

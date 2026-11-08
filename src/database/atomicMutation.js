@@ -458,8 +458,8 @@ async function _executeAtomicSQLite({ operations, suppressDeltaQueue = false }) 
 
   // Self-healing sequence monotonicity: Ensure startSeq is strictly >= MAX(sequence in sync_delta_queue)
   // This physically prevents counter rewinds or duplicate sequence allocation even after database restores or resets.
-  const queueRes = await db.query('SELECT sequence FROM sync_delta_queue');
-  const queueMaxSeq = (queueRes.values || []).reduce((max, r) => Math.max(max, Number(r.sequence) || 0), 0);
+  const queueRes = await db.query('SELECT MAX(sequence) AS max_seq FROM sync_delta_queue').catch(() => ({ values: [] }));
+  const queueMaxSeq = Number(queueRes?.values?.[0]?.max_seq ?? queueRes?.values?.[0]?.max ?? 0);
   const startSeq = Math.max(
     Number(state.last_allocated_sequence) || 0,
     Number(state.last_uploaded_sequence) || 0,

@@ -345,8 +345,8 @@ export function getCurrentSyncStatus() {
 export async function getDeltaSyncMetrics() {
   try {
     const db = getDB();
-    const qRes = await db.query('SELECT * FROM sync_delta_queue').catch(() => ({ values: [] }));
-    const pendingCount = (qRes?.values || []).filter(r => r.status !== 'ACKNOWLEDGED').length;
+    const countRes = await db.query("SELECT COUNT(*) AS count FROM sync_delta_queue WHERE status != 'ACKNOWLEDGED'").catch(() => ({ values: [] }));
+    const pendingCount = Number(countRes?.values?.[0]?.count ?? countRes?.values?.[0]?.cnt ?? 0);
 
     const sRes = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] }));
     const localState = sRes?.values?.[0] || {};
@@ -1189,8 +1189,8 @@ export async function publishAuthoritativeDeviceSnapshot(options = {}) {
     // Include local device queue sequence in covered peer watermarks
     const localStateRes = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] }));
     const localStateRow = localStateRes.values?.[0] || {};
-    const queueRes = await db.query('SELECT sequence FROM sync_delta_queue').catch(() => ({ values: [] }));
-    const queueMaxSeq = (queueRes.values || []).reduce((max, r) => Math.max(max, Number(r.sequence) || 0), 0);
+    const queueRes = await db.query('SELECT MAX(sequence) AS max_seq FROM sync_delta_queue').catch(() => ({ values: [] }));
+    const queueMaxSeq = Number(queueRes?.values?.[0]?.max_seq ?? queueRes?.values?.[0]?.max ?? 0);
     const currentAllocatedSeq = Math.max(
       Number(localStateRow.last_allocated_sequence || 0),
       Number(localStateRow.last_uploaded_sequence || 0),
@@ -1515,10 +1515,10 @@ async function _executeBootstrapFlow(options = {}) {
 
     // 9. Verification before transitioning to ACTIVE
     onProgress({ stage: 'VERIFYING', message: 'Verifying your data…' });
-    const deltaQueueRows = (await db.query('SELECT * FROM sync_delta_queue').catch(() => ({ values: [] }))).values || [];
-    const pendingOutbound = deltaQueueRows.filter(r => r.status !== 'ACKNOWLEDGED');
-    if (pendingOutbound.length > 0) {
-      throw new Error(`BOOTSTRAP_VERIFICATION_FAILED: BOOTSTRAP_SAFEGUARD_REJECTED: Unexpected outbound delta queue entries created during bootstrap (${pendingOutbound.length} events).`);
+    const pendingRes = await db.query("SELECT COUNT(*) AS count FROM sync_delta_queue WHERE status != 'ACKNOWLEDGED'").catch(() => ({ values: [] }));
+    const pendingOutboundCount = Number(pendingRes?.values?.[0]?.count ?? pendingRes?.values?.[0]?.cnt ?? 0);
+    if (pendingOutboundCount > 0) {
+      throw new Error(`BOOTSTRAP_VERIFICATION_FAILED: BOOTSTRAP_SAFEGUARD_REJECTED: Unexpected outbound delta queue entries created during bootstrap (${pendingOutboundCount} events).`);
     }
 
     // 10. Transition to ACTIVE

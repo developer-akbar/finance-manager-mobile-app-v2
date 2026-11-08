@@ -342,7 +342,7 @@ export async function uploadPendingDeltas(opts) {
     };
 
     // 2. Fetch pending queue events
-    const rawEvents = (await db.query('SELECT * FROM sync_delta_queue')).values || [];
+    const rawEvents = (await db.query("SELECT * FROM sync_delta_queue WHERE status != 'ACKNOWLEDGED'")).values || [];
 
     let lifecycleState = localState.lifecycle_state;
     if (!lifecycleState) {

@@ -153,12 +153,17 @@ const parseWhere = (clause, vals) => {
   return clause.split(/\s+AND\s+/i).map(p => {
     const notInM = p.trim().match(/^(\w+)\s+NOT\s+IN\s*\(([^)]+)\)/i);
     const inM = p.trim().match(/^(\w+)\s+IN\s*\(([^)]+)\)/i);
+    const neqLit = p.trim().match(/^(\w+)\s*(?:!=|<>)\s*['"]([^'"]*)['"]/);
+    const neqNum = p.trim().match(/^(\w+)\s*(?:!=|<>)\s*(\d+(?:\.\d+)?)/);
+    const neq = p.trim().match(/^(\w+)\s*(?:!=|<>)\s*\?/);
     const lm  = p.trim().match(/^(\w+)\s+LIKE\s+\?/i);
     const lte = p.trim().match(/^(\w+)\s*<=\s*\?/);
     const gte = p.trim().match(/^(\w+)\s*>=\s*\?/);
     const lt  = p.trim().match(/^(\w+)\s*<\s*\?/);
     const gt  = p.trim().match(/^(\w+)\s*>\s*\?/);
     const lowerEm = p.trim().match(/^LOWER\((\w+)\)\s*=\s*\?/i);
+    const emLit = p.trim().match(/^(\w+)\s*=\s*['"]([^'"]*)['"]/);
+    const emNum = p.trim().match(/^(\w+)\s*=\s*(\d+(?:\.\d+)?)/);
     const em  = p.trim().match(/^(\w+)\s*=\s*\?/);
     const om  = p.trim().match(/^\((.+)\)/);  // OR groups like (a=? OR b=? OR c=?)
     if (notInM) {
@@ -185,12 +190,17 @@ const parseWhere = (clause, vals) => {
       }
       return { col: inM[1], op: 'IN', val: inVals };
     }
+    if (neqLit) return { col:neqLit[1], op:'!=', val:neqLit[2] };
+    if (neqNum) return { col:neqNum[1], op:'!=', val:Number(neqNum[2]) };
+    if (neq) return { col:neq[1], op:'!=',   val:vals[vi++] };
     if (lm)  return { col:lm[1],  op:'LIKE', val:vals[vi++] };
     if (lte) return { col:lte[1], op:'<=',   val:vals[vi++] };
     if (gte) return { col:gte[1], op:'>=',   val:vals[vi++] };
     if (lt)  return { col:lt[1],  op:'<',    val:vals[vi++] };
     if (gt)  return { col:gt[1],  op:'>',    val:vals[vi++] };
     if (lowerEm) return { col:lowerEm[1], op:'LOWER_EQ', val:vals[vi++] };
+    if (emLit) return { col:emLit[1], op:'=', val:emLit[2] };
+    if (emNum) return { col:emNum[1], op:'=', val:Number(emNum[2]) };
     if (em)  return { col:em[1],  op:'=',    val:vals[vi++] };
     if (om) {
       // parse OR sub-conditions
@@ -215,6 +225,7 @@ const matchCond = (row, c) => {
   const rv = String(rawVal ?? '');
   if (c.op === 'NOT IN') return Array.isArray(c.val) && !c.val.map(x => String(x ?? '')).includes(rv);
   if (c.op === 'IN')   return Array.isArray(c.val) && c.val.map(x => String(x ?? '')).includes(rv);
+  if (c.op === '!=')   return rv !== String(c.val ?? '');
   if (c.op === 'LOWER_EQ') return rv.toLowerCase() === String(c.val ?? '').toLowerCase();
   if (c.op === '=')    return rv === String(c.val ?? '');
   if (c.op === '<=') {
@@ -294,6 +305,29 @@ const parseAndRun = async (db, sql, vals = []) => {
       const aliasMatch = s.match(/SELECT\s+COUNT\(\*\)(?:\s+AS\s+(\w+))?/i);
       const alias = aliasMatch?.[1] || 'count';
       return { values: [{ [alias]: rows.length, count: rows.length }] };
+    }
+
+    const maxMatch = s.match(/SELECT\s+MAX\((\w+)\)(?:\s+AS\s+(\w+))?/i);
+    if (maxMatch) {
+      const col = maxMatch[1];
+      const alias = maxMatch[2] || `max_${col}`;
+      const maxVal = rows.reduce((max, r) => {
+        const val = Number(r[col]);
+        return (!isNaN(val) && val > max) ? val : max;
+      }, 0);
+      return { values: [{ [alias]: maxVal, max: maxVal, max_seq: maxVal }] };
+    }
+
+    const minMatch = s.match(/SELECT\s+MIN\((\w+)\)(?:\s+AS\s+(\w+))?/i);
+    if (minMatch) {
+      const col = minMatch[1];
+      const alias = minMatch[2] || `min_${col}`;
+      const minVal = rows.reduce((min, r) => {
+        const val = Number(r[col]);
+        return (!isNaN(val) && val < min) ? val : min;
+      }, Infinity);
+      const finalMin = minVal === Infinity ? 0 : minVal;
+      return { values: [{ [alias]: finalMin, min: finalMin }] };
     }
 
     const lm = s.match(/LIMIT\s+(\d+)/i); if (lm) rows = rows.slice(0, +lm[1]);
@@ -1440,6 +1474,39 @@ export const ensureSyncSchema = async (db) => {
 
   // recurring_rules migrations
   await safeAddCol('recurring_rules', "updated_at TEXT DEFAULT ''");
+
+  // High-performance indexes for delta sync queue
+  try {
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_sync_delta_queue_sequence ON sync_delta_queue (sequence);');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_sync_delta_queue_status ON sync_delta_queue (status);');
+  } catch {}
+
+  // Automatically prune acknowledged delta events covered by the current snapshot watermark
+  await pruneAcknowledgedDeltas(db).catch(() => {});
+};
+
+/**
+ * Safely prunes acknowledged delta events from sync_delta_queue that are strictly <= last_acked_sequence
+ * and already covered by the authoritative cloud snapshot baseline.
+ */
+export async function pruneAcknowledgedDeltas(dbInstance = null) {
+  const db = dbInstance || getDB();
+  if (!db) return 0;
+  try {
+    const sRes = await db.query('SELECT * FROM sync_local_state WHERE key = ?', ['device_state']).catch(() => ({ values: [] }));
+    const localState = sRes?.values?.[0] || {};
+    const safeWatermark = Number(localState.last_acked_sequence || 0);
+    if (safeWatermark > 0) {
+      const res = await db.run(
+        "DELETE FROM sync_delta_queue WHERE status = 'ACKNOWLEDGED' AND sequence <= ?",
+        [safeWatermark]
+      ).catch(() => ({ changes: { changes: 0 } }));
+      return res?.changes?.changes || 0;
+    }
+  } catch (err) {
+    console.warn('[pruneAcknowledgedDeltas] Warning:', err);
+  }
+  return 0;
 };
 
 /**
