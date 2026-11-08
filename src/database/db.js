@@ -151,21 +151,24 @@ const idbPutBatch = (db, store, items) => new Promise((res, rej) => {
 const parseWhere = (clause, vals) => {
   let vi = 0;
   return clause.split(/\s+AND\s+/i).map(p => {
-    const notInM = p.trim().match(/^(\w+)\s+NOT\s+IN\s*\(([^)]+)\)/i);
-    const inM = p.trim().match(/^(\w+)\s+IN\s*\(([^)]+)\)/i);
-    const neqLit = p.trim().match(/^(\w+)\s*(?:!=|<>)\s*['"]([^'"]*)['"]/);
-    const neqNum = p.trim().match(/^(\w+)\s*(?:!=|<>)\s*(\d+(?:\.\d+)?)/);
-    const neq = p.trim().match(/^(\w+)\s*(?:!=|<>)\s*\?/);
-    const lm  = p.trim().match(/^(\w+)\s+LIKE\s+\?/i);
-    const lte = p.trim().match(/^(\w+)\s*<=\s*\?/);
-    const gte = p.trim().match(/^(\w+)\s*>=\s*\?/);
-    const lt  = p.trim().match(/^(\w+)\s*<\s*\?/);
-    const gt  = p.trim().match(/^(\w+)\s*>\s*\?/);
-    const lowerEm = p.trim().match(/^LOWER\((\w+)\)\s*=\s*\?/i);
-    const emLit = p.trim().match(/^(\w+)\s*=\s*['"]([^'"]*)['"]/);
-    const emNum = p.trim().match(/^(\w+)\s*=\s*(\d+(?:\.\d+)?)/);
-    const em  = p.trim().match(/^(\w+)\s*=\s*\?/);
-    const om  = p.trim().match(/^\((.+)\)/);  // OR groups like (a=? OR b=? OR c=?)
+    const trimmed = p.trim();
+    if (/^1\s*=\s*1$/.test(trimmed)) return null;
+
+    const notInM = trimmed.match(/^([a-zA-Z_]\w*)\s+NOT\s+IN\s*\(([^)]+)\)/i);
+    const inM = trimmed.match(/^([a-zA-Z_]\w*)\s+IN\s*\(([^)]+)\)/i);
+    const neqLit = trimmed.match(/^([a-zA-Z_]\w*)\s*(?:!=|<>)\s*['"]([^'"]*)['"]/);
+    const neqNum = trimmed.match(/^([a-zA-Z_]\w*)\s*(?:!=|<>)\s*(\d+(?:\.\d+)?)/);
+    const neq = trimmed.match(/^([a-zA-Z_]\w*)\s*(?:!=|<>)\s*\?/);
+    const lm  = trimmed.match(/^([a-zA-Z_]\w*)\s+LIKE\s+\?/i);
+    const lte = trimmed.match(/^([a-zA-Z_]\w*)\s*<=\s*\?/);
+    const gte = trimmed.match(/^([a-zA-Z_]\w*)\s*>=\s*\?/);
+    const lt  = trimmed.match(/^([a-zA-Z_]\w*)\s*<\s*\?/);
+    const gt  = trimmed.match(/^([a-zA-Z_]\w*)\s*>\s*\?/);
+    const lowerEm = trimmed.match(/^LOWER\(([a-zA-Z_]\w*)\)\s*=\s*\?/i);
+    const emLit = trimmed.match(/^([a-zA-Z_]\w*)\s*=\s*['"]([^'"]*)['"]/);
+    const emNum = trimmed.match(/^([a-zA-Z_]\w*)\s*=\s*(\d+(?:\.\d+)?)/);
+    const em  = trimmed.match(/^([a-zA-Z_]\w*)\s*=\s*\?/);
+    const om  = trimmed.match(/^\((.+)\)/);  // OR groups like (a=? OR b=? OR c=?)
     if (notInM) {
       const inner = notInM[2].trim();
       let notInVals;
@@ -205,9 +208,9 @@ const parseWhere = (clause, vals) => {
     if (om) {
       // parse OR sub-conditions
       const subs = om[1].split(/\s+OR\s+/i).map(sp => {
-        const slm = sp.trim().match(/^LOWER\((\w+)\)\s*=\s*\?/i);
-        const sm = sp.trim().match(/^(\w+)\s*=\s*\?/);
-        const sl = sp.trim().match(/^(\w+)\s+LIKE\s+\?/i);
+        const slm = sp.trim().match(/^LOWER\(([a-zA-Z_]\w*)\)\s*=\s*\?/i);
+        const sm = sp.trim().match(/^([a-zA-Z_]\w*)\s*=\s*\?/);
+        const sl = sp.trim().match(/^([a-zA-Z_]\w*)\s+LIKE\s+\?/i);
         if (slm) return { col:slm[1], op:'LOWER_EQ', val:vals[vi++] };
         if (sm) return { col:sm[1], op:'=',    val:vals[vi++] };
         if (sl) return { col:sl[1], op:'LIKE', val:vals[vi++] };
