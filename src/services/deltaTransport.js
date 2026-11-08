@@ -835,6 +835,7 @@ export async function pullPeerDeltas(opts) {
     if (recoverableIds.has(b.deviceId)) return false;
     const reasonStr = String(b.reason || '').toUpperCase();
     if (reasonStr.includes('NEWER')) return false;
+    if (reasonStr.includes('OLDER')) return false;
     return true;
   });
 

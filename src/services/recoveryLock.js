@@ -73,7 +73,6 @@ if (typeof localStorage !== 'undefined') {
       }
     } else {
       // No recovery lock state exists yet in localStorage!
-      // Requirement 1: Recovery-bootstrap mechanism that defaults to LOCKED for this recovery installation when no recovery lock state exists.
       if (isAndroidRuntime() || hasPersistedPinInLocalStorage()) {
         _cachedLockState = true;
         _cachedLockDetails = {
@@ -88,7 +87,6 @@ if (typeof localStorage !== 'undefined') {
       }
     }
   } catch (initErr) {
-    // Fail closed: Any initialization error defaults to LOCKED
     _cachedLockState = true;
     _cachedLockDetails = {
       locked: true,
@@ -174,32 +172,32 @@ export function resetRecoveryLockMemoryCache() {
  */
 export async function checkRecoverySafetyLockAsync() {
   try {
-    const { getDB } = await import('../database/db.js');
+    const { getDB, initDB } = await import('../database/db.js');
     const { getSetting, setSetting } = await import('../database/settings.js');
     
-    // Assert database is responsive; failure to access DB must fail closed
-    const db = getDB();
-    if (!db) throw new Error('Database not initialized');
-
-    const saved = await getSetting(RECOVERY_SAFETY_LOCK_KEY);
+    let db = getDB();
+    if (!db) {
+      try {
+        db = await initDB();
+      } catch {}
+    }
 
     let sqliteLocked = null;
     let sqliteDetails = null;
+    let saved = null;
 
-    // 1. Inspect SQLite persisted state
-    if (saved && typeof saved === 'string' && saved.trim()) {
+    // 1. Inspect SQLite persisted state if database is available
+    if (db) {
       try {
-        const parsed = JSON.parse(saved);
-        if (parsed) {
-          sqliteLocked = parsed.locked === true || parsed === 'LOCKED';
-          sqliteDetails = parsed;
+        saved = await getSetting(RECOVERY_SAFETY_LOCK_KEY);
+        if (saved && typeof saved === 'string' && saved.trim()) {
+          const parsed = JSON.parse(saved);
+          if (parsed) {
+            sqliteLocked = parsed.locked === true || parsed === 'LOCKED';
+            sqliteDetails = parsed;
+          }
         }
-      } catch {
-        if (saved === 'LOCKED' || saved === 'true') {
-          sqliteLocked = true;
-          sqliteDetails = { locked: true, reason: saved };
-        }
-      }
+      } catch {}
     }
 
     // 2. Inspect localStorage persisted state
@@ -218,34 +216,52 @@ export async function checkRecoverySafetyLockAsync() {
       } catch {}
     }
 
-    // 3. Conflict resolution / Fail-closed rule:
-    // If either SQLite or localStorage indicates LOCKED, or if they conflict, device MUST remain LOCKED.
+    // 3. Reinstall / Cache-clear recovery:
+    // If SQLite is authoritatively unlocked ({ locked: false }), and localStorage only holds
+    // an automatic BOOTSTRAP_DEFAULT_LOCKED artifact from a cleared cache/reinstall,
+    // SQLite's unlocked state takes precedence and heals localStorage.
+    if (sqliteLocked === false) {
+      const isLocalAutoBootstrap = localDetails?.reason === RECOVERY_LOCK_REASON.BOOTSTRAP_DEFAULT_LOCKED;
+      if (localLocked === false || localLocked === null || isLocalAutoBootstrap) {
+        _cachedLockState = false;
+        _cachedLockDetails = sqliteDetails;
+        if (typeof localStorage !== 'undefined') {
+          try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(sqliteDetails)); } catch {}
+        }
+        return false;
+      }
+    }
+
+    // 4. Fail-closed on explicit lock conflict:
+    // If either SQLite or localStorage indicates LOCKED (and it's not a healed reinstall bootstrap),
+    // device MUST remain LOCKED.
     if (sqliteLocked === true || localLocked === true) {
       _cachedLockState = true;
       _cachedLockDetails = (sqliteLocked ? sqliteDetails : localDetails) || {
         locked: true,
         reason: 'CONFLICT_FAIL_CLOSED_LOCKED'
       };
-      // Harmonize both stores to locked
       const strLocked = JSON.stringify(_cachedLockDetails);
       if (typeof localStorage !== 'undefined') {
         try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, strLocked); } catch {}
       }
-      try {
-        await setSetting(RECOVERY_SAFETY_LOCK_KEY, strLocked, { suppressDeltaQueue: true });
-      } catch {}
+      if (db) {
+        try {
+          await setSetting(RECOVERY_SAFETY_LOCK_KEY, strLocked, { suppressDeltaQueue: true });
+        } catch {}
+      }
       notifyRecoveryLockListeners(true, _cachedLockDetails);
       return true;
     }
 
-    // 4. Both explicitly confirmed unlocked
+    // 5. Both explicitly confirmed unlocked
     if (sqliteLocked === false && localLocked === false) {
       _cachedLockState = false;
       _cachedLockDetails = sqliteDetails || localDetails;
       return false;
     }
 
-    // 5. Only one store has state and indicates unlocked -> harmonize
+    // 6. Only one store has state and indicates unlocked -> harmonize
     if (sqliteLocked === false && localLocked === null) {
       _cachedLockState = false;
       _cachedLockDetails = sqliteDetails;
@@ -258,17 +274,19 @@ export async function checkRecoverySafetyLockAsync() {
     if (localLocked === false && sqliteLocked === null) {
       _cachedLockState = false;
       _cachedLockDetails = localDetails;
-      try {
-        await setSetting(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(localDetails), { suppressDeltaQueue: true });
-      } catch {}
+      if (db) {
+        try {
+          await setSetting(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(localDetails), { suppressDeltaQueue: true });
+        } catch {}
+      }
       return false;
     }
 
-    // 6. NO RECOVERY LOCK RECORD EXISTS IN SQLITE OR LOCALSTORAGE!
+    // 7. NO RECOVERY LOCK RECORD EXISTS IN SQLITE OR LOCALSTORAGE!
     // Recovery-bootstrap rule: Check if device has an existing persisted PIN or is running on Android.
     const isAndroid = isAndroidRuntime();
     const hasPinLocal = hasPersistedPinInLocalStorage();
-    const dbPin = await getSetting('finman_persisted_sync_pin').catch(() => null);
+    const dbPin = db ? await getSetting('finman_persisted_sync_pin').catch(() => null) : null;
     const hasPinDb = Boolean(dbPin && typeof dbPin === 'string' && dbPin.trim());
 
     if (isAndroid || hasPinLocal || hasPinDb) {
@@ -286,10 +304,12 @@ export async function checkRecoverySafetyLockAsync() {
       if (typeof localStorage !== 'undefined') {
         try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, strPayload); } catch {}
       }
-      try {
-        await setSetting(RECOVERY_SAFETY_LOCK_KEY, strPayload, { suppressDeltaQueue: true });
-      } catch (err) {
-        console.warn('[RecoveryLock] Failed to persist bootstrap lock in SQLite:', err);
+      if (db) {
+        try {
+          await setSetting(RECOVERY_SAFETY_LOCK_KEY, strPayload, { suppressDeltaQueue: true });
+        } catch (err) {
+          console.warn('[RecoveryLock] Failed to persist bootstrap lock in SQLite:', err);
+        }
       }
       notifyRecoveryLockListeners(true, bootstrapPayload);
       return true;

@@ -187,12 +187,13 @@ export function getSyncSessionKey() {
 export async function initSyncSessionFromStorage() {
   if (_sessionKeyMaterial) return _sessionKeyMaterial;
   try {
-    // 1. Durably check recovery safety lock first.
-    // If locked, NEVER restore persisted PIN automatically.
-    const isLocked = await checkRecoverySafetyLockAsync();
-    if (isLocked) {
-      console.warn('[SyncSession] Recovery safety lock is ACTIVE. Suppressing automatic PIN restoration.');
-      return null;
+    // 1. Durably check recovery safety lock first only if explicitly active
+    if (isRecoverySafetyLocked()) {
+      const isLocked = await checkRecoverySafetyLockAsync().catch(() => false);
+      if (isLocked) {
+        console.warn('[SyncSession] Recovery safety lock is ACTIVE. Suppressing automatic PIN restoration.');
+        return null;
+      }
     }
 
     let saved = null;
@@ -215,17 +216,15 @@ export async function initSyncSessionFromStorage() {
         _persistedPin = decodedPin;
         _sessionKeyMaterial = await deriveKeyMaterial(decodedPin);
 
-        // Upgrade storage to prefixed format if it was legacy unmasked
-        if (!saved.trim().startsWith(TOKEN_PREFIX)) {
-          const upgraded = encodePersistedToken(decodedPin);
-          if (upgraded) {
-            if (typeof localStorage !== 'undefined') {
-              try { localStorage.setItem(PERSISTED_PIN_STORAGE_KEY, upgraded); } catch {}
-            }
-            import('../database/settings.js').then(({ setSetting }) => {
-              setSetting(PERSISTED_PIN_STORAGE_KEY, upgraded, { suppressDeltaQueue: true }).catch(() => {});
-            }).catch(() => {});
+        // Ensure token is persisted across both localStorage and SQLite
+        const currentToken = saved.trim().startsWith(TOKEN_PREFIX) ? saved.trim() : encodePersistedToken(decodedPin);
+        if (currentToken) {
+          if (typeof localStorage !== 'undefined' && localStorage.getItem(PERSISTED_PIN_STORAGE_KEY) !== currentToken) {
+            try { localStorage.setItem(PERSISTED_PIN_STORAGE_KEY, currentToken); } catch {}
           }
+          import('../database/settings.js').then(({ setSetting }) => {
+            setSetting(PERSISTED_PIN_STORAGE_KEY, currentToken, { suppressDeltaQueue: true }).catch(() => {});
+          }).catch(() => {});
         }
 
         notifyListeners();

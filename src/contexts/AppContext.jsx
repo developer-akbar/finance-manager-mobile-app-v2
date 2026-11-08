@@ -191,6 +191,9 @@ export function AppProvider({ children }) {
   const load = useCallback(async (retries = 1) => {
     try {
       await initDB();
+      import('../services/syncSession.js').then(({ initSyncSessionFromStorage }) => {
+        initSyncSessionFromStorage().catch(() => {});
+      }).catch(() => {});
       const [txns, accts, catsArr, aGroups, aMapping, budgets, settings, recurringRules, investmentPlans] = await Promise.all([
         getTransactions(), getAccounts(), getCategories(),
         getAccountGroups(), getAccountMapping(), getBudgets(), getAllSettings(),

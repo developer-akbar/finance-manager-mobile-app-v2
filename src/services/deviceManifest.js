@@ -797,6 +797,11 @@ export async function listPeerManifests(arg1, arg2, arg3, arg4) {
           if (isDescendant) {
             lineageStatus = PEER_LINEAGE_STATUS.RECOVERABLE_NEWER;
             lineageReason = `PEER_ON_NEWER_SNAPSHOT_BASELINE_${peerBase}`;
+          } else if (localVer > 0 && peerVer > 0 && localVer > peerVer) {
+            // Local device is on a newer authoritative snapshot baseline than this peer manifest.
+            // An older peer manifest does not block the local device from syncing.
+            lineageStatus = PEER_LINEAGE_STATUS.COMPATIBLE;
+            lineageReason = `PEER_ON_OLDER_SNAPSHOT_BASELINE_${peerBase}`;
           } else {
             lineageStatus = PEER_LINEAGE_STATUS.INCOMPATIBLE_BLOCKED;
             lineageReason = `INCOMPATIBLE_SNAPSHOT_BASELINE_${peerBase}`;
