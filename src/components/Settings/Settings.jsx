@@ -1,3 +1,4 @@
+import { resolveDeviceAuditInfo, formatDeviceAuditLabel } from '../../services/deviceAudit.js';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, parseDate } from '../../utils/format.js';
@@ -1900,7 +1901,8 @@ function DataManager({ onBack, onOpenCloudSync }) {
       'SubAccount', 'FromSubAccount', 'ToSubAccount',
       'InvestmentTransactionType', 'Brokerage', 'SecuritySymbol', 'SecurityISIN',
       'Quantity', 'UnitPrice', 'TradeValue', 'CostBasis', 'CashImpact', 'PositionQuantityChange', 'RealizedPnl',
-      'TradeId', 'OrderId', 'Exchange', 'Segment', 'Source'
+      'TradeId', 'OrderId', 'Exchange', 'Segment', 'Source',
+      'Created By', 'Created By Device ID', 'Last Modified By', 'Last Modified By Device ID'
     ];
     // RFC 4180: quote any field containing comma, double-quote, newline or carriage-return
     const esc = v => { const s = String(v ?? ''); return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -1914,8 +1916,14 @@ function DataManager({ onBack, onOpenCloudSync }) {
         const toAcctIdx = (accounts || []).findIndex(a => a.name === t.ToAccount);
         const toAcctObj = toAcctIdx !== -1 ? accounts[toAcctIdx] : null;
         const grpIdx = (accountGroups || []).findIndex(g => (typeof g === 'string' ? g : g.name) === (acctObj?.group || ''));
+        const createdAudit = resolveDeviceAuditInfo(t.created_by_device_id, t.created_by_provenance);
+        const updatedAudit = resolveDeviceAuditInfo(t.updated_by_device_id, t.updated_by_provenance);
 
         return hdrs.map(h => {
+          if (h === 'Created By') return esc(formatDeviceAuditLabel(createdAudit));
+          if (h === 'Created By Device ID') return esc(createdAudit.deviceId || '');
+          if (h === 'Last Modified By') return esc(formatDeviceAuditLabel(updatedAudit));
+          if (h === 'Last Modified By Device ID') return esc(updatedAudit.deviceId || '');
           if (h === 'AccountGroup') return esc(acctObj?.group || '');
           if (h === 'AccountType') return esc(acctObj?.acctType || '');
           if (h === 'CardLast4') return esc(acctObj?.cardLast4 || '');
@@ -2264,9 +2272,22 @@ function DataManager({ onBack, onOpenCloudSync }) {
                   <button className="btn btn-ghost btn-full" onClick={() => setShowDel(false)}>Cancel</button>
                   <button className="btn btn-danger btn-full" onClick={async () => {
                     // 1. Export CSV backup
-                    const hdrs = ['Date', 'Time', 'Account', 'FromAccount', 'ToAccount', 'Category', 'Subcategory', 'Note', 'Description', 'INR', 'Amount', 'Currency', 'Income/Expense', 'ID'];
+                    const hdrs = ['Date', 'Time', 'Account', 'FromAccount', 'ToAccount', 'Category', 'Subcategory', 'Note', 'Description', 'INR', 'Amount', 'Currency', 'Income/Expense', 'ID', 'Created By', 'Created By Device ID', 'Last Modified By', 'Last Modified By Device ID'];
                     const esc = v => { const s = String(v ?? ''); return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-                    const rows = [hdrs.join(','), ...transactions.map(t => hdrs.map(h => esc(t[h])).join(','))];
+                    const rows = [
+                      hdrs.join(','),
+                      ...transactions.map(t => {
+                        const ca = resolveDeviceAuditInfo(t.created_by_device_id, t.created_by_provenance);
+                        const ua = resolveDeviceAuditInfo(t.updated_by_device_id, t.updated_by_provenance);
+                        return hdrs.map(h => {
+                          if (h === 'Created By') return esc(formatDeviceAuditLabel(ca));
+                          if (h === 'Created By Device ID') return esc(ca.deviceId || '');
+                          if (h === 'Last Modified By') return esc(formatDeviceAuditLabel(ua));
+                          if (h === 'Last Modified By Device ID') return esc(ua.deviceId || '');
+                          return esc(t[h]);
+                        }).join(',');
+                      })
+                    ];
                     await saveFile('\ufeff' + rows.join('\n'), `finman_backup_before_delete_${new Date().toISOString().split('T')[0]}.csv`, 'text/csv;charset=utf-8;');
 
                     // 2. Clear all tables

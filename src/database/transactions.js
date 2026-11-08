@@ -27,6 +27,8 @@ export const rowToTxn = (r) => {
     created_at: r.created_at, updated_at: r.updated_at,
     created_by_device_id: r.created_by_device_id || r.CreatedByDeviceId || null,
     updated_by_device_id: r.updated_by_device_id || r.UpdatedByDeviceId || null,
+    created_by_provenance: r.created_by_provenance || r.CreatedByProvenance || null,
+    updated_by_provenance: r.updated_by_provenance || r.UpdatedByProvenance || null,
     recurring_rule_id: r.recurring_rule_id || '',
     Tags: r.tags || '', tags: r.tags || '',
     split_group_id: r.split_group_id || '',
@@ -212,6 +214,8 @@ export const addTransaction = async (data) => {
   const localDevId = await getCurrentDeviceId().catch(() => null);
   const createdBy = data.created_by_device_id || data.CreatedByDeviceId || localDevId || null;
   const updatedBy = data.updated_by_device_id || data.UpdatedByDeviceId || createdBy || null;
+  const createdProv = data.created_by_provenance || data.CreatedByProvenance || (createdBy ? 'VERIFIED' : null);
+  const updatedProv = data.updated_by_provenance || data.UpdatedByProvenance || (updatedBy ? 'VERIFIED' : null);
   
   const isInv = !!(data.InvestmentTransactionType || data.Brokerage);
   const storeName = isInv ? 'investment_transactions' : 'transactions';
@@ -256,7 +260,9 @@ export const addTransaction = async (data) => {
       security_display_name:secDispName,
       settlement_mode:setMode,
       created_by_device_id: createdBy,
-      updated_by_device_id: updatedBy
+      updated_by_device_id: updatedBy,
+      created_by_provenance: createdProv,
+      updated_by_provenance: updatedProv
     };
   } else {
     const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : 0)))) || 0;
@@ -274,7 +280,9 @@ export const addTransaction = async (data) => {
       from_sub_account:data.FromSubAccount||data.from_sub_account||data.SubAccount||data.sub_account||'',
       to_sub_account:data.ToSubAccount||data.to_sub_account||'',
       created_by_device_id: createdBy,
-      updated_by_device_id: updatedBy
+      updated_by_device_id: updatedBy,
+      created_by_provenance: createdProv,
+      updated_by_provenance: updatedProv
     };
   }
 
@@ -636,7 +644,9 @@ export const updateTransaction = async (idOrData, maybeData) => {
 
   const localDevId = await getCurrentDeviceId().catch(() => null);
   const preservedCreator = oldTxn?.created_by_device_id || oldTxn?.CreatedByDeviceId || data.created_by_device_id || null;
+  const preservedCreatorProv = oldTxn?.created_by_provenance || oldTxn?.CreatedByProvenance || data.created_by_provenance || (preservedCreator ? 'VERIFIED' : null);
   const modifier = data.updated_by_device_id || data.UpdatedByDeviceId || localDevId || null;
+  const modifierProv = data.updated_by_provenance || data.UpdatedByProvenance || (modifier ? 'VERIFIED' : null);
 
   const isInv = !!(data.InvestmentTransactionType || data.Brokerage);
   const storeName = isInv ? 'investment_transactions' : 'transactions';
@@ -703,7 +713,9 @@ export const updateTransaction = async (idOrData, maybeData) => {
       security_display_name: secDispName,
       settlement_mode: setMode,
       created_by_device_id: preservedCreator,
-      updated_by_device_id: modifier
+      updated_by_device_id: modifier,
+      created_by_provenance: preservedCreatorProv,
+      updated_by_provenance: modifierProv
     };
   } else {
     const inrVal = parseFloat(data.INR !== undefined && data.INR !== '' ? data.INR : (data.inr !== undefined && data.inr !== '' ? data.inr : (data.Amount !== undefined && data.Amount !== '' ? data.Amount : (data.amount !== undefined && data.amount !== '' ? data.amount : (oldTxn?.INR !== undefined ? oldTxn.INR : (oldTxn?.inr !== undefined ? oldTxn.inr : 0)))))) || 0;
@@ -861,7 +873,9 @@ export const convertTransactionToInstalment = async ({
     created_at: oldTxn.created_at || now,
     updated_at: now,
     created_by_device_id: oldTxn.created_by_device_id || oldTxn.CreatedByDeviceId || null,
-    updated_by_device_id: await getCurrentDeviceId().catch(() => null)
+    updated_by_device_id: await getCurrentDeviceId().catch(() => null),
+    created_by_provenance: oldTxn.created_by_provenance || oldTxn.CreatedByProvenance || (oldTxn.created_by_device_id ? 'VERIFIED' : null),
+    updated_by_provenance: 'VERIFIED'
   };
   operations.push({
     storeName: 'transactions',
@@ -906,7 +920,9 @@ export const convertTransactionToInstalment = async ({
       created_at: now,
       updated_at: now,
       created_by_device_id: localDevId || null,
-      updated_by_device_id: localDevId || null
+      updated_by_device_id: localDevId || null,
+      created_by_provenance: localDevId ? 'VERIFIED' : null,
+      updated_by_provenance: localDevId ? 'VERIFIED' : null
     };
     siblingRows.push(sibRow);
     operations.push({
@@ -1481,7 +1497,9 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
         segment: String(r.Segment || '').trim(),
         source: String(r.Source || '').trim(),
         created_by_device_id: r.created_by_device_id || r.CreatedByDeviceId || r['Created By Device ID'] || localDevId || null,
-        updated_by_device_id: r.updated_by_device_id || r.UpdatedByDeviceId || r['Last Modified Device ID'] || localDevId || null
+        updated_by_device_id: r.updated_by_device_id || r.UpdatedByDeviceId || r['Last Modified By Device ID'] || r['Last Modified Device ID'] || localDevId || null,
+        created_by_provenance: (String(r['Created By'] || '').toLowerCase().includes('(legacy)') || r.created_by_provenance === 'LEGACY_ASSIGNED') ? 'LEGACY_ASSIGNED' : ((r.created_by_device_id || r.CreatedByDeviceId || r['Created By Device ID'] || localDevId) ? 'VERIFIED' : null),
+        updated_by_provenance: (String(r['Last Modified By'] || '').toLowerCase().includes('(legacy)') || r.updated_by_provenance === 'LEGACY_ASSIGNED') ? 'LEGACY_ASSIGNED' : ((r.updated_by_device_id || r.UpdatedByDeviceId || r['Last Modified By Device ID'] || r['Last Modified Device ID'] || localDevId) ? 'VERIFIED' : null)
       });
     } else {
       genItems.push({
@@ -1511,7 +1529,9 @@ export const bulkImport = async (rows, { firstImport = false } = {}) => {
         from_sub_account: String(r.FromSubAccount || r.from_sub_account || r.SubAccount || r.sub_account || '').trim(),
         to_sub_account: String(r.ToSubAccount || r.to_sub_account || '').trim(),
         created_by_device_id: r.created_by_device_id || r.CreatedByDeviceId || r['Created By Device ID'] || localDevId || null,
-        updated_by_device_id: r.updated_by_device_id || r.UpdatedByDeviceId || r['Last Modified Device ID'] || localDevId || null
+        updated_by_device_id: r.updated_by_device_id || r.UpdatedByDeviceId || r['Last Modified By Device ID'] || r['Last Modified Device ID'] || localDevId || null,
+        created_by_provenance: (String(r['Created By'] || '').toLowerCase().includes('(legacy)') || r.created_by_provenance === 'LEGACY_ASSIGNED') ? 'LEGACY_ASSIGNED' : ((r.created_by_device_id || r.CreatedByDeviceId || r['Created By Device ID'] || localDevId) ? 'VERIFIED' : null),
+        updated_by_provenance: (String(r['Last Modified By'] || '').toLowerCase().includes('(legacy)') || r.updated_by_provenance === 'LEGACY_ASSIGNED') ? 'LEGACY_ASSIGNED' : ((r.updated_by_device_id || r.UpdatedByDeviceId || r['Last Modified By Device ID'] || r['Last Modified Device ID'] || localDevId) ? 'VERIFIED' : null)
       });
     }
   }

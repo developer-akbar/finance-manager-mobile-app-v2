@@ -252,7 +252,7 @@ test('FinMan Phase 2 Option 3 — Deterministic Virtual Test Harness', async (su
 
     // Transactions remain un-prefixed for backward compatibility
     assert.ok(manifest['txn_v11_000000']);
-    assert.ok(manifest['inv_v11_0000']);
+    assert.ok(manifest['investment_transactions:inv_v11_0000'] || manifest['inv_v11_0000']);
 
     // Non-transactions receive collection-scoped prefixes
     assert.ok(manifest['categories:cat_v11_0'] || manifest['categories:Cash']);

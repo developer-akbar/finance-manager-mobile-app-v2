@@ -232,9 +232,9 @@ export function fastFingerprint(str) {
  */
 export function getManifestEntityKey(entityType, rawId) {
   const normType = String(entityType || '').toLowerCase();
-  if (normType === 'transaction' || normType === 'transactions' ||
-      normType === 'investment_transaction' || normType === 'investment_transactions') {
-    return String(rawId);
+  if (normType === 'transaction' || normType === 'transactions') {
+    const sId = String(rawId);
+    return sId.startsWith('transactions:') ? sId.substring('transactions:'.length) : sId;
   }
   if (normType === 'setting' || normType === 'settings') {
     const sId = String(rawId);
@@ -252,6 +252,7 @@ export function getManifestEntityKey(entityType, rawId) {
     return `brokerages:${canonId}`;
   }
   else if (normType === 'inventory') typePrefix = 'inventory';
+  else if (normType === 'investment_transaction' || normType === 'investment_transactions') typePrefix = 'investment_transactions';
   else if (!normType.endsWith('s')) typePrefix = `${normType}s`;
 
   const strId = String(rawId);
@@ -711,13 +712,11 @@ export async function reconcile3Way({
   for (const [type, items] of Object.entries(localEntities)) {
     if (type === 'sync_tombstones') {
       for (const t of items) {
-        const rawId = String(t.id || '');
+        const rawId = String(t.id || t.entity_id || '');
+        const eType = t.entity_type || t.type || '';
         if (rawId) {
-          localTombstoneMap.set(rawId, t);
-          const scopedKey = getManifestEntityKey(t.entity_type || t.type || '', rawId);
-          if (scopedKey !== rawId) {
-            localTombstoneMap.set(scopedKey, t);
-          }
+          const scopedKey = getManifestEntityKey(eType, rawId);
+          localTombstoneMap.set(scopedKey, t);
         }
       }
       continue;
@@ -739,13 +738,11 @@ export async function reconcile3Way({
   for (const [type, items] of Object.entries(cloudEntities)) {
     if (type === 'sync_tombstones') {
       for (const t of items) {
-        const rawId = String(t.id || '');
+        const rawId = String(t.id || t.entity_id || '');
+        const eType = t.entity_type || t.type || '';
         if (rawId) {
-          cloudTombstoneMap.set(rawId, t);
-          const scopedKey = getManifestEntityKey(t.entity_type || t.type || '', rawId);
-          if (scopedKey !== rawId) {
-            cloudTombstoneMap.set(scopedKey, t);
-          }
+          const scopedKey = getManifestEntityKey(eType, rawId);
+          cloudTombstoneMap.set(scopedKey, t);
         }
       }
       continue;
@@ -846,14 +843,14 @@ export async function reconcile3Way({
           const bizKey = getTransactionBusinessKey(entry.item);
           if (bizKey) {
             if (!localTxnBizMap.has(bizKey)) localTxnBizMap.set(bizKey, []);
-            localTxnBizMap.get(bizKey).push({ id, item: entry.item, type: 'transactions' });
+            localTxnBizMap.get(bizKey).push({ id, rawId: entry.rawId || id, item: entry.item, type: 'transactions' });
             localTxPassedIdentity++;
           }
         } else if (isInv) {
           const bizKey = getInvestmentTransactionBusinessKey(entry.item);
           if (bizKey) {
             if (!localInvBizMap.has(bizKey)) localInvBizMap.set(bizKey, []);
-            localInvBizMap.get(bizKey).push({ id, item: entry.item, type: 'investment_transactions' });
+            localInvBizMap.get(bizKey).push({ id, rawId: entry.rawId || id, item: entry.item, type: 'investment_transactions' });
             localInvPassedIdentity++;
           }
         } else {
@@ -913,14 +910,14 @@ export async function reconcile3Way({
           const bizKey = getTransactionBusinessKey(entry.item);
           if (bizKey) {
             if (!cloudTxnBizMap.has(bizKey)) cloudTxnBizMap.set(bizKey, []);
-            cloudTxnBizMap.get(bizKey).push({ id, item: entry.item, type: 'transactions' });
+            cloudTxnBizMap.get(bizKey).push({ id, rawId: entry.rawId || id, item: entry.item, type: 'transactions' });
             cloudTxPassedIdentity++;
           }
         } else if (isInv) {
           const bizKey = getInvestmentTransactionBusinessKey(entry.item);
           if (bizKey) {
             if (!cloudInvBizMap.has(bizKey)) cloudInvBizMap.set(bizKey, []);
-            cloudInvBizMap.get(bizKey).push({ id, item: entry.item, type: 'investment_transactions' });
+            cloudInvBizMap.get(bizKey).push({ id, rawId: entry.rawId || id, item: entry.item, type: 'investment_transactions' });
             cloudInvPassedIdentity++;
           }
         } else {
@@ -1074,7 +1071,9 @@ export async function reconcile3Way({
       if (!isLocDeleted && !isCldDeleted) {
         identityMatchedIds.add(locCand.id);
         identityMatchedIds.add(cldCand.id);
-        identityAliases.set(cldCand.id, locCand.id);
+        const cldKey = cldCand.rawId || cldCand.id;
+        const locKey = locCand.rawId || locCand.id;
+        identityAliases.set(cldKey, locKey);
         identityMatchedTransactions++;
       }
     } else {
@@ -1112,7 +1111,9 @@ export async function reconcile3Way({
       if (!isLocDeleted && !isCldDeleted) {
         identityMatchedIds.add(locCand.id);
         identityMatchedIds.add(cldCand.id);
-        identityAliases.set(cldCand.id, locCand.id);
+        const cldKey = cldCand.rawId || cldCand.id;
+        const locKey = locCand.rawId || locCand.id;
+        identityAliases.set(cldKey, locKey);
         identityMatchedInvestments++;
       }
     } else {
@@ -1231,8 +1232,8 @@ export async function reconcile3Way({
     const baseEntry = baseManifest[id];
     const localEntry = localMap.get(id);
     const cloudEntry = cloudMap.get(id);
-    const localDeleted = localTombstoneMap.has(id) || (localEntry && localTombstoneMap.has(localEntry.rawId));
-    const cloudDeleted = cloudTombstoneMap.has(id) || (cloudEntry && cloudTombstoneMap.has(cloudEntry.rawId));
+    const localDeleted = localTombstoneMap.has(id);
+    const cloudDeleted = cloudTombstoneMap.has(id);
 
     // CASE 1: Brand new on Local only (not in Base, not in Cloud, not deleted)
     if (!baseEntry && localEntry && !cloudEntry && !cloudDeleted) {
@@ -2548,6 +2549,8 @@ export function txnObjectToDBRow(t) {
   const to_sub_account = String(t.ToSubAccount || t.to_sub_account || '');
   const created_by_device_id = t.created_by_device_id || t.CreatedByDeviceId || null;
   const updated_by_device_id = t.updated_by_device_id || t.UpdatedByDeviceId || null;
+  const created_by_provenance = t.created_by_provenance || t.CreatedByProvenance || null;
+  const updated_by_provenance = t.updated_by_provenance || t.UpdatedByProvenance || null;
 
   return {
     id, date, time, account, from_account, to_account,
@@ -2556,7 +2559,8 @@ export function txnObjectToDBRow(t) {
     created_at, updated_at, recurring_rule_id,
     tags, split_group_id, receipt_image, warranty_expiry, serial_no,
     sub_account, from_sub_account, to_sub_account,
-    created_by_device_id, updated_by_device_id
+    created_by_device_id, updated_by_device_id,
+    created_by_provenance, updated_by_provenance
   };
 }
 
@@ -2609,7 +2613,7 @@ export async function applyLocalEntityInsertOrUpdate(db, item, collectionType = 
   if (collection === 'transactions' || collection === 'transaction') {
     const row = txnObjectToDBRow(item);
     await db.run(
-      `INSERT OR REPLACE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode,created_by_device_id,updated_by_device_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT OR REPLACE INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode,created_by_device_id,updated_by_device_id,created_by_provenance,updated_by_provenance) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [row.id, row.date, row.time, row.account, row.from_account, row.to_account,
        row.category, row.subcategory, row.note, row.description,
        row.inr, row.amount, row.currency, row.type,
@@ -2619,7 +2623,7 @@ export async function applyLocalEntityInsertOrUpdate(db, item, collectionType = 
        row.investment_account, row.actual_amount, row.total_charges,
        row.brokerage_charges, row.exchange_charges, row.stt_charges, row.sebi_charges,
        row.stamp_duty_charges, row.gst_charges, row.dp_charges, row.other_charges,
-       row.security_display_name, row.settlement_mode, row.created_by_device_id ?? null, row.updated_by_device_id ?? null]
+       row.security_display_name, row.settlement_mode, row.created_by_device_id ?? null, row.updated_by_device_id ?? null, row.created_by_provenance ?? null, row.updated_by_provenance ?? null]
     );
     return;
   }
@@ -2627,7 +2631,7 @@ export async function applyLocalEntityInsertOrUpdate(db, item, collectionType = 
   if (collection === 'investment_transactions' || collection === 'investment_transaction') {
     const row = invTxnObjectToDBRow(item);
     await db.run(
-      `INSERT OR REPLACE INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source,created_by_device_id,updated_by_device_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT OR REPLACE INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source,created_by_device_id,updated_by_device_id,created_by_provenance,updated_by_provenance) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [row.id, row.date, row.time, row.account, row.from_account, row.to_account,
        row.category, row.subcategory, row.note, row.description,
        row.inr, row.amount, row.currency, row.type,
@@ -2641,7 +2645,7 @@ export async function applyLocalEntityInsertOrUpdate(db, item, collectionType = 
        row.investment_transaction_type, row.brokerage, row.security_symbol, row.security_isin,
        row.quantity, row.unit_price, row.trade_value, row.cost_basis, row.cash_impact,
        row.position_qty_change, row.realized_pnl, row.trade_id, row.order_id,
-       row.exchange, row.segment, row.source, row.created_by_device_id ?? null, row.updated_by_device_id ?? null]
+       row.exchange, row.segment, row.source, row.created_by_device_id ?? null, row.updated_by_device_id ?? null, row.created_by_provenance ?? null, row.updated_by_provenance ?? null]
     );
     return;
   }
@@ -2866,7 +2870,7 @@ export async function populateLocalEntitiesBootstrap(db, entities, options = {})
     for (const t of entities.transactions) {
       const row = txnObjectToDBRow(t);
       await db.run(
-        `INSERT INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode,created_by_device_id,updated_by_device_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode,created_by_device_id,updated_by_device_id,created_by_provenance,updated_by_provenance) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [row.id, row.date, row.time, row.account, row.from_account, row.to_account,
          row.category, row.subcategory, row.note, row.description,
          row.inr, row.amount, row.currency, row.type,
@@ -2876,7 +2880,7 @@ export async function populateLocalEntitiesBootstrap(db, entities, options = {})
          row.investment_account, row.actual_amount, row.total_charges,
          row.brokerage_charges, row.exchange_charges, row.stt_charges, row.sebi_charges,
          row.stamp_duty_charges, row.gst_charges, row.dp_charges, row.other_charges,
-         row.security_display_name, row.settlement_mode, row.created_by_device_id ?? null, row.updated_by_device_id ?? null]
+         row.security_display_name, row.settlement_mode, row.created_by_device_id ?? null, row.updated_by_device_id ?? null, row.created_by_provenance ?? null, row.updated_by_provenance ?? null]
       );
     }
   }
@@ -2889,7 +2893,7 @@ export async function populateLocalEntitiesBootstrap(db, entities, options = {})
     for (const t of entities.investment_transactions) {
       const row = invTxnObjectToDBRow(t);
       await db.run(
-        `INSERT INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source,created_by_device_id,updated_by_device_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO investment_transactions (id,date,time,account,from_account,to_account,category,subcategory,note,description,inr,amount,currency,type,created_at,updated_at,recurring_rule_id,tags,split_group_id,receipt_image,warranty_expiry,serial_no,sub_account,from_sub_account,to_sub_account,investment_account,actual_amount,total_charges,brokerage_charges,exchange_charges,stt_charges,sebi_charges,stamp_duty_charges,gst_charges,dp_charges,other_charges,security_display_name,settlement_mode,investment_transaction_type,brokerage,security_symbol,security_isin,quantity,unit_price,trade_value,cost_basis,cash_impact,position_qty_change,realized_pnl,trade_id,order_id,exchange,segment,source,created_by_device_id,updated_by_device_id,created_by_provenance,updated_by_provenance) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [row.id, row.date, row.time, row.account, row.from_account, row.to_account,
          row.category, row.subcategory, row.note, row.description,
          row.inr, row.amount, row.currency, row.type,
@@ -2903,7 +2907,7 @@ export async function populateLocalEntitiesBootstrap(db, entities, options = {})
          row.investment_transaction_type, row.brokerage, row.security_symbol, row.security_isin,
          row.quantity, row.unit_price, row.trade_value, row.cost_basis, row.cash_impact,
          row.position_qty_change, row.realized_pnl, row.trade_id, row.order_id,
-         row.exchange, row.segment, row.source, row.created_by_device_id ?? null, row.updated_by_device_id ?? null]
+         row.exchange, row.segment, row.source, row.created_by_device_id ?? null, row.updated_by_device_id ?? null, row.created_by_provenance ?? null, row.updated_by_provenance ?? null]
       );
     }
   }

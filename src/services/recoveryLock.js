@@ -87,7 +87,15 @@ if (typeof localStorage !== 'undefined') {
         } catch {}
       }
     }
-  } catch {}
+  } catch (initErr) {
+    // Fail closed: Any initialization error defaults to LOCKED
+    _cachedLockState = true;
+    _cachedLockDetails = {
+      locked: true,
+      reason: 'INIT_ERROR_FAIL_CLOSED',
+      error: initErr?.message
+    };
+  }
 }
 
 function notifyRecoveryLockListeners(isLocked, details) {
@@ -162,68 +170,101 @@ export function resetRecoveryLockMemoryCache() {
 /**
  * Asynchronous, durable check against both localStorage and SQLite settings.
  * If no recovery lock state exists on installation, defaults to LOCKED and persists the lock.
+ * If SQLite and localStorage conflict, fails closed and remains LOCKED.
  */
 export async function checkRecoverySafetyLockAsync() {
   try {
+    const { getDB } = await import('../database/db.js');
     const { getSetting, setSetting } = await import('../database/settings.js');
-    const saved = await getSetting(RECOVERY_SAFETY_LOCK_KEY).catch(() => null);
+    
+    // Assert database is responsive; failure to access DB must fail closed
+    const db = getDB();
+    if (!db) throw new Error('Database not initialized');
 
-    // 1. SQLite has a persisted state
+    const saved = await getSetting(RECOVERY_SAFETY_LOCK_KEY);
+
+    let sqliteLocked = null;
+    let sqliteDetails = null;
+
+    // 1. Inspect SQLite persisted state
     if (saved && typeof saved === 'string' && saved.trim()) {
       try {
         const parsed = JSON.parse(saved);
         if (parsed) {
-          if (parsed.locked === false) {
-            _cachedLockState = false;
-            _cachedLockDetails = parsed;
-            if (typeof localStorage !== 'undefined') {
-              try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, saved); } catch {}
-            }
-            return false;
-          }
-          if (parsed.locked === true || parsed === 'LOCKED') {
-            _cachedLockState = true;
-            _cachedLockDetails = parsed;
-            if (typeof localStorage !== 'undefined') {
-              try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, saved); } catch {}
-            }
-            return true;
-          }
+          sqliteLocked = parsed.locked === true || parsed === 'LOCKED';
+          sqliteDetails = parsed;
         }
       } catch {
         if (saved === 'LOCKED' || saved === 'true') {
-          _cachedLockState = true;
-          _cachedLockDetails = { locked: true, reason: saved };
-          return true;
+          sqliteLocked = true;
+          sqliteDetails = { locked: true, reason: saved };
         }
       }
     }
 
-    // 2. SQLite does not have state: check localStorage
+    // 2. Inspect localStorage persisted state
+    let localLocked = null;
+    let localDetails = null;
     if (typeof localStorage !== 'undefined') {
       try {
         const raw = localStorage.getItem(RECOVERY_SAFETY_LOCK_KEY);
         if (raw && typeof raw === 'string' && raw.trim()) {
           const parsed = JSON.parse(raw);
           if (parsed) {
-            if (parsed.locked === false) {
-              _cachedLockState = false;
-              _cachedLockDetails = parsed;
-              await setSetting(RECOVERY_SAFETY_LOCK_KEY, raw, { suppressDeltaQueue: true }).catch(() => {});
-              return false;
-            }
-            if (parsed.locked === true || parsed === 'LOCKED') {
-              _cachedLockState = true;
-              _cachedLockDetails = parsed;
-              await setSetting(RECOVERY_SAFETY_LOCK_KEY, raw, { suppressDeltaQueue: true }).catch(() => {});
-              return true;
-            }
+            localLocked = parsed.locked === true || parsed === 'LOCKED';
+            localDetails = parsed;
           }
         }
       } catch {}
     }
 
-    // 3. NO RECOVERY LOCK RECORD EXISTS IN SQLITE OR LOCALSTORAGE!
+    // 3. Conflict resolution / Fail-closed rule:
+    // If either SQLite or localStorage indicates LOCKED, or if they conflict, device MUST remain LOCKED.
+    if (sqliteLocked === true || localLocked === true) {
+      _cachedLockState = true;
+      _cachedLockDetails = (sqliteLocked ? sqliteDetails : localDetails) || {
+        locked: true,
+        reason: 'CONFLICT_FAIL_CLOSED_LOCKED'
+      };
+      // Harmonize both stores to locked
+      const strLocked = JSON.stringify(_cachedLockDetails);
+      if (typeof localStorage !== 'undefined') {
+        try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, strLocked); } catch {}
+      }
+      try {
+        await setSetting(RECOVERY_SAFETY_LOCK_KEY, strLocked, { suppressDeltaQueue: true });
+      } catch {}
+      notifyRecoveryLockListeners(true, _cachedLockDetails);
+      return true;
+    }
+
+    // 4. Both explicitly confirmed unlocked
+    if (sqliteLocked === false && localLocked === false) {
+      _cachedLockState = false;
+      _cachedLockDetails = sqliteDetails || localDetails;
+      return false;
+    }
+
+    // 5. Only one store has state and indicates unlocked -> harmonize
+    if (sqliteLocked === false && localLocked === null) {
+      _cachedLockState = false;
+      _cachedLockDetails = sqliteDetails;
+      if (typeof localStorage !== 'undefined') {
+        try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, saved); } catch {}
+      }
+      return false;
+    }
+
+    if (localLocked === false && sqliteLocked === null) {
+      _cachedLockState = false;
+      _cachedLockDetails = localDetails;
+      try {
+        await setSetting(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(localDetails), { suppressDeltaQueue: true });
+      } catch {}
+      return false;
+    }
+
+    // 6. NO RECOVERY LOCK RECORD EXISTS IN SQLITE OR LOCALSTORAGE!
     // Recovery-bootstrap rule: Check if device has an existing persisted PIN or is running on Android.
     const isAndroid = isAndroidRuntime();
     const hasPinLocal = hasPersistedPinInLocalStorage();
@@ -254,7 +295,16 @@ export async function checkRecoverySafetyLockAsync() {
       return true;
     }
   } catch (err) {
-    console.warn('[RecoveryLock] Error in checkRecoverySafetyLockAsync:', err);
+    // Fail-closed: Initialization or inspection errors must leave the system LOCKED
+    console.warn('[RecoveryLock] Error in checkRecoverySafetyLockAsync (failing closed):', err);
+    _cachedLockState = true;
+    _cachedLockDetails = {
+      locked: true,
+      reason: 'INSPECTION_ERROR_FAIL_CLOSED',
+      error: err?.message
+    };
+    notifyRecoveryLockListeners(true, _cachedLockDetails);
+    return true;
   }
 
   _cachedLockState = false;
@@ -304,6 +354,7 @@ export async function setRecoverySafetyLock(reason = RECOVERY_LOCK_REASON.RECONC
 /**
  * Clear the recovery lock. Requires explicit confirmation or force option.
  * Never silently called on startup. Durably stores locked: false.
+ * If SQLite persistence fails, fails closed and re-arms in-memory and localStorage lock.
  */
 export async function clearRecoverySafetyLock(options = {}) {
   if (!options.confirmed && !options.force) {
@@ -331,7 +382,20 @@ export async function clearRecoverySafetyLock(options = {}) {
     const { setSetting } = await import('../database/settings.js');
     await setSetting(RECOVERY_SAFETY_LOCK_KEY, strPayload, { suppressDeltaQueue: true });
   } catch (err) {
-    console.warn('[RecoveryLock] Warning: Failed to store cleared state in SQLite settings:', err?.message);
+    // Fail-closed: SQLite write failed! Cannot report success. Re-arm immediately.
+    _cachedLockState = true;
+    _cachedLockDetails = {
+      locked: true,
+      reason: 'SQLITE_PERSISTENCE_FAILURE',
+      error: err?.message
+    };
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(_cachedLockDetails));
+      } catch {}
+    }
+    notifyRecoveryLockListeners(true, _cachedLockDetails);
+    throw new Error(`CRITICAL: Failed to persist cleared recovery lock in SQLite settings: ${err?.message}`);
   }
 
   notifyRecoveryLockListeners(false, clearedPayload);
@@ -340,6 +404,8 @@ export async function clearRecoverySafetyLock(options = {}) {
 
 /**
  * Verifies PIN and clears the recovery safety lock with explicit user confirmation.
+ * Session unlock must succeed BEFORE the recovery lock is cleared.
+ * Missing stored PIN fails closed.
  */
 export async function clearRecoverySafetyLockWithPin(pin, options = {}) {
   if (!pin || typeof pin !== 'string' || !pin.trim()) {
@@ -370,16 +436,21 @@ export async function clearRecoverySafetyLockWithPin(pin, options = {}) {
     } catch {}
   }
 
-  if (storedPin && storedPin !== cleanPin) {
+  // Fail-closed: If no PIN is registered on device, lock CANNOT be cleared
+  if (!storedPin) {
+    throw new Error('No encryption PIN is registered on this device. Recovery lock cannot be cleared.');
+  }
+
+  if (storedPin !== cleanPin) {
     throw new Error('Incorrect PIN. Recovery safety lock cannot be cleared.');
   }
 
-  // Clear lock durably
-  await clearRecoverySafetyLock({ confirmed: true, reason: 'USER_PIN_VERIFIED' });
-
-  // Unlock active session with verified PIN
+  // 1. Session unlock must succeed first. If it throws, lock remains armed.
   const { unlockSyncSession } = await import('./syncSession.js');
   await unlockSyncSession(cleanPin, { persist: true });
+
+  // 2. Clear lock durably only after session is confirmed unlocked
+  await clearRecoverySafetyLock({ confirmed: true, reason: 'USER_PIN_VERIFIED' });
 
   return { success: true };
 }

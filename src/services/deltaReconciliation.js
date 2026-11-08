@@ -16,7 +16,253 @@ import { getDB, getRawIDB, getTableColumns } from '../database/db.js';
 import { toCanonicalJson, computeCanonicalSha256 } from '../utils/canonicalEntity.js';
 import { saveConflictRecord, getPendingConflicts, CONFLICT_STATUS, CONFLICT_RESOLUTION, CONFLICT_TYPE } from '../database/conflicts.js';
 import { createDeltaEvent, DELTA_STATUS, DELTA_OPERATION } from '../database/deltaQueue.js';
-import { calculateEntityDiff } from '../utils/conflictFormatter.js';
+import { calculateEntityDiff, normalizeDateKey } from '../utils/conflictFormatter.js';
+
+const PRIVATE_SUPPORTED_VERIFIED_PROVENANCES = new Set([
+  'VERIFIED',
+  'VERIFIED_CREATOR_MANUAL_ENTRY',
+  'VERIFIED_CREATOR_DEVICE_ORIGINATED'
+]);
+
+export const SUPPORTED_VERIFIED_PROVENANCES = Object.freeze([
+  'VERIFIED',
+  'VERIFIED_CREATOR_MANUAL_ENTRY',
+  'VERIFIED_CREATOR_DEVICE_ORIGINATED'
+]);
+
+export function isSupportedVerifiedProvenance(provenance) {
+  if (typeof provenance !== 'string') return false;
+  return PRIVATE_SUPPORTED_VERIFIED_PROVENANCES.has(provenance.trim());
+}
+
+/**
+ * Evaluates whether a device ID and provenance pair represents verified, ambiguous, or missing provenance.
+ *
+ * Rules:
+ * 1. Allowlisted verified provenance ('VERIFIED', 'VERIFIED_CREATOR_MANUAL_ENTRY',
+ *    'VERIFIED_CREATOR_DEVICE_ORIGINATED') is ALWAYS verified and preserved.
+ *    - 'VERIFIED_CREATOR_MANUAL_ENTRY' is verified even when deviceId is null/missing.
+ * 2. An arbitrary value (e.g. 'VERIFIED_UNRECOGNIZED', 'CUSTOM_EXTERNAL') not in the allowlist
+ *    is classified as ambiguous, NOT verified.
+ * 3. An unfamiliar provenance value or any existing non-null device ID must be preserved
+ *    unless the merge is explicitly proven safe.
+ * 4. Missing/null on both deviceId and provenance is unverified (eligible for safe legacy attribution).
+ *
+ * @param {string|null|undefined} deviceId
+ * @param {string|null|undefined} provenance
+ * @returns {{ isVerified: boolean, isAmbiguous: boolean, shouldPreserve: boolean }}
+ */
+export function classifyProvenance(deviceId, provenance) {
+  const provStr = provenance ? String(provenance).trim() : null;
+  const devStr = deviceId ? String(deviceId).trim() : null;
+  const isGenericDev = !devStr || devStr === 'Unknown' || devStr === 'local_device';
+
+  // 1. Explicit allowlist check
+  if (provStr && isSupportedVerifiedProvenance(provStr)) {
+    return { isVerified: true, isAmbiguous: false, shouldPreserve: true };
+  }
+
+  // 2. Explicit legacy or generic unknown strings
+  const upperProv = provStr ? provStr.toUpperCase() : null;
+  if (upperProv === 'LEGACY_ASSIGNED' || upperProv === 'UNKNOWN' || upperProv === 'LEGACY') {
+    const hasConcreteDev = !isGenericDev;
+    return {
+      isVerified: false,
+      isAmbiguous: false,
+      shouldPreserve: hasConcreteDev && upperProv === 'LEGACY_ASSIGNED'
+    };
+  }
+
+  // 3. Unrecognized provenance string -> Ambiguous! Must be preserved unless proven safe
+  if (provStr) {
+    return { isVerified: false, isAmbiguous: true, shouldPreserve: true };
+  }
+
+  // 4. Provenance is null/missing, but non-generic device ID exists -> Existing device attribution to preserve
+  if (!isGenericDev) {
+    return { isVerified: true, isAmbiguous: false, shouldPreserve: true };
+  }
+
+  // 5. Both deviceId and provenance are null/empty/generic -> Unassigned, eligible for legacy merge
+  return { isVerified: false, isAmbiguous: false, shouldPreserve: false };
+}
+
+/**
+ * Backward-compatible helper to test if provenance is verified.
+ *
+ * @param {string|null} deviceId
+ * @param {string|null} provenance
+ * @returns {boolean}
+ */
+export function isVerifiedProvenance(deviceId, provenance) {
+  return classifyProvenance(deviceId, provenance).isVerified;
+}
+
+/**
+ * Merges two payloads preserving verified and existing provenance over legacy attribution.
+ *
+ * Rules:
+ * 1. Allowlisted verified provenance always wins over legacy attribution.
+ * 2. Unfamiliar provenance or existing non-null device ID is preserved over legacy attribution.
+ * 3. Applies independently to created_by and updated_by fields.
+ */
+export function mergeProvenanceProtectedPayload(localEntity, remotePayload) {
+  if (!localEntity || !remotePayload) return remotePayload;
+
+  const merged = { ...remotePayload };
+
+  // 1. Created By Provenance Protection (Evaluated independently of modifier)
+  const localCreatedClass = classifyProvenance(localEntity.created_by_device_id, localEntity.created_by_provenance);
+  const remoteCreatedClass = classifyProvenance(remotePayload.created_by_device_id, remotePayload.created_by_provenance);
+
+  if (localCreatedClass.shouldPreserve && !remoteCreatedClass.isVerified) {
+    merged.created_by_device_id = localEntity.created_by_device_id;
+    merged.created_by_provenance = localEntity.created_by_provenance || 'VERIFIED';
+  }
+
+  // 2. Updated By Provenance Protection (Evaluated independently of creator)
+  const localUpdatedClass = classifyProvenance(localEntity.updated_by_device_id, localEntity.updated_by_provenance);
+  const remoteUpdatedClass = classifyProvenance(remotePayload.updated_by_device_id, remotePayload.updated_by_provenance);
+
+  if (localUpdatedClass.shouldPreserve && !remoteUpdatedClass.isVerified) {
+    merged.updated_by_device_id = localEntity.updated_by_device_id;
+    merged.updated_by_provenance = localEntity.updated_by_provenance || 'VERIFIED';
+  }
+
+  return merged;
+}
+
+
+
+/**
+ * Determines whether a remote update is a safe, non-destructive legacy attribution update
+ * that can be merged into the local entity without raising a concurrent-edit conflict.
+ *
+ * Rules:
+ * 1. If local provenance is missing or genuinely unknown and incoming provenance is LEGACY_ASSIGNED,
+ *    populate the missing audit fields.
+ * 2. If local provenance is already verified, preserve it.
+ * 3. Never replace verified provenance with LEGACY_ASSIGNED.
+ * 4. Do not modify financial fields for an audit-only event.
+ * 5. Do not generate a normal concurrent-edit conflict when the only difference is a safely mergeable legacy attribution update.
+ * 6. Preserve the original transaction ID and financial record identity.
+ * 7. Apply equivalent rules to ordinary and investment transactions.
+ */
+export function isSafelyMergeableLegacyAttribution(localEntity, remotePayload, collection = 'transactions') {
+  if (!localEntity || !remotePayload) {
+    return { isMergeable: false, mergedPayload: null };
+  }
+
+  // Check if incoming payload actually carries legacy attribution
+  const remoteHasLegacyCreated = remotePayload.created_by_provenance === 'LEGACY_ASSIGNED';
+  const remoteHasLegacyUpdated = remotePayload.updated_by_provenance === 'LEGACY_ASSIGNED';
+  if (!remoteHasLegacyCreated && !remoteHasLegacyUpdated) {
+    return { isMergeable: false, mergedPayload: null };
+  }
+
+  const coll = String(collection).toLowerCase().trim();
+
+  // Validate that no financial, account, category, or business fields differ
+  const diff = calculateEntityDiff(localEntity, remotePayload, coll);
+  if (diff.isDeleteConflict) {
+    return { isMergeable: false, mergedPayload: null };
+  }
+
+  // Check if any non-provenance field changed
+  const provenanceKeys = new Set([
+    'created_by_device_id', 'updated_by_device_id',
+    'created_by_provenance', 'updated_by_provenance'
+  ]);
+
+  const nonProvenanceChanges = diff.changedFields.filter(f => !provenanceKeys.has(f.key));
+  if (nonProvenanceChanges.length > 0) {
+    // There are functional, financial, or status differences! Must NOT auto-merge.
+    return { isMergeable: false, mergedPayload: null };
+  }
+
+  // Deep field-level audit: Exhaustively compare ALL fields across localEntity and remotePayload.
+  // Guarantees that all fields outside calculateEntityDiff (investment-specific financial fields:
+  // quantity, unit_price, cost_basis, security_symbol, realized_pnl, etc., and ordinary transaction fields:
+  // tags, split_group_id, receipt_image, warranty_expiry, serial_no, etc.) are strictly identical.
+  const allKeys = new Set([...Object.keys(localEntity), ...Object.keys(remotePayload)]);
+  for (const key of allKeys) {
+    if (provenanceKeys.has(key)) continue;
+
+    const lVal = localEntity[key];
+    const rVal = remotePayload[key];
+
+    // Deletion status comparison: normalize across boolean, numeric, and omitted flags
+    if (key === 'deleted' || key === '_deleted') {
+      const isDelL = Boolean(lVal === 1 || lVal === '1' || lVal === true || lVal === 'true');
+      const isDelR = Boolean(rVal === 1 || rVal === '1' || rVal === true || rVal === 'true');
+      if (isDelL !== isDelR) {
+        return { isMergeable: false, mergedPayload: null };
+      }
+      continue;
+    }
+
+    if ((lVal === undefined || lVal === null || lVal === '') && 
+        (rVal === undefined || rVal === null || rVal === '')) {
+      continue;
+    }
+
+    if (typeof lVal === 'number' || typeof rVal === 'number') {
+      const numL = Number(lVal);
+      const numR = Number(rVal);
+      if (!isNaN(numL) && !isNaN(numR)) {
+        if (Math.abs(numL - numR) > 0.0001) {
+          return { isMergeable: false, mergedPayload: null };
+        }
+        continue;
+      }
+    }
+
+    if (key.toLowerCase().includes('date') && lVal && rVal) {
+      if (normalizeDateKey(lVal) !== normalizeDateKey(rVal)) {
+        return { isMergeable: false, mergedPayload: null };
+      }
+      continue;
+    }
+
+    const normL = typeof lVal === 'object' && lVal !== null ? JSON.stringify(lVal) : String(lVal ?? '').trim();
+    const normR = typeof rVal === 'object' && rVal !== null ? JSON.stringify(rVal) : String(rVal ?? '').trim();
+    if (normL !== normR) {
+      return { isMergeable: false, mergedPayload: null };
+    }
+  }
+
+  // At this point, ONLY provenance fields differ (or zero differences).
+  // Now evaluate field-level provenance according to Rules 1-3.
+  const merged = { ...localEntity }; // Preserve all local fields by default (Rule 4 & 6)
+
+  // Rule 1, 2, 3 for created_by (Evaluated independently of modifier)
+  const localCreatedClass = classifyProvenance(localEntity.created_by_device_id, localEntity.created_by_provenance);
+
+  if (localCreatedClass.shouldPreserve) {
+    // Preserve local attribution (verified, existing non-null device ID, or ambiguous provenance)
+    merged.created_by_device_id = localEntity.created_by_device_id;
+    merged.created_by_provenance = localEntity.created_by_provenance;
+  } else if (remoteHasLegacyCreated) {
+    // Local provenance is missing/unknown/legacy; adopt incoming legacy attribution (Rule 1)
+    merged.created_by_device_id = remotePayload.created_by_device_id;
+    merged.created_by_provenance = 'LEGACY_ASSIGNED';
+  }
+
+  // Rule 1, 2, 3 for updated_by (Evaluated independently of creator)
+  const localUpdatedClass = classifyProvenance(localEntity.updated_by_device_id, localEntity.updated_by_provenance);
+
+  if (localUpdatedClass.shouldPreserve) {
+    // Preserve local attribution (verified, existing non-null device ID, or ambiguous provenance)
+    merged.updated_by_device_id = localEntity.updated_by_device_id;
+    merged.updated_by_provenance = localEntity.updated_by_provenance;
+  } else if (remoteHasLegacyUpdated) {
+    // Local provenance is missing/unknown/legacy; adopt incoming legacy attribution (Rule 1)
+    merged.updated_by_device_id = remotePayload.updated_by_device_id;
+    merged.updated_by_provenance = 'LEGACY_ASSIGNED';
+  }
+
+  return { isMergeable: true, mergedPayload: merged };
+}
 
 export const RECONCILIATION_STATUS = Object.freeze({
   STAGED: 'STAGED',
@@ -145,6 +391,9 @@ async function _releaseReconcileFallbackLock(lockName, ownerToken) {
  * atomically applies clean mutations, logs conflicts, and advances watermarks.
  */
 export async function reconcileStagedEvents({ peerDeviceId = null, limit = 5000, isBootstrap = false, signal = null } = {}) {
+  if (signal?.aborted) {
+    throw signal.reason || new Error('SYNC_PASS_ABORTED: Reconciliation cancelled or timed out');
+  }
   const db = getDB();
 
   // Guard: Reconciliation is forbidden if device is not ACTIVE (unless explicitly part of bootstrap JOINING flow)
@@ -605,8 +854,8 @@ async function _reconcileBundleAtomically(bundle) {
       }
       if (!activeConf) {
         const confByEnt = await db.query(
-          'SELECT * FROM sync_conflicts WHERE entity_id = ? AND status = ?',
-          [entityId, CONFLICT_STATUS.PENDING]
+          'SELECT * FROM sync_conflicts WHERE collection = ? AND entity_id = ? AND status = ?',
+          [storeName, entityId, CONFLICT_STATUS.PENDING]
         );
         activeConf = confByEnt.values?.[0] || null;
       }
@@ -687,14 +936,22 @@ async function _reconcileBundleAtomically(bundle) {
           reason: 'Local entity was deleted while remote peer edited it'
         });
       } else {
-        // Concurrent edit divergence
-        allClean = false;
-        allIdempotent = false;
-        conflictsToLog.push({
-          item,
-          conflictType: CONFLICT_TYPE.CONCURRENT_EDIT,
-          reason: 'Local entity state diverged from remote base checksum'
-        });
+        // Check if this is a safe legacy attribution merge (Rule 5)
+        const safeMerge = isSafelyMergeableLegacyAttribution(localEntity, event.payload, storeName);
+        if (safeMerge.isMergeable) {
+          item.decision = 'APPLY_UPDATE';
+          item.event.payload = safeMerge.mergedPayload;
+          allIdempotent = false;
+        } else {
+          // Concurrent edit divergence
+          allClean = false;
+          allIdempotent = false;
+          conflictsToLog.push({
+            item,
+            conflictType: CONFLICT_TYPE.CONCURRENT_EDIT,
+            reason: 'Local entity state diverged from remote base checksum'
+          });
+        }
       }
     } else if (op === DELTA_OPERATION.DELETE) {
       if (localEntity && localChecksum === hBase) {
@@ -783,7 +1040,8 @@ async function _reconcileBundleAtomically(bundle) {
         const targetStore = tx.objectStore(item.storeName);
 
         if (item.decision === 'APPLY_INSERT' || item.decision === 'APPLY_UPDATE' || item.decision === 'APPLY_RECREATE') {
-          targetStore.put(item.event.payload);
+          const finalPayload = mergeProvenanceProtectedPayload(item.localEntity, item.event.payload);
+          targetStore.put(finalPayload);
           if (item.decision === 'APPLY_RECREATE') {
             tombStore.delete(item.entityId);
           }
@@ -857,7 +1115,7 @@ async function _reconcileBundleAtomically(bundle) {
     // SQLite Transaction
     for (const item of evaluationList) {
       if (item.decision === 'APPLY_INSERT' || item.decision === 'APPLY_UPDATE' || item.decision === 'APPLY_RECREATE') {
-        const payload = item.event.payload;
+        const payload = mergeProvenanceProtectedPayload(item.localEntity, item.event.payload);
         const rawCols = Object.keys(payload);
         const tableCols = await getTableColumns(db, item.storeName);
         const cols = (tableCols && tableCols.size > 0)
@@ -1037,14 +1295,19 @@ export async function resolveConflict(conflictId, resolution, customData = null,
     let resOperation = DELTA_OPERATION.UPDATE;
 
     if (resolution === CONFLICT_RESOLUTION.KEEP_LOCAL) {
-      resolutionPayload = liveLocalEntity;
+      resolutionPayload = mergeProvenanceProtectedPayload(remotePayload, liveLocalEntity);
       resBaseChecksum = confRow.remote_checksum; // State being overridden on remote peer
-      resNewChecksum = liveLocalChecksum;
+      resNewChecksum = resolutionPayload ? await computeCanonicalSha256(resolutionPayload) : liveLocalChecksum;
       resOperation = liveLocalEntity ? DELTA_OPERATION.UPDATE : DELTA_OPERATION.DELETE;
     } else if (resolution === CONFLICT_RESOLUTION.ACCEPT_REMOTE) {
-      resolutionPayload = remotePayload;
+      const safeMerge = isSafelyMergeableLegacyAttribution(liveLocalEntity, remotePayload, storeName);
+      if (safeMerge.isMergeable) {
+        resolutionPayload = safeMerge.mergedPayload;
+      } else {
+        resolutionPayload = mergeProvenanceProtectedPayload(liveLocalEntity, remotePayload);
+      }
       resBaseChecksum = liveLocalChecksum;
-      resNewChecksum = confRow.remote_checksum;
+      resNewChecksum = resolutionPayload ? await computeCanonicalSha256(resolutionPayload) : confRow.remote_checksum;
       resOperation = remotePayload ? DELTA_OPERATION.UPDATE : DELTA_OPERATION.DELETE;
     } else if (resolution === CONFLICT_RESOLUTION.CUSTOM_STATE) {
       resolutionPayload = customData;
@@ -1099,9 +1362,9 @@ export async function resolveConflict(conflictId, resolution, customData = null,
         const stateStore = tx.objectStore('sync_local_state');
 
         // A. Canonical Entity Mutation / Tombstone
-        if (resolution === CONFLICT_RESOLUTION.ACCEPT_REMOTE) {
-          if (remotePayload) {
-            entStore.put(remotePayload);
+        if (resolution === CONFLICT_RESOLUTION.ACCEPT_REMOTE || resolution === CONFLICT_RESOLUTION.KEEP_LOCAL) {
+          if (resolutionPayload) {
+            entStore.put(resolutionPayload);
           } else {
             entStore.delete(entityId);
             tombStore.put({ id: entityId, entity_type: storeName, deleted_at: now });
@@ -1136,7 +1399,7 @@ export async function resolveConflict(conflictId, resolution, customData = null,
           ...localState,
           key: 'device_state',
           device_id: localDevId,
-          last_allocated_sequence: nextSeq,
+          last_allocated_sequence: Math.max(Number(localState.last_allocated_sequence) || 0, nextSeq),
           updated_at: now
         });
 
@@ -1149,11 +1412,11 @@ export async function resolveConflict(conflictId, resolution, customData = null,
       const statements = [];
 
       // A. Canonical Entity Mutation / Tombstone
-      if (resolution === CONFLICT_RESOLUTION.ACCEPT_REMOTE) {
-        if (remotePayload) {
-          const cols = Object.keys(remotePayload);
+      if (resolution === CONFLICT_RESOLUTION.ACCEPT_REMOTE || resolution === CONFLICT_RESOLUTION.KEEP_LOCAL) {
+        if (resolutionPayload) {
+          const cols = Object.keys(resolutionPayload);
           const placeholders = cols.map(() => '?').join(',');
-          const vals = cols.map(c => typeof remotePayload[c] === 'object' && remotePayload[c] !== null ? JSON.stringify(remotePayload[c]) : (remotePayload[c] ?? null));
+          const vals = cols.map(c => typeof resolutionPayload[c] === 'object' && resolutionPayload[c] !== null ? JSON.stringify(resolutionPayload[c]) : (resolutionPayload[c] ?? null));
           statements.push({
             statement: `INSERT OR REPLACE INTO ${storeName} (${cols.join(',')}) VALUES (${placeholders})`,
             values: vals
@@ -1215,7 +1478,7 @@ export async function resolveConflict(conflictId, resolution, customData = null,
 
       // E. Sequence Allocation Update
       statements.push({
-        statement: 'UPDATE sync_local_state SET last_allocated_sequence = ?, updated_at = ? WHERE key = ?',
+        statement: 'UPDATE sync_local_state SET last_allocated_sequence = MAX(COALESCE(last_allocated_sequence, 0), ?), updated_at = ? WHERE key = ?',
         values: [nextSeq, now, 'device_state']
       });
 
@@ -1245,6 +1508,10 @@ export async function resolveConflict(conflictId, resolution, customData = null,
  * Resolves all pending conflicts with the specified resolution strategy (KEEP_LOCAL or ACCEPT_REMOTE).
  */
 export async function resolveAllConflicts(resolution = CONFLICT_RESOLUTION.KEEP_LOCAL, options = {}) {
+  const batchSize = Math.max(1, Math.min(Number(options.batchSize) || 50, 100));
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+  const yieldMs = typeof options.yieldMs === 'number' ? options.yieldMs : 20;
+
   const pending = await getPendingConflicts();
   if (!pending.length) {
     return { total: 0, resolved: 0, failed: 0, errors: [] };
@@ -1253,19 +1520,52 @@ export async function resolveAllConflicts(resolution = CONFLICT_RESOLUTION.KEEP_
   let resolved = 0;
   let failed = 0;
   const errors = [];
+  const total = pending.length;
+  const totalBatches = Math.ceil(total / batchSize);
 
-  for (const c of pending) {
-    try {
-      await resolveConflict(c.conflict_id, resolution, null, { force: true, ...options });
-      resolved++;
-    } catch (err) {
-      console.warn(`[resolveAllConflicts] Failed to resolve conflict ${c.conflict_id}:`, err);
-      errors.push({ conflict_id: c.conflict_id, error: err.message });
-      failed++;
+  if (options.signal?.aborted) {
+    throw options.signal.reason || new Error('RESOLVE_ALL_ABORTED: Conflict resolution cancelled or timed out');
+  }
+
+  for (let b = 0; b < totalBatches; b++) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason || new Error('RESOLVE_ALL_ABORTED: Conflict resolution cancelled or timed out');
+    }
+    const batch = pending.slice(b * batchSize, (b + 1) * batchSize);
+    for (const c of batch) {
+      try {
+        await resolveConflict(c.conflict_id, resolution, null, { force: true, ...options });
+        resolved++;
+      } catch (err) {
+        console.warn(`[resolveAllConflicts] Failed to resolve conflict ${c.conflict_id}:`, err);
+        errors.push({ conflict_id: c.conflict_id, error: err.message });
+        failed++;
+      }
+    }
+
+    if (onProgress) {
+      try {
+        onProgress({
+          resolved,
+          failed,
+          total,
+          currentBatch: b + 1,
+          totalBatches
+        });
+      } catch {}
+    }
+
+    // Yield to the event loop between batches to keep UI responsive and allow garbage collection
+    if (options.maxBatches && (b + 1) >= options.maxBatches) {
+      break;
+    }
+
+    if (b < totalBatches - 1 && yieldMs > 0) {
+      await new Promise(r => setTimeout(r, yieldMs));
     }
   }
 
-  return { total: pending.length, resolved, failed, errors };
+  return { total, resolved, failed, errors };
 }
 
 /**
@@ -1288,12 +1588,20 @@ export async function autoResolveIdenticalConflicts() {
     } catch {}
 
     const diff = calculateEntityDiff(liveLocal, c.remote_payload, c.collection);
+    const safeMerge = isSafelyMergeableLegacyAttribution(liveLocal, c.remote_payload, c.collection);
     if (!diff.hasChanges) {
       try {
         await resolveConflict(c.conflict_id, CONFLICT_RESOLUTION.KEEP_LOCAL, null, { force: true });
         resolved++;
       } catch (e) {
         console.warn(`[autoResolveIdenticalConflicts] Failed to auto-resolve identical conflict ${c.conflict_id}:`, e);
+      }
+    } else if (safeMerge.isMergeable) {
+      try {
+        await resolveConflict(c.conflict_id, CONFLICT_RESOLUTION.CUSTOM_STATE, safeMerge.mergedPayload, { force: true });
+        resolved++;
+      } catch (e) {
+        console.warn(`[autoResolveIdenticalConflicts] Failed to auto-resolve safe legacy attribution conflict ${c.conflict_id}:`, e);
       }
     }
   }

@@ -1065,7 +1065,7 @@ export const attachNativeBackupMethods = (db) => {
 
 
 const applySchema = async (db) => {
-  await db.execute(`CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY,date TEXT NOT NULL,time TEXT DEFAULT '',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',note TEXT DEFAULT '',description TEXT DEFAULT '',inr REAL DEFAULT 0,amount TEXT DEFAULT '0',currency TEXT DEFAULT 'INR',type TEXT DEFAULT 'Expense',created_at TEXT,updated_at TEXT,recurring_rule_id TEXT DEFAULT '',tags TEXT DEFAULT '',split_group_id TEXT DEFAULT '',receipt_image TEXT DEFAULT '',warranty_expiry TEXT DEFAULT '',serial_no TEXT DEFAULT '',sub_account TEXT DEFAULT '',from_sub_account TEXT DEFAULT '',to_sub_account TEXT DEFAULT '',created_by_device_id TEXT DEFAULT NULL,updated_by_device_id TEXT DEFAULT NULL);`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY,date TEXT NOT NULL,time TEXT DEFAULT '',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',note TEXT DEFAULT '',description TEXT DEFAULT '',inr REAL DEFAULT 0,amount TEXT DEFAULT '0',currency TEXT DEFAULT 'INR',type TEXT DEFAULT 'Expense',created_at TEXT,updated_at TEXT,recurring_rule_id TEXT DEFAULT '',tags TEXT DEFAULT '',split_group_id TEXT DEFAULT '',receipt_image TEXT DEFAULT '',warranty_expiry TEXT DEFAULT '',serial_no TEXT DEFAULT '',sub_account TEXT DEFAULT '',from_sub_account TEXT DEFAULT '',to_sub_account TEXT DEFAULT '',created_by_device_id TEXT DEFAULT NULL,updated_by_device_id TEXT DEFAULT NULL,created_by_provenance TEXT DEFAULT NULL,updated_by_provenance TEXT DEFAULT NULL);`);
   try { await db.run(`ALTER TABLE transactions ADD COLUMN description TEXT DEFAULT ''`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN time TEXT DEFAULT ''`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN recurring_rule_id TEXT DEFAULT ''`); } catch {}
@@ -1079,6 +1079,8 @@ const applySchema = async (db) => {
   try { await db.run(`ALTER TABLE transactions ADD COLUMN to_sub_account TEXT DEFAULT ''`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN created_by_device_id TEXT DEFAULT NULL`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN updated_by_device_id TEXT DEFAULT NULL`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN created_by_provenance TEXT DEFAULT NULL`); } catch {}
+  try { await db.run(`ALTER TABLE transactions ADD COLUMN updated_by_provenance TEXT DEFAULT NULL`); } catch {}
   await db.execute(`CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,group_name TEXT DEFAULT '',sort_order INTEGER DEFAULT 0,created_at TEXT,acct_type TEXT DEFAULT '',settlement_date INTEGER DEFAULT 0,payment_due_days INTEGER DEFAULT 0,is_asset INTEGER DEFAULT 1,card_last4 TEXT DEFAULT '');`);
   try { await db.execute(`ALTER TABLE accounts ADD COLUMN acct_type TEXT DEFAULT '';`); } catch {}
   try { await db.execute(`ALTER TABLE accounts ADD COLUMN settlement_date INTEGER DEFAULT 0;`); } catch {}
@@ -1160,10 +1162,14 @@ const applySchema = async (db) => {
     security_display_name TEXT,
     settlement_mode TEXT DEFAULT 'ACTUAL',
     created_by_device_id TEXT DEFAULT NULL,
-    updated_by_device_id TEXT DEFAULT NULL
+    updated_by_device_id TEXT DEFAULT NULL,
+    created_by_provenance TEXT DEFAULT NULL,
+    updated_by_provenance TEXT DEFAULT NULL
   );`);
   try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN created_by_device_id TEXT DEFAULT NULL`); } catch {}
   try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN updated_by_device_id TEXT DEFAULT NULL`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN created_by_provenance TEXT DEFAULT NULL`); } catch {}
+  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN updated_by_provenance TEXT DEFAULT NULL`); } catch {}
   try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN investment_account TEXT`); } catch {}
   try { await db.run(`ALTER TABLE transactions ADD COLUMN investment_account TEXT`); } catch {}
   try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN actual_amount REAL DEFAULT 0`); } catch {}

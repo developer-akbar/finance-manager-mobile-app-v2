@@ -52,6 +52,7 @@ import {
   resolveConflict,
   resolveAllConflicts,
   autoResolveIdenticalConflicts,
+  isSafelyMergeableLegacyAttribution,
   getDeviceLifecycleState,
   discoverCloudRepository,
   bootstrapNewDevice,
@@ -157,6 +158,9 @@ export default function CloudSyncManager({ onBack }) {
   const [confirmResolutionModal, setConfirmResolutionModal] = useState(null);
   const [confirmResolveAllModal, setConfirmResolveAllModal] = useState(null);
   const [isResolvingAll, setIsResolvingAll] = useState(false);
+  const [resolveAllProgress, setResolveAllProgress] = useState(null);
+  const [conflictPage, setConflictPage] = useState(1);
+  const CONFLICTS_PER_PAGE = 30;
   const [liveCatchingUpProgress, setLiveCatchingUpProgress] = useState(null);
 
   // Authoritative Master Setup State (for Populated Uninitialized Devices)
@@ -844,8 +848,16 @@ export default function CloudSyncManager({ onBack }) {
     const { resolution } = confirmResolveAllModal;
     setIsResolvingAll(true);
     setResolutionMsg(null);
+    setResolveAllProgress(null);
     try {
-      const res = await resolveAllConflicts(resolution, { force: true });
+      const res = await resolveAllConflicts(resolution, {
+        force: true,
+        batchSize: 50,
+        yieldMs: 25,
+        onProgress: (p) => {
+          setResolveAllProgress(p);
+        }
+      });
       const isKeepLocal = resolution === CONFLICT_RESOLUTION.KEEP_LOCAL;
       setResolutionMsg({
         type: res.failed > 0 ? 'warning' : 'success',
@@ -854,6 +866,7 @@ export default function CloudSyncManager({ onBack }) {
 
       const updatedList = await getPendingConflicts();
       setPendingConflicts(updatedList || []);
+      setConflictPage(1);
       const updatedMetrics = await getDeltaSyncMetrics();
       setDeltaMetrics(prev => ({ ...prev, ...updatedMetrics }));
 
@@ -872,6 +885,7 @@ export default function CloudSyncManager({ onBack }) {
       });
     } finally {
       setIsResolvingAll(false);
+      setResolveAllProgress(null);
       setConfirmResolveAllModal(null);
     }
   };
@@ -1889,9 +1903,11 @@ export default function CloudSyncManager({ onBack }) {
                     </div>
 
                     {pendingConflicts.length > 1 && (() => {
-                      const allIdentical = pendingConflicts.every(c => {
+                      const allIdenticalOrSafe = pendingConflicts.every(c => {
                         const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
-                        return !diff.hasChanges;
+                        if (!diff.hasChanges) return true;
+                        const safe = isSafelyMergeableLegacyAttribution(c.local_payload, c.remote_payload, c.collection);
+                        return safe.isMergeable;
                       });
 
                       return (
@@ -1908,7 +1924,7 @@ export default function CloudSyncManager({ onBack }) {
                             <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--text-primary)' }}>
                               ⚡ Bulk Resolution ({pendingConflicts.length} Pending)
                             </div>
-                            {allIdentical && (
+                            {allIdenticalOrSafe && (
                               <span style={{
                                 fontSize: '0.66rem',
                                 padding: '2px 8px',
@@ -1917,14 +1933,14 @@ export default function CloudSyncManager({ onBack }) {
                                 color: 'var(--green)',
                                 fontWeight: 700
                               }}>
-                                ✓ All records have identical data
+                                ✓ All records have identical or safe attribution data
                               </span>
                             )}
                           </div>
 
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                            {allIdentical
-                              ? 'All pending records have identical values on both devices. You can resolve all of them with one tap to clear the conflict banner and resume automatic synchronization.'
+                            {allIdenticalOrSafe
+                              ? 'All pending records have identical financial data or safe legacy attribution updates. Resolving them will safely preserve all financial fields and verified provenance while clearing the conflict banner and resuming automatic synchronization.'
                               : 'Quickly resolve all pending conflicts across all affected collections in a single step.'}
                           </div>
 
@@ -1952,7 +1968,42 @@ export default function CloudSyncManager({ onBack }) {
                       );
                     })()}
 
-                    {pendingConflicts.map((c) => {
+                    {(() => {
+                      const totalConflictPages = Math.ceil(pendingConflicts.length / CONFLICTS_PER_PAGE) || 1;
+                      const currentPage = Math.min(Math.max(1, conflictPage), totalConflictPages);
+                      const visibleConflicts = pendingConflicts.slice((currentPage - 1) * CONFLICTS_PER_PAGE, currentPage * CONFLICTS_PER_PAGE);
+
+                      return (
+                        <>
+                          {pendingConflicts.length > CONFLICTS_PER_PAGE && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                              <span>Showing {(currentPage - 1) * CONFLICTS_PER_PAGE + 1}–{Math.min(currentPage * CONFLICTS_PER_PAGE, pendingConflicts.length)} of {pendingConflicts.length} conflicts</span>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  disabled={currentPage <= 1}
+                                  onClick={() => setConflictPage(p => Math.max(1, p - 1))}
+                                  style={{ padding: '2px 8px', fontSize: '0.72rem' }}
+                                >
+                                  Prev
+                                </button>
+                                <span style={{ padding: '2px 6px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                  {currentPage} / {totalConflictPages}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  disabled={currentPage >= totalConflictPages}
+                                  onClick={() => setConflictPage(p => Math.min(totalConflictPages, p + 1))}
+                                  style={{ padding: '2px 8px', fontSize: '0.72rem' }}
+                                >
+                                  Next
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                          {visibleConflicts.map((c) => {
                       const isCurrentResolving = resolvingId === c.conflict_id;
                       const formatted = formatConflictEntity(c);
                       const diff = calculateEntityDiff(c.local_payload, c.remote_payload, c.collection);
@@ -2197,6 +2248,29 @@ export default function CloudSyncManager({ onBack }) {
                         </div>
                       );
                     })}
+                          {pendingConflicts.length > CONFLICTS_PER_PAGE && (
+                            <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 12 }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                disabled={conflictPage <= 1}
+                                onClick={() => setConflictPage(p => Math.max(1, p - 1))}
+                              >
+                                ← Previous Page
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                disabled={conflictPage >= Math.ceil(pendingConflicts.length / CONFLICTS_PER_PAGE)}
+                                onClick={() => setConflictPage(p => p + 1)}
+                              >
+                                Next Page →
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
@@ -2384,6 +2458,36 @@ export default function CloudSyncManager({ onBack }) {
                         title="Explicitly restore operational tables from the verified native SQLite backup"
                       >
                         🔄 Test Self-Restore
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={async () => {
+                          setIsTestingNativeBackup(true);
+                          setNativeBackupStatus(null);
+                          try {
+                            const { runLegacyAuditDryRun, exposeLegacyAuditDevDiagnostics } = await import('../../services/legacyDeviceAuditMigration.js');
+                            exposeLegacyAuditDevDiagnostics();
+                            const res = await runLegacyAuditDryRun();
+                            console.log('[LegacyAuditMigration] Dry-Run Results:', res);
+                            setNativeBackupStatus({
+                              success: true,
+                              message: `📊 Audit Dry-Run: ${res.accounting.plannedDatabaseRowUpdates} rows eligible (${res.accounting.eligibleCreatorFields} creator, ${res.accounting.eligibleModifierFields} modifier) · SHA: ${res.baselineFinancialChecksum.slice(0, 10)}… (0 writes)`
+                            });
+                          } catch (err) {
+                            setNativeBackupStatus({
+                              success: false,
+                              message: `Audit dry-run failed: ${err.message}`
+                            });
+                          } finally {
+                            setIsTestingNativeBackup(false);
+                          }
+                        }}
+                        disabled={isTestingNativeBackup}
+                        style={{ fontSize: '0.68rem', padding: '4px 8px', background: 'rgba(255, 170, 0, 0.1)', borderColor: 'rgba(255, 170, 0, 0.3)', color: '#ffaa00' }}
+                        title="Performs read-only audit attribution analysis on the active local database with zero writes"
+                      >
+                        📊 Dry-Run Audit
                       </button>
                       <button
                         type="button"
@@ -2771,6 +2875,25 @@ export default function CloudSyncManager({ onBack }) {
                 </div>
               )}
 
+              {isResolvingAll && resolveAllProgress && (
+                <div style={{
+                  marginBottom: 14,
+                  padding: '10px 12px',
+                  background: 'var(--bg-card)',
+                  borderRadius: 8,
+                  border: '1px solid var(--border-light)',
+                  textAlign: 'center',
+                  fontSize: '0.78rem'
+                }}>
+                  <div style={{ fontWeight: 800, color: 'var(--accent)', marginBottom: 4 }}>
+                    Resolving batch {resolveAllProgress.currentBatch} of {resolveAllProgress.totalBatches}...
+                  </div>
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    {resolveAllProgress.resolved} of {resolveAllProgress.total} resolved ({Math.round((resolveAllProgress.resolved / resolveAllProgress.total) * 100)}%)
+                  </div>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 12, width: '100%' }}>
                 <button
                   className="btn btn-secondary"
@@ -2851,6 +2974,25 @@ export default function CloudSyncManager({ onBack }) {
                 </div>
               </div>
 
+              {isResolvingAll && resolveAllProgress && (
+                <div style={{
+                  marginBottom: 14,
+                  padding: '10px 12px',
+                  background: 'var(--bg-card)',
+                  borderRadius: 8,
+                  border: '1px solid var(--border-light)',
+                  textAlign: 'center',
+                  fontSize: '0.78rem'
+                }}>
+                  <div style={{ fontWeight: 800, color: 'var(--accent)', marginBottom: 4 }}>
+                    Resolving batch {resolveAllProgress.currentBatch} of {resolveAllProgress.totalBatches}...
+                  </div>
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    {resolveAllProgress.resolved} of {resolveAllProgress.total} resolved ({Math.round((resolveAllProgress.resolved / resolveAllProgress.total) * 100)}%)
+                  </div>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 12, width: '100%' }}>
                 <button
                   type="button"
@@ -2921,6 +3063,25 @@ export default function CloudSyncManager({ onBack }) {
                     : `You are choosing to accept incoming cloud versions for all ${count} records. Local records will be updated to match incoming cloud data.`}
                 </div>
               </div>
+
+              {isResolvingAll && resolveAllProgress && (
+                <div style={{
+                  marginBottom: 14,
+                  padding: '10px 12px',
+                  background: 'var(--bg-card)',
+                  borderRadius: 8,
+                  border: '1px solid var(--border-light)',
+                  textAlign: 'center',
+                  fontSize: '0.78rem'
+                }}>
+                  <div style={{ fontWeight: 800, color: 'var(--accent)', marginBottom: 4 }}>
+                    Resolving batch {resolveAllProgress.currentBatch} of {resolveAllProgress.totalBatches}...
+                  </div>
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    {resolveAllProgress.resolved} of {resolveAllProgress.total} resolved ({Math.round((resolveAllProgress.resolved / resolveAllProgress.total) * 100)}%)
+                  </div>
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: 12, width: '100%' }}>
                 <button

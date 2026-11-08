@@ -10,6 +10,7 @@
 import { v4 as uuid } from 'uuid';
 import { getDB, getRawIDB } from '../database/db.js';
 import { findAppDataFile, readAppDataFile, uploadAppDataFile, fetchWithTimeout } from './googleDriveSync.js';
+import { isRecoverySafetyLocked, checkRecoverySafetyLockAsync } from './recoveryLock.js';
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 
@@ -266,6 +267,9 @@ export async function readOwnDeviceManifest(arg1, arg2, arg3, arg4, arg5) {
  * Atomically uploads/patches own device manifest in Google Drive appDataFolder.
  */
 export async function writeOwnDeviceManifest(arg1, arg2, arg3) {
+  if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
+    throw new Error('MANIFEST_WRITE_ABORTED: Recovery safety lock is ACTIVE on this device');
+  }
   let manifest, accessToken, driveClient, deviceId;
   if (arg1 && typeof arg1 === 'object' && !arg1.device_id && (arg1.manifestData || arg1.manifest)) {
     manifest = arg1.manifestData || arg1.manifest;
@@ -368,6 +372,16 @@ export async function writeOwnDeviceManifest(arg1, arg2, arg3) {
   const uploader = driveClient?.uploadAppDataFile || uploadAppDataFile;
   const result = await uploader(filename, content, 'application/json', accessToken);
   return { manifest, driveResult: result };
+}
+
+/**
+ * Direct entry point for manifest update with fail-fast recovery safety lock enforcement.
+ */
+export async function updateDeviceManifest(arg1, arg2, arg3) {
+  if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
+    throw new Error('MANIFEST_WRITE_ABORTED: Recovery safety lock is ACTIVE on this device');
+  }
+  return await writeOwnDeviceManifest(arg1, arg2, arg3);
 }
 
 /**
@@ -828,6 +842,14 @@ export async function listPeerManifests(arg1, arg2, arg3, arg4) {
       if (typeof opts?.onPeerDiscovered === 'function') {
         try {
           opts.onPeerDiscovered(manifest);
+        } catch {}
+      }
+
+      // Automatically register peer device name into audit registry
+      if (manifest.device_id && manifest.device_name) {
+        try {
+          const { registerDeviceAuditName } = await import('./deviceAudit.js');
+          registerDeviceAuditName(manifest.device_id, manifest.device_name);
         } catch {}
       }
     } catch (err) {

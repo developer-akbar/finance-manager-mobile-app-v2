@@ -34,6 +34,7 @@ import {
   resolveConflict,
   resolveAllConflicts,
   autoResolveIdenticalConflicts,
+  isSafelyMergeableLegacyAttribution,
   RECONCILIATION_STATUS
 } from './deltaReconciliation.js';
 import {
@@ -62,6 +63,7 @@ export {
   resolveConflict,
   resolveAllConflicts,
   autoResolveIdenticalConflicts,
+  isSafelyMergeableLegacyAttribution,
   RECONCILIATION_STATUS
 };
 import { computeCanonicalSha256 } from '../utils/canonicalEntity.js';

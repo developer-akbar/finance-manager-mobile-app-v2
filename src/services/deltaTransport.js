@@ -16,6 +16,7 @@ import {
   getDeviceManifestFilename
 } from './deviceManifest.js';
 import { findAppDataFile, readAppDataFile, uploadAppDataFile } from './googleDriveSync.js';
+import { isRecoverySafetyLocked, checkRecoverySafetyLockAsync } from './recoveryLock.js';
 
 export const TRANSPORT_SCHEMA_VERSION = 1;
 export const TARGET_PACKAGE_EVENTS = 100;
@@ -314,12 +315,18 @@ export function slicePendingDeltaQueue(
  * Uploads locally pending delta queue packages to Google Drive appDataFolder.
  */
 export async function uploadPendingDeltas(opts) {
+  if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
+    throw new Error('UPLOAD_ABORTED: Recovery safety lock is ACTIVE on this device');
+  }
   const deviceId = opts.deviceId || opts.device_id;
   const encryptionKeyOrPin = opts.sessionKey || opts.encryptionKeyOrPin;
   const accessToken = opts.accessToken;
   const driveClient = opts.driveClient;
 
   return await withSameDeviceLock(deviceId, async () => {
+    if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
+      throw new Error('UPLOAD_ABORTED: Recovery safety lock is ACTIVE on this device');
+    }
     if (opts.signal?.aborted) {
       throw opts.signal.reason || new Error('SYNC_PASS_ABORTED: Upload aborted');
     }
@@ -500,15 +507,25 @@ export async function uploadPendingDeltas(opts) {
             });
           }
 
-          stateStore.put({
-            ...localState,
-            key: localState.key || 'device_state',
-            device_id: deviceId,
-            last_uploaded_sequence: payload.end_sequence,
-            last_pushed_sequence: payload.end_sequence,
-            last_acked_sequence: payload.end_sequence,
-            updated_at: new Date().toISOString()
-          });
+          const reqState = stateStore.get(localState.key || 'device_state');
+          reqState.onsuccess = () => {
+            const current = reqState.result || localState;
+            const endSeq = payload.end_sequence;
+            stateStore.put({
+              ...current,
+              key: current.key || 'device_state',
+              device_id: deviceId,
+              last_allocated_sequence: Math.max(
+                Number(current.last_allocated_sequence) || 0,
+                Number(localState.last_allocated_sequence) || 0,
+                endSeq
+              ),
+              last_uploaded_sequence: Math.max(Number(current.last_uploaded_sequence) || 0, endSeq),
+              last_pushed_sequence: Math.max(Number(current.last_pushed_sequence) || 0, endSeq),
+              last_acked_sequence: Math.max(Number(current.last_acked_sequence) || 0, endSeq),
+              updated_at: new Date().toISOString()
+            });
+          };
 
           tx.oncomplete = resolve;
           tx.onerror = () => reject(tx.error);
@@ -520,8 +537,13 @@ export async function uploadPendingDeltas(opts) {
           ['ACKNOWLEDGED', new Date().toISOString(), payload.start_sequence, payload.end_sequence]
         );
         await db.run(
-          'UPDATE sync_local_state SET last_uploaded_sequence = ?, last_pushed_sequence = ?, last_acked_sequence = ?, updated_at = ? WHERE device_id = ? OR key = ?',
-          [payload.end_sequence, payload.end_sequence, payload.end_sequence, new Date().toISOString(), deviceId, 'device_state']
+          'UPDATE sync_local_state SET ' +
+          'last_uploaded_sequence = MAX(COALESCE(last_uploaded_sequence, 0), ?), ' +
+          'last_pushed_sequence = MAX(COALESCE(last_pushed_sequence, 0), ?), ' +
+          'last_acked_sequence = MAX(COALESCE(last_acked_sequence, 0), ?), ' +
+          'last_allocated_sequence = MAX(COALESCE(last_allocated_sequence, 0), ?), ' +
+          'updated_at = ? WHERE device_id = ? OR key = ?',
+          [payload.end_sequence, payload.end_sequence, payload.end_sequence, payload.end_sequence, new Date().toISOString(), deviceId, 'device_state']
         );
       }
 

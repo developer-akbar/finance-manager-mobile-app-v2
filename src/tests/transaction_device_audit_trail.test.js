@@ -471,5 +471,88 @@ test('TRANSACTION DEVICE AUDIT TRAIL TEST SUITE', async (t) => {
     assert.equal(infoAfter.deviceName, null, 'Device name falls back to null');
     assert.equal(infoAfter.isLegacy, false, 'Historical ID is preserved, not marked legacy');
   });
+
+  // ── 15. Cross-Device Resolution, Safe Fallbacks & Independent Creator/Modifier ──
+  await t.test('15. Comprehensive Device Name Resolution Matrix', async () => {
+    const {
+      formatDeviceAuditLabel,
+      WELL_KNOWN_DEVICES,
+      getWellKnownDeviceName
+    } = await import('../services/deviceAudit.js');
+
+    // Scenario 0: WELL_KNOWN_DEVICES immutability
+    assert.ok(Object.isFrozen(WELL_KNOWN_DEVICES), 'WELL_KNOWN_DEVICES must be frozen');
+    assert.throws(() => {
+      'use strict';
+      WELL_KNOWN_DEVICES['dev_injected_evil'] = 'Injected Device';
+    }, /Cannot add property|is not extensible|TypeError/);
+    assert.throws(() => {
+      'use strict';
+      delete WELL_KNOWN_DEVICES['dev_c7e4544221f4'];
+    }, /Cannot delete property|TypeError/);
+    assert.equal(getWellKnownDeviceName('dev_c7e4544221f4'), 'My Mobile');
+    assert.equal(getWellKnownDeviceName('dev_unregistered'), null);
+
+    // Scenario 1: Known device ID resolves to its registered name
+    registerDeviceAuditName('dev_laptop_40e', 'My Laptop FinMan Web');
+    const known = resolveDeviceAuditInfo('dev_laptop_40e', 'VERIFIED');
+    assert.equal(known.deviceId, 'dev_laptop_40e');
+    assert.equal(known.deviceName, 'My Laptop FinMan Web');
+    assert.equal(known.isLegacy, false);
+    assert.equal(known.isLegacyAssigned, false);
+    assert.equal(formatDeviceAuditLabel(known), 'My Laptop FinMan Web');
+
+    // Scenario 2: Unknown device ID displays a safe fallback (raw device ID)
+    const unknown = resolveDeviceAuditInfo('dev_unregistered_999', 'VERIFIED');
+    assert.equal(unknown.deviceId, 'dev_unregistered_999');
+    assert.equal(unknown.deviceName, null);
+    assert.equal(unknown.isLegacy, false);
+    assert.equal(unknown.isLegacyAssigned, false);
+    assert.equal(formatDeviceAuditLabel(unknown), 'dev_unregistered_999');
+
+    // Missing / null device ID displays Unknown (Legacy)
+    const nullDev = resolveDeviceAuditInfo(null, null);
+    assert.equal(nullDev.isLegacy, true);
+    assert.equal(formatDeviceAuditLabel(nullDev), 'Unknown (Legacy)');
+
+    // Scenario 3: Legacy-assigned records display 'My Mobile (Legacy)'
+    const legacyAssigned = resolveDeviceAuditInfo('dev_c7e4544221f4', 'LEGACY_ASSIGNED');
+    assert.equal(legacyAssigned.deviceId, 'dev_c7e4544221f4');
+    assert.equal(legacyAssigned.deviceName, 'My Mobile');
+    assert.equal(legacyAssigned.isLegacy, false);
+    assert.equal(legacyAssigned.isLegacyAssigned, true);
+    assert.equal(formatDeviceAuditLabel(legacyAssigned), 'My Mobile (Legacy)');
+
+    // Scenario 4: Device names remain correct after manifest refresh / cache update
+    const { cacheDeviceRegistry } = await import('../services/deviceAudit.js');
+    cacheDeviceRegistry([
+      { device_id: 'dev_b6de1af49405', device_name: 'Laptop Localhost' },
+      { device_id: 'dev_c7e4544221f4', device_name: 'My Mobile' }
+    ]);
+    const refreshed = resolveDeviceAuditInfo('dev_b6de1af49405', 'VERIFIED');
+    assert.equal(refreshed.deviceName, 'Laptop Localhost');
+    assert.equal(formatDeviceAuditLabel(refreshed), 'Laptop Localhost');
+
+    // Scenario 5: Creator and modifier names resolve independently on the same transaction
+    const txn = {
+      created_by_device_id: 'dev_c7e4544221f4',
+      created_by_provenance: 'LEGACY_ASSIGNED',
+      updated_by_device_id: 'dev_b6de1af49405',
+      updated_by_provenance: 'VERIFIED'
+    };
+    const creatorInfo = resolveDeviceAuditInfo(txn.created_by_device_id, txn.created_by_provenance);
+    const modifierInfo = resolveDeviceAuditInfo(txn.updated_by_device_id, txn.updated_by_provenance);
+    assert.equal(formatDeviceAuditLabel(creatorInfo), 'My Mobile (Legacy)');
+    assert.equal(formatDeviceAuditLabel(modifierInfo), 'Laptop Localhost');
+    assert.notEqual(creatorInfo.deviceId, modifierInfo.deviceId);
+    assert.notEqual(formatDeviceAuditLabel(creatorInfo), formatDeviceAuditLabel(modifierInfo));
+
+    // Scenario 6: A device rename (nickname override) does not change historical device IDs
+    setDeviceNickname('dev_c7e4544221f4', "Akbar's Primary Phone");
+    const renamed = resolveDeviceAuditInfo('dev_c7e4544221f4', 'LEGACY_ASSIGNED');
+    assert.equal(renamed.deviceId, 'dev_c7e4544221f4', 'Device ID must remain immutable');
+    assert.equal(renamed.deviceName, "Akbar's Primary Phone", 'Device name adopts the new nickname');
+    assert.equal(formatDeviceAuditLabel(renamed), "Akbar's Primary Phone (Legacy)");
+  });
 });
 

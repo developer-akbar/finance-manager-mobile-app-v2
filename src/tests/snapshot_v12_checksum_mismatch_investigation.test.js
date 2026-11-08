@@ -64,18 +64,22 @@ test('FinMan Checksum Mismatch Investigation — Root Cause Isolation Suite', as
       serial_no: '',
       sub_account: '',
       from_sub_account: '',
-      to_sub_account: ''
+      to_sub_account: '',
+      created_by_device_id: null,
+      updated_by_device_id: null,
+      created_by_provenance: null,
+      updated_by_provenance: null
     };
 
     // Assert that saveTransaction rowObj has exactly 25 keys
-    assert.equal(Object.keys(transferRowObj).length, 25);
+    assert.equal(Object.keys(transferRowObj).length, 29);
 
     // Convert via snapshot pipeline: rowToTxn -> txnObjectToDBRow
     const snapshotEntity = rowToTxn(transferRowObj);
     const dbRow = txnObjectToDBRow(snapshotEntity);
 
     // Assert that dbRow now has exactly 25 keys (matching saveTransaction rowObj)
-    assert.equal(Object.keys(dbRow).length, 25);
+    assert.equal(Object.keys(dbRow).length, 29);
     assert.deepEqual(Object.keys(dbRow).sort(), Object.keys(transferRowObj).sort());
 
     // Verify none of the 13 investment keys are injected into regular transaction dbRow
@@ -118,7 +122,11 @@ test('FinMan Checksum Mismatch Investigation — Root Cause Isolation Suite', as
       serial_no: '',
       sub_account: '',
       from_sub_account: '',
-      to_sub_account: ''
+      to_sub_account: '',
+      created_by_device_id: null,
+      updated_by_device_id: null,
+      created_by_provenance: null,
+      updated_by_provenance: null
     };
 
     const snapshotEntity = rowToTxn(transferRowObj);
@@ -132,7 +140,7 @@ test('FinMan Checksum Mismatch Investigation — Root Cause Isolation Suite', as
       }
     }
 
-    assert.equal(Object.keys(strippedDbRow).length, 25);
+    assert.equal(Object.keys(strippedDbRow).length, 29);
     assert.deepEqual(Object.keys(strippedDbRow).sort(), Object.keys(transferRowObj).sort());
 
     const hashRowObj = await computeCanonicalSha256(transferRowObj);

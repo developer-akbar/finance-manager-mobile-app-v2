@@ -489,6 +489,35 @@ export function calculateEntityDiff(localPayload, remotePayload, collection = 't
         changed: localPerson !== remotePerson
       });
     }
+
+    // 8. Device Audit Fields
+    const localCreated = localPayload.created_by_device_id || '';
+    const remoteCreated = remotePayload.created_by_device_id || '';
+    const localCreatedProv = localPayload.created_by_provenance || '';
+    const remoteCreatedProv = remotePayload.created_by_provenance || '';
+    if (localCreated !== remoteCreated || localCreatedProv !== remoteCreatedProv) {
+      allFields.push({
+        key: 'created_by_device_id',
+        label: 'Created By Device',
+        localValue: localCreated ? (localCreated + (localCreatedProv ? ' (' + localCreatedProv + ')' : '')) : '—',
+        remoteValue: remoteCreated ? (remoteCreated + (remoteCreatedProv ? ' (' + remoteCreatedProv + ')' : '')) : '—',
+        changed: true
+      });
+    }
+
+    const localUpdated = localPayload.updated_by_device_id || '';
+    const remoteUpdated = remotePayload.updated_by_device_id || '';
+    const localUpdatedProv = localPayload.updated_by_provenance || '';
+    const remoteUpdatedProv = remotePayload.updated_by_provenance || '';
+    if (localUpdated !== remoteUpdated || localUpdatedProv !== remoteUpdatedProv) {
+      allFields.push({
+        key: 'updated_by_device_id',
+        label: 'Last Modified By Device',
+        localValue: localUpdated ? (localUpdated + (localUpdatedProv ? ' (' + localUpdatedProv + ')' : '')) : '—',
+        remoteValue: remoteUpdated ? (remoteUpdated + (remoteUpdatedProv ? ' (' + remoteUpdatedProv + ')' : '')) : '—',
+        changed: true
+      });
+    }
   } else {
     // Non-transaction entities: dynamic key comparison ignoring internal metadata
     const ignoredKeys = new Set([

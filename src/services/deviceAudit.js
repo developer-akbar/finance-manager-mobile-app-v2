@@ -12,6 +12,28 @@
  * - Historical device IDs survive device removal from registry.
  */
 
+const PRIVATE_WELL_KNOWN_DEVICES = Object.freeze({
+  'dev_c7e4544221f4': 'My Mobile'
+});
+
+export const WELL_KNOWN_DEVICES = Object.freeze({
+  'dev_c7e4544221f4': 'My Mobile'
+});
+
+/**
+ * Returns the canonical well-known device name for a given device ID, if registered.
+ *
+ * @param {string|null|undefined} deviceId
+ * @returns {string|null}
+ */
+export function getWellKnownDeviceName(deviceId) {
+  if (typeof deviceId !== 'string') return null;
+  const clean = deviceId.trim();
+  return Object.prototype.hasOwnProperty.call(PRIVATE_WELL_KNOWN_DEVICES, clean)
+    ? PRIVATE_WELL_KNOWN_DEVICES[clean]
+    : null;
+}
+
 let _cachedDeviceId = null;
 const _memoryRegistry = new Map();
 const _memoryNicknames = new Map();
@@ -152,16 +174,22 @@ export function cacheDeviceRegistry(devices) {
  * 3. Checks registered manifest device names.
  * 4. If current local device and no name recorded, defaults to 'FinMan Web' / 'FinMan Android'.
  * 5. If device is not in registry (e.g. removed or unknown peer), preserves and returns the deviceId.
+ * 6. If provenance is 'LEGACY_ASSIGNED', sets isLegacyAssigned: true.
  *
  * @param {string|null|undefined} deviceId
- * @returns {{ deviceId: string|null, deviceName: string|null, isLegacy: boolean }}
+ * @param {string|null|undefined} [provenance=null]
+ * @returns {{ deviceId: string|null, deviceName: string|null, isLegacy: boolean, isLegacyAssigned: boolean, provenance: string }}
  */
-export function resolveDeviceAuditInfo(deviceId) {
+export function resolveDeviceAuditInfo(deviceId, provenance = null) {
+  const isLegacyAssigned = provenance === 'LEGACY_ASSIGNED' || String(provenance || '').toUpperCase() === 'LEGACY_ASSIGNED';
+
   if (!deviceId || deviceId === 'Unknown' || deviceId === 'local_device') {
     return {
       deviceId: null,
       deviceName: null,
-      isLegacy: true
+      isLegacy: true,
+      isLegacyAssigned: false,
+      provenance: 'UNKNOWN'
     };
   }
 
@@ -170,7 +198,9 @@ export function resolveDeviceAuditInfo(deviceId) {
     return {
       deviceId: null,
       deviceName: null,
-      isLegacy: true
+      isLegacy: true,
+      isLegacyAssigned: false,
+      provenance: 'UNKNOWN'
     };
   }
 
@@ -194,7 +224,12 @@ export function resolveDeviceAuditInfo(deviceId) {
 
   let deviceName = nickname || registryName || null;
 
-  // 3. Fallback for local device if not explicitly named
+  // 3. Fallback for well-known canonical devices (e.g. historical Android creator)
+  if (!deviceName) {
+    deviceName = getWellKnownDeviceName(cleanId);
+  }
+
+  // 4. Fallback for local device if not explicitly named
   if (!deviceName) {
     let localId = _cachedDeviceId;
     if (!localId && typeof localStorage !== 'undefined') {
@@ -212,8 +247,25 @@ export function resolveDeviceAuditInfo(deviceId) {
   return {
     deviceId: cleanId,
     deviceName,
-    isLegacy: false
+    isLegacy: false,
+    isLegacyAssigned,
+    provenance: isLegacyAssigned ? 'LEGACY_ASSIGNED' : 'VERIFIED'
   };
+}
+
+/**
+ * Formats a resolved audit info into a human-readable display label.
+ * E.g., 'My Mobile', 'My Mobile (Legacy)', or 'Unknown (Legacy)'.
+ *
+ * @param {Object} auditInfo
+ * @returns {string}
+ */
+export function formatDeviceAuditLabel(auditInfo) {
+  if (!auditInfo || auditInfo.isLegacy || !auditInfo.deviceId) {
+    return 'Unknown (Legacy)';
+  }
+  const baseName = auditInfo.deviceName || auditInfo.deviceId;
+  return auditInfo.isLegacyAssigned ? `${baseName} (Legacy)` : baseName;
 }
 
 /**

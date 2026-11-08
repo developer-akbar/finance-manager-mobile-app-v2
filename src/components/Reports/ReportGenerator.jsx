@@ -1,3 +1,4 @@
+import { resolveDeviceAuditInfo, formatDeviceAuditLabel } from '../../services/deviceAudit.js';
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import {
@@ -229,6 +230,10 @@ export default function ReportGenerator({ onBack }) {
         t.Tags || '',
         parseFloat(t.INR || t.Amount || 0),
         t.Currency || 'INR',
+        formatDeviceAuditLabel(resolveDeviceAuditInfo(t.created_by_device_id, t.created_by_provenance)),
+        resolveDeviceAuditInfo(t.created_by_device_id, t.created_by_provenance).deviceId || '',
+        formatDeviceAuditLabel(resolveDeviceAuditInfo(t.updated_by_device_id, t.updated_by_provenance)),
+        resolveDeviceAuditInfo(t.updated_by_device_id, t.updated_by_provenance).deviceId || '',
       ]);
       const wsTxns = XLSX.utils.aoa_to_sheet([headers, ...txnRows]);
 
@@ -250,7 +255,7 @@ export default function ReportGenerator({ onBack }) {
   const handleExportCSV = async () => {
     setExporting(true);
     try {
-      const hdrs = ['Date', 'Time', 'Type', 'Account', 'FromAccount', 'ToAccount', 'Category', 'Subcategory', 'Note', 'Description', 'Tags', 'INR', 'Currency'];
+      const hdrs = ['Date', 'Time', 'Type', 'Account', 'FromAccount', 'ToAccount', 'Category', 'Subcategory', 'Note', 'Description', 'Tags', 'INR', 'Currency', 'Created By', 'Created By Device ID', 'Last Modified By', 'Last Modified By Device ID'];
       const esc = v => { const s = String(v ?? ''); return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
       const rows = [
         hdrs.join(','),
@@ -268,6 +273,10 @@ export default function ReportGenerator({ onBack }) {
           esc(t.Tags || ''),
           t.INR || t.Amount || 0,
           esc(t.Currency || 'INR'),
+          esc(formatDeviceAuditLabel(resolveDeviceAuditInfo(t.created_by_device_id, t.created_by_provenance))),
+          esc(resolveDeviceAuditInfo(t.created_by_device_id, t.created_by_provenance).deviceId || ''),
+          esc(formatDeviceAuditLabel(resolveDeviceAuditInfo(t.updated_by_device_id, t.updated_by_provenance))),
+          esc(resolveDeviceAuditInfo(t.updated_by_device_id, t.updated_by_provenance).deviceId || ''),
         ].join(','))
       ];
       const filename = `FinMan_Transactions_${startDate}_to_${endDate}.csv`;

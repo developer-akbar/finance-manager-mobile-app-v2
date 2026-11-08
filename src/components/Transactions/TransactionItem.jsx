@@ -365,8 +365,8 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
   const [copiedTxnId, setCopiedTxnId] = useState(false);
   const [viewingReceipt, setViewingReceipt] = useState(false);
 
-  const createdAudit = resolveDeviceAuditInfo(t.created_by_device_id);
-  const updatedAudit = resolveDeviceAuditInfo(t.updated_by_device_id);
+  const createdAudit = resolveDeviceAuditInfo(t.created_by_device_id, t.created_by_provenance);
+  const updatedAudit = resolveDeviceAuditInfo(t.updated_by_device_id, t.updated_by_provenance);
 
   const type = txnType(t);
   const amount = txnAmount(t);
@@ -802,11 +802,11 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
                 <span style={{ color: 'var(--text-muted)' }}>Unknown (Legacy)</span>
               ) : createdAudit.deviceName ? (
                 <>
-                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{createdAudit.deviceName}</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{createdAudit.deviceName}{createdAudit.isLegacyAssigned ? ' (Legacy)' : ''}</span>
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginLeft: '6px' }}>({createdAudit.deviceId})</span>
                 </>
               ) : (
-                <span style={{ fontFamily: 'monospace' }}>{createdAudit.deviceId}</span>
+                <span style={{ fontFamily: 'monospace' }}>{createdAudit.deviceId}{createdAudit.isLegacyAssigned ? ' (Legacy)' : ''}</span>
               )}
             </div>
             <div><strong>Last Modified:</strong> {t.updated_at ? new Date(t.updated_at).toLocaleString('en-IN') : '—'}</div>
@@ -816,11 +816,11 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
                 <span style={{ color: 'var(--text-muted)' }}>Unknown (Legacy)</span>
               ) : updatedAudit.deviceName ? (
                 <>
-                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{updatedAudit.deviceName}</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{updatedAudit.deviceName}{updatedAudit.isLegacyAssigned ? ' (Legacy)' : ''}</span>
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', marginLeft: '6px' }}>({updatedAudit.deviceId})</span>
                 </>
               ) : (
-                <span style={{ fontFamily: 'monospace' }}>{updatedAudit.deviceId}</span>
+                <span style={{ fontFamily: 'monospace' }}>{updatedAudit.deviceId}{updatedAudit.isLegacyAssigned ? ' (Legacy)' : ''}</span>
               )}
             </div>
             {t.recurring_rule_id && <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><strong>Recurring Rule ID:</strong> {t.recurring_rule_id}</div>}

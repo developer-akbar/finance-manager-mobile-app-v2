@@ -93,7 +93,7 @@ async function _executeSingleMutationAttempt({
 
   const isWeb = Capacitor.getPlatform() === 'web';
 
-  if (isWeb) {
+  if (isWeb && !db.isNativeSQLite) {
     return await _executeAtomicIDB({
       operations: [{
         storeName,
@@ -179,7 +179,7 @@ export async function executeAtomicBatch({
 
   const runMutation = async () => {
     const isWeb = Capacitor.getPlatform() === 'web';
-    if (isWeb) {
+    if (isWeb && !db.isNativeSQLite) {
       return await _executeAtomicIDB({ operations: preparedOps, suppressDeltaQueue });
     } else {
       return await _executeAtomicSQLite({ operations: preparedOps, suppressDeltaQueue });
@@ -467,6 +467,22 @@ async function _executeAtomicSQLite({ operations, suppressDeltaQueue = false }) 
     Number(state.last_acked_sequence) || 0,
     queueMaxSeq
   );
+  // Optimistic Precondition Validation for SQLite: Assert expectedBaseEntity matches current DB entity
+  for (const op of operations) {
+    if (op.expectedBaseEntity && (op.operation === DELTA_OPERATION.UPDATE || op.operation === DELTA_OPERATION.DELETE)) {
+      const currentRes = await db.query(`SELECT * FROM ${op.storeName} WHERE id = ?`, [op.id]);
+      const currentEntity = currentRes.values?.[0] || null;
+      if (!currentEntity) {
+        throw new Error(`PRECONDITION_FAILED: Target entity ${op.storeName}:${op.id} does not exist in SQLite database`);
+      }
+      const jsonCurrent = toCanonicalJson(currentEntity);
+      const jsonExpected = toCanonicalJson(op.expectedBaseEntity);
+      if (jsonCurrent !== jsonExpected) {
+        throw new Error(`PRECONDITION_FAILED: Concurrent modification detected for ${op.storeName}:${op.id}`);
+      }
+    }
+  }
+
   const statements = [];
   const emittedEvents = [];
 
