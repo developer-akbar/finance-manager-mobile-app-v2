@@ -222,44 +222,70 @@ function AppInner() {
 
   const backInterceptRef = React.useRef(null);
   const lastBackPressRef = useRef(0);
+  const isExitingRef = useRef(false);
 
-  // Android hardware back button handler
+  const currentViewRef = useRef(currentView);
+  currentViewRef.current = currentView;
+
+  const showAddRef = useRef(showAdd);
+  showAddRef.current = showAdd;
+
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+
+  // Android hardware back button handler - registered strictly once on mount
   useEffect(() => {
+    let listenerHandle = null;
+    let isMounted = true;
+
     const setup = async () => {
       try {
         const { App: CapApp } = await import('@capacitor/app');
-        CapApp.addListener('backButton', () => {
+        if (!isMounted) return;
+
+        listenerHandle = await CapApp.addListener('backButton', () => {
+          if (isExitingRef.current) return;
+
           // 1. If an active screen registered a back-intercept callback, execute it and stop
           if (backInterceptRef.current) {
             backInterceptRef.current();
             return;
           }
           // 2. If AddTransaction modal is open, close it
-          if (showAdd) {
+          if (showAddRef.current) {
             setShowAdd(false);
             return;
           }
           // 3. If on a sub-screen, go to dashboard
-          if (currentView !== 'dashboard') {
-            navigate('dashboard');
+          if (currentViewRef.current !== 'dashboard') {
+            navigateRef.current?.('dashboard');
             return;
           }
           // 4. On dashboard root: double-tap within 2s to exit
           const now = Date.now();
           if (now - lastBackPressRef.current < 2000) {
+            isExitingRef.current = true;
             CapApp.exitApp();
           } else {
             lastBackPressRef.current = now;
-            showToast('Press BACK again to exit');
+            showToastRef.current?.('Press BACK again to exit');
           }
         });
       } catch { /* web */ }
     };
+
     setup();
+
     return () => {
-      import('@capacitor/app').then(({ App }) => App.removeAllListeners()).catch(() => {});
+      isMounted = false;
+      if (listenerHandle && typeof listenerHandle.remove === 'function') {
+        listenerHandle.remove();
+      }
     };
-  }, [currentView, showAdd, navigate, showToast]);
+  }, []);
 
   // Fail-closed DB state: Never show empty dashboard if DB failed to load
   if (state.dbError) {

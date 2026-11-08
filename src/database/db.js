@@ -1098,30 +1098,91 @@ export const attachNativeBackupMethods = (db) => {
 };
 
 
+
+const _tableColumnsCache = new Map();
+
+export const getTableColumns = async (db, table) => {
+  if (!db || !table) return null;
+  const key = String(table).toLowerCase();
+  if (_tableColumnsCache.has(key)) return _tableColumnsCache.get(key);
+  const cols = new Set();
+  try {
+    if (typeof db.query === 'function') {
+      const info = await db.query(`PRAGMA table_info(${table})`);
+      for (const row of info.values || []) {
+        if (row.name) cols.add(row.name.toLowerCase());
+      }
+    }
+  } catch {}
+  if (cols.size > 0) {
+    _tableColumnsCache.set(key, cols);
+    return cols;
+  }
+  return null;
+};
+
+export const clearTableColumnsCache = () => {
+  _tableColumnsCache.clear();
+};
+
+export const safeAddCol = async (db, table, colDef) => {
+  try {
+    const colName = colDef.trim().split(/\s+/)[0].toLowerCase();
+    let existingCols = await getTableColumns(db, table);
+    if (existingCols && existingCols.has(colName)) {
+      return; // Column already exists, skip ALTER TABLE entirely
+    }
+    if (typeof db.run === 'function') {
+      await db.run(`ALTER TABLE ${table} ADD COLUMN ${colDef}`);
+    } else if (typeof db.execute === 'function') {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN ${colDef};`);
+    }
+    if (existingCols) {
+      existingCols.add(colName);
+    }
+  } catch {
+    // Ignore: column already exists or ALTER TABLE unsupported (e.g. IDB)
+  }
+};
+
 const applySchema = async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS transactions (id TEXT PRIMARY KEY,date TEXT NOT NULL,time TEXT DEFAULT '',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',note TEXT DEFAULT '',description TEXT DEFAULT '',inr REAL DEFAULT 0,amount TEXT DEFAULT '0',currency TEXT DEFAULT 'INR',type TEXT DEFAULT 'Expense',created_at TEXT,updated_at TEXT,recurring_rule_id TEXT DEFAULT '',tags TEXT DEFAULT '',split_group_id TEXT DEFAULT '',receipt_image TEXT DEFAULT '',warranty_expiry TEXT DEFAULT '',serial_no TEXT DEFAULT '',sub_account TEXT DEFAULT '',from_sub_account TEXT DEFAULT '',to_sub_account TEXT DEFAULT '',created_by_device_id TEXT DEFAULT NULL,updated_by_device_id TEXT DEFAULT NULL,created_by_provenance TEXT DEFAULT NULL,updated_by_provenance TEXT DEFAULT NULL);`);
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN description TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN time TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN recurring_rule_id TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN tags TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN split_group_id TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN receipt_image TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN warranty_expiry TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN serial_no TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN sub_account TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN from_sub_account TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN to_sub_account TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN created_by_device_id TEXT DEFAULT NULL`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN updated_by_device_id TEXT DEFAULT NULL`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN created_by_provenance TEXT DEFAULT NULL`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN updated_by_provenance TEXT DEFAULT NULL`); } catch {}
+  await safeAddCol(db, 'transactions', "description TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "time TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "recurring_rule_id TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "tags TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "split_group_id TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "receipt_image TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "warranty_expiry TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "serial_no TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "sub_account TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "from_sub_account TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "to_sub_account TEXT DEFAULT ''");
+  await safeAddCol(db, 'transactions', "created_by_device_id TEXT DEFAULT NULL");
+  await safeAddCol(db, 'transactions', "updated_by_device_id TEXT DEFAULT NULL");
+  await safeAddCol(db, 'transactions', "created_by_provenance TEXT DEFAULT NULL");
+  await safeAddCol(db, 'transactions', "updated_by_provenance TEXT DEFAULT NULL");
+  await safeAddCol(db, 'transactions', "investment_account TEXT");
+  await safeAddCol(db, 'transactions', "actual_amount REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "total_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "brokerage_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "exchange_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "stt_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "sebi_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "stamp_duty_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "gst_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "dp_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "other_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "security_display_name TEXT");
+  await safeAddCol(db, 'transactions', "settlement_mode TEXT DEFAULT 'ACTUAL'");
+
   await db.execute(`CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,name TEXT NOT NULL,group_name TEXT DEFAULT '',sort_order INTEGER DEFAULT 0,created_at TEXT,acct_type TEXT DEFAULT '',settlement_date INTEGER DEFAULT 0,payment_due_days INTEGER DEFAULT 0,is_asset INTEGER DEFAULT 1,card_last4 TEXT DEFAULT '');`);
-  try { await db.execute(`ALTER TABLE accounts ADD COLUMN acct_type TEXT DEFAULT '';`); } catch {}
-  try { await db.execute(`ALTER TABLE accounts ADD COLUMN settlement_date INTEGER DEFAULT 0;`); } catch {}
-  try { await db.execute(`ALTER TABLE accounts ADD COLUMN payment_due_days INTEGER DEFAULT 0;`); } catch {}
-  try { await db.execute(`ALTER TABLE accounts ADD COLUMN is_asset INTEGER DEFAULT 1;`); } catch {}
-  try { await db.execute(`ALTER TABLE accounts ADD COLUMN card_last4 TEXT DEFAULT '';`); } catch {}
-  try { await db.run(`ALTER TABLE accounts ADD COLUMN card_last4 TEXT DEFAULT ''`); } catch {}
+  await safeAddCol(db, 'accounts', "acct_type TEXT DEFAULT ''");
+  await safeAddCol(db, 'accounts', "settlement_date INTEGER DEFAULT 0");
+  await safeAddCol(db, 'accounts', "payment_due_days INTEGER DEFAULT 0");
+  await safeAddCol(db, 'accounts', "is_asset INTEGER DEFAULT 1");
+  await safeAddCol(db, 'accounts', "card_last4 TEXT DEFAULT ''");
+
   await db.execute(`CREATE TABLE IF NOT EXISTS account_groups (id TEXT PRIMARY KEY,name TEXT NOT NULL,sort_order INTEGER DEFAULT 0);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS account_mapping (id TEXT PRIMARY KEY,source_name TEXT,account_name TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY,name TEXT NOT NULL,type TEXT DEFAULT 'Expense',sort_order INTEGER DEFAULT 0);`);
@@ -1130,16 +1191,18 @@ const applySchema = async (db) => {
   await db.execute(`CREATE TABLE IF NOT EXISTS budgets (id TEXT PRIMARY KEY,category TEXT NOT NULL,amount REAL NOT NULL,period TEXT DEFAULT 'Monthly',created_at TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT);`);
   await db.execute(`CREATE TABLE IF NOT EXISTS recurring_rules (id TEXT PRIMARY KEY,rule_type TEXT NOT NULL,status TEXT DEFAULT 'active',txn_type TEXT DEFAULT 'Expense',account TEXT DEFAULT '',from_account TEXT DEFAULT '',to_account TEXT DEFAULT '',category TEXT DEFAULT '',subcategory TEXT DEFAULT '',base_note TEXT DEFAULT '',description TEXT DEFAULT '',currency TEXT DEFAULT 'INR',total_amount REAL DEFAULT 0,amount_per_part REAL DEFAULT 0,total_days INTEGER DEFAULT 0,total_parts INTEGER DEFAULT 0,completed_parts INTEGER DEFAULT 0,start_date TEXT DEFAULT '',next_date TEXT DEFAULT '',end_date TEXT DEFAULT '',schedule_mode TEXT DEFAULT 'on_date',frequency TEXT DEFAULT '',created_at TEXT DEFAULT '',updated_at TEXT DEFAULT '');`);
-  try { await db.run(`ALTER TABLE recurring_rules ADD COLUMN updated_at TEXT DEFAULT ''`); } catch {}
+  await safeAddCol(db, 'recurring_rules', "updated_at TEXT DEFAULT ''");
+
   await db.execute(`CREATE TABLE IF NOT EXISTS inventory (id TEXT PRIMARY KEY,name TEXT NOT NULL,qty REAL DEFAULT 0,unit TEXT DEFAULT '',price REAL DEFAULT 0,discounted_price REAL DEFAULT 0,status TEXT DEFAULT 'available',purchased_date TEXT DEFAULT '',notes TEXT DEFAULT '',updated_at TEXT,sub_qty REAL DEFAULT 1,sub_unit TEXT DEFAULT '',original_qty REAL DEFAULT 0,pack_qty REAL DEFAULT 1,discount_type TEXT DEFAULT 'percentage',discount_value REAL DEFAULT 0,category TEXT DEFAULT '',brand TEXT DEFAULT '');`);
-  try { await db.run(`ALTER TABLE inventory ADD COLUMN sub_qty REAL DEFAULT 1`); } catch {}
-  try { await db.run(`ALTER TABLE inventory ADD COLUMN sub_unit TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE inventory ADD COLUMN original_qty REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE inventory ADD COLUMN pack_qty REAL DEFAULT 1`); } catch {}
-  try { await db.run(`ALTER TABLE inventory ADD COLUMN discount_type TEXT DEFAULT 'percentage'`); } catch {}
-  try { await db.run(`ALTER TABLE inventory ADD COLUMN discount_value REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE inventory ADD COLUMN category TEXT DEFAULT ''`); } catch {}
-  try { await db.run(`ALTER TABLE inventory ADD COLUMN brand TEXT DEFAULT ''`); } catch {}
+  await safeAddCol(db, 'inventory', "sub_qty REAL DEFAULT 1");
+  await safeAddCol(db, 'inventory', "sub_unit TEXT DEFAULT ''");
+  await safeAddCol(db, 'inventory', "original_qty REAL DEFAULT 0");
+  await safeAddCol(db, 'inventory', "pack_qty REAL DEFAULT 1");
+  await safeAddCol(db, 'inventory', "discount_type TEXT DEFAULT 'percentage'");
+  await safeAddCol(db, 'inventory', "discount_value REAL DEFAULT 0");
+  await safeAddCol(db, 'inventory', "category TEXT DEFAULT ''");
+  await safeAddCol(db, 'inventory', "brand TEXT DEFAULT ''");
+
   await db.execute(`CREATE TABLE IF NOT EXISTS investment_transactions (
     id TEXT PRIMARY KEY,
     date TEXT,
@@ -1200,37 +1263,23 @@ const applySchema = async (db) => {
     created_by_provenance TEXT DEFAULT NULL,
     updated_by_provenance TEXT DEFAULT NULL
   );`);
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN created_by_device_id TEXT DEFAULT NULL`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN updated_by_device_id TEXT DEFAULT NULL`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN created_by_provenance TEXT DEFAULT NULL`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN updated_by_provenance TEXT DEFAULT NULL`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN investment_account TEXT`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN investment_account TEXT`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN actual_amount REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN total_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN brokerage_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN exchange_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN stt_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN sebi_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN stamp_duty_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN gst_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN dp_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN other_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN security_display_name TEXT`); } catch {}
-  try { await db.run(`ALTER TABLE investment_transactions ADD COLUMN settlement_mode TEXT DEFAULT 'ACTUAL'`); } catch {}
-
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN actual_amount REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN total_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN brokerage_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN exchange_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN stt_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN sebi_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN stamp_duty_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN gst_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN dp_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN other_charges REAL DEFAULT 0`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN security_display_name TEXT`); } catch {}
-  try { await db.run(`ALTER TABLE transactions ADD COLUMN settlement_mode TEXT DEFAULT 'ACTUAL'`); } catch {}
+  await safeAddCol(db, 'investment_transactions', "created_by_device_id TEXT DEFAULT NULL");
+  await safeAddCol(db, 'investment_transactions', "updated_by_device_id TEXT DEFAULT NULL");
+  await safeAddCol(db, 'investment_transactions', "created_by_provenance TEXT DEFAULT NULL");
+  await safeAddCol(db, 'investment_transactions', "updated_by_provenance TEXT DEFAULT NULL");
+  await safeAddCol(db, 'investment_transactions', "investment_account TEXT");
+  await safeAddCol(db, 'investment_transactions', "actual_amount REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "total_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "brokerage_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "exchange_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "stt_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "sebi_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "stamp_duty_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "gst_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "dp_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "other_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "security_display_name TEXT");
+  await safeAddCol(db, 'investment_transactions', "settlement_mode TEXT DEFAULT 'ACTUAL'");
   await db.execute(`CREATE TABLE IF NOT EXISTS brokerages (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE,
@@ -1388,92 +1437,46 @@ const applySchema = async (db) => {
 /**
  * Ensures all sync table columns exist on SQLite, safely handling both Capacitor SQLite db.run and db.execute.
  */
-const _tableColumnsCache = new Map();
-
-export const getTableColumns = async (db, table) => {
-  if (!db || !table) return null;
-  const key = String(table).toLowerCase();
-  if (_tableColumnsCache.has(key)) return _tableColumnsCache.get(key);
-  const cols = new Set();
-  try {
-    if (typeof db.query === 'function') {
-      const info = await db.query(`PRAGMA table_info(${table})`);
-      for (const row of info.values || []) {
-        if (row.name) cols.add(row.name.toLowerCase());
-      }
-    }
-  } catch {}
-  if (cols.size > 0) {
-    _tableColumnsCache.set(key, cols);
-    return cols;
-  }
-  return null;
-};
-
-export const clearTableColumnsCache = () => {
-  _tableColumnsCache.clear();
-};
-
 export const ensureSyncSchema = async (db) => {
   if (!db) return;
 
-  const safeAddCol = async (table, colDef) => {
-    try {
-      const colName = colDef.trim().split(/\s+/)[0].toLowerCase();
-      let existingCols = await getTableColumns(db, table);
-      if (existingCols && existingCols.has(colName)) {
-        return; // Column already exists, skip ALTER TABLE entirely
-      }
-      if (typeof db.run === 'function') {
-        await db.run(`ALTER TABLE ${table} ADD COLUMN ${colDef}`);
-      } else if (typeof db.execute === 'function') {
-        await db.execute(`ALTER TABLE ${table} ADD COLUMN ${colDef};`);
-      }
-      if (existingCols) {
-        existingCols.add(colName);
-      }
-    } catch {
-      // Ignore: column already exists or ALTER TABLE unsupported (e.g. IDB)
-    }
-  };
-
   // sync_local_state migrations
-  await safeAddCol('sync_local_state', "lifecycle_state TEXT DEFAULT 'UNINITIALIZED'");
-  await safeAddCol('sync_local_state', 'base_snapshot_id TEXT');
-  await safeAddCol('sync_local_state', 'base_cloud_version INTEGER DEFAULT 0');
-  await safeAddCol('sync_local_state', 'last_parent_snapshot_id TEXT');
-  await safeAddCol('sync_local_state', 'last_uploaded_sequence INTEGER DEFAULT 0');
-  await safeAddCol('sync_local_state', 'last_acked_sequence INTEGER DEFAULT 0');
+  await safeAddCol(db, 'sync_local_state', "lifecycle_state TEXT DEFAULT 'UNINITIALIZED'");
+  await safeAddCol(db, 'sync_local_state', 'base_snapshot_id TEXT');
+  await safeAddCol(db, 'sync_local_state', 'base_cloud_version INTEGER DEFAULT 0');
+  await safeAddCol(db, 'sync_local_state', 'last_parent_snapshot_id TEXT');
+  await safeAddCol(db, 'sync_local_state', 'last_uploaded_sequence INTEGER DEFAULT 0');
+  await safeAddCol(db, 'sync_local_state', 'last_acked_sequence INTEGER DEFAULT 0');
 
   // sync_peer_state migrations
-  await safeAddCol('sync_peer_state', 'base_snapshot_id TEXT');
+  await safeAddCol(db, 'sync_peer_state', 'base_snapshot_id TEXT');
 
   // sync_delta_queue migrations
-  await safeAddCol('sync_delta_queue', 'acknowledged_at TEXT');
-  await safeAddCol('sync_delta_queue', 'created_at TEXT');
+  await safeAddCol(db, 'sync_delta_queue', 'acknowledged_at TEXT');
+  await safeAddCol(db, 'sync_delta_queue', 'created_at TEXT');
 
   // sync_tombstones migrations
-  await safeAddCol('sync_tombstones', 'entity_id TEXT');
-  await safeAddCol('sync_tombstones', 'generation INTEGER DEFAULT 0');
-  await safeAddCol('sync_tombstones', 'deleted_checksum TEXT');
+  await safeAddCol(db, 'sync_tombstones', 'entity_id TEXT');
+  await safeAddCol(db, 'sync_tombstones', 'generation INTEGER DEFAULT 0');
+  await safeAddCol(db, 'sync_tombstones', 'deleted_checksum TEXT');
 
   // sync_staged_packages migrations
-  await safeAddCol('sync_staged_packages', 'sequence_range TEXT');
-  await safeAddCol('sync_staged_packages', 'base_snapshot_id TEXT');
+  await safeAddCol(db, 'sync_staged_packages', 'sequence_range TEXT');
+  await safeAddCol(db, 'sync_staged_packages', 'base_snapshot_id TEXT');
 
   // sync_conflicts migrations
-  await safeAddCol('sync_conflicts', "entity_type TEXT DEFAULT ''");
-  await safeAddCol('sync_conflicts', 'local_state TEXT');
-  await safeAddCol('sync_conflicts', 'remote_state TEXT');
-  await safeAddCol('sync_conflicts', 'base_state TEXT');
-  await safeAddCol('sync_conflicts', "detected_at TEXT DEFAULT ''");
+  await safeAddCol(db, 'sync_conflicts', "entity_type TEXT DEFAULT ''");
+  await safeAddCol(db, 'sync_conflicts', 'local_state TEXT');
+  await safeAddCol(db, 'sync_conflicts', 'remote_state TEXT');
+  await safeAddCol(db, 'sync_conflicts', 'base_state TEXT');
+  await safeAddCol(db, 'sync_conflicts', "detected_at TEXT DEFAULT ''");
 
   // investment_plans migrations
-  await safeAddCol('investment_plans', 'target_amount REAL DEFAULT 0');
-  await safeAddCol('investment_plans', 'current_value REAL DEFAULT 0');
+  await safeAddCol(db, 'investment_plans', 'target_amount REAL DEFAULT 0');
+  await safeAddCol(db, 'investment_plans', 'current_value REAL DEFAULT 0');
 
   // recurring_rules migrations
-  await safeAddCol('recurring_rules', "updated_at TEXT DEFAULT ''");
+  await safeAddCol(db, 'recurring_rules', "updated_at TEXT DEFAULT ''");
 
   // High-performance indexes for delta sync queue
   try {
