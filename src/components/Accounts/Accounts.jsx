@@ -10,7 +10,7 @@ import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import StockManager from './StockManager.jsx';
 import InvestmentsPortfolio from './InvestmentsPortfolio.jsx';
 import InvestmentPlansModal from '../Investments/InvestmentPlansModal.jsx';
-import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
+import { BulkSelectionBar, SearchView } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import { useDueAlertState } from '../../hooks/useDueAlertState.js';
 import { activeHoldingsData } from '../../database/holdingsData.js';
@@ -399,6 +399,7 @@ export function isInvestmentTransactionForSubAccount(txn, parentAsset, subAccoun
 
 // ── Account Detail ────────────────────────────────────────────────────────────
 function AccountDetail({ acctName, subAccountName, allTxns, onBack, backInterceptRef, ccConfig }) {
+  const { state } = useApp();
   const now = new Date();
 
   // If this is a CC account, default period to 'CC Cycle'; otherwise 'Month'
@@ -415,6 +416,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   const [multiMode, setMultiMode] = useState(false);
   const [copyTxn, setCopyTxn] = useState(null);
   const [addKey, setAddKey] = useState(0);
+  const [showSearch, setShowSearch] = useState(false);
 
   // For CC Cycle navigation: which cycle offset (0 = current, -1 = previous, etc.)
   const [ccCycleOffset, setCcCycleOffset] = useState(0);
@@ -850,6 +852,21 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
     return Object.entries(map);
   }, [periodTxns, orderMap]);
 
+  if (showSearch) {
+    return (
+      <SearchView
+        transactions={acctTxns}
+        accounts={state.accounts || []}
+        categories={state.categories || {}}
+        fixedAccount={acctName}
+        fixedSubAccount={subAccountName}
+        onClose={() => setShowSearch(false)}
+        backInterceptRef={backInterceptRef}
+        onCopy={handleCopy}
+      />
+    );
+  }
+
   return (
     <div className="acct-detail-screen">
       <div className="page-hdr">
@@ -860,16 +877,8 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           <div className="page-hdr-title">{acctName}{subAccountName ? ` › ${subAccountName}` : ''}</div>
           <div className="page-hdr-sub">{subAccountName ? 'Sub Account' : 'Account'} · {acctTxns.length} total txns</div>
         </div>
-        <div className="entity-badge" style={{
-          background: 'var(--theme-header-btn-bg, var(--bg-card2))',
-          color: 'var(--theme-header-btn-color, var(--text-primary))',
-          border: '1px solid var(--border)',
-          fontWeight: 700
-        }}>
-          {((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)) >= 0 ? '+' : ''}{formatINRCompact(Math.abs((isShareMarket && brokerageInfo) ? brokerageInfo.currentValue : (isMFAcct ? mfActiveCost : closingBal)))}
-        </div>
-        <button className="add-fab-sm" onClick={() => { setShowAdd(true); setAddKey(k => k + 1); }} title="Add transaction">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M12 5v14M5 12h14" /></svg>
+        <button className="txn-search-btn" onClick={() => setShowSearch(true)} title="Search transactions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="16" height="16"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         </button>
       </div>
 
@@ -905,6 +914,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           </div>
         )}
 
+        <div className="acct-sticky-header-wrap">
         <div style={{ padding: '4px var(--page-px) 4px' }}>
           <div className="period-tabs">
             {PERIODS.filter(p => p !== 'CC Cycle' || isCC).map(p => <button key={p} className={`period-tab ${period === p ? 'active' : ''}`} onClick={() => { setPeriod(p); if (p === 'CC Cycle') setCcCycleOffset(0); }}>{p}</button>)}
@@ -982,6 +992,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
               {(isMFAcct ? mfActiveCost : closingBal) >= 0 ? '+' : ''}{formatINR(isMFAcct ? mfActiveCost : closingBal)}
             </div>
           </div>
+        </div>
         </div>
 
         {chartTitle && (
@@ -1104,6 +1115,15 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           </>
         }
       </div>
+      {/* Floating Add Transaction Button */}
+      <button
+        className="trans-fab"
+        onClick={() => { setShowAdd(true); setAddKey(k => k + 1); }}
+        title="Add Transaction"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
+
       {addDate && <AddTransaction prefillDate={addDate} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={() => setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef} />}
       {showAdd && <AddTransaction key={addKey} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={() => setShowAdd(false)} onSaveAndContinue={() => { }} backInterceptRef={backInterceptRef} />}
       {copyTxn && <AddTransaction copyTransaction={copyTxn} onClose={() => setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({ ...copyTxn, _id: undefined })} backInterceptRef={backInterceptRef} />}

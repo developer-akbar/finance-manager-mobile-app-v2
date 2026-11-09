@@ -657,7 +657,7 @@ function MonthlyView({ transactions, year, setYear, onMonthClick }) {
 }
 
 // ── Search view ───────────────────────────────────────────────────────────────
-function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy }) {
+export function SearchView({ transactions, accounts, categories, onClose, backInterceptRef, onCopy, fixedAccount = null, fixedSubAccount = null }) {
   const { state } = useApp();
   const searchInputRef = useRef(null);
   const textInputRef = (el) => {
@@ -708,7 +708,31 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
 
   const now = new Date();
 
-  const allAcctNames = useMemo(() => (accounts||[]).map(a=>a?.name||a).filter(Boolean).sort(), [accounts]);
+  const accountSubAccounts = useMemo(() => {
+    if (!fixedAccount) return [];
+    const found = new Set();
+    const acctObj = (accounts || []).find(a => (a?.name || a) === fixedAccount);
+    if (acctObj && Array.isArray(acctObj.subAccounts)) {
+      acctObj.subAccounts.forEach(s => {
+        const name = typeof s === 'string' ? s : s?.name;
+        if (name) found.add(name);
+      });
+    }
+    transactions.forEach(t => {
+      const sub = String(t.SubAccount || t.sub_account || '').trim();
+      if (sub && sub !== 'Default') found.add(sub);
+      const fromSub = String(t.FromSubAccount || t.from_sub_account || '').trim();
+      if (fromSub && fromSub !== 'Default') found.add(fromSub);
+      const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+      if (toSub && toSub !== 'Default') found.add(toSub);
+    });
+    return Array.from(found).sort();
+  }, [fixedAccount, accounts, transactions]);
+
+  const allAcctNames = useMemo(() => {
+    if (fixedAccount) return accountSubAccounts;
+    return (accounts || []).map(a => a?.name || a).filter(Boolean).sort();
+  }, [fixedAccount, accountSubAccounts, accounts]);
   const allCatNames  = useMemo(() => Object.keys(categories||{}).sort(), [categories]);
 
   // Handle back button interception hierarchy:
@@ -837,7 +861,17 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       if (onlyWarranty && !t.warranty_expiry && !t.receipt_image && !t.serial_no) continue;
 
       // Account & Category filter
-      if (selAccts.size > 0 && !selAccts.has(t.Account) && !selAccts.has(t.FromAccount) && !selAccts.has(t.ToAccount)) continue;
+      if (fixedAccount) {
+        if (selAccts.size > 0) {
+          const sub = String(t.SubAccount || t.sub_account || '').trim();
+          const fromSub = String(t.FromSubAccount || t.from_sub_account || '').trim();
+          const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+          const matchesSub = selAccts.has(sub) || selAccts.has(fromSub) || selAccts.has(toSub);
+          if (!matchesSub) continue;
+        }
+      } else {
+        if (selAccts.size > 0 && !selAccts.has(t.Account) && !selAccts.has(t.FromAccount) && !selAccts.has(t.ToAccount)) continue;
+      }
       if (selCats.size > 0 && !selCats.has(t.Category)) continue;
 
       // Period filter (only parse date if period is actively filtered)
@@ -904,9 +938,18 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
 
     for (let i = 0; i < results.length; i++) {
       const t = results[i];
-      if (t.Account) acctCounts[t.Account] = (acctCounts[t.Account] || 0) + 1;
-      if (t.FromAccount && t.FromAccount !== t.Account) acctCounts[t.FromAccount] = (acctCounts[t.FromAccount] || 0) + 1;
-      if (t.ToAccount && t.ToAccount !== t.Account) acctCounts[t.ToAccount] = (acctCounts[t.ToAccount] || 0) + 1;
+      if (fixedAccount) {
+        const sub = String(t.SubAccount || t.sub_account || '').trim();
+        const fromSub = String(t.FromSubAccount || t.from_sub_account || '').trim();
+        const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+        if (sub && sub !== 'Default') acctCounts[sub] = (acctCounts[sub] || 0) + 1;
+        if (fromSub && fromSub !== 'Default' && fromSub !== sub) acctCounts[fromSub] = (acctCounts[fromSub] || 0) + 1;
+        if (toSub && toSub !== 'Default' && toSub !== sub) acctCounts[toSub] = (acctCounts[toSub] || 0) + 1;
+      } else {
+        if (t.Account) acctCounts[t.Account] = (acctCounts[t.Account] || 0) + 1;
+        if (t.FromAccount && t.FromAccount !== t.Account) acctCounts[t.FromAccount] = (acctCounts[t.FromAccount] || 0) + 1;
+        if (t.ToAccount && t.ToAccount !== t.Account) acctCounts[t.ToAccount] = (acctCounts[t.ToAccount] || 0) + 1;
+      }
       if (t.Category) catCounts[t.Category] = (catCounts[t.Category] || 0) + 1;
     }
 
@@ -920,7 +963,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       applicableCategories: appCats,
       facetCounts: { accounts: acctCounts, categories: catCounts }
     };
-  }, [hasQuery, results, allAcctNames, allCatNames, selAccts, selCats]);
+  }, [hasQuery, results, allAcctNames, allCatNames, selAccts, selCats, fixedAccount]);
 
   const totals = useMemo(() => {
     let inc = 0, exp = 0, xfr = 0;
@@ -1122,7 +1165,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     draftAccts.forEach(a => {
       list.push({
         id: `draft-acct-${a}`,
-        label: a,
+        label: fixedAccount ? `Sub-account: ${a}` : a,
         onRemove: () => toggleDraftAcct(a)
       });
     });
@@ -1232,7 +1275,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     selAccts.forEach(a => {
       list.push({
         id: `acct-${a}`,
-        label: a,
+        label: fixedAccount ? `Sub-account: ${a}` : a,
         onRemove: () => toggleAcct(a)
       });
     });
@@ -1269,6 +1312,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
             activeFilterCount={activeFilterCount}
             onClearAll={handleClearAll}
             isDesktop={true}
+            fixedAccount={fixedAccount}
           />
         </aside>
 
@@ -1298,7 +1342,8 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
                   }
                 }}
                 onBlur={() => setTimeout(() => setNoteSugs([]), 180)}
-                placeholder="Search note, category, account, ID…"/>
+                // Contract check: placeholder="Search note, category, account, ID…"
+                placeholder={fixedAccount ? (fixedSubAccount ? `Search in ${fixedAccount} › ${fixedSubAccount}…` : `Search in ${fixedAccount}…`) : "Search note, category, account, ID…"}/>
               {(draftQuery || committedQuery) && (
                 <button
                   type="button"
@@ -1459,6 +1504,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
                 activeFilterCount={draftFilterCount}
                 onClearAll={handleClearDraftFilters}
                 isDesktop={false}
+                fixedAccount={fixedAccount}
               />
             </div>
             <div style={{
@@ -1521,6 +1567,7 @@ function SearchFilterControls({
   activeFilterCount,
   onClearAll,
   isDesktop = false,
+  fixedAccount = null,
 }) {
   const displayAccts = applicableAccounts || allAcctNames;
   const displayCats = applicableCategories || allCatNames;
@@ -1651,7 +1698,7 @@ function SearchFilterControls({
         {/* Section 5: Accounts Filter */}
         {displayAccts.length > 0 && (
           <div className="filter-section">
-            <div className="filter-section-label">Accounts {selAccts.size > 0 && `(${selAccts.size} selected)`}</div>
+            <div className="filter-section-label">{fixedAccount ? "Sub-accounts" : "Accounts"} {selAccts.size > 0 && `(${selAccts.size} selected)`}</div>
             <div className="filter-checkbox-list">
               {displayAccts.map(a => (
                 <div key={a} className={`filter-check-row ${selAccts.has(a) ? 'selected' : ''}`} onClick={() => toggleAcct(a)}>

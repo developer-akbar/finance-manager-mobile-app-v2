@@ -77,6 +77,10 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
       ? (t.Note || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`)
       : (t.Note || t.Category || '—'));
 
+  const subAccount = String(t.SubAccount || t.sub_account || '').trim();
+  const fromSub = String(t.FromSubAccount || t.from_sub_account || (isTransfer && !t.ToSubAccount && !t.to_sub_account ? subAccount : '')).trim();
+  const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
+
   const subLabel = !isTransfer && !isInvestment ? (t.Category || '') : '';
   const hasAccount = !isTransfer && !isInvestment && t.Account;
   const xferAccountLabel = !isInvestment && isTransfer && t.Note ? `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}` : '';
@@ -180,8 +184,16 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
             <span className="td-acct-val" title={isTransfer ? (xferAccountLabel || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`) : (t.Account || invBroker || '—')}>
               {isTransfer ? (xferAccountLabel || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`) : (t.Account || invBroker || '—')}
             </span>
-            {t.SubAccount && t.SubAccount !== t.Account && !isTransfer && (
-              <span className="td-subacct-val">{t.SubAccount}</span>
+            {isTransfer ? (
+              (fromSub || toSub) && (
+                <span className="td-subacct-val" title={`${fromSub || '—'} → ${toSub || '—'}`}>
+                  {fromSub && toSub ? `${fromSub} → ${toSub}` : (fromSub ? `${fromSub} →` : `→ ${toSub}`)}
+                </span>
+              )
+            ) : (
+              (subAccount && subAccount !== t.Account && subAccount !== 'Default') ? (
+                <span className="td-subacct-val" title={subAccount}>{subAccount}</span>
+              ) : null
             )}
           </div>
 
@@ -309,8 +321,24 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
                   {showDate && t.Date && <span className="txn-time-tag" style={{ color: 'var(--text-muted)' }}>{formatDate(t.Date, 'short')}</span>}
                   {subLabel && <span className="txn-cat-tag">{subLabel}</span>}
                   {t.Subcategory && t.Subcategory !== 'Default' && t.Subcategory !== subLabel && <span className="txn-cat-tag">{t.Subcategory}</span>}
-                  {hasAccount && <span className="txn-time-tag">{t.Account}</span>}
-                  {xferAccountLabel && <span className="txn-time-tag">{xferAccountLabel}</span>}
+                  {hasAccount && (
+                    <>
+                      <span className="txn-time-tag">{t.Account}</span>
+                      {subAccount && subAccount !== t.Account && subAccount !== 'Default' && (
+                        <span className="txn-time-tag" style={{ color: 'var(--text-secondary)', opacity: 0.85 }}>{subAccount}</span>
+                      )}
+                    </>
+                  )}
+                  {isTransfer && (
+                    <>
+                      <span className="txn-time-tag">{xferAccountLabel || `${t.Account || t.FromAccount || '—'} → ${t.ToAccount || '—'}`}</span>
+                      {(fromSub || toSub) && (
+                        <span className="txn-time-tag" style={{ color: 'var(--text-secondary)', opacity: 0.85 }}>
+                          {fromSub && toSub ? `${fromSub} → ${toSub}` : (fromSub ? `${fromSub} →` : `→ ${toSub}`)}
+                        </span>
+                      )}
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -408,6 +436,9 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
   const cls = displayType === 'income' ? 'income' : displayType === 'expense' ? 'expense' : 'transfer';
   const sign = displayType === 'income' ? '+' : displayType === 'expense' ? '−' : '';
   const isXfer = type === 'transfer';
+  const subAccount = String(t.SubAccount || t.sub_account || '').trim();
+  const fromSub = String(t.FromSubAccount || t.from_sub_account || (isXfer && !t.ToSubAccount && !t.to_sub_account ? subAccount : '')).trim();
+  const toSub = String(t.ToSubAccount || t.to_sub_account || '').trim();
 
   // Instalment detection: use note pattern AND recurring_rule_id
   const ruleId = t.recurring_rule_id;
@@ -673,14 +704,36 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
             <>
               {ageStr && <DPRow label="Age" value={ageStr} />}
               {isInvested && isRedeemed && <DPRow label="Portfolio Status" value="Redeemed (Inactive)" />}
-              {isXfer ? <>
-                <DPRow label="From" value={t.Account || t.FromAccount || '—'} />
-                <DPRow label="To" value={t.ToAccount || '—'} />
-              </> : <>
-                <DPRow label="Account" value={t.Account || '—'} />
-                <DPRow label="Category" value={t.Category || '—'} />
-                {t.Subcategory && t.Subcategory !== 'Default' && <DPRow label="Subcategory" value={t.Subcategory} />}
-              </>}
+              {isXfer ? (
+                <>
+                  <DPRow
+                    label="From"
+                    value={fromSub && fromSub !== 'Default' && fromSub !== (t.Account || t.FromAccount)
+                      ? `${t.Account || t.FromAccount || '—'} → ${fromSub}`
+                      : (t.Account || t.FromAccount || '—')
+                    }
+                  />
+                  <DPRow
+                    label="To"
+                    value={toSub && toSub !== 'Default' && toSub !== t.ToAccount
+                      ? `${t.ToAccount || '—'} → ${toSub}`
+                      : (t.ToAccount || '—')
+                    }
+                  />
+                </>
+              ) : (
+                <>
+                  <DPRow
+                    label="Account"
+                    value={subAccount && subAccount !== 'Default' && subAccount !== t.Account
+                      ? `${t.Account || '—'} → ${subAccount}`
+                      : (t.Account || '—')
+                    }
+                  />
+                  <DPRow label="Category" value={t.Category || '—'} />
+                  {t.Subcategory && t.Subcategory !== 'Default' && <DPRow label="Subcategory" value={t.Subcategory} />}
+                </>
+              )}
               {t.Note && <DPRow label="Note" value={t.Note} />}
               {showDescription && t.Description && normalizeDescriptionForView(t.Description) && (
                 <DPRow label="Description" value={normalizeDescriptionForView(t.Description)} isPreWrap={true} />
