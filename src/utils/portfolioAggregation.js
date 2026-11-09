@@ -202,7 +202,7 @@ export function aggregatePositionsForDisplay(positions = [], valuationProvider =
 export function formatAsOfDate(dateStr) {
   if (!dateStr) return '';
   const str = String(dateStr).trim();
-  
+
   // Handle space separator for date vs time (e.g., "2026-09-04 10:24 AM")
   const spaceIdx = str.indexOf(' ');
   let datePart = str;
@@ -346,7 +346,7 @@ export function parseDateToTimestamp(dateStr) {
  */
 export function calculateXIRR(cashFlows) {
   if (!Array.isArray(cashFlows) || cashFlows.length < 2) return null;
-  
+
   const validFlows = [];
   for (const cf of cashFlows) {
     if (!cf || !cf.date || typeof cf.amount !== 'number' || isNaN(cf.amount) || cf.amount === 0) continue;
@@ -412,8 +412,8 @@ export function computePositionXIRR(position, valuation = null) {
   const val = valuation || position.valuation;
   const currentValue = isRedeemed ? 0 : (val && val.isValued && val.currentValue > 0 ? val.currentValue : 0);
 
-  const txns = (position.txns && position.txns.length > 0) 
-    ? position.txns 
+  const txns = (position.txns && position.txns.length > 0)
+    ? position.txns
     : (position.buyLots && position.buyLots.length > 0 ? position.buyLots : []);
   if (!Array.isArray(txns) || txns.length === 0) return null;
 
@@ -521,7 +521,7 @@ export function computePortfolioXIRR(activePositions = [], valuationProvider = n
 
 export function calculateInvestmentAge(earliestDateStr, referenceDate = new Date('2026-09-06')) {
   if (!earliestDateStr) return { fullStr: '', compactStr: '', years: 0, months: 0 };
-  
+
   let dateObj;
   const str = String(earliestDateStr).trim();
   const parts = str.split('/');
@@ -587,11 +587,14 @@ export function getInvestmentDisplayMetrics(position, valuation = null) {
       costLabel: 'Invested',
       returnLabel: 'Total returns',
       priceLabel: 'Current NAV',
+      shortPriceLabel: 'NAV',
       qtyLabel: 'Total Units',
       avgPriceLabel: 'Avg NAV',
       unvaluedLabel: 'NAV unavailable',
       formattedQty: '0 units',
+      formattedQtyCompact: '0',
       formattedAvgPrice: 'Avg NAV ₹0.00',
+      formattedAvgPriceCompact: 'Avg ₹0.00',
       priceTypeLabel: 'Current NAV'
     };
   }
@@ -614,7 +617,7 @@ export function getInvestmentDisplayMetrics(position, valuation = null) {
 
   const units = position.currentUnits || 0;
   const avgCost = position.averageCostPerUnit !== undefined && position.averageCostPerUnit !== null
-    ? position.averageCostPerUnit 
+    ? position.averageCostPerUnit
     : (units > 0 ? position.remainingCostBasis / units : 0);
 
   // Price label determination based on ValuationResult.priceType
@@ -637,18 +640,23 @@ export function getInvestmentDisplayMetrics(position, valuation = null) {
     costLabel: 'Invested',
     returnLabel: isMf ? 'Total returns' : 'P&L',
     priceLabel: priceTypeLabel,
+    shortPriceLabel: isMf ? 'NAV' : 'LTP',
     priceTypeLabel,
     qtyLabel: isMf ? 'Total Units' : 'Qty',
     avgPriceLabel: isMf ? 'Avg NAV' : 'Avg Price',
-    formattedQty: isMf 
+    formattedQty: isMf
       ? `${units.toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} units`
       : `Qty ${Math.round(units)}`,
+    formattedQtyCompact: isMf
+      ? `${units.toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}`
+      : `${Math.round(units)}`,
     rawQty: isMf
       ? units.toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
       : `${Math.round(units)}`,
     formattedAvgPrice: isMf
       ? `Avg NAV ₹${avgCost.toFixed(2)}`
       : `Avg Price ₹${avgCost.toFixed(2)}`,
+    formattedAvgPriceCompact: `Avg ₹${avgCost.toFixed(2)}`,
     unvaluedLabel: isMf ? 'NAV unavailable' : 'LTP unavailable'
   };
 }
@@ -693,13 +701,13 @@ export function computePortfolio1DReturns(activePositions = [], valuationProvide
     const val = valuationProvider.getValuation(pos);
     const units = pos.currentUnits || 0;
     if (
-      !val || 
-      !val.isValued || 
-      typeof val.nav !== 'number' || 
-      typeof val.previousClose !== 'number' || 
-      isNaN(val.nav) || 
-      isNaN(val.previousClose) || 
-      val.previousClose <= 0 || 
+      !val ||
+      !val.isValued ||
+      typeof val.nav !== 'number' ||
+      typeof val.previousClose !== 'number' ||
+      isNaN(val.nav) ||
+      isNaN(val.previousClose) ||
+      val.previousClose <= 0 ||
       units <= 0
     ) {
       continue;

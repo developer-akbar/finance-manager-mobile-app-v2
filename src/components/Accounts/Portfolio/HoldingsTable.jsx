@@ -1,33 +1,37 @@
 import React, { useState, useMemo } from 'react';
 import { formatINR } from '../../../utils/format.js';
-import { 
-  aggregatePositionsForDisplay, 
+import {
+  aggregatePositionsForDisplay,
   matchesHoldingSearch,
-  getInvestmentDisplayMetrics, 
-  formatAsOfDate, 
-  formatSignedCurrency, 
+  getInvestmentDisplayMetrics,
+  formatAsOfDate,
+  formatSignedCurrency,
   formatSignedPercent,
   computePositionXIRR,
   getTodaysChange
 } from '../../../utils/portfolioAggregation.js';
 import { detectAssetType } from '../../../utils/valuationProvider.js';
 
-export default function HoldingsTable({ 
-  positions = [], 
-  valuationProvider, 
-  valuationVersion, 
+export default function HoldingsTable({
+  positions = [],
+  valuationProvider,
+  valuationVersion,
   oneDayDisplayMode = 'unit',
   onToggleOneDayDisplayMode = null,
-  onSelectPosition 
+  onSelectPosition
 }) {
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState('cost');
   const [sortDir, setSortDir] = useState('desc'); // 'asc' | 'desc'
   const [expandedGroups, setExpandedGroups] = useState({});
 
-  // 1. Group active positions by scheme identity
+  // 1. Group active positions by scheme identity and precompute XIRR for fast sorting
   const aggregatedGroups = useMemo(() => {
-    return aggregatePositionsForDisplay(positions, valuationProvider);
+    const rawGroups = aggregatePositionsForDisplay(positions, valuationProvider);
+    return rawGroups.map(group => {
+      const xirr = computePositionXIRR(group, group.valuation);
+      return { ...group, xirr };
+    });
   }, [positions, valuationProvider, valuationVersion]);
 
   // 2. Filter & Sort aggregated groups
@@ -74,6 +78,10 @@ export default function HoldingsTable({
         const nA = (valA?.isValued && typeof valA.nav === 'number') ? valA.nav : -Infinity;
         const nB = (valB?.isValued && typeof valB.nav === 'number') ? valB.nav : -Infinity;
         comparison = nA - nB;
+      } else if (sortKey === 'xirr') {
+        const xA = (typeof a.xirr === 'number' && !isNaN(a.xirr)) ? a.xirr : -Infinity;
+        const xB = (typeof b.xirr === 'number' && !isNaN(b.xirr)) ? b.xirr : -Infinity;
+        comparison = xA - xB;
       } else if (sortKey === 'units') {
         comparison = (a.currentUnits || 0) - (b.currentUnits || 0);
       }
@@ -132,7 +140,7 @@ export default function HoldingsTable({
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
-          <select 
+          <select
             className="holdings-sort-select"
             value={`${sortKey}-${sortDir}`}
             onChange={e => {
@@ -145,6 +153,7 @@ export default function HoldingsTable({
             <option value="value-desc">Sort: Highest Current Value</option>
             <option value="returns-desc">Sort: Highest Total Return</option>
             <option value="oneDay-desc">Sort: Highest 1D Return</option>
+            <option value="xirr-desc">Sort: Highest XIRR</option>
             <option value="units-desc">Sort: Most Units</option>
             <option value="name-asc">Sort: Security Name (A-Z)</option>
             <option value="platform-asc">Sort: Platform (A-Z)</option>
@@ -179,8 +188,11 @@ export default function HoldingsTable({
                   <th className="sortable-th col-1d text-right" onClick={() => handleHeaderClick('oneDay')}>
                     1D Return{renderSortIndicator('oneDay')}
                   </th>
+                  <th className="sortable-th col-xirr text-right" onClick={() => handleHeaderClick('xirr')}>
+                    XIRR{renderSortIndicator('xirr')}
+                  </th>
                   <th className="sortable-th col-nav text-right" onClick={() => handleHeaderClick('nav')}>
-                    NAV / LTP{renderSortIndicator('nav')}
+                    CUR. NAV / LTP{renderSortIndicator('nav')}
                   </th>
                   <th className="sortable-th col-qty text-right" onClick={() => handleHeaderClick('units')}>
                     Units / Qty & Avg{renderSortIndicator('units')}
@@ -202,7 +214,7 @@ export default function HoldingsTable({
 
                   return (
                     <React.Fragment key={group.positionKey}>
-                      <tr 
+                      <tr
                         className={`holdings-table-row clickable ${group.isAggregateGroup ? 'aggregated-row' : ''}`}
                         onClick={() => onSelectPosition(group)}
                         title="Click to view holding details"
@@ -224,7 +236,7 @@ export default function HoldingsTable({
                         <td className="col-folio">
                           <div className="folio-mode-meta">
                             {group.isAggregateGroup ? (
-                              <button 
+                              <button
                                 className="folio-expand-badge-btn"
                                 onClick={(e) => toggleExpand(group.positionKey, e)}
                                 title="Click to expand folios"
@@ -242,7 +254,7 @@ export default function HoldingsTable({
                         <td className="col-val text-right font-bold current-val-cell num-tabular">
                           {isValued ? formatINR(val.currentValue) : <span className="val-na text-muted">{metrics.unvaluedLabel}</span>}
                         </td>
-                        <td className="col-cost text-right mono text-muted num-tabular font-semibold">
+                        <td className="col-cost text-right text-muted num-tabular font-semibold">
                           {formatINR(group.remainingCostBasis)}
                         </td>
                         <td className="col-pnl text-right num-tabular">
@@ -270,11 +282,22 @@ export default function HoldingsTable({
                             <span className="val-na text-muted">—</span>
                           )}
                         </td>
-                        <td className="col-nav text-right mono num-tabular">
+                        {/* Dedicated XIRR Column */}
+                        <td className="col-xirr text-right num-tabular">
+                          {typeof group.xirr === 'number' && !isNaN(group.xirr) ? (
+                            <span className={`font-bold ${getPnlClass(group.xirr)}`}>
+                              {formatSignedPercent(group.xirr)}
+                            </span>
+                          ) : (
+                            <span className="val-na text-muted">—</span>
+                          )}
+                        </td>
+                        {/* CUR. NAV / LTP Column */}
+                        <td className="col-nav text-right num-tabular">
                           {isValued && typeof val.nav === 'number' ? (
                             <div className="nav-cell-wrap">
                               <div className="nav-val-main font-semibold text-primary">
-                                {metrics.priceLabel} ₹{val.nav.toFixed(2)}
+                                {metrics.isMf ? 'NAV' : 'LTP'} ₹{val.nav.toFixed(2)}
                               </div>
                               {val.asOf && (
                                 <div className="nav-as-of-sub text-muted font-xs">
@@ -286,9 +309,21 @@ export default function HoldingsTable({
                             <span className="val-na text-muted">{metrics.unvaluedLabel}</span>
                           )}
                         </td>
-                        <td className="col-qty text-right mono font-xs text-muted num-tabular">
-                          <div className="font-semibold text-primary">{metrics.formattedQty}</div>
-                          <div>{metrics.formattedAvgPrice}</div>
+                        {/* Units / Qty & Avg Column */}
+                        <td className="col-qty text-right num-tabular">
+                          <div className="font-semibold text-primary">
+                            {metrics.isMf
+                              ? `${(group.currentUnits || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}`
+                              : `${(group.currentUnits || 0).toLocaleString('en-IN')}`}
+                          </div>
+                          <div className="text-muted font-xs">
+                            {(() => {
+                              const avgCost = group.averageCostPerUnit !== undefined && group.averageCostPerUnit !== null
+                                ? group.averageCostPerUnit
+                                : ((group.currentUnits || 0) > 0 ? (group.remainingCostBasis || 0) / group.currentUnits : 0);
+                              return `Avg ₹${avgCost.toFixed(2)}`;
+                            })()}
+                          </div>
                         </td>
                       </tr>
 
@@ -304,7 +339,7 @@ export default function HoldingsTable({
                           const subOneDayPercent = subHasOneDay ? (subOneDayDiff / subVal.previousClose) * 100 : null;
 
                           return (
-                            <tr 
+                            <tr
                               key={subPos.positionKey || idx}
                               className="folio-sub-row clickable"
                               onClick={() => onSelectPosition(subPos)}
@@ -324,7 +359,7 @@ export default function HoldingsTable({
                               <td className="col-val text-right font-semibold num-tabular">
                                 {subIsValued ? formatINR(subVal.currentValue) : '—'}
                               </td>
-                              <td className="col-cost text-right mono text-muted num-tabular">
+                              <td className="col-cost text-right text-muted num-tabular">
                                 {formatINR(subPos.remainingCostBasis)}
                               </td>
                               <td className="col-pnl text-right num-tabular">
@@ -341,11 +376,37 @@ export default function HoldingsTable({
                                   </span>
                                 ) : '—'}
                               </td>
-                              <td className="col-nav text-right mono text-muted num-tabular">
-                                {subIsValued ? `${subMetrics.priceLabel} ₹${subVal.nav.toFixed(2)}` : '—'}
+                              <td className="col-xirr text-right num-tabular">
+                                {(() => {
+                                  const subXirr = computePositionXIRR(subPos, subVal);
+                                  return typeof subXirr === 'number' && !isNaN(subXirr) ? (
+                                    <span className={`font-semibold ${getPnlClass(subXirr)}`}>
+                                      {formatSignedPercent(subXirr)}
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted">—</span>
+                                  );
+                                })()}
                               </td>
-                              <td className="col-qty text-right mono font-xs text-muted num-tabular">
-                                {subMetrics.formattedQty}
+                              <td className="col-nav text-right text-muted num-tabular">
+                                {subIsValued && typeof subVal.nav === 'number'
+                                  ? `${subMetrics.isMf ? 'NAV' : 'LTP'} ₹${subVal.nav.toFixed(2)}`
+                                  : '—'}
+                              </td>
+                              <td className="col-qty text-right num-tabular">
+                                <div className="font-semibold text-primary" style={{ fontSize: '0.82rem' }}>
+                                  {subMetrics.isMf
+                                    ? `${(subPos.currentUnits || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}`
+                                    : `${(subPos.currentUnits || 0).toLocaleString('en-IN')}`}
+                                </div>
+                                <div className="text-muted font-xs">
+                                  {(() => {
+                                    const subAvgCost = subPos.averageCostPerUnit !== undefined && subPos.averageCostPerUnit !== null
+                                      ? subPos.averageCostPerUnit
+                                      : ((subPos.currentUnits || 0) > 0 ? (subPos.remainingCostBasis || 0) / subPos.currentUnits : 0);
+                                    return `Avg ₹${subAvgCost.toFixed(2)}`;
+                                  })()}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -368,7 +429,7 @@ export default function HoldingsTable({
 
               return (
                 <div key={group.positionKey} className="holding-mobile-card-group">
-                  <div 
+                  <div
                     className={`holding-mobile-card clickable ${group.isAggregateGroup ? 'aggregated-card' : ''}`}
                     onClick={() => onSelectPosition(group)}
                   >
@@ -379,7 +440,7 @@ export default function HoldingsTable({
                         <div className="holding-card-sub-meta text-muted flex-gap-xs align-center mt-1">
                           <span className="platform-tag">{group.subAccount}</span>
                           {group.isAggregateGroup && (
-                            <button 
+                            <button
                               className="folio-expand-badge-btn"
                               onClick={(e) => toggleExpand(group.positionKey, e)}
                             >
@@ -421,23 +482,20 @@ export default function HoldingsTable({
                       </div>
                       <div className="sec-col text-right">
                         <span className="sec-lbl text-muted uppercase">XIRR</span>
-                        {(() => {
-                          const groupXirr = computePositionXIRR(group, val);
-                          return groupXirr !== null ? (
-                            <span className={`sec-val font-semibold num-tabular ${getPnlClass(groupXirr)}`}>
-                              {formatSignedPercent(groupXirr)}
-                            </span>
-                          ) : (
-                            <span className="sec-val text-muted">—</span>
-                          );
-                        })()}
+                        {typeof group.xirr === 'number' && !isNaN(group.xirr) ? (
+                          <span className={`sec-val font-semibold num-tabular ${getPnlClass(group.xirr)}`}>
+                            {formatSignedPercent(group.xirr)}
+                          </span>
+                        ) : (
+                          <span className="sec-val text-muted">—</span>
+                        )}
                       </div>
                     </div>
 
                     {/* 3. Three-Column Primary Metadata Grid */}
                     <div className="card-metadata-grid grid-3 mt-2 font-xs text-muted">
                       <div className="meta-col">
-                        <span className="meta-lbl block">{metrics.priceLabel}</span>
+                        <span className="meta-lbl block">{metrics.isMf ? 'NAV' : 'LTP'}</span>
                         {(() => {
                           const assetType = detectAssetType(group);
                           const dailyChange = isValued && typeof val.nav === 'number'
@@ -449,9 +507,9 @@ export default function HoldingsTable({
                                 {isValued && typeof val.nav === 'number' ? `₹${val.nav.toFixed(2)}` : '—'}
                               </span>
                               {dailyChange ? (
-                                <span 
-                                  className={`todays-change font-semibold num-tabular ${dailyChange.cls}`} 
-                                  style={{ fontSize: '0.68rem', color: dailyChange.color, whiteSpace: 'nowrap', cursor: 'pointer' }} 
+                                <span
+                                  className={`todays-change font-semibold num-tabular ${dailyChange.cls}`}
+                                  style={{ fontSize: '0.68rem', color: dailyChange.color, whiteSpace: 'nowrap', cursor: 'pointer' }}
                                   title="Tap 1D change to switch between price/NAV change and position 1D P&L."
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -476,16 +534,23 @@ export default function HoldingsTable({
                       </div>
 
                       <div className="meta-col">
-                        <span className="meta-lbl block">{metrics.avgPriceLabel}</span>
+                        <span className="meta-lbl block">Avg</span>
                         <span className="meta-val font-semibold block num-tabular">
-                          {metrics.formattedAvgPrice.replace(/^(Avg NAV|Avg Price)\s*/, '')}
+                          ₹{(() => {
+                            const avgCost = group.averageCostPerUnit !== undefined && group.averageCostPerUnit !== null
+                              ? group.averageCostPerUnit
+                              : ((group.currentUnits || 0) > 0 ? (group.remainingCostBasis || 0) / group.currentUnits : 0);
+                            return avgCost.toFixed(2);
+                          })()}
                         </span>
                       </div>
 
                       <div className="meta-col text-right">
-                        <span className="meta-lbl block">{metrics.qtyLabel}</span>
+                        <span className="meta-lbl block">Units</span>
                         <span className="meta-val font-semibold block num-tabular">
-                          {metrics.rawQty || metrics.formattedQty}
+                          {metrics.isMf
+                            ? `${(group.currentUnits || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}`
+                            : `${(group.currentUnits || 0).toLocaleString('en-IN')}`}
                         </span>
                       </div>
                     </div>
@@ -500,7 +565,7 @@ export default function HoldingsTable({
                         const subMetrics = getInvestmentDisplayMetrics(subPos);
 
                         return (
-                          <div 
+                          <div
                             key={subPos.positionKey || idx}
                             className="mobile-sub-card clickable"
                             onClick={() => onSelectPosition(subPos)}
@@ -510,12 +575,27 @@ export default function HoldingsTable({
                                 <div className="font-bold text-sm text-primary">Folio {subPos.folioNumber}</div>
                                 <div className="text-muted font-xs mt-0.5">{subPos.subAccount}</div>
                               </div>
+                              {(() => {
+                                const subXirr = computePositionXIRR(subPos, subVal);
+                                return typeof subXirr === 'number' && !isNaN(subXirr) ? (
+                                  <div className="text-right">
+                                    <span className="text-muted font-xs uppercase block">XIRR</span>
+                                    <span className={`font-bold font-xs num-tabular ${getPnlClass(subXirr)}`}>
+                                      {formatSignedPercent(subXirr)}
+                                    </span>
+                                  </div>
+                                ) : null;
+                              })()}
                             </div>
-                            
+
                             <div className="sub-card-grid grid-3 font-xs num-tabular pt-2 border-top">
                               <div>
                                 <span className="text-muted block uppercase">Units</span>
-                                <span className="font-semibold block mt-0.5">{subMetrics.rawQty || subMetrics.formattedQty}</span>
+                                <span className="font-semibold block mt-0.5">
+                                  {subMetrics.isMf
+                                    ? `${(subPos.currentUnits || 0).toLocaleString('en-IN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}`
+                                    : `${(subPos.currentUnits || 0).toLocaleString('en-IN')}`}
+                                </span>
                               </div>
                               <div>
                                 <span className="text-muted block uppercase">Invested</span>
