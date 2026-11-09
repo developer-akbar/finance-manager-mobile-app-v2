@@ -692,6 +692,20 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   const [txnTypeFilter, setTxnTypeFilter] = useState('All'); // 'All' | 'Expense' | 'Income' | 'Transfer'
   const [onlyWarranty, setOnlyWarranty]   = useState(false);
 
+  // Draft filter state for the Filter Sheet (staged until "Apply Filters" is clicked)
+  const [draftScopeNotes, setDraftScopeNotes] = useState(true);
+  const [draftScopeDesc,  setDraftScopeDesc]  = useState(true);
+  const [draftScopeTags,  setDraftScopeTags]  = useState(true);
+  const [draftMinAmount,  setDraftMinAmount]  = useState('');
+  const [draftMaxAmount,  setDraftMaxAmount]  = useState('');
+  const [draftTxnType,    setDraftTxnType]    = useState('All');
+  const [draftWarranty,   setDraftWarranty]   = useState(false);
+  const [draftPeriod,     setDraftPeriod]     = useState('All');
+  const [draftFrom,       setDraftFrom]       = useState('');
+  const [draftTo,         setDraftTo]         = useState('');
+  const [draftAccts,      setDraftAccts]      = useState(new Set());
+  const [draftCats,       setDraftCats]       = useState(new Set());
+
   const now = new Date();
 
   const allAcctNames = useMemo(() => (accounts||[]).map(a=>a?.name||a).filter(Boolean).sort(), [accounts]);
@@ -999,6 +1013,129 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
   const toggleAcct = a => setSelAccts(p => { const s = new Set(p); s.has(a) ? s.delete(a) : s.add(a); return s; });
   const toggleCat  = c => setSelCats(p  => { const s = new Set(p); s.has(c) ? s.delete(c) : s.add(c); return s; });
 
+  const toggleDraftAcct = a => setDraftAccts(p => { const s = new Set(p); s.has(a) ? s.delete(a) : s.add(a); return s; });
+  const toggleDraftCat  = c => setDraftCats(p  => { const s = new Set(p); s.has(c) ? s.delete(c) : s.add(c); return s; });
+
+  const openFilterSheet = () => {
+    setDraftScopeNotes(scopeNotes);
+    setDraftScopeDesc(scopeDesc);
+    setDraftScopeTags(scopeTags);
+    setDraftMinAmount(minAmount);
+    setDraftMaxAmount(maxAmount);
+    setDraftTxnType(txnTypeFilter);
+    setDraftWarranty(onlyWarranty);
+    setDraftPeriod(selPeriod);
+    setDraftFrom(customFrom);
+    setDraftTo(customTo);
+    setDraftAccts(new Set(selAccts));
+    setDraftCats(new Set(selCats));
+    setShowFilter(true);
+  };
+
+  const handleApplyFilters = () => {
+    setScopeNotes(draftScopeNotes);
+    setScopeDesc(draftScopeDesc);
+    setScopeTags(draftScopeTags);
+    setMinAmount(draftMinAmount);
+    setMaxAmount(draftMaxAmount);
+    setTxnTypeFilter(draftTxnType);
+    setOnlyWarranty(draftWarranty);
+    setSelPeriod(draftPeriod);
+    setPeriodOffset(0);
+    setFrom(draftFrom);
+    setTo(draftTo);
+    setSelAccts(new Set(draftAccts));
+    setSelCats(new Set(draftCats));
+    setShowFilter(false);
+  };
+
+  const handleClearDraftFilters = () => {
+    setDraftScopeNotes(true);
+    setDraftScopeDesc(true);
+    setDraftScopeTags(true);
+    setDraftMinAmount('');
+    setDraftMaxAmount('');
+    setDraftTxnType('All');
+    setDraftWarranty(false);
+    setDraftPeriod('All');
+    setDraftFrom('');
+    setDraftTo('');
+    setDraftAccts(new Set());
+    setDraftCats(new Set());
+  };
+
+  const draftFilterCount = useMemo(() => {
+    let count = 0;
+    if (draftAccts.size > 0) count += draftAccts.size;
+    if (draftCats.size > 0) count += draftCats.size;
+    if (draftPeriod !== 'All') count += 1;
+    if (draftTxnType !== 'All') count += 1;
+    if (draftMinAmount) count += 1;
+    if (draftMaxAmount) count += 1;
+    if (draftWarranty) count += 1;
+    if (!draftScopeNotes || !draftScopeDesc || !draftScopeTags) count += 1;
+    return count;
+  }, [draftAccts, draftCats, draftPeriod, draftTxnType, draftMinAmount, draftMaxAmount, draftWarranty, draftScopeNotes, draftScopeDesc, draftScopeTags]);
+
+  const draftAppliedFilters = useMemo(() => {
+    const list = [];
+    if (draftTxnType !== 'All') {
+      list.push({
+        id: 'draft-type',
+        label: `Type: ${draftTxnType}`,
+        onRemove: () => setDraftTxnType('All')
+      });
+    }
+    if (draftMinAmount && draftMaxAmount) {
+      list.push({
+        id: 'draft-amount',
+        label: `₹${draftMinAmount} – ₹${draftMaxAmount}`,
+        onRemove: () => { setDraftMinAmount(''); setDraftMaxAmount(''); }
+      });
+    } else if (draftMinAmount) {
+      list.push({
+        id: 'draft-minAmount',
+        label: `≥ ₹${draftMinAmount}`,
+        onRemove: () => setDraftMinAmount('')
+      });
+    } else if (draftMaxAmount) {
+      list.push({
+        id: 'draft-maxAmount',
+        label: `≤ ₹${draftMaxAmount}`,
+        onRemove: () => setDraftMaxAmount('')
+      });
+    }
+    if (draftWarranty) {
+      list.push({
+        id: 'draft-warranty',
+        label: '🛡️ Receipt / Warranty',
+        onRemove: () => setDraftWarranty(false)
+      });
+    }
+    if (draftPeriod !== 'All') {
+      list.push({
+        id: 'draft-period',
+        label: draftPeriod === 'Custom' ? `Custom: ${draftFrom || '…'} to ${draftTo || '…'}` : draftPeriod,
+        onRemove: () => { setDraftPeriod('All'); setDraftFrom(''); setDraftTo(''); }
+      });
+    }
+    draftAccts.forEach(a => {
+      list.push({
+        id: `draft-acct-${a}`,
+        label: a,
+        onRemove: () => toggleDraftAcct(a)
+      });
+    });
+    draftCats.forEach(c => {
+      list.push({
+        id: `draft-cat-${c}`,
+        label: c,
+        onRemove: () => toggleDraftCat(c)
+      });
+    });
+    return list;
+  }, [draftTxnType, draftMinAmount, draftMaxAmount, draftWarranty, draftPeriod, draftFrom, draftTo, draftAccts, draftCats]);
+
   const PERIODS = ['All', 'Weekly', 'Monthly', 'Yearly', 'FY', 'Custom'];
   const canNav  = selPeriod !== 'All' && selPeriod !== 'Custom';
 
@@ -1034,6 +1171,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
     setScopeTags(true);
     setFrom('');
     setTo('');
+    handleClearDraftFilters();
   };
 
   // Applied Filter Chips
@@ -1193,7 +1331,7 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
                 </div>
               )}
             </div>
-            <button className="filter-btn mobile-only-filter-btn" onClick={() => setShowFilter(true)}>
+            <button className="filter-btn mobile-only-filter-btn" onClick={openFilterSheet}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{width:15,height:15}}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
               {activeFilterCount > 0 && <span className="filter-active-dot"/>}
             </button>
@@ -1284,35 +1422,69 @@ function SearchView({ transactions, accounts, categories, onClose, backIntercept
       {showFilter && (
         <>
           <div className="overlay" onClick={() => setShowFilter(false)}/>
-          <div className="bottom-sheet" style={{maxHeight:'92dvh',display:'flex',flexDirection:'column',padding:'0 0 calc(var(--safe-bottom)+12px)'}}>
-            <div className="sheet-handle" style={{marginTop:14}}/>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'0 var(--page-px) 10px',borderBottom:'1px solid var(--border)'}}>
-              <div style={{fontWeight:800,fontSize:'0.9rem'}}>Search &amp; Filter Options</div>
+          <div
+            className="bottom-sheet"
+            style={{
+              maxHeight: 'min(86dvh, calc(100dvh - max(var(--safe-top, 0px), 24px) - 24px))',
+              display: 'flex',
+              flexDirection: 'column',
+              padding: 0,
+              bottom: 0,
+              borderRadius: '22px 22px 0 0',
+              boxSizing: 'border-box',
+              overflow: 'hidden'
+            }}
+          >
+            <div className="sheet-handle" style={{ marginTop: 12, marginBottom: 6, flexShrink: 0 }}/>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 var(--page-px) 10px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Search &amp; Filter Options</div>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowFilter(false)}>Close</button>
             </div>
-            <div style={{overflow:'auto',flex:1,padding:'10px var(--page-px)'}}>
+            <div style={{ overflowY: 'auto', overflowX: 'hidden', flex: 1, padding: '10px var(--page-px)', WebkitOverflowScrolling: 'touch' }}>
               <SearchFilterControls
-                scopeNotes={scopeNotes} setScopeNotes={setScopeNotes}
-                scopeDesc={scopeDesc} setScopeDesc={setScopeDesc}
-                scopeTags={scopeTags} setScopeTags={setScopeTags}
-                minAmount={minAmount} setMinAmount={setMinAmount}
-                maxAmount={maxAmount} setMaxAmount={setMaxAmount}
-                txnTypeFilter={txnTypeFilter} setTxnTypeFilter={setTxnTypeFilter}
-                onlyWarranty={onlyWarranty} setOnlyWarranty={setOnlyWarranty}
-                PERIODS={PERIODS} selPeriod={selPeriod} handlePeriodChange={handlePeriodChange}
-                customFrom={customFrom} setFrom={setFrom}
-                customTo={customTo} setTo={setTo}
-                allAcctNames={allAcctNames} selAccts={selAccts} toggleAcct={toggleAcct}
-                allCatNames={allCatNames} categories={categories} selCats={selCats} toggleCat={toggleCat}
+                scopeNotes={draftScopeNotes} setScopeNotes={setDraftScopeNotes}
+                scopeDesc={draftScopeDesc} setScopeDesc={setDraftScopeDesc}
+                scopeTags={draftScopeTags} setScopeTags={setDraftScopeTags}
+                minAmount={draftMinAmount} setMinAmount={setDraftMinAmount}
+                maxAmount={draftMaxAmount} setMaxAmount={setDraftMaxAmount}
+                txnTypeFilter={draftTxnType} setTxnTypeFilter={setDraftTxnType}
+                onlyWarranty={draftWarranty} setOnlyWarranty={setDraftWarranty}
+                PERIODS={PERIODS} selPeriod={draftPeriod} handlePeriodChange={p => setDraftPeriod(p)}
+                customFrom={draftFrom} setFrom={setDraftFrom}
+                customTo={draftTo} setTo={setDraftTo}
+                allAcctNames={allAcctNames} selAccts={draftAccts} toggleAcct={toggleDraftAcct}
+                allCatNames={allCatNames} categories={categories} selCats={draftCats} toggleCat={toggleDraftCat}
                 applicableAccounts={applicableAccounts} applicableCategories={applicableCategories} facetCounts={facetCounts}
-                appliedFilters={appliedFilters}
-                activeFilterCount={activeFilterCount}
-                onClearAll={handleClearAll}
+                appliedFilters={draftAppliedFilters}
+                activeFilterCount={draftFilterCount}
+                onClearAll={handleClearDraftFilters}
                 isDesktop={false}
               />
             </div>
-            <div style={{padding:'10px var(--page-px) 0'}}>
-              <button className="btn btn-primary btn-full" onClick={() => setShowFilter(false)}>Apply Filters</button>
+            <div style={{
+              padding: '12px var(--page-px) max(calc(var(--safe-bottom, 0px) + 20px), 36px)',
+              background: 'var(--bg-card)',
+              borderTop: '1px solid var(--border)',
+              flexShrink: 0,
+              boxShadow: '0 -4px 16px rgba(0, 0, 0, 0.12)'
+            }}>
+              <button
+                type="button"
+                className="btn btn-primary btn-full"
+                style={{
+                  height: 48,
+                  fontSize: '0.95rem',
+                  fontWeight: 700,
+                  borderRadius: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8
+                }}
+                onClick={handleApplyFilters}
+              >
+                Apply Filters {draftFilterCount > 0 ? `(${draftFilterCount})` : ''}
+              </button>
             </div>
           </div>
         </>
