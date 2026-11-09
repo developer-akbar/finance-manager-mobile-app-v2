@@ -182,15 +182,47 @@ export default function CloudSyncManager({ onBack }) {
   });
 
   useEffect(() => {
-    const unsub = subscribeRecoveryLock((isLocked, details) => {
-      setRecoveryLockState(prev => ({
-        ...prev,
-        isLocked,
-        details,
-        error: ''
-      }));
+    let mounted = true;
+    const unsub = subscribeRecoveryLock(async (isLocked, details) => {
+      let storedPin = '';
+      if (isLocked) {
+        try {
+          const { getStoredPersistedPin } = await import('../../services/syncSession.js');
+          storedPin = await getStoredPersistedPin() || '';
+        } catch {}
+      }
+      if (mounted) {
+        setRecoveryLockState(prev => ({
+          ...prev,
+          isLocked,
+          details,
+          unlockPin: prev.unlockPin || storedPin,
+          error: ''
+        }));
+      }
     });
-    return () => unsub();
+
+    (async () => {
+      try {
+        const { isRecoverySafetyLocked, getRecoverySafetyLockDetails } = await import('../../services/recoveryLock.js');
+        const locked = isRecoverySafetyLocked();
+        if (locked && mounted) {
+          const { getStoredPersistedPin } = await import('../../services/syncSession.js');
+          const storedPin = await getStoredPersistedPin() || '';
+          setRecoveryLockState(prev => ({
+            ...prev,
+            isLocked: true,
+            details: getRecoverySafetyLockDetails(),
+            unlockPin: prev.unlockPin || storedPin
+          }));
+        }
+      } catch {}
+    })();
+
+    return () => {
+      mounted = false;
+      unsub();
+    };
   }, []);
 
   // Register global window helper for programmatic or console invocation
@@ -738,6 +770,9 @@ export default function CloudSyncManager({ onBack }) {
     try {
       const cleanPin = pin.trim();
       await unlockSyncSession(cleanPin);
+      try {
+        await clearRecoverySafetyLockWithPin(cleanPin);
+      } catch {}
       setPin(''); // Immediately clear raw PIN from component input state
       setErrorMsg('');
       setAuthError('');
@@ -766,15 +801,26 @@ export default function CloudSyncManager({ onBack }) {
 
   // Handle Explicit Clear of Recovery Safety Lock with PIN
   const handleClearRecoveryLock = async () => {
-    if (!recoveryLockState.unlockPin || !recoveryLockState.unlockPin.trim()) {
+    let pinToUse = recoveryLockState.unlockPin;
+    if (!pinToUse || !pinToUse.trim()) {
+      try {
+        const { getStoredPersistedPin } = await import('../../services/syncSession.js');
+        pinToUse = await getStoredPersistedPin();
+      } catch {}
+    }
+    if (!pinToUse || !pinToUse.trim()) {
       setRecoveryLockState(prev => ({ ...prev, error: 'Please enter your encryption PIN.' }));
       return;
     }
     setRecoveryLockState(prev => ({ ...prev, isClearing: true, error: '' }));
     try {
-      await clearRecoverySafetyLockWithPin(recoveryLockState.unlockPin.trim());
+      await clearRecoverySafetyLockWithPin(pinToUse.trim());
       setRecoveryLockState(prev => ({ ...prev, isLocked: false, details: null, unlockPin: '', isClearing: false }));
       setSuccessMsg('✓ Recovery safety lock successfully cleared. Sync session restored.');
+      try {
+        const { initSyncSessionFromStorage } = await import('../../services/syncSession.js');
+        await initSyncSessionFromStorage();
+      } catch {}
     } catch (err) {
       setRecoveryLockState(prev => ({ ...prev, isClearing: false, error: err.message || 'Failed to clear recovery lock.' }));
     }
