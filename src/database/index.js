@@ -6,6 +6,7 @@ export * from './categories.js';
 export * from './budgets.js';
 export * from './recurring.js';
 export * from './investmentPlans.js';
+export * from './bookmarks.js';
 export * from './inventory.js';
 export * from './tombstones.js';
 export * from './deltaQueue.js';

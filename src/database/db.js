@@ -5,10 +5,10 @@
 import { Capacitor } from '@capacitor/core';
 
 const IDB_NAME    = 'finman_v2';
-const IDB_VERSION = 16; // v16 — sync_conflicts store
+const IDB_VERSION = 17; // v17 — transaction_bookmarks store
 
 // Each store and its primary key field
-const STORE_DEFS = [
+export const STORE_DEFS = [
   { name:'transactions',            key:'id'  },
   { name:'accounts',                key:'id'  },
   { name:'account_groups',          key:'id'  },
@@ -23,6 +23,7 @@ const STORE_DEFS = [
   { name:'investment_transactions', key:'id'  },
   { name:'brokerages',              key:'id'  },
   { name:'investment_plans',         key:'id'  },
+  { name:'transaction_bookmarks',   key:'id'  },
   { name:'sync_tombstones',         key:'id'  },
   { name:'sync_delta_queue',        key:'event_id' },
   { name:'sync_local_state',        key:'key' },
@@ -1175,6 +1176,7 @@ const applySchema = async (db) => {
   await safeAddCol(db, 'transactions', "stamp_duty_charges REAL DEFAULT 0");
   await safeAddCol(db, 'transactions', "gst_charges REAL DEFAULT 0");
   await safeAddCol(db, 'transactions', "dp_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'transactions', "cdsl_charges REAL DEFAULT 0");
   await safeAddCol(db, 'transactions', "other_charges REAL DEFAULT 0");
   await safeAddCol(db, 'transactions', "security_display_name TEXT");
   await safeAddCol(db, 'transactions', "settlement_mode TEXT DEFAULT 'ACTUAL'");
@@ -1258,6 +1260,7 @@ const applySchema = async (db) => {
     stamp_duty_charges REAL,
     gst_charges REAL,
     dp_charges REAL,
+    cdsl_charges REAL,
     other_charges REAL,
     security_display_name TEXT,
     settlement_mode TEXT DEFAULT 'ACTUAL',
@@ -1280,6 +1283,7 @@ const applySchema = async (db) => {
   await safeAddCol(db, 'investment_transactions', "stamp_duty_charges REAL DEFAULT 0");
   await safeAddCol(db, 'investment_transactions', "gst_charges REAL DEFAULT 0");
   await safeAddCol(db, 'investment_transactions', "dp_charges REAL DEFAULT 0");
+  await safeAddCol(db, 'investment_transactions', "cdsl_charges REAL DEFAULT 0");
   await safeAddCol(db, 'investment_transactions', "other_charges REAL DEFAULT 0");
   await safeAddCol(db, 'investment_transactions', "security_display_name TEXT");
   await safeAddCol(db, 'investment_transactions', "settlement_mode TEXT DEFAULT 'ACTUAL'");
@@ -1312,6 +1316,18 @@ const applySchema = async (db) => {
     active INTEGER DEFAULT 1,
     target_amount REAL DEFAULT 0,
     current_value REAL DEFAULT 0,
+    created_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT ''
+  );`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS transaction_bookmarks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    transaction_type TEXT DEFAULT 'Expense',
+    template_data TEXT NOT NULL,
+    source_transaction_id TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0,
+    usage_count INTEGER DEFAULT 0,
+    last_used_at TEXT DEFAULT '',
     created_at TEXT DEFAULT '',
     updated_at TEXT DEFAULT ''
   );`);

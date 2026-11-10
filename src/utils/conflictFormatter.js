@@ -46,6 +46,9 @@ export function getFriendlyCollection(collection) {
     case 'category':
       return 'Category';
     case 'settings':
+    case 'transaction_bookmarks':
+    case 'transaction_bookmark':
+      return 'Transaction Bookmark';
     case 'setting':
       return 'Setting';
     default:
@@ -386,7 +389,56 @@ export function calculateEntityDiff(localPayload, remotePayload, collection = 't
 
   const allFields = [];
 
-  // Transactions: Canonical high-priority financial fields
+  // Bookmarks: Template name, type, sort order, and template payload
+  if (coll.includes('bookmark')) {
+    const localName = String(localPayload?.name || '').trim();
+    const remoteName = String(remotePayload?.name || '').trim();
+    if (localName || remoteName) {
+      allFields.push({
+        key: 'name',
+        label: 'Bookmark Name',
+        localValue: localName || '—',
+        remoteValue: remoteName || '—',
+        changed: localName !== remoteName
+      });
+    }
+
+    const localType = String(localPayload?.transaction_type || '').trim();
+    const remoteType = String(remotePayload?.transaction_type || '').trim();
+    if (localType || remoteType) {
+      allFields.push({
+        key: 'transaction_type',
+        label: 'Transaction Type',
+        localValue: localType || '—',
+        remoteValue: remoteType || '—',
+        changed: localType !== remoteType
+      });
+    }
+
+    const localSort = Number(localPayload?.sort_order ?? 0);
+    const remoteSort = Number(remotePayload?.sort_order ?? 0);
+    if (localSort !== remoteSort) {
+      allFields.push({
+        key: 'sort_order',
+        label: 'Sort Order',
+        localValue: String(localSort),
+        remoteValue: String(remoteSort),
+        changed: true
+      });
+    }
+
+    const localT = typeof localPayload?.template_data === 'object' ? JSON.stringify(localPayload.template_data) : String(localPayload?.template_data || '');
+    const remoteT = typeof remotePayload?.template_data === 'object' ? JSON.stringify(remotePayload.template_data) : String(remotePayload?.template_data || '');
+    if (localT || remoteT) {
+      allFields.push({
+        key: 'template_data',
+        label: 'Template Details',
+        localValue: localT || '—',
+        remoteValue: remoteT || '—',
+        changed: localT !== remoteT
+      });
+    }
+  } else   // Transactions: Canonical high-priority financial fields
   if (coll.includes('trans')) {
     // 1. Amount
     const localAmtVal = localPayload.amount !== undefined ? localPayload.amount : (localPayload.Amount !== undefined ? localPayload.Amount : (localPayload.inr !== undefined ? localPayload.inr : localPayload.INR));

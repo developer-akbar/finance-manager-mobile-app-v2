@@ -48,6 +48,7 @@ export const rowToTxn = (r) => {
     StampDutyCharges: parseFloat(r.stamp_duty_charges || 0) || (r.stamp_duty_charges === 0 ? 0 : ''), stamp_duty_charges: parseFloat(r.stamp_duty_charges || 0) || 0,
     GSTCharges: parseFloat(r.gst_charges || 0) || (r.gst_charges === 0 ? 0 : ''), gst_charges: parseFloat(r.gst_charges || 0) || 0,
     DPCharges: parseFloat(r.dp_charges || 0) || (r.dp_charges === 0 ? 0 : ''), dp_charges: parseFloat(r.dp_charges || 0) || 0,
+    CDSLCharges: parseFloat(r.cdsl_charges || 0) || (r.cdsl_charges === 0 ? 0 : ''), cdsl_charges: parseFloat(r.cdsl_charges || 0) || 0,
     OtherCharges: parseFloat(r.other_charges || 0) || (r.other_charges === 0 ? 0 : ''), other_charges: parseFloat(r.other_charges || 0) || 0,
     SecurityDisplayName: r.security_display_name || '', security_display_name: r.security_display_name || '',
     SettlementMode: r.settlement_mode || 'ACTUAL', settlement_mode: r.settlement_mode || 'ACTUAL',
@@ -102,6 +103,7 @@ export const rowToTxn = (r) => {
       StampDutyCharges: parseFloat(r.stamp_duty_charges || 0) || (r.stamp_duty_charges === 0 ? 0 : ''),
       GSTCharges: parseFloat(r.gst_charges || 0) || (r.gst_charges === 0 ? 0 : ''),
       DPCharges: parseFloat(r.dp_charges || 0) || (r.dp_charges === 0 ? 0 : ''),
+      CDSLCharges: parseFloat(r.cdsl_charges || 0) || (r.cdsl_charges === 0 ? 0 : ''),
       OtherCharges: parseFloat(r.other_charges || 0) || (r.other_charges === 0 ? 0 : ''),
       SettlementMode: r.settlement_mode || 'ACTUAL',
     };
@@ -232,6 +234,7 @@ export const addTransaction = async (data) => {
     const stampCh = parseFloat(data.StampDutyCharges !== undefined && data.StampDutyCharges !== '' ? data.StampDutyCharges : (data.stamp_duty_charges !== undefined && data.stamp_duty_charges !== '' ? data.stamp_duty_charges : 0)) || 0;
     const gstCh = parseFloat(data.GSTCharges !== undefined && data.GSTCharges !== '' ? data.GSTCharges : (data.gst_charges !== undefined && data.gst_charges !== '' ? data.gst_charges : 0)) || 0;
     const dpCh = parseFloat(data.DPCharges !== undefined && data.DPCharges !== '' ? data.DPCharges : (data.dp_charges !== undefined && data.dp_charges !== '' ? data.dp_charges : 0)) || 0;
+    const cdslCh = parseFloat(data.CDSLCharges !== undefined && data.CDSLCharges !== '' ? data.CDSLCharges : (data.cdsl_charges !== undefined && data.cdsl_charges !== '' ? data.cdsl_charges : 0)) || 0;
     const otherCh = parseFloat(data.OtherCharges !== undefined && data.OtherCharges !== '' ? data.OtherCharges : (data.other_charges !== undefined && data.other_charges !== '' ? data.other_charges : 0)) || 0;
     const secDispName = String(data.SecurityDisplayName || data.security_display_name || data.Note || data.note || '');
     const setMode = String(data.SettlementMode || data.settlement_mode || 'ACTUAL').toUpperCase();
@@ -256,7 +259,7 @@ export const addTransaction = async (data) => {
       realized_pnl:parseFloat(data.RealizedPnl||data.realized_pnl||0), trade_id:data.TradeId||data.trade_id||'', order_id:data.OrderId||data.order_id||'', exchange:data.Exchange||data.exchange||'', segment:data.Segment||data.segment||'', source:data.Source||data.source||'',
       investment_account:invAcct,
       actual_amount:actualAmt, total_charges:totCharges, brokerage_charges:brokCharges, exchange_charges:exCharges,
-      stt_charges:sttCh, sebi_charges:sebiCh, stamp_duty_charges:stampCh, gst_charges:gstCh, dp_charges:dpCh, other_charges:otherCh,
+      stt_charges:sttCh, sebi_charges:sebiCh, stamp_duty_charges:stampCh, gst_charges:gstCh, dp_charges:dpCh, cdsl_charges:cdslCh, other_charges:otherCh,
       security_display_name:secDispName,
       settlement_mode:setMode,
       created_by_device_id: createdBy,
@@ -661,8 +664,9 @@ export const updateTransaction = async (idOrData, maybeData) => {
     const sttCh = parseFloat(data.STTCharges !== undefined && data.STTCharges !== '' ? data.STTCharges : (data.stt_charges !== undefined && data.stt_charges !== '' ? data.stt_charges : (oldTxn?.stt_charges || 0))) || 0;
     const sebiCh = parseFloat(data.SEBICharges !== undefined && data.SEBICharges !== '' ? data.SEBICharges : (data.sebi_charges !== undefined && data.sebi_charges !== '' ? data.sebi_charges : (oldTxn?.sebi_charges || 0))) || 0;
     const stampCh = parseFloat(data.StampDutyCharges !== undefined && data.StampDutyCharges !== '' ? data.StampDutyCharges : (data.stamp_duty_charges !== undefined && data.stamp_duty_charges !== '' ? data.stamp_duty_charges : (oldTxn?.stamp_duty_charges || 0))) || 0;
-    const gstCh = parseFloat(data.GSTCharges !== undefined && data.GSTCharges !== '' ? data.gst_charges : (data.gst_charges !== undefined && data.gst_charges !== '' ? data.gst_charges : (oldTxn?.gst_charges || 0))) || 0;
+    const gstCh = parseFloat(data.GSTCharges !== undefined && data.GSTCharges !== '' ? data.GSTCharges : (data.gst_charges !== undefined && data.gst_charges !== '' ? data.gst_charges : (oldTxn?.gst_charges || 0))) || 0;
     const dpCh = parseFloat(data.DPCharges !== undefined && data.DPCharges !== '' ? data.DPCharges : (data.dp_charges !== undefined && data.dp_charges !== '' ? data.dp_charges : (oldTxn?.dp_charges || 0))) || 0;
+    const cdslCh = parseFloat(data.CDSLCharges !== undefined && data.CDSLCharges !== '' ? data.CDSLCharges : (data.cdsl_charges !== undefined && data.cdsl_charges !== '' ? data.cdsl_charges : (oldTxn?.cdsl_charges || 0))) || 0;
     const otherCh = parseFloat(data.OtherCharges !== undefined && data.OtherCharges !== '' ? data.OtherCharges : (data.other_charges !== undefined && data.other_charges !== '' ? data.other_charges : (oldTxn?.other_charges || 0))) || 0;
     const secDispName = String(data.SecurityDisplayName || data.security_display_name || data.Note || data.note || oldTxn?.security_display_name || oldTxn?.SecurityDisplayName || oldTxn?.note || oldTxn?.Note || '');
     const setMode = String(data.SettlementMode || data.settlement_mode || oldTxn?.settlement_mode || oldTxn?.SettlementMode || 'ACTUAL').toUpperCase();
@@ -709,7 +713,7 @@ export const updateTransaction = async (idOrData, maybeData) => {
       source: data.Source || data.source || oldTxn?.source || oldTxn?.Source || '',
       investment_account: invAcct,
       actual_amount: actualAmt, total_charges: totCharges, brokerage_charges: brokCharges, exchange_charges: exCharges,
-      stt_charges: sttCh, sebi_charges: sebiCh, stamp_duty_charges: stampCh, gst_charges: gstCh, dp_charges: dpCh, other_charges: otherCh,
+      stt_charges: sttCh, sebi_charges: sebiCh, stamp_duty_charges: stampCh, gst_charges: gstCh, dp_charges: dpCh, cdsl_charges: cdslCh, other_charges: otherCh,
       security_display_name: secDispName,
       settlement_mode: setMode,
       created_by_device_id: preservedCreator,

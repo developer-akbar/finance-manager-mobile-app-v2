@@ -1,5 +1,5 @@
 import { activeHoldingsData } from '../database/holdingsData.js';
-import { parseDate } from './format.js';
+import { parseDate, toInputDate } from './format.js';
 
 export function normalizeSymbol(sym) {
   let s = String(sym || '').trim().toUpperCase();
@@ -609,7 +609,12 @@ export function calculateGrowwCharges({
   securitySymbol = '',
   securityISIN = '',
   investmentAccount = '',
-  exchange = 'NSE'
+  exchange = 'NSE',
+  date = '',
+  existingTransactions = [],
+  currentTransactionId = null,
+  alreadyDebitedToday = false,
+  owner = ''
 }) {
   const val = parseFloat(tradeVal) || 0;
   if (val <= 0) {
@@ -621,7 +626,11 @@ export function calculateGrowwCharges({
       stampDutyCharges: 0,
       gstCharges: 0,
       dpCharges: 0,
+      growwDpCharges: 0,
+      cdslCharges: 0,
       otherCharges: 0,
+      platformCharges: 0,
+      governmentCharges: 0,
       totalCharges: 0
     };
   }
@@ -641,6 +650,54 @@ export function calculateGrowwCharges({
 
   const isBSE = String(exchange || '').toUpperCase() === 'BSE';
 
+  // Check if DP charge was already debited for this ISIN on the same trading day
+  let isAlreadyDebited = Boolean(alreadyDebitedToday);
+  if (!isAlreadyDebited && type === 'SELL' && date && Array.isArray(existingTransactions) && existingTransactions.length > 0) {
+    const targetDate = toInputDate(date);
+    const targetISIN = isinUpper;
+    const targetSym = symUpper;
+    const currentId = currentTransactionId ? String(currentTransactionId) : null;
+
+    if (targetDate && (targetISIN || targetSym)) {
+      for (const t of existingTransactions) {
+        const tId = String(t.id || t._id || '');
+        if (currentId && tId === currentId) continue;
+
+        const tDate = toInputDate(t.Date || t.date || '');
+        if (tDate !== targetDate) continue;
+
+        const tType = String(t.InvestmentTransactionType || t.investment_transaction_type || t.Type || t.type || '').toUpperCase();
+        if (!tType.includes('SELL')) continue;
+
+        const tISIN = String(t.SecurityISIN || t.security_isin || t.securityISIN || '').trim().toUpperCase();
+        const tSym = String(t.SecuritySymbol || t.security_symbol || t.securitySymbol || '').trim().toUpperCase();
+
+        const isSameISIN = Boolean(
+          (targetISIN && tISIN && targetISIN === tISIN) ||
+          (targetSym && tSym && targetSym === tSym)
+        );
+
+        if (isSameISIN) {
+          const tDP = parseFloat(t.DPCharges !== undefined && t.DPCharges !== '' ? t.DPCharges : (t.dp_charges !== undefined && t.dp_charges !== '' ? t.dp_charges : 0)) || 0;
+          if (tDP > 0) {
+            isAlreadyDebited = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // CDSL rate: ₹3.25 per applicable ISIN debit per trading day
+  const cdslRate = 3.25;
+
+  // On delivery SELL from Demat:
+  // 1. Groww DP Charges (Platform): ₹16.50 (for trade value >= ₹100; ₹0 if < ₹100).
+  // 2. CDSL DP Charges (Depository / Statutory): ₹3.25.
+  // Applied once per ISIN per trading day.
+  const standardGrowwDP = (isAlreadyDebited || val < 100) ? 0 : 16.50;
+  const standardCdslDP = isAlreadyDebited ? 0 : cdslRate;
+
   let brokerage = 0;
   let stt = 0;
   let exchangeCharges = 0;
@@ -648,6 +705,7 @@ export function calculateGrowwCharges({
   let stampDuty = 0;
   let gst = 0;
   let dpCharges = 0;
+  let cdslCharges = 0;
   let other = 0;
 
   if (isMF) {
@@ -660,63 +718,69 @@ export function calculateGrowwCharges({
     stampDuty = type === 'BUY' ? Math.round(val * 0.00005 * 100) / 100 : 0;
     gst = 0;
     dpCharges = 0;
+    cdslCharges = 0;
     other = 0;
   } else if (isETF) {
     // ETF on Groww:
-    // Brokerage: Min(₹20, 0.05% of trade value)
-    brokerage = Math.round(Math.min(20, val * 0.0005) * 100) / 100;
-    // STT: 0 on BUY, 0.001% on SELL
-    stt = type === 'SELL' ? Math.round(val * 0.00001 * 100) / 100 : 0;
-    // Exchange: 0.00297% (NSE) / 0.00375% (BSE)
-    exchangeCharges = Math.round(val * (isBSE ? 0.0000375 : 0.0000297) * 100) / 100;
+    // Brokerage = MIN(20, MAX(5, Trade Value * 0.001)) (0.1%, min ₹5, max ₹20)
+    brokerage = Math.round(Math.min(20, Math.max(5, val * 0.001)) * 100) / 100;
+    // STT: 0 on BUY, 0.001% on SELL (rounded off to nearest rupee)
+    stt = type === 'SELL' ? Math.round(val * 0.001) : 0;
+    // Exchange: NSE 0.00307% (includes IPFT) / BSE 0.00375%
+    exchangeCharges = Math.round(val * (isBSE ? 0.0000375 : 0.0000307) * 100) / 100;
     // SEBI: 0.0001% (₹10 / crore)
     sebi = Math.round(val * 0.000001 * 100) / 100;
     // Stamp duty: 0.015% on BUY only
     stampDuty = type === 'BUY' ? Math.round(val * 0.00015 * 100) / 100 : 0;
-    // DP Charges: ₹13.50 on SELL from demat (0 on BUY)
-    dpCharges = type === 'SELL' ? 13.50 : 0;
-    // GST: 18% on (Brokerage + Exchange + SEBI + DP Charges)
-    gst = Math.round((brokerage + exchangeCharges + sebi + dpCharges) * 0.18 * 100) / 100;
-    // Other / IPFT: NSE IPFT 0.0001%
-    other = Math.round(val * 0.000001 * 100) / 100;
+    // DP Charges on SELL
+    dpCharges = type === 'SELL' ? standardGrowwDP : 0;
+    cdslCharges = type === 'SELL' ? standardCdslDP : 0;
+    // GST: 18% on taxable services (Brokerage + Exchange + SEBI + Groww DP + CDSL DP)
+    const taxableBase = brokerage + exchangeCharges + sebi + dpCharges + cdslCharges;
+    gst = type === 'SELL' ? Math.round(taxableBase * 0.18) : Math.round(taxableBase * 0.18 * 100) / 100;
+    other = 0;
   } else {
     // Equity Delivery on Groww:
-    // Brokerage: Min(₹20, 0.05% of trade value)
-    brokerage = Math.round(Math.min(20, val * 0.0005) * 100) / 100;
-    // STT: 0.1% on BUY, 0.1% on SELL
-    stt = Math.round(val * 0.001 * 100) / 100;
-    // Exchange: 0.00297% (NSE) / 0.00375% (BSE)
-    exchangeCharges = Math.round(val * (isBSE ? 0.0000375 : 0.0000297) * 100) / 100;
-    // SEBI: 0.0001%
+    // Brokerage = MIN(20, MAX(5, Trade Value * 0.001)) (0.1%, min ₹5, max ₹20)
+    brokerage = Math.round(Math.min(20, Math.max(5, val * 0.001)) * 100) / 100;
+    // STT: 0.1% rounded off to the nearest rupee per CBDT / statutory rules
+    stt = Math.round(val * 0.001);
+    // Exchange: NSE 0.00307% (includes IPFT) / BSE 0.00375%
+    exchangeCharges = Math.round(val * (isBSE ? 0.0000375 : 0.0000307) * 100) / 100;
+    // SEBI: 0.0001% (₹10 / crore)
     sebi = Math.round(val * 0.000001 * 100) / 100;
     // Stamp duty: 0.015% on BUY only
     stampDuty = type === 'BUY' ? Math.round(val * 0.00015 * 100) / 100 : 0;
-    // DP Charges: ₹13.50 on SELL
-    dpCharges = type === 'SELL' ? 13.50 : 0;
-    // GST: 18% on (Brokerage + Exchange + SEBI + DP Charges)
-    gst = Math.round((brokerage + exchangeCharges + sebi + dpCharges) * 0.18 * 100) / 100;
-    // Other / IPFT: 0.0001%
-    other = Math.round(val * 0.000001 * 100) / 100;
+    // DP Charges on SELL
+    dpCharges = type === 'SELL' ? standardGrowwDP : 0;
+    cdslCharges = type === 'SELL' ? standardCdslDP : 0;
+    // GST: 18% on taxable services (Brokerage + Exchange + SEBI + Groww DP + CDSL DP)
+    const taxableBase = brokerage + exchangeCharges + sebi + dpCharges + cdslCharges;
+    gst = type === 'SELL' ? Math.round(taxableBase * 0.18) : Math.round(taxableBase * 0.18 * 100) / 100;
+    other = 0;
   }
 
-  const totalCharges = Math.round((brokerage + stt + exchangeCharges + sebi + stampDuty + gst + dpCharges + other) * 100) / 100;
+  const platformCharges = Math.round((brokerage + dpCharges) * 100) / 100;
+  const governmentCharges = Math.round((stt + exchangeCharges + sebi + stampDuty + cdslCharges + gst + other) * 100) / 100;
+  const totalCharges = Math.round((platformCharges + governmentCharges) * 100) / 100;
 
   return {
     brokerageCharges: brokerage,
+    growwDpCharges: dpCharges,
+    dpCharges: dpCharges,
+    cdslCharges: cdslCharges,
     exchangeCharges,
     sttCharges: stt,
     sebiCharges: sebi,
     stampDutyCharges: stampDuty,
     gstCharges: gst,
-    dpCharges,
     otherCharges: other,
+    platformCharges,
+    governmentCharges,
     totalCharges
   };
 }
 
-/**
- * Resolves known Folio and HoldingMode from transaction history given Owner, Platform/SubAccount, and Security/ISIN.
- */
 export function resolveKnownFolioAndMode({
   owner = 'Myself',
   platform = '',

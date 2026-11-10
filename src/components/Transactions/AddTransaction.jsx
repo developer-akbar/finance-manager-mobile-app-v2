@@ -501,12 +501,13 @@ const SubcatFieldFR = React.forwardRef((props, ref) => {
 export default function AddTransaction({
   onClose, onSaveAndContinue = null, editTransaction = null, copyTransaction = null,
   planTransaction = null,
+  bookmarkTransaction = null,
   prefillDate = null, prefillAccount = null, prefillCategory = null,
   prefillType = null, prefillFromAccount = null, prefillToAccount = null, prefillAmount = null, prefillNote = null, prefillTags = null,
   prefillSubAccount = null,
   backInterceptRef = null, onSaveInstalment = null
 }) {
-  const { state, navigate, addTransaction, updateTransaction, deleteTransaction, createRecurringRule, modifyRecurringRule, removeRecurringRule, updateInstalmentSiblings, advancePlanDueDate, load, showDescription } = useApp();
+  const { state, navigate, addTransaction, updateTransaction, deleteTransaction, createRecurringRule, modifyRecurringRule, removeRecurringRule, updateInstalmentSiblings, advancePlanDueDate, recordBookmarkUsage, load, showDescription } = useApp();
   const { accounts = [], categories = {}, transactions = [], investmentPlans = [] } = state || {};
   const isEdit = !!editTransaction;
 
@@ -646,6 +647,7 @@ export default function AddTransaction({
       stampDutyCharges: '',
       gstCharges: '',
       dpCharges: '',
+      cdslCharges: '',
       otherCharges: '',
       
       // Copy template & routing fields from Plan
@@ -796,6 +798,55 @@ export default function AddTransaction({
         else if (initialSubAccount.toLowerCase().includes('etmoney')) initialHoldingMode = 'NON_DEMAT';
       }
 
+      let loadedCdsl = (t.CDSLCharges !== undefined && t.CDSLCharges !== null && t.CDSLCharges !== '')
+        ? parseFloat(t.CDSLCharges)
+        : ((t.cdsl_charges !== undefined && t.cdsl_charges !== null && t.cdsl_charges !== '') ? parseFloat(t.cdsl_charges) : null);
+
+      let loadedOther = (t.OtherCharges !== undefined && t.OtherCharges !== null && t.OtherCharges !== '')
+        ? parseFloat(t.OtherCharges)
+        : ((t.other_charges !== undefined && t.other_charges !== null && t.other_charges !== '') ? parseFloat(t.other_charges) : 0);
+
+      let loadedGst = (t.GSTCharges !== undefined && t.GSTCharges !== null && t.GSTCharges !== '')
+        ? parseFloat(t.GSTCharges)
+        : ((t.gst_charges !== undefined && t.gst_charges !== null && t.gst_charges !== '') ? parseFloat(t.gst_charges) : null);
+
+      const loadedTotal = parseFloat(t.TotalCharges !== undefined ? t.TotalCharges : (t.total_charges || 0)) || 0;
+      const loadedBrokerage = parseFloat(t.BrokerageCharges !== undefined ? t.BrokerageCharges : (t.brokerage_charges || 0)) || 0;
+      const loadedDp = parseFloat(t.DPCharges !== undefined ? t.DPCharges : (t.dp_charges || 0)) || 0;
+      const loadedStt = parseFloat(t.STTCharges !== undefined ? t.STTCharges : (t.stt_charges || 0)) || 0;
+      const loadedExchange = parseFloat(t.ExchangeCharges !== undefined ? t.ExchangeCharges : (t.exchange_charges || 0)) || 0;
+      const loadedSebi = parseFloat(t.SEBICharges !== undefined ? t.SEBICharges : (t.sebi_charges || 0)) || 0;
+      const loadedStamp = parseFloat(t.StampDutyCharges !== undefined ? t.StampDutyCharges : (t.stamp_duty_charges || 0)) || 0;
+
+      // Backward compatibility / legacy recovery for CDSL DP charges:
+      if ((loadedCdsl === null || loadedCdsl === 0) && isInv && invType === 'SELL') {
+        if (loadedOther === 3.25 || loadedOther === 3.5) {
+          loadedCdsl = loadedOther;
+          loadedOther = 0;
+        } else if (loadedOther > 3.25 && loadedTotal > 0) {
+          const remWith325 = Math.round((loadedTotal - (loadedBrokerage + loadedDp + loadedStt + loadedExchange + loadedSebi + loadedStamp + 3.25 + (loadedOther - 3.25))) * 100) / 100;
+          const expectedGst = Math.round((loadedBrokerage + loadedDp + 3.25 + loadedExchange + loadedSebi) * 0.18);
+          if (remWith325 === expectedGst || remWith325 === 0) {
+            loadedCdsl = 3.25;
+            loadedOther = Math.round((loadedOther - 3.25) * 100) / 100;
+          }
+        }
+      }
+
+      // Backward compatibility / legacy recovery for GST:
+      if ((loadedGst === null || loadedGst === 0) && loadedTotal > 0 && isInv) {
+        const nonGstSum = Math.round((loadedBrokerage + loadedDp + (loadedCdsl || 0) + loadedStt + loadedExchange + loadedSebi + loadedStamp + loadedOther) * 100) / 100;
+        const diff = Math.round((loadedTotal - nonGstSum) * 100) / 100;
+        if (diff > 0) {
+          const taxableBase = loadedBrokerage + loadedDp + (loadedCdsl || 0) + loadedExchange + loadedSebi;
+          const calcGstRound = Math.round(taxableBase * 0.18);
+          const calcGstDec = Math.round(taxableBase * 0.18 * 100) / 100;
+          if (diff === calcGstRound || diff === calcGstDec || Math.abs(diff - calcGstRound) <= 1) {
+            loadedGst = diff;
+          }
+        }
+      }
+
       return {
         type: isInv ? 'Investment' : rt,
         amount: dispAmt,
@@ -834,14 +885,15 @@ export default function AddTransaction({
         actualAmount: dispActual,
         costBasis: String(t.CostBasis || t.cost_basis || ''),
         realizedPnl: String(t.RealizedPnl || t.realized_pnl || ''),
-        brokerageCharges: String(t.BrokerageCharges || t.brokerage_charges || ''),
-        exchangeCharges: String(t.ExchangeCharges || t.exchange_charges || ''),
-        sttCharges: String(t.STTCharges || t.stt_charges || ''),
-        sebiCharges: String(t.SEBICharges || t.sebi_charges || ''),
-        stampDutyCharges: String(t.StampDutyCharges || t.stamp_duty_charges || ''),
-        gstCharges: String(t.GSTCharges || t.gst_charges || ''),
-        dpCharges: String(t.DPCharges || t.dp_charges || ''),
-        otherCharges: String(t.OtherCharges || t.other_charges || ''),
+        brokerageCharges: String(t.BrokerageCharges !== undefined && t.BrokerageCharges !== '' ? t.BrokerageCharges : (t.brokerage_charges !== undefined && t.brokerage_charges !== '' ? t.brokerage_charges : '')),
+        exchangeCharges: String(t.ExchangeCharges !== undefined && t.ExchangeCharges !== '' ? t.ExchangeCharges : (t.exchange_charges !== undefined && t.exchange_charges !== '' ? t.exchange_charges : '')),
+        sttCharges: String(t.STTCharges !== undefined && t.STTCharges !== '' ? t.STTCharges : (t.stt_charges !== undefined && t.stt_charges !== '' ? t.stt_charges : '')),
+        sebiCharges: String(t.SEBICharges !== undefined && t.SEBICharges !== '' ? t.SEBICharges : (t.sebi_charges !== undefined && t.sebi_charges !== '' ? t.sebi_charges : '')),
+        stampDutyCharges: String(t.StampDutyCharges !== undefined && t.StampDutyCharges !== '' ? t.StampDutyCharges : (t.stamp_duty_charges !== undefined && t.stamp_duty_charges !== '' ? t.stamp_duty_charges : '')),
+        gstCharges: loadedGst !== null && loadedGst !== undefined ? String(loadedGst) : '',
+        dpCharges: String(t.DPCharges !== undefined && t.DPCharges !== '' ? t.DPCharges : (t.dp_charges !== undefined && t.dp_charges !== '' ? t.dp_charges : '')),
+        cdslCharges: loadedCdsl !== null && loadedCdsl !== undefined ? String(loadedCdsl) : '',
+        otherCharges: loadedOther ? String(loadedOther) : '',
         brokerage: isInv ? initialSubAccount : '',
         source: t.Source || t.source || ''
       };
@@ -894,6 +946,7 @@ export default function AddTransaction({
         stampDutyCharges: '',
         gstCharges: '',
         dpCharges: '',
+        cdslCharges: '',
         otherCharges: '',
         brokerage: p.sub_account || p.subAccount || p.brokerage || '',
         source: 'Investment Plan',
@@ -1050,9 +1103,65 @@ export default function AddTransaction({
         stampDutyCharges: '',
         gstCharges: '',
         dpCharges: '',
+        cdslCharges: '',
         otherCharges: '',
         brokerage: '',
         source: ''
+      };
+    }
+    if (bookmarkTransaction) {
+      const b = bookmarkTransaction;
+      const td = b.template_data || {};
+      const bType = b.transaction_type || 'Expense';
+      const normType = bType === 'Transfer' ? 'Transfer-Out' : bType;
+      return {
+        type: normType,
+        amount: td.amount !== undefined && td.amount !== null && String(td.amount).trim() !== '' ? String(td.amount) : '',
+        date: todayVal(),
+        time: nowTimeStr(),
+        investmentAccount: '',
+        account: normType.startsWith('Transfer') ? '' : (td.account || ''),
+        fromAccount: normType.startsWith('Transfer') ? (td.from_account || td.account || '') : '',
+        toAccount: normType.startsWith('Transfer') ? (td.to_account || '') : '',
+        category: td.category || '',
+        subcategory: td.subcategory && td.subcategory !== 'Default' ? td.subcategory : '',
+        note: td.note || '',
+        description: td.description || '',
+        tags: getUserFacingTags(td.tags || '').join(', '),
+        receipt_image: '',
+        warranty_expiry: '',
+        serial_no: '',
+        subAccount: td.sub_account || '',
+        fromSubAccount: td.from_sub_account || td.sub_account || '',
+        toSubAccount: td.to_sub_account || '',
+        fundingAccount: '',
+        settlementAccount: '',
+        owner: 'Myself',
+        folio: '',
+        holdingMode: '',
+        showAdvanced: false,
+        investmentTransactionType: 'BUY',
+        settlementMode: 'ACTUAL',
+        securitySymbol: '',
+        securityDisplayName: '',
+        securityISIN: '',
+        quantity: '',
+        unitPrice: '',
+        tradeValue: '',
+        actualAmount: '',
+        costBasis: '',
+        realizedPnl: '',
+        brokerageCharges: '',
+        exchangeCharges: '',
+        sttCharges: '',
+        sebiCharges: '',
+        stampDutyCharges: '',
+        gstCharges: '',
+        dpCharges: '',
+        cdslCharges: '',
+        otherCharges: '',
+        brokerage: '',
+        source: 'Bookmark'
       };
     }
     return {
@@ -1975,6 +2084,23 @@ export default function AddTransaction({
     return s;
   }
 
+  const platformChargesSubtotal = useMemo(() => {
+    const sum = (parseFloat(form.brokerageCharges) || 0) +
+      (parseFloat(form.dpCharges) || 0);
+    return Math.round(sum * 100) / 100;
+  }, [form.brokerageCharges, form.dpCharges]);
+
+  const govtChargesSubtotal = useMemo(() => {
+    const sum = (parseFloat(form.sttCharges) || 0) +
+      (parseFloat(form.exchangeCharges) || 0) +
+      (parseFloat(form.sebiCharges) || 0) +
+      (parseFloat(form.stampDutyCharges) || 0) +
+      (parseFloat(form.cdslCharges) || 0) +
+      (parseFloat(form.gstCharges) || 0) +
+      (parseFloat(form.otherCharges) || 0);
+    return Math.round(sum * 100) / 100;
+  }, [form.sttCharges, form.exchangeCharges, form.sebiCharges, form.stampDutyCharges, form.cdslCharges, form.gstCharges, form.otherCharges]);
+
   const totalCharges = useMemo(() => {
     const sum = (parseFloat(form.brokerageCharges) || 0) +
       (parseFloat(form.exchangeCharges) || 0) +
@@ -1983,9 +2109,10 @@ export default function AddTransaction({
       (parseFloat(form.stampDutyCharges) || 0) +
       (parseFloat(form.gstCharges) || 0) +
       (parseFloat(form.dpCharges) || 0) +
+      (parseFloat(form.cdslCharges) || 0) +
       (parseFloat(form.otherCharges) || 0);
     return Math.round(sum * 100) / 100;
-  }, [form.brokerageCharges, form.exchangeCharges, form.sttCharges, form.sebiCharges, form.stampDutyCharges, form.gstCharges, form.dpCharges, form.otherCharges]);
+  }, [form.brokerageCharges, form.exchangeCharges, form.sttCharges, form.sebiCharges, form.stampDutyCharges, form.gstCharges, form.dpCharges, form.cdslCharges, form.otherCharges]);
 
   // Unified Settlement calculation
   const computedSettlement = useMemo(() => {
@@ -2058,7 +2185,11 @@ export default function AddTransaction({
       securitySymbol: baseForm.securitySymbol,
       securityISIN: baseForm.securityISIN,
       investmentAccount: baseForm.investmentAccount || baseForm.account || '',
-      exchange: 'NSE'
+      exchange: baseForm.exchange || 'NSE',
+      date: baseForm.date,
+      existingTransactions: transactions,
+      currentTransactionId: editTransaction?.id || editTransaction?._id,
+      owner: baseForm.owner || ''
     });
   };
 
@@ -2074,6 +2205,7 @@ export default function AddTransaction({
           (parseFloat(prev.stampDutyCharges) || 0) +
           (parseFloat(prev.gstCharges) || 0) +
           (parseFloat(prev.dpCharges) || 0) +
+          (parseFloat(prev.cdslCharges) || 0) +
           (parseFloat(prev.otherCharges) || 0);
 
         let nextCostBasis = prev.costBasis;
@@ -2142,9 +2274,10 @@ export default function AddTransaction({
         sttCharges: String(brk.sttCharges || '0'),
         sebiCharges: String(brk.sebiCharges || '0'),
         stampDutyCharges: String(brk.stampDutyCharges || '0'),
-        gstCharges: String(brk.gstCharges || '0'),
-        dpCharges: String(brk.dpCharges || '0'),
-        otherCharges: String(brk.otherCharges || '0'),
+        gstCharges: String(brk.gstCharges ?? '0'),
+        dpCharges: String(brk.dpCharges ?? '0'),
+        cdslCharges: String(brk.cdslCharges ?? '0'),
+        otherCharges: String(brk.otherCharges ?? '0'),
         costBasis: nextCostBasis,
         realizedPnl: nextRealizedPnl
       };
@@ -2329,6 +2462,7 @@ export default function AddTransaction({
         (parseFloat(nextForm.stampDutyCharges) || 0) +
         (parseFloat(nextForm.gstCharges) || 0) +
         (parseFloat(nextForm.dpCharges) || 0) +
+        (parseFloat(nextForm.cdslCharges) || 0) +
         (parseFloat(nextForm.otherCharges) || 0);
 
       let nextCostBasis = nextForm.costBasis;
@@ -2401,6 +2535,7 @@ export default function AddTransaction({
           (parseFloat(prev.stampDutyCharges) || 0) +
           (parseFloat(prev.gstCharges) || 0) +
           (parseFloat(prev.dpCharges) || 0) +
+          (parseFloat(prev.cdslCharges) || 0) +
           (parseFloat(prev.otherCharges) || 0);
 
         let nextCostBasis = prev.costBasis;
@@ -2482,6 +2617,7 @@ export default function AddTransaction({
           (parseFloat(prev.stampDutyCharges) || 0) +
           (parseFloat(prev.gstCharges) || 0) +
           (parseFloat(prev.dpCharges) || 0) +
+          (parseFloat(prev.cdslCharges) || 0) +
           (parseFloat(prev.otherCharges) || 0);
 
         let nextCostBasis = prev.costBasis;
@@ -2567,6 +2703,7 @@ export default function AddTransaction({
           (parseFloat(prev.stampDutyCharges) || 0) +
           (parseFloat(prev.gstCharges) || 0) +
           (parseFloat(prev.dpCharges) || 0) +
+          (parseFloat(prev.cdslCharges) || 0) +
           (parseFloat(prev.otherCharges) || 0);
 
         let nextCostBasis = prev.costBasis;
@@ -2636,6 +2773,7 @@ export default function AddTransaction({
         (parseFloat(prev.stampDutyCharges) || 0) +
         (parseFloat(prev.gstCharges) || 0) +
         (parseFloat(prev.dpCharges) || 0) +
+        (parseFloat(prev.cdslCharges) || 0) +
         (parseFloat(prev.otherCharges) || 0);
       const hasActual = prev.actualAmount !== undefined && prev.actualAmount !== null && prev.actualAmount !== '' && !isNaN(parseFloat(prev.actualAmount));
       const netProc = mode === 'ACTUAL'
@@ -3228,14 +3366,25 @@ export default function AddTransaction({
             CostBasis: costBasis,
             RealizedPnl: realizedPnl,
             BrokerageCharges: parseFloat(form.brokerageCharges) || 0,
+            brokerage_charges: parseFloat(form.brokerageCharges) || 0,
             ExchangeCharges: parseFloat(form.exchangeCharges) || 0,
+            exchange_charges: parseFloat(form.exchangeCharges) || 0,
             STTCharges: parseFloat(form.sttCharges) || 0,
+            stt_charges: parseFloat(form.sttCharges) || 0,
             SEBICharges: parseFloat(form.sebiCharges) || 0,
+            sebi_charges: parseFloat(form.sebiCharges) || 0,
             StampDutyCharges: parseFloat(form.stampDutyCharges) || 0,
+            stamp_duty_charges: parseFloat(form.stampDutyCharges) || 0,
             GSTCharges: parseFloat(form.gstCharges) || 0,
+            gst_charges: parseFloat(form.gstCharges) || 0,
             DPCharges: parseFloat(form.dpCharges) || 0,
+            dp_charges: parseFloat(form.dpCharges) || 0,
+            CDSLCharges: parseFloat(form.cdslCharges) || 0,
+            cdsl_charges: parseFloat(form.cdslCharges) || 0,
             OtherCharges: parseFloat(form.otherCharges) || 0,
+            other_charges: parseFloat(form.otherCharges) || 0,
             TotalCharges: totCharges,
+            total_charges: totCharges,
             CashImpact: cashImpact,
             PositionQuantityChange: invType === 'SELL' ? -Math.abs(qty) : Math.abs(qty),
             Source: isEdit ? (editTransaction?.Source || 'Manual') : 'Manual',
@@ -3246,6 +3395,13 @@ export default function AddTransaction({
             await updateTransaction(invTxnId, invData);
           } else {
             await addTransaction(invData);
+            if (bookmarkTransaction?.id && recordBookmarkUsage) {
+              try {
+                await recordBookmarkUsage(bookmarkTransaction.id);
+              } catch (err) {
+                console.warn('Failed to record bookmark usage:', err);
+              }
+            }
             if (form.planId && advancePlanDueDate) {
               try {
                 await advancePlanDueDate(form.planId, form.date);
@@ -4093,130 +4249,213 @@ export default function AddTransaction({
 
                       {/* Charge Breakdown Inputs */}
                       {(form.settlementMode || 'ACTUAL') === 'BREAKDOWN' && (
-                        <div style={{ borderTop: '1px dashed var(--border)', paddingTop: 6 }}>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                            <div>
-                              <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>Brokerage (₹)</label>
-                              <input
-                                className="form-input"
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="0.00"
-                                style={{ fontSize: '0.74rem', padding: '4px 6px' }}
-                                value={form.brokerageCharges}
-                                onFocus={handleNumberFocus}
-                                onClick={handleNumberFocus}
-                                onContextMenu={handleNumberContextMenu}
-                                onChange={e => handleChargeChange('brokerageCharges', e.target.value)}
-                              />
+                        <div style={{ borderTop: '1px dashed var(--border)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                          {/* Group 1: Platform Charges */}
+                          <div style={{
+                            padding: '10px 12px',
+                            borderRadius: 'var(--r-md)',
+                            background: 'rgba(255, 255, 255, 0.02)',
+                            border: '1px solid var(--border)'
+                          }}>
+                            <div style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              marginBottom: 8,
+                              paddingBottom: 4,
+                              borderBottom: '1px solid var(--border)'
+                            }}>
+                              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                🏢 Platform Charges
+                              </span>
+                              <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--accent)' }}>
+                                Subtotal: {formatINR(platformChargesSubtotal, 2)}
+                              </span>
                             </div>
-                            <div>
-                              <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>Exchange Charges (₹)</label>
-                              <input
-                                className="form-input"
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="0.00"
-                                style={{ fontSize: '0.74rem', padding: '4px 6px' }}
-                                value={form.exchangeCharges}
-                                onFocus={handleNumberFocus}
-                                onClick={handleNumberFocus}
-                                onContextMenu={handleNumberContextMenu}
-                                onChange={e => handleChargeChange('exchangeCharges', e.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>STT (₹)</label>
-                              <input
-                                className="form-input"
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="0.00"
-                                style={{ fontSize: '0.74rem', padding: '4px 6px' }}
-                                value={form.sttCharges}
-                                onFocus={handleNumberFocus}
-                                onClick={handleNumberFocus}
-                                onContextMenu={handleNumberContextMenu}
-                                onChange={e => handleChargeChange('sttCharges', e.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>SEBI Fee (₹)</label>
-                              <input
-                                className="form-input"
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="0.00"
-                                style={{ fontSize: '0.74rem', padding: '4px 6px' }}
-                                value={form.sebiCharges}
-                                onFocus={handleNumberFocus}
-                                onClick={handleNumberFocus}
-                                onContextMenu={handleNumberContextMenu}
-                                onChange={e => handleChargeChange('sebiCharges', e.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>Stamp Duty (₹)</label>
-                              <input
-                                className="form-input"
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="0.00"
-                                style={{ fontSize: '0.74rem', padding: '4px 6px' }}
-                                value={form.stampDutyCharges}
-                                onFocus={handleNumberFocus}
-                                onClick={handleNumberFocus}
-                                onContextMenu={handleNumberContextMenu}
-                                onChange={e => handleChargeChange('stampDutyCharges', e.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>GST (₹)</label>
-                              <input
-                                className="form-input"
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="0.00"
-                                style={{ fontSize: '0.74rem', padding: '4px 6px' }}
-                                value={form.gstCharges}
-                                onFocus={handleNumberFocus}
-                                onClick={handleNumberFocus}
-                                onContextMenu={handleNumberContextMenu}
-                                onChange={e => handleChargeChange('gstCharges', e.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>DP Charges (₹)</label>
-                              <input
-                                className="form-input"
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="0.00"
-                                style={{ fontSize: '0.74rem', padding: '4px 6px' }}
-                                value={form.dpCharges}
-                                onFocus={handleNumberFocus}
-                                onClick={handleNumberFocus}
-                                onContextMenu={handleNumberContextMenu}
-                                onChange={e => handleChargeChange('dpCharges', e.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>Other Charges (₹)</label>
-                              <input
-                                className="form-input"
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="0.00"
-                                style={{ fontSize: '0.74rem', padding: '4px 6px' }}
-                                value={form.otherCharges}
-                                onFocus={handleNumberFocus}
-                                onClick={handleNumberFocus}
-                                onContextMenu={handleNumberContextMenu}
-                                onChange={e => handleChargeChange('otherCharges', e.target.value)}
-                              />
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>Brokerage (₹)</label>
+                                <input
+                                  className="form-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="0.00"
+                                  style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                                  value={form.brokerageCharges}
+                                  onFocus={handleNumberFocus}
+                                  onClick={handleNumberFocus}
+                                  onContextMenu={handleNumberContextMenu}
+                                  onChange={e => handleChargeChange('brokerageCharges', e.target.value)}
+                                />
+                              </div>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>Groww DP Charges (₹)</label>
+                                <input
+                                  className="form-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="0.00"
+                                  style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                                  value={form.dpCharges}
+                                  onFocus={handleNumberFocus}
+                                  onClick={handleNumberFocus}
+                                  onContextMenu={handleNumberContextMenu}
+                                  onChange={e => handleChargeChange('dpCharges', e.target.value)}
+                                />
+                              </div>
                             </div>
                           </div>
-                          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+
+                          {/* Group 2: Government & Regulatory Charges */}
+                          <div style={{
+                            padding: '10px 12px',
+                            borderRadius: 'var(--r-md)',
+                            background: 'rgba(255, 255, 255, 0.02)',
+                            border: '1px solid var(--border)'
+                          }}>
+                            <div style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              marginBottom: 8,
+                              paddingBottom: 4,
+                              borderBottom: '1px solid var(--border)'
+                            }}>
+                              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                🏛️ Government & Regulatory Charges
+                              </span>
+                              <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--accent)' }}>
+                                Subtotal: {formatINR(govtChargesSubtotal, 2)}
+                              </span>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>STT (₹)</label>
+                                <input
+                                  className="form-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="0.00"
+                                  style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                                  value={form.sttCharges}
+                                  onFocus={handleNumberFocus}
+                                  onClick={handleNumberFocus}
+                                  onContextMenu={handleNumberContextMenu}
+                                  onChange={e => handleChargeChange('sttCharges', e.target.value)}
+                                />
+                              </div>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>Exchange Charges (₹)</label>
+                                <input
+                                  className="form-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="0.00"
+                                  style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                                  value={form.exchangeCharges}
+                                  onFocus={handleNumberFocus}
+                                  onClick={handleNumberFocus}
+                                  onContextMenu={handleNumberContextMenu}
+                                  onChange={e => handleChargeChange('exchangeCharges', e.target.value)}
+                                />
+                              </div>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>SEBI Fee (₹)</label>
+                                <input
+                                  className="form-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="0.00"
+                                  style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                                  value={form.sebiCharges}
+                                  onFocus={handleNumberFocus}
+                                  onClick={handleNumberFocus}
+                                  onContextMenu={handleNumberContextMenu}
+                                  onChange={e => handleChargeChange('sebiCharges', e.target.value)}
+                                />
+                              </div>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>Stamp Duty (₹)</label>
+                                <input
+                                  className="form-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="0.00"
+                                  style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                                  value={form.stampDutyCharges}
+                                  onFocus={handleNumberFocus}
+                                  onClick={handleNumberFocus}
+                                  onContextMenu={handleNumberContextMenu}
+                                  onChange={e => handleChargeChange('stampDutyCharges', e.target.value)}
+                                />
+                              </div>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>CDSL DP Charges (₹)</label>
+                                <input
+                                  className="form-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="0.00"
+                                  style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                                  value={form.cdslCharges}
+                                  onFocus={handleNumberFocus}
+                                  onClick={handleNumberFocus}
+                                  onContextMenu={handleNumberContextMenu}
+                                  onChange={e => handleChargeChange('cdslCharges', e.target.value)}
+                                />
+                              </div>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>GST (₹)</label>
+                                <input
+                                  className="form-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="0.00"
+                                  style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                                  value={form.gstCharges}
+                                  onFocus={handleNumberFocus}
+                                  onClick={handleNumberFocus}
+                                  onContextMenu={handleNumberContextMenu}
+                                  onChange={e => handleChargeChange('gstCharges', e.target.value)}
+                                />
+                              </div>
+                              <div>
+                                <label className="form-label" style={{ fontSize: '0.62rem', marginBottom: 2 }}>Other Charges (₹)</label>
+                                <input
+                                  className="form-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="0.00"
+                                  style={{ fontSize: '0.74rem', padding: '4px 6px' }}
+                                  value={form.otherCharges}
+                                  onFocus={handleNumberFocus}
+                                  onClick={handleNumberFocus}
+                                  onContextMenu={handleNumberContextMenu}
+                                  onChange={e => handleChargeChange('otherCharges', e.target.value)}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Total Charges Summary Bar */}
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '8px 12px',
+                            borderRadius: 'var(--r-md)',
+                            background: 'var(--bg-card)',
+                            border: '1px solid var(--border)'
+                          }}>
+                            <span style={{ fontSize: '0.76rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                              Total Charges
+                            </span>
+                            <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--expense)' }}>
+                              {formatINR(totalCharges, 2)}
+                            </span>
+                          </div>
+
+                          <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
                             <button
                               type="button"
                               onClick={handleRecalculateCharges}

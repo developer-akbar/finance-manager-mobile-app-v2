@@ -7,6 +7,7 @@ import Accounts from './components/Accounts/Accounts.jsx';
 import Categories from './components/Categories/Categories.jsx';
 import Analytics from './components/Analytics/Analytics.jsx';
 import Settings from './components/Settings/Settings.jsx';
+import Bookmarks from './components/Bookmarks/Bookmarks.jsx';
 import PinLock from './components/Common/PinLock.jsx';
 import AddTransaction from './components/Transactions/AddTransaction.jsx';
 import { initDB, closeDB } from './database/index.js';
@@ -115,6 +116,7 @@ function AppInner() {
   // ALL hooks must be called unconditionally before any early return
   const [showAdd, setShowAdd]   = useState(false);
   const [addKey,  setAddKey]    = useState(0);
+  const [bookmarkToUse, setBookmarkToUse] = useState(null);
   const [backupDue, setBackupDue] = useState(false);
 
   // Global viewport & orientation alignment safety
@@ -327,6 +329,17 @@ function AppInner() {
         <div className={`tab-view ${currentView === 'transactions' ? 'active-tab' : 'hidden'}`}>
           <Transactions isActive={currentView === 'transactions'} onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef} viewParams={state.viewParams}/>
         </div>
+        <div className={`tab-view ${currentView === 'bookmarks' ? 'active-tab' : 'hidden'}`}>
+          <Bookmarks
+            isActive={currentView === 'bookmarks'}
+            onUseBookmark={(bookmark) => {
+              setBookmarkToUse(bookmark);
+              setShowAdd(true);
+              setAddKey(k => k + 1);
+            }}
+            backInterceptRef={backInterceptRef}
+          />
+        </div>
         <div className={`tab-view ${currentView === 'accounts' ? 'active-tab' : 'hidden'}`}>
           <Accounts backInterceptRef={backInterceptRef}/>
         </div>
@@ -340,7 +353,18 @@ function AppInner() {
           <Settings backInterceptRef={backInterceptRef}/>
         </div>
       </Layout>
-      {showAdd && <AddTransaction key={addKey} onClose={() => setShowAdd(false)} onSaveAndContinue={() => {}} backInterceptRef={backInterceptRef}/>}
+      {showAdd && (
+        <AddTransaction
+          key={addKey}
+          bookmarkTransaction={bookmarkToUse}
+          onClose={() => {
+            setShowAdd(false);
+            setBookmarkToUse(null);
+          }}
+          onSaveAndContinue={() => {}}
+          backInterceptRef={backInterceptRef}
+        />
+      )}
       {backupDue && (
         <div style={{position:'fixed',bottom:'calc(64px + var(--safe-bottom, 0px) + 8px)',left:12,right:12,background:'var(--bg-card)',border:'1px solid rgba(0,229,160,0.35)',borderRadius:12,padding:'10px 14px',display:'flex',alignItems:'center',gap:10,zIndex:9998,boxShadow:'0 4px 20px rgba(0,0,0,0.4)'}}>
           <span style={{fontSize:'1.2rem'}}>☁️</span>

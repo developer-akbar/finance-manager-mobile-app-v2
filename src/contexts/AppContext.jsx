@@ -18,6 +18,12 @@ import {
   updateInvestmentPlan as dbUpdatePlan,
   deleteInvestmentPlan as dbDeletePlan,
   advancePlanDueDate as dbAdvancePlanDate,
+  getAllBookmarks, saveBookmark as dbSaveBookmark,
+  updateBookmark as dbUpdateBookmark,
+  deleteBookmark as dbDeleteBookmark,
+  duplicateBookmark as dbDuplicateBookmark,
+  reorderBookmarks as dbReorderBookmarks,
+  recordBookmarkUsage as dbRecordBookmarkUsage,
   getDB,
   initDB,
   closeDB,
@@ -144,6 +150,7 @@ const INIT = {
   showDescription: true,
   recurringRules: [],
   investmentPlans: [],
+  bookmarks: [],
   loading: true, error: null, importProgress: null,
   dbReady: false, dbError: null,
   currentView: 'dashboard',
@@ -170,6 +177,10 @@ function reducer(s, a) {
     case 'ADD_INVESTMENT_PLAN':  return { ...s, investmentPlans: [a.payload, ...(s.investmentPlans || [])] };
     case 'UPD_INVESTMENT_PLAN':  return { ...s, investmentPlans: (s.investmentPlans || []).map(p => p.id === a.payload.id ? a.payload : p) };
     case 'DEL_INVESTMENT_PLAN':  return { ...s, investmentPlans: (s.investmentPlans || []).filter(p => p.id !== a.payload) };
+    case 'SET_BOOKMARKS':        return { ...s, bookmarks: a.payload };
+    case 'ADD_BOOKMARK':         return { ...s, bookmarks: [...(s.bookmarks || []).filter(b => b.id !== a.payload.id), a.payload].sort((x, y) => (x.sort_order ?? 0) - (y.sort_order ?? 0)) };
+    case 'UPD_BOOKMARK':         return { ...s, bookmarks: (s.bookmarks || []).map(b => b.id === a.payload.id ? a.payload : b).sort((x, y) => (x.sort_order ?? 0) - (y.sort_order ?? 0)) };
+    case 'DEL_BOOKMARK':         return { ...s, bookmarks: (s.bookmarks || []).filter(b => b.id !== a.payload) };
     case 'UPD_SETTINGS': return { ...s, settings: { ...s.settings, ...a.payload } };
     case 'NAVIGATE': 
       return { 
@@ -194,10 +205,10 @@ export function AppProvider({ children }) {
       import('../services/syncSession.js').then(({ initSyncSessionFromStorage }) => {
         initSyncSessionFromStorage().catch(() => {});
       }).catch(() => {});
-      const [txns, accts, catsArr, aGroups, aMapping, budgets, settings, recurringRules, investmentPlans] = await Promise.all([
+      const [txns, accts, catsArr, aGroups, aMapping, budgets, settings, recurringRules, investmentPlans, bookmarks] = await Promise.all([
         getTransactions(), getAccounts(), getCategories(),
         getAccountGroups(), getAccountMapping(), getBudgets(), getAllSettings(),
-        getAllRecurringRules(), getAllInvestmentPlans(),
+        getAllRecurringRules(), getAllInvestmentPlans(), getAllBookmarks(),
       ]);
 
       let brokerages = [];
@@ -249,6 +260,7 @@ export function AppProvider({ children }) {
           budgets, settings, theme, headerColor, fontSize, fontFamily, fontDataWeight, showDescription,
           recurringRules: recurringRules || [],
           investmentPlans: investmentPlans || [],
+          bookmarks: bookmarks || [],
           brokerages: brokerages || [],
         }});
         return;
@@ -609,6 +621,7 @@ export function AppProvider({ children }) {
           budgets, settings, theme, headerColor, fontSize, fontFamily, fontDataWeight, showDescription,
           recurringRules: recurringRules || [],
           investmentPlans: investmentPlans || [],
+          bookmarks: bookmarks || [],
           brokerages: brokerages || [],
         },
       });
@@ -1466,6 +1479,43 @@ export function AppProvider({ children }) {
     return updated;
   };
 
+
+  const createBookmark = async (data) => {
+    const r = await dbSaveBookmark(data);
+    if (r) dispatch({ type: 'ADD_BOOKMARK', payload: r });
+    return r;
+  };
+
+  const updateBookmark = async (id, updates) => {
+    const r = await dbUpdateBookmark(id, updates);
+    if (r) dispatch({ type: 'UPD_BOOKMARK', payload: r });
+    return r;
+  };
+
+  const deleteBookmark = async (id) => {
+    await dbDeleteBookmark(id);
+    dispatch({ type: 'DEL_BOOKMARK', payload: id });
+    return true;
+  };
+
+  const duplicateBookmark = async (id, name = null) => {
+    const r = await dbDuplicateBookmark(id, name);
+    if (r) dispatch({ type: 'ADD_BOOKMARK', payload: r });
+    return r;
+  };
+
+  const reorderBookmarks = async (orderedIds) => {
+    await dbReorderBookmarks(orderedIds);
+    const fresh = await getAllBookmarks();
+    dispatch({ type: 'SET_BOOKMARKS', payload: fresh });
+  };
+
+  const recordBookmarkUsage = async (id) => {
+    const r = await dbRecordBookmarkUsage(id);
+    if (r) dispatch({ type: 'UPD_BOOKMARK', payload: r });
+    return r;
+  };
+
   const refreshInvestmentPlans = async () => {
     const plans = await getAllInvestmentPlans();
     dispatch({ type: 'SET_INVESTMENT_PLANS', payload: plans });
@@ -1486,6 +1536,8 @@ export function AppProvider({ children }) {
       saveBudget, removeBudget,
       addInvestmentPlan, updateInvestmentPlan, deleteInvestmentPlan,
       advancePlanDueDate, refreshInvestmentPlans,
+      createBookmark, updateBookmark, deleteBookmark,
+      duplicateBookmark, reorderBookmarks, recordBookmarkUsage,
     }}>
       {children}
     </Ctx.Provider>

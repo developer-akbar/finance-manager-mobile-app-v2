@@ -21,7 +21,7 @@
 .txn-view-tab { padding:6px 16px; border-radius:calc(var(--r-md) - 2px); border:none; background:none; font-size:0.76rem; font-weight:700; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); }
 .txn-view-tab.active { background:var(--green); color:#0a0f1e; }
 .txn-header-actions { display:flex; align-items:center; gap:8px; }
-.txn-paste-btn {
+.txn-paste-btn, .txn-bookmark-btn {
   height: 34px;
   padding: 0 12px;
   background: var(--theme-header-btn-bg, var(--bg-card));
@@ -37,21 +37,22 @@
   font-family: var(--font);
   transition: var(--transition);
 }
-.txn-paste-btn:hover {
+.txn-paste-btn:hover, .txn-bookmark-btn:hover {
   background: var(--bg-hover);
   border-color: var(--accent);
 }
-.txn-paste-btn svg {
+.txn-paste-btn svg, .txn-bookmark-btn svg {
   width: 14px;
   height: 14px;
   stroke: var(--theme-header-btn-color, var(--accent));
 }
 @media (max-width: 480px) {
   .txn-paste-btn-lbl { display: none; }
-  .txn-paste-btn { padding: 0; width: 34px; justify-content: center; }
+  .txn-paste-btn, .txn-bookmark-btn { padding: 0; width: 34px; justify-content: center; }
 }
 .txn-search-btn { width:34px; height:34px; background:var(--theme-header-btn-bg, var(--bg-card)); border:1px solid var(--theme-header-border, var(--border)); border-radius:var(--r-md); cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--theme-header-btn-color, var(--text-primary)); transition: var(--transition); }
-.txn-search-btn:hover { background: var(--bg-hover); }
+.txn-search-btn:hover { background: var(--bg-hover); border-color: var(--text-muted); }
+.txn-search-btn:hover svg { stroke: var(--theme-header-btn-color, var(--text-primary)); }
 .txn-search-btn svg { width:15px; height:15px; stroke:var(--theme-header-btn-color, var(--text-secondary)); }
 
 /* Row 2 month nav — Compact & Centered on all viewports */

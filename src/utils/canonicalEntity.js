@@ -33,6 +33,7 @@ const INVESTMENT_SCHEMA_KEYS = new Set([
   'stamp_duty_charges',
   'gst_charges',
   'dp_charges',
+  'cdsl_charges',
   'other_charges',
   'security_display_name',
   'settlement_mode'
@@ -50,6 +51,7 @@ const MONETARY_FIELDS = new Set([
   'stamp_duty_charges',
   'gst_charges',
   'dp_charges',
+  'cdsl_charges',
   'other_charges',
   'planned_amount',
   'cost_basis',

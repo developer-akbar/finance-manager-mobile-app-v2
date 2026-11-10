@@ -385,7 +385,45 @@ export default function TransactionItem({ transaction: t, selected, onLongPress,
 
 // ── Detail sheet ─────────────────────────────────────────────────────────────
 export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
-  const { deleteTransaction, updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments, state, showDescription = true } = useApp();
+  const { deleteTransaction, updateInstalmentSiblings, updateInstalmentAmount, deleteAllInstalments, state, showDescription = true, createBookmark, updateBookmark, deleteBookmark, navigate } = useApp();
+  const existingBookmark = (state.bookmarks || []).find(
+    b => b.source_transaction_id && b.source_transaction_id === (t.id || t._id || t.ID)
+  );
+  const [showBookmarkModal, setShowBookmarkModal] = useState(false);
+  const [bookmarkName, setBookmarkName] = useState('');
+  const [savingBookmark, setSavingBookmark] = useState(false);
+
+  const getSuggestedBookmarkName = (txn) => {
+    const note = (txn.Note || txn.note || '').trim();
+    const cat = (txn.Category || txn.category || '').trim();
+    const subcat = (txn.Subcategory || txn.subcategory || '').trim();
+    const desc = (txn.Description || txn.description || '').trim();
+    const tType = txnType(txn);
+
+    if (note && note !== 'Default') {
+      return note;
+    }
+    if (cat && subcat && subcat !== 'Default') {
+      return `${cat} · ${subcat}`;
+    }
+    if (cat) {
+      return cat;
+    }
+    if (desc) {
+      return desc.slice(0, 30);
+    }
+    return `${tType.charAt(0).toUpperCase() + tType.slice(1)} Template`;
+  };
+
+  useEffect(() => {
+    if (showBookmarkModal) {
+      if (existingBookmark) {
+        setBookmarkName(existingBookmark.name);
+      } else {
+        setBookmarkName(getSuggestedBookmarkName(t));
+      }
+    }
+  }, [showBookmarkModal, existingBookmark, t]);
   const [showDelete, setShowDelete] = useState(false);
   const [showCopyPicker, setShowCopyPicker] = useState(false);
   const [showPlanModal, setShowPlanModal] = useState(false);
@@ -887,6 +925,18 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
         <div className="dp-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button className="btn btn-secondary" style={{ flex: 1, minWidth: '70px' }} onClick={onEdit}>✏️ Edit</button>
           {onCopy && <button className="btn btn-secondary" style={{ flex: 1, minWidth: '70px' }} onClick={() => setShowCopyPicker(true)}>📋 Copy</button>}
+          <button
+            className={`btn ${existingBookmark ? 'btn-primary' : 'btn-secondary'}`}
+            style={{
+              flex: 1,
+              minWidth: '85px',
+              ...(existingBookmark ? { borderColor: 'var(--accent)', background: 'rgba(0, 229, 160, 0.15)', color: 'var(--accent)' } : {})
+            }}
+            onClick={() => setShowBookmarkModal(true)}
+            title={existingBookmark ? `Bookmarked as "${existingBookmark.name}". Click to view or edit.` : 'Save as reusable template'}
+          >
+            {existingBookmark ? '🔖 Bookmarked' : '🔖 Bookmark'}
+          </button>
           {isInvestment && (
             <button
               className="btn btn-secondary"
@@ -897,7 +947,15 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
               📈 Plan
             </button>
           )}
-          <button className="btn btn-danger" style={{ flex: 1, minWidth: '70px' }} onClick={() => setShowDelete(true)}>🗑 Delete</button>
+          <button className="btn btn-danger" style={{ flex: 1, minWidth: '70px' }} onClick={() => setShowDelete(true)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14" style={{ flexShrink: 0 }}>
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14H6L5 6" />
+              <path d="M10 11v6M14 11v6" />
+              <path d="M9 6V4h6v2" />
+            </svg>
+            <span>Delete</span>
+          </button>
         </div>
 
         {/* Create Investment Plan Modal */}
@@ -915,6 +973,155 @@ export function DetailSheet({ t, onEdit, onClose, onCopy, backInterceptRef }) {
               });
             } : null}
           />
+        )}
+        {/* Bookmark template popup */}
+        {showBookmarkModal && (
+          <div className="dp-delete-confirm" style={{ zIndex: 12, justifyContent: 'flex-start', paddingTop: '28px', paddingBottom: '24px', overflowY: 'auto' }}>
+            <div style={{ fontSize: '1.8rem', marginBottom: 6 }}>🔖</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 800, marginBottom: 4 }}>
+              {existingBookmark ? 'Transaction Bookmarked' : 'Save as Bookmark'}
+            </div>
+            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginBottom: 16, textAlign: 'center', maxWidth: '320px', lineHeight: 1.4 }}>
+              {existingBookmark
+                ? 'This transaction is already saved as a reusable template. You can update its name, jump to Bookmarks, or remove it.'
+                : 'Save this transaction as a reusable template to quickly create similar entries without retyping details.'}
+            </div>
+
+            <div style={{ width: '100%', maxWidth: '340px', marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Bookmark Name
+              </label>
+              <input
+                type="text"
+                className="form-input"
+                style={{ width: '100%', boxSizing: 'border-box', fontSize: '0.9rem', padding: '10px 12px', borderRadius: 10, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+                placeholder="e.g. Monthly Grocery, Fuel refill..."
+                value={bookmarkName}
+                onChange={(e) => setBookmarkName(e.target.value)}
+                autoFocus
+              />
+            </div>
+
+            {/* Template Summary Card */}
+            <div style={{
+              width: '100%', maxWidth: '340px', background: 'var(--bg-card)', border: '1px solid var(--border)',
+              borderRadius: 12, padding: '10px 14px', marginBottom: 18, fontSize: '0.75rem', boxSizing: 'border-box'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Type</span>
+                <span className="font-semibold text-primary">{type.toUpperCase()}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Amount</span>
+                <span className="font-bold">₹{formatINR(amount)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Account</span>
+                <span className="font-semibold">{isXfer ? `${t.Account || '—'} → ${t.ToAccount || '—'}` : (subAccount ? `${t.Account} → ${subAccount}` : t.Account || '—')}</span>
+              </div>
+              {t.Category && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Category</span>
+                  <span className="font-semibold">{t.Category}{t.Subcategory && t.Subcategory !== 'Default' ? ` · ${t.Subcategory}` : ''}</span>
+                </div>
+              )}
+              {t.Note && (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Note</span>
+                  <span className="text-secondary" style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.Note}</span>
+                </div>
+              )}
+            </div>
+
+            <div style={{ width: '100%', maxWidth: '340px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {existingBookmark ? (
+                <>
+                  <button
+                    className="btn btn-primary btn-full"
+                    disabled={!bookmarkName.trim()}
+                    onClick={async () => {
+                      await updateBookmark(existingBookmark.id, { name: bookmarkName.trim() });
+                      toast.success('Bookmark name updated');
+                      setShowBookmarkModal(false);
+                    }}
+                  >
+                    Update Bookmark Name
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-full"
+                    onClick={() => {
+                      setShowBookmarkModal(false);
+                      onClose();
+                      navigate('bookmarks');
+                    }}
+                  >
+                    Open Bookmarks Screen
+                  </button>
+                  <button
+                    className="btn btn-danger btn-full"
+                    style={{ opacity: 0.9, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                    onClick={async () => {
+                      if (window.confirm('Delete this bookmark template? (Original transaction remains untouched)')) {
+                        await deleteBookmark(existingBookmark.id);
+                        toast.success('Bookmark removed');
+                        setShowBookmarkModal(false);
+                      }
+                    }}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6l-1 14H6L5 6" />
+                      <path d="M10 11v6M14 11v6" />
+                      <path d="M9 6V4h6v2" />
+                    </svg>
+                    <span>Delete Bookmark</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="btn btn-primary btn-full"
+                  disabled={!bookmarkName.trim() || savingBookmark}
+                  onClick={async () => {
+                    setSavingBookmark(true);
+                    try {
+                      const templateData = {
+                        amount: String(t.INR || t.Amount || t.amount || ''),
+                        account: t.Account || t.from_account || '',
+                        sub_account: t.SubAccount || t.sub_account || '',
+                        from_account: t.Account || t.from_account || '',
+                        to_account: t.ToAccount || t.to_account || '',
+                        from_sub_account: t.FromSubAccount || t.from_sub_account || (isXfer ? (t.SubAccount || t.sub_account || '') : ''),
+                        to_sub_account: t.ToSubAccount || t.to_sub_account || '',
+                        category: t.Category || '',
+                        subcategory: (t.Subcategory && t.Subcategory !== 'Default') ? t.Subcategory : '',
+                        note: t.Note || '',
+                        description: t.Description || '',
+                        tags: t.Tags || ''
+                      };
+                      await createBookmark({
+                        name: bookmarkName.trim(),
+                        transaction_type: type === 'income' ? 'Income' : (type === 'transfer' ? 'Transfer' : 'Expense'),
+                        template_data: templateData,
+                        source_transaction_id: t.id || t._id || t.ID || ''
+                      });
+                      toast.success(`Bookmarked as "${bookmarkName.trim()}"`);
+                      setShowBookmarkModal(false);
+                    } catch (err) {
+                      console.error('Failed to create bookmark:', err);
+                      toast.error('Failed to save bookmark');
+                    } finally {
+                      setSavingBookmark(false);
+                    }
+                  }}
+                >
+                  {savingBookmark ? 'Saving...' : 'Save Bookmark Template'}
+                </button>
+              )}
+              <button className="btn btn-ghost btn-full" onClick={() => setShowBookmarkModal(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
         {/* Copy date picker popup */}
         {showCopyPicker && onCopy && (

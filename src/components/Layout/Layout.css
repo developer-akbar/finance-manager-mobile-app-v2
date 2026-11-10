@@ -183,9 +183,13 @@
     justify-content: center;
   }
 
-  .sidebar-nav-item:hover {
+  .sidebar-nav-item:hover:not(.active) {
     background: var(--theme-header-btn-bg, var(--bg-hover));
     color: var(--theme-header-text, var(--text-primary));
+  }
+  .sidebar-nav-item.active:hover {
+    background: var(--theme-header-btn-bg, var(--green-dim));
+    color: var(--theme-header-btn-color, var(--green));
   }
 
   .sidebar-nav-item.active {

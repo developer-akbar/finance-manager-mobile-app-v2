@@ -1785,7 +1785,7 @@ function SearchFilterControls({
 
 // ── Main Transactions screen ──────────────────────────────────────────────────
 export default function Transactions({ isActive, onAddTransaction, backInterceptRef, viewParams }) {
-  const { state, clearNavParams } = useApp();
+  const { state, clearNavParams, navigate } = useApp();
   const { transactions, accounts, categories } = state;
   const now = new Date();
 
@@ -2021,6 +2021,12 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
               <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
             </svg>
             <span className="txn-paste-btn-lbl">Paste</span>
+          </button>
+          <button className="txn-bookmark-btn" onClick={() => navigate('bookmarks')} title="Bookmarks (Reusable Templates)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span className="txn-paste-btn-lbl">Bookmarks</span>
           </button>
           <button className="txn-search-btn" onClick={()=>setViewMode('search')} title="Search Transactions">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>

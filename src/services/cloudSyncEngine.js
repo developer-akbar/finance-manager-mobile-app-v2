@@ -201,6 +201,14 @@ export function canonicalizeEntity(entity, entityType = 'transaction') {
     return `${key}:${value}`;
   }
 
+  if (entityType === 'transaction_bookmarks' || entityType === 'transaction_bookmark') {
+    const name = String(entity.name || '').trim();
+    const type = String(entity.transaction_type || '').trim();
+    const tData = typeof entity.template_data === 'object' ? JSON.stringify(entity.template_data) : String(entity.template_data || '');
+    const sort = String(entity.sort_order ?? 0);
+    return `${id}|${name}|${type}|${sort}|${tData}`;
+  }
+
   if (entityType === 'sync_tombstone' || entityType === 'sync_tombstones' || entityType === 'tombstone' || entityType === 'tombstones') {
     const tombId = String(entity.id || entity.entity_id || id || '').trim();
     const eType = String(entity.entity_type || 'transaction').trim();
@@ -251,6 +259,7 @@ export function getManifestEntityKey(entityType, rawId) {
     const canonId = getCanonicalBrokerageId(unPrefixed);
     return `brokerages:${canonId}`;
   }
+  else if (normType === 'transaction_bookmark' || normType === 'transaction_bookmarks') typePrefix = 'transaction_bookmarks';
   else if (normType === 'inventory') typePrefix = 'inventory';
   else if (normType === 'investment_transaction' || normType === 'investment_transactions') typePrefix = 'investment_transactions';
   else if (!normType.endsWith('s')) typePrefix = `${normType}s`;
@@ -317,6 +326,7 @@ export async function readLocalEntities(dbInstance = null) {
     accountGroupsRes,
     accountMappingRes,
     brokeragesRes,
+    bookmarksRes,
     tombstonesRes,
     settingsRes,
     queueRes
@@ -334,6 +344,7 @@ export async function readLocalEntities(dbInstance = null) {
     db.query('SELECT * FROM account_groups').catch(() => ({ values: [] })),
     db.query('SELECT * FROM account_mapping').catch(() => ({ values: [] })),
     db.query('SELECT * FROM brokerages').catch(() => ({ values: [] })),
+    db.query('SELECT * FROM transaction_bookmarks').catch(() => ({ values: [] })),
     db.query('SELECT * FROM sync_tombstones').catch(() => ({ values: [] })),
     db.query('SELECT * FROM settings').catch(() => ({ values: [] }))
   ]);
@@ -360,6 +371,7 @@ export async function readLocalEntities(dbInstance = null) {
     account_groups: accountGroupsRes.values || [],
     account_mapping: accountMappingRes.values || [],
     brokerages: brokeragesRes.values || [],
+    transaction_bookmarks: bookmarksRes.values || [],
     sync_tombstones: tombstonesRes.values || [],
     settings: settingsObj
   };
@@ -2719,6 +2731,26 @@ export async function applyLocalEntityInsertOrUpdate(db, item, collectionType = 
     return;
   }
 
+  if (collection === 'transaction_bookmarks' || collection === 'transaction_bookmark') {
+    const tData = typeof item.template_data === 'object' ? JSON.stringify(item.template_data) : String(item.template_data || '{}');
+    await db.run(
+      'INSERT OR REPLACE INTO transaction_bookmarks (id, name, transaction_type, template_data, source_transaction_id, sort_order, usage_count, last_used_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        item.id,
+        item.name || 'Untitled Bookmark',
+        item.transaction_type || 'Expense',
+        tData,
+        item.source_transaction_id || '',
+        item.sort_order ?? 0,
+        item.usage_count ?? 0,
+        item.last_used_at || '',
+        item.created_at || new Date().toISOString(),
+        item.updated_at || new Date().toISOString()
+      ]
+    );
+    return;
+  }
+
   if (collection === 'brokerages' || collection === 'brokerage') {
     const brk = item;
     const canonId = getCanonicalBrokerageId(brk);
@@ -2785,6 +2817,8 @@ export async function applyLocalEntityInsertOrUpdate(db, item, collectionType = 
     return await applyLocalEntityInsertOrUpdate(db, item, 'investment_plans');
   } else if (item.source_name !== undefined && item.account_name !== undefined) {
     return await applyLocalEntityInsertOrUpdate(db, item, 'account_mapping');
+  } else if (item.template_data !== undefined) {
+    return await applyLocalEntityInsertOrUpdate(db, item, 'transaction_bookmarks');
   } else if (item.bank_account !== undefined || item.owner !== undefined) {
     return await applyLocalEntityInsertOrUpdate(db, item, 'brokerages');
   } else if (item.unit !== undefined || item.discounted_price !== undefined) {
@@ -2858,6 +2892,7 @@ export async function populateLocalEntitiesBootstrap(db, entities, options = {})
   await db.run('DELETE FROM investment_plans').catch(() => {});
   await db.run('DELETE FROM account_mapping').catch(() => {});
   await db.run('DELETE FROM brokerages').catch(() => {});
+  await db.run('DELETE FROM transaction_bookmarks').catch(() => {});
   await db.run('DELETE FROM transactions').catch(() => {});
   await db.run('DELETE FROM investment_transactions').catch(() => {});
   await db.run('DELETE FROM sync_tombstones').catch(() => {});
