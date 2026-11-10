@@ -141,8 +141,8 @@ export const SYNC_TRIGGER = Object.freeze({
   PERIODIC: 'PERIODIC'
 });
 
-export const DEBOUNCE_MS = 30000; // 30 seconds
-export const MAX_CEILING_MS = 60000; // 60 seconds
+export const DEBOUNCE_MS = 2500; // 2.5 seconds responsive background sync
+export const MAX_CEILING_MS = 10000; // 10 seconds ceiling
 
 let _syncBroadcastChannel = null;
 let _currentSyncStatus = SYNC_STATUS.IDLE;
@@ -1687,10 +1687,6 @@ export function initializeDeltaSyncRuntime() {
 
   const triggerAutoSyncIfReady = async (trigger) => {
     try {
-      if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
-        console.warn(`[deltaSyncCoordinator] Auto-sync suppressed (${trigger}): Recovery safety lock is ACTIVE.`);
-        return;
-      }
       const state = await getDeviceLifecycleState();
       if (state !== DEVICE_LIFECYCLE.ACTIVE) return;
       const token = _syncConfig.getAccessToken ? await _syncConfig.getAccessToken() : null;
@@ -1705,7 +1701,6 @@ export function initializeDeltaSyncRuntime() {
   let unsubscribeSession = null;
   import('./syncSession.js').then(({ subscribeSyncSession }) => {
     unsubscribeSession = subscribeSyncSession(async (isUnlocked, key) => {
-      if (isRecoverySafetyLocked()) return;
       if (isUnlocked && key) {
         await triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
       }
@@ -1716,7 +1711,6 @@ export function initializeDeltaSyncRuntime() {
   let unsubscribeAuth = null;
   import('./googleAuth.js').then(({ subscribeGoogleAuth }) => {
     unsubscribeAuth = subscribeGoogleAuth(async (isAuthenticated, token) => {
-      if (isRecoverySafetyLocked()) return;
       if (isAuthenticated && token) {
         await triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
       }
@@ -1725,14 +1719,19 @@ export function initializeDeltaSyncRuntime() {
 
   // 4. Register visibilitychange & focus listeners (foreground wake for ACTIVE devices)
   const handleVisibilityChange = async () => {
-    if (isRecoverySafetyLocked()) return;
-    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+    if (typeof document === 'undefined') return;
+    if (document.visibilityState === 'visible') {
       await triggerAutoSyncIfReady(SYNC_TRIGGER.FOREGROUND);
+    } else if (document.visibilityState === 'hidden') {
+      // Flush and sync any pending mutations immediately before tab/browser suspends
+      if (_debounceTimer || _ceilingTimer) {
+        _flushSyncTimers();
+        triggerAutomaticSync(SYNC_TRIGGER.MUTATION).catch(() => {});
+      }
     }
   };
 
   const handleFocus = async () => {
-    if (isRecoverySafetyLocked()) return;
     await triggerAutoSyncIfReady(SYNC_TRIGGER.FOREGROUND);
   };
 
@@ -1744,19 +1743,17 @@ export function initializeDeltaSyncRuntime() {
   }
 
   // 5. Trigger startup sync check immediately and with staged retries for async token restoration
-  if (!isRecoverySafetyLocked()) {
-    triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
-  }
+  triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
   const startupTimer1 = setTimeout(() => {
-    if (!isRecoverySafetyLocked()) triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
+    triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
   }, 1500);
   const startupTimer2 = setTimeout(() => {
-    if (!isRecoverySafetyLocked()) triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
+    triggerAutoSyncIfReady(SYNC_TRIGGER.STARTUP);
   }, 4000);
 
   // 6. Periodic background auto-sync timer (every 5 minutes)
   const periodicSyncTimer = setInterval(() => {
-    if (!isRecoverySafetyLocked()) triggerAutoSyncIfReady(SYNC_TRIGGER.PERIODIC);
+    triggerAutoSyncIfReady(SYNC_TRIGGER.PERIODIC);
   }, 300000);
   if (typeof periodicSyncTimer?.unref === 'function') periodicSyncTimer.unref();
 
@@ -1920,10 +1917,6 @@ export async function withMasterSyncLock(taskFn, lockOptions = {}) {
  * Schedules an automatic sync run based on trigger type and debounce rules.
  */
 export function scheduleSync(trigger = SYNC_TRIGGER.MUTATION) {
-  if (isRecoverySafetyLocked()) {
-    console.warn(`[deltaSyncCoordinator] scheduleSync suppressed (${trigger}): Recovery safety lock is ACTIVE.`);
-    return;
-  }
   if (!_syncConfig.enabled) return;
   if (_isBootstrapInProgress) return;
 
@@ -1972,10 +1965,6 @@ function _flushSyncTimers() {
  */
 export async function triggerAutomaticSync(trigger = SYNC_TRIGGER.MANUAL, options = {}) {
   _flushSyncTimers();
-  if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
-    console.warn(`[triggerAutomaticSync] Suppressed (${trigger}): Recovery safety lock is ACTIVE.`);
-    return { status: 'RECOVERY_LOCKED', message: 'Recovery safety lock is ACTIVE' };
-  }
   if (_isBootstrapInProgress) {
     return { status: 'BLOCKED_BOOTSTRAP_IN_PROGRESS' };
   }
@@ -2008,11 +1997,6 @@ export async function triggerAutomaticSync(trigger = SYNC_TRIGGER.MANUAL, option
  * Executes a complete sync cycle (Push -> Pull -> Reconcile) under the Master Sync Lock.
  */
 export async function executeFullSyncPass(options = {}) {
-  if (isRecoverySafetyLocked() || (await checkRecoverySafetyLockAsync())) {
-    console.warn('[executeFullSyncPass] Aborted: Recovery safety lock is ACTIVE.');
-    return { success: false, status: 'RECOVERY_LOCKED', reason: 'Recovery safety lock is ACTIVE' };
-  }
-
   const trigger = options.trigger || SYNC_TRIGGER.MANUAL;
   const driveClient = options.driveClient || _syncConfig.driveClient;
   const getAccessToken = _syncConfig.getAccessToken;

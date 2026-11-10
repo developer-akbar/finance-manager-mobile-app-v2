@@ -187,14 +187,7 @@ export function getSyncSessionKey() {
 export async function initSyncSessionFromStorage() {
   if (_sessionKeyMaterial) return _sessionKeyMaterial;
   try {
-    // 1. Durably check recovery safety lock first only if explicitly active
-    if (isRecoverySafetyLocked()) {
-      const isLocked = await checkRecoverySafetyLockAsync().catch(() => false);
-      if (isLocked) {
-        console.warn('[SyncSession] Recovery safety lock is ACTIVE. Suppressing automatic PIN restoration.');
-        return null;
-      }
-    }
+    // 1. Auto-restoration of stored encryption PIN on startup
 
     let saved = null;
     if (typeof localStorage !== 'undefined') {
@@ -249,38 +242,11 @@ if (typeof window !== 'undefined') {
 export async function unlockSyncSession(pinOrKey, options = {}) {
   const shouldPersist = options.persist !== false;
 
-  // Handle recovery safety lock during unlock:
-  // If the lock is active, verify that caller provided a valid PIN that matches stored credentials.
-  const { isRecoverySafetyLocked, clearRecoverySafetyLock } = await import('./recoveryLock.js');
-  if (isRecoverySafetyLocked()) {
-    if (typeof pinOrKey === 'string' && pinOrKey.trim()) {
-      let storedPin = null;
-      if (typeof localStorage !== 'undefined') {
-        try {
-          const storedToken = localStorage.getItem(PERSISTED_PIN_STORAGE_KEY);
-          if (storedToken) storedPin = decodePersistedToken(storedToken);
-        } catch {}
-      }
-      if (!storedPin) {
-        try {
-          const { getSetting } = await import('../database/settings.js');
-          const dbToken = await getSetting(PERSISTED_PIN_STORAGE_KEY);
-          if (dbToken) storedPin = decodePersistedToken(dbToken);
-        } catch {}
-      }
-      if (storedPin && storedPin !== pinOrKey.trim()) {
-        throw new Error('Incorrect PIN. Recovery safety lock cannot be cleared.');
-      }
-      await clearRecoverySafetyLock({ confirmed: true, reason: 'EXPLICIT_PIN_UNLOCK' });
-    } else if (options.clearRecoveryLock || options.force) {
-      await clearRecoverySafetyLock({ confirmed: true, force: true, reason: 'EXPLICIT_PIN_UNLOCK' });
-    } else {
-      throw new Error('Recovery safety lock is ACTIVE. Explicit PIN confirmation is required to unlock.');
-    }
-  } else {
-    // If not locked, ensure recovery safety lock is explicitly recorded as cleared/unlocked
+  // Ensure recovery safety lock is recorded as cleared
+  try {
+    const { clearRecoverySafetyLock } = await import('./recoveryLock.js');
     await clearRecoverySafetyLock({ confirmed: true, force: true, reason: 'EXPLICIT_PIN_UNLOCK' }).catch(() => {});
-  }
+  } catch {}
 
   if (pinOrKey && typeof pinOrKey === 'object' && pinOrKey.algorithm?.name === 'PBKDF2') {
     _sessionKeyMaterial = pinOrKey;

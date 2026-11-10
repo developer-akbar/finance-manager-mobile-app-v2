@@ -1220,73 +1220,7 @@ export default function CloudSyncManager({ onBack }) {
       </div>
 
       <div className="cloud-sync-container">
-        {/* Persistent Recovery Safety Lock Alert Banner */}
-        {recoveryLockState.isLocked && (
-          <div style={{
-            background: 'rgba(255, 77, 106, 0.12)',
-            border: '2px solid var(--expense, #ff4d6a)',
-            borderRadius: 12,
-            padding: '14px 16px',
-            margin: '12px 0 16px',
-            color: 'var(--text-primary)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: '1.2rem' }}>⚠️</span>
-              <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--expense)' }}>
-                Snapshot Recovery Safety Lock Active
-              </div>
-            </div>
-            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 12 }}>
-              A previous snapshot recovery or synchronization attempt was interrupted (or process restart occurred during recovery).
-              Automatic sync, background polling, and PIN restoration are suspended to protect your financial records.
-              {recoveryLockState.details?.reason && (
-                <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                  Reason: {recoveryLockState.details.reason} {recoveryLockState.details.locked_at ? `(${new Date(recoveryLockState.details.locked_at).toLocaleString()})` : ''}
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                type="password"
-                placeholder="Enter Sync PIN to confirm"
-                value={recoveryLockState.unlockPin}
-                onChange={(e) => setRecoveryLockState(prev => ({ ...prev, unlockPin: e.target.value, error: '' }))}
-                style={{
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 6,
-                  padding: '6px 12px',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.8rem',
-                  width: '190px'
-                }}
-              />
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={handleClearRecoveryLock}
-                disabled={recoveryLockState.isClearing}
-                style={{
-                  background: 'var(--expense)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 6,
-                  padding: '6px 14px',
-                  fontWeight: 700,
-                  fontSize: '0.78rem',
-                  cursor: 'pointer'
-                }}
-              >
-                {recoveryLockState.isClearing ? 'Verifying PIN…' : 'Verify PIN & Clear Recovery Lock'}
-              </button>
-            </div>
-            {recoveryLockState.error && (
-              <div style={{ color: 'var(--expense)', fontSize: '0.75rem', fontWeight: 700, marginTop: 8 }}>
-                {recoveryLockState.error}
-              </div>
-            )}
-          </div>
-        )}
+
         {/* Security & Privacy Notice */}
         <div style={{
           background: 'rgba(0, 229, 160, 0.08)',

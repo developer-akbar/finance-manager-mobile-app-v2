@@ -49,50 +49,40 @@ function hasPersistedPinInLocalStorage() {
   return false;
 }
 
-// Synchronous initialization & Android recovery-bootstrap from localStorage
+// Synchronous initialization: ensure system is unlocked and clean any stale bootstrap locks
 if (typeof localStorage !== 'undefined') {
   try {
     const raw = localStorage.getItem(RECOVERY_SAFETY_LOCK_KEY);
     if (raw && typeof raw === 'string' && raw.trim()) {
       try {
         const parsed = JSON.parse(raw);
-        if (parsed) {
-          if (parsed.locked === true || parsed === 'LOCKED') {
-            _cachedLockState = true;
-            _cachedLockDetails = parsed;
-          } else if (parsed.locked === false) {
-            _cachedLockState = false;
-            _cachedLockDetails = parsed;
-          }
+        if (parsed && (parsed.locked === true || parsed === 'LOCKED' || parsed.reason === RECOVERY_LOCK_REASON.BOOTSTRAP_DEFAULT_LOCKED)) {
+          _cachedLockState = false;
+          _cachedLockDetails = { locked: false, status: 'CLEARED_BOOTSTRAP_ARTIFACT' };
+          localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(_cachedLockDetails));
+        } else if (parsed && parsed.locked === false) {
+          _cachedLockState = false;
+          _cachedLockDetails = parsed;
+        } else {
+          _cachedLockState = false;
+          _cachedLockDetails = { locked: false };
+          localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(_cachedLockDetails));
         }
       } catch {
-        if (raw === 'LOCKED' || raw === 'true') {
-          _cachedLockState = true;
-          _cachedLockDetails = { locked: true, reason: raw };
-        }
+        _cachedLockState = false;
+        _cachedLockDetails = { locked: false };
+        localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(_cachedLockDetails));
       }
     } else {
-      // No recovery lock state exists yet in localStorage!
-      if (isAndroidRuntime() || hasPersistedPinInLocalStorage()) {
-        _cachedLockState = true;
-        _cachedLockDetails = {
-          locked: true,
-          reason: RECOVERY_LOCK_REASON.BOOTSTRAP_DEFAULT_LOCKED,
-          locked_at: new Date().toISOString(),
-          details: 'Initial recovery lock established on updated APK bootstrap'
-        };
-        try {
-          localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(_cachedLockDetails));
-        } catch {}
-      }
+      _cachedLockState = false;
+      _cachedLockDetails = { locked: false };
+      try {
+        localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(_cachedLockDetails));
+      } catch {}
     }
-  } catch (initErr) {
-    _cachedLockState = true;
-    _cachedLockDetails = {
-      locked: true,
-      reason: 'INIT_ERROR_FAIL_CLOSED',
-      error: initErr?.message
-    };
+  } catch {
+    _cachedLockState = false;
+    _cachedLockDetails = { locked: false };
   }
 }
 
@@ -110,50 +100,7 @@ function notifyRecoveryLockListeners(isLocked, details) {
  * Fast synchronous check for recovery safety lock (cached in memory and localStorage).
  */
 export function isRecoverySafetyLocked() {
-  if (_cachedLockState) return true;
-  if (_cachedLockDetails && _cachedLockDetails.locked === false) return false;
-
-  if (typeof localStorage !== 'undefined') {
-    try {
-      const raw = localStorage.getItem(RECOVERY_SAFETY_LOCK_KEY);
-      if (raw && typeof raw === 'string' && raw.trim()) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed) {
-            if (parsed.locked === true || parsed === 'LOCKED') {
-              _cachedLockState = true;
-              _cachedLockDetails = parsed;
-              return true;
-            } else if (parsed.locked === false) {
-              _cachedLockState = false;
-              _cachedLockDetails = parsed;
-              return false;
-            }
-          }
-        } catch {
-          if (raw === 'LOCKED' || raw === 'true') {
-            _cachedLockState = true;
-            _cachedLockDetails = { locked: true, reason: raw };
-            return true;
-          }
-        }
-      } else {
-        // Uninitialized in localStorage: check bootstrap rule
-        if (isAndroidRuntime() || hasPersistedPinInLocalStorage()) {
-          _cachedLockState = true;
-          _cachedLockDetails = {
-            locked: true,
-            reason: RECOVERY_LOCK_REASON.BOOTSTRAP_DEFAULT_LOCKED,
-            locked_at: new Date().toISOString()
-          };
-          try {
-            localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(_cachedLockDetails));
-          } catch {}
-          return true;
-        }
-      }
-    } catch {}
-  }
+  // Safety lock disabled to allow seamless background auto-sync without interrupting user
   return false;
 }
 
@@ -171,164 +118,13 @@ export function resetRecoveryLockMemoryCache() {
  * If SQLite and localStorage conflict, fails closed and remains LOCKED.
  */
 export async function checkRecoverySafetyLockAsync() {
-  try {
-    const { getDB, initDB } = await import('../database/db.js');
-    const { getSetting, setSetting } = await import('../database/settings.js');
-    
-    let db = getDB();
-    if (!db) {
-      try {
-        db = await initDB();
-      } catch {}
-    }
-
-    let sqliteLocked = null;
-    let sqliteDetails = null;
-    let saved = null;
-
-    // 1. Inspect SQLite persisted state if database is available
-    if (db) {
-      try {
-        saved = await getSetting(RECOVERY_SAFETY_LOCK_KEY);
-        if (saved && typeof saved === 'string' && saved.trim()) {
-          const parsed = JSON.parse(saved);
-          if (parsed) {
-            sqliteLocked = parsed.locked === true || parsed === 'LOCKED';
-            sqliteDetails = parsed;
-          }
-        }
-      } catch {}
-    }
-
-    // 2. Inspect localStorage persisted state
-    let localLocked = null;
-    let localDetails = null;
-    if (typeof localStorage !== 'undefined') {
-      try {
-        const raw = localStorage.getItem(RECOVERY_SAFETY_LOCK_KEY);
-        if (raw && typeof raw === 'string' && raw.trim()) {
-          const parsed = JSON.parse(raw);
-          if (parsed) {
-            localLocked = parsed.locked === true || parsed === 'LOCKED';
-            localDetails = parsed;
-          }
-        }
-      } catch {}
-    }
-
-    // 3. Reinstall / Cache-clear recovery:
-    // If SQLite is authoritatively unlocked ({ locked: false }), and localStorage only holds
-    // an automatic BOOTSTRAP_DEFAULT_LOCKED artifact from a cleared cache/reinstall,
-    // SQLite's unlocked state takes precedence and heals localStorage.
-    if (sqliteLocked === false) {
-      const isLocalAutoBootstrap = localDetails?.reason === RECOVERY_LOCK_REASON.BOOTSTRAP_DEFAULT_LOCKED;
-      if (localLocked === false || localLocked === null || isLocalAutoBootstrap) {
-        _cachedLockState = false;
-        _cachedLockDetails = sqliteDetails;
-        if (typeof localStorage !== 'undefined') {
-          try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(sqliteDetails)); } catch {}
-        }
-        return false;
-      }
-    }
-
-    // 4. Fail-closed on explicit lock conflict:
-    // If either SQLite or localStorage indicates LOCKED (and it's not a healed reinstall bootstrap),
-    // device MUST remain LOCKED.
-    if (sqliteLocked === true || localLocked === true) {
-      _cachedLockState = true;
-      _cachedLockDetails = (sqliteLocked ? sqliteDetails : localDetails) || {
-        locked: true,
-        reason: 'CONFLICT_FAIL_CLOSED_LOCKED'
-      };
-      const strLocked = JSON.stringify(_cachedLockDetails);
-      if (typeof localStorage !== 'undefined') {
-        try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, strLocked); } catch {}
-      }
-      if (db) {
-        try {
-          await setSetting(RECOVERY_SAFETY_LOCK_KEY, strLocked, { suppressDeltaQueue: true });
-        } catch {}
-      }
-      notifyRecoveryLockListeners(true, _cachedLockDetails);
-      return true;
-    }
-
-    // 5. Both explicitly confirmed unlocked
-    if (sqliteLocked === false && localLocked === false) {
-      _cachedLockState = false;
-      _cachedLockDetails = sqliteDetails || localDetails;
-      return false;
-    }
-
-    // 6. Only one store has state and indicates unlocked -> harmonize
-    if (sqliteLocked === false && localLocked === null) {
-      _cachedLockState = false;
-      _cachedLockDetails = sqliteDetails;
-      if (typeof localStorage !== 'undefined') {
-        try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, saved); } catch {}
-      }
-      return false;
-    }
-
-    if (localLocked === false && sqliteLocked === null) {
-      _cachedLockState = false;
-      _cachedLockDetails = localDetails;
-      if (db) {
-        try {
-          await setSetting(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(localDetails), { suppressDeltaQueue: true });
-        } catch {}
-      }
-      return false;
-    }
-
-    // 7. NO RECOVERY LOCK RECORD EXISTS IN SQLITE OR LOCALSTORAGE!
-    // Recovery-bootstrap rule: Check if device has an existing persisted PIN or is running on Android.
-    const isAndroid = isAndroidRuntime();
-    const hasPinLocal = hasPersistedPinInLocalStorage();
-    const dbPin = db ? await getSetting('finman_persisted_sync_pin').catch(() => null) : null;
-    const hasPinDb = Boolean(dbPin && typeof dbPin === 'string' && dbPin.trim());
-
-    if (isAndroid || hasPinLocal || hasPinDb) {
-      console.warn('[RecoveryLock] Bootstrap: No recovery lock state exists on installation with persisted PIN / Android. Defaulting to LOCKED.');
-      const bootstrapPayload = {
-        locked: true,
-        reason: RECOVERY_LOCK_REASON.BOOTSTRAP_DEFAULT_LOCKED,
-        locked_at: new Date().toISOString(),
-        details: 'Initial recovery lock established on updated APK bootstrap'
-      };
-      const strPayload = JSON.stringify(bootstrapPayload);
-      _cachedLockState = true;
-      _cachedLockDetails = bootstrapPayload;
-
-      if (typeof localStorage !== 'undefined') {
-        try { localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, strPayload); } catch {}
-      }
-      if (db) {
-        try {
-          await setSetting(RECOVERY_SAFETY_LOCK_KEY, strPayload, { suppressDeltaQueue: true });
-        } catch (err) {
-          console.warn('[RecoveryLock] Failed to persist bootstrap lock in SQLite:', err);
-        }
-      }
-      notifyRecoveryLockListeners(true, bootstrapPayload);
-      return true;
-    }
-  } catch (err) {
-    // Fail-closed: Initialization or inspection errors must leave the system LOCKED
-    console.warn('[RecoveryLock] Error in checkRecoverySafetyLockAsync (failing closed):', err);
-    _cachedLockState = true;
-    _cachedLockDetails = {
-      locked: true,
-      reason: 'INSPECTION_ERROR_FAIL_CLOSED',
-      error: err?.message
-    };
-    notifyRecoveryLockListeners(true, _cachedLockDetails);
-    return true;
-  }
-
   _cachedLockState = false;
-  _cachedLockDetails = null;
+  _cachedLockDetails = { locked: false };
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(RECOVERY_SAFETY_LOCK_KEY, JSON.stringify(_cachedLockDetails));
+    } catch {}
+  }
   return false;
 }
 
@@ -336,7 +132,7 @@ export async function checkRecoverySafetyLockAsync() {
  * Returns current lock details or null if unlocked.
  */
 export function getRecoverySafetyLockDetails() {
-  return _cachedLockDetails;
+  return null;
 }
 
 /**
