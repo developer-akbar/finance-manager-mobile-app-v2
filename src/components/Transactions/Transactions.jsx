@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, calcTotals, calcReportingTotals, groupByDate, txnType, txnAmount, inputToStorage, isSystemTag, getUserFacingTags, normalizeSuggestionQuery } from '../../utils/format.js';
+import { parseDate, formatINR, calcTotals, calcReportingTotals, calcSelectedTotals, groupByDate, txnType, txnAmount, inputToStorage, isSystemTag, getUserFacingTags, normalizeSuggestionQuery } from '../../utils/format.js';
 import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import TransactionSyncModal from './TransactionSyncModal.jsx';
@@ -40,19 +40,45 @@ export function BulkSelectionBar({ selected, setSelected, selTotals, allTxns, on
 
   const selArr = allTxns.filter(t => selected.has(t._id));
 
-  // Escape key listener for bulk edit & delete confirmation sheets
+  // Escape key listener for bulk selection bar: sheet closing & multi-select exit
   React.useEffect(() => {
-    if (!confirm && !showEditSheet) return;
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape' || e.key === 'Esc') {
+      if (e.key !== 'Escape' && e.key !== 'Esc') return;
+
+      if (confirm) {
         e.stopPropagation();
-        if (confirm) setConfirm(false);
-        if (showEditSheet) setShowEditSheet(false);
+        setConfirm(false);
+        return;
+      }
+      if (showEditSheet) {
+        e.stopPropagation();
+        setShowEditSheet(false);
+        return;
+      }
+
+      const activeEl = document.activeElement;
+      const tagName = activeEl?.tagName?.toLowerCase();
+      const isTextInput = tagName === 'textarea' || (tagName === 'input' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes(activeEl?.type?.toLowerCase()));
+      if (isTextInput || activeEl?.isContentEditable) {
+        return;
+      }
+
+      const activeOverlays = document.querySelectorAll(
+        '.overlay, .bottom-sheet, .modal-backdrop, .modal-overlay, .dialog-overlay, .fullscreen-modal, .fullscreen-overlay, .sync-modal-overlay'
+      );
+      if (activeOverlays.length > 0) {
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+      if (onDone) {
+        onDone();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [confirm, showEditSheet]);
+  }, [confirm, showEditSheet, onDone]);
 
   const handleBulkCopy = async () => {
     try {
@@ -195,11 +221,14 @@ export function BulkSelectionBar({ selected, setSelected, selTotals, allTxns, on
           {selTotals.inc > 0 && <span className="sel-total-inc">+{formatINR(selTotals.inc)}</span>}
           {selTotals.exp > 0 && <span className="sel-total-exp">−{formatINR(selTotals.exp)}</span>}
           {selTotals.xfr > 0 && <span className="sel-total-xfr">⇄{formatINR(selTotals.xfr)}</span>}
-          {(selTotals.inc > 0 || selTotals.exp > 0) && (
-            <span className="sel-total-net" style={{color:selTotals.inc-selTotals.exp>=0?'var(--income)':'var(--expense)'}}>
-              = {selTotals.inc-selTotals.exp>=0?'+':'−'}{formatINR(Math.abs(selTotals.inc-selTotals.exp))}
-            </span>
-          )}
+          {(selTotals.inc > 0 || selTotals.exp > 0) && (() => {
+            const netVal = Math.round((selTotals.inc - selTotals.exp) * 100) / 100;
+            return (
+              <span className="sel-total-net" style={{color: netVal >= 0 ? 'var(--income)' : 'var(--expense)'}}>
+                = {netVal >= 0 ? '+' : '−'}{formatINR(Math.abs(netVal))}
+              </span>
+            );
+          })()}
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0,position:'relative'}}>
           {selected.size > 0 && (
@@ -765,6 +794,18 @@ export function SearchView({ transactions, accounts, categories, onClose, backIn
           return;
         }
         if (multiMode) {
+          const activeEl = document.activeElement;
+          const tagName = activeEl?.tagName?.toLowerCase();
+          const isTextInput = tagName === 'textarea' || (tagName === 'input' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes(activeEl?.type?.toLowerCase()));
+          if (isTextInput || activeEl?.isContentEditable) {
+            return;
+          }
+          const activeOverlays = document.querySelectorAll(
+            '.overlay, .bottom-sheet, .modal-backdrop, .modal-overlay, .dialog-overlay, .fullscreen-modal, .fullscreen-overlay, .sync-modal-overlay'
+          );
+          if (activeOverlays.length > 0) {
+            return;
+          }
           e.stopPropagation();
           setMultiMode(false);
           setSelected(new Set());
@@ -978,16 +1019,7 @@ export function SearchView({ transactions, accounts, categories, onClose, backIn
   }, [results]);
 
   const selTotals = useMemo(() => {
-    let inc = 0, exp = 0, xfr = 0;
-    for (let i = 0; i < results.length; i++) {
-      const t = results[i];
-      if (!selected.has(t._id)) continue;
-      const tp = txnType(t), amt = txnAmount(t);
-      if (tp === 'income') inc += amt;
-      else if (tp === 'expense') exp += amt;
-      else xfr += amt;
-    }
-    return { inc, exp, xfr };
+    return calcSelectedTotals(results, selected);
   }, [results, selected]);
 
   const allAvailableTags = useMemo(() => {
@@ -1935,7 +1967,15 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' || e.key === 'Esc') {
         if (showSyncModal || showCal || addDate || copyTxn) return;
-        const activeOverlays = document.querySelectorAll('.overlay, .bottom-sheet, .modal-backdrop, .modal-overlay, .dialog-overlay');
+        const activeEl = document.activeElement;
+        const tagName = activeEl?.tagName?.toLowerCase();
+        const isTextInput = tagName === 'textarea' || (tagName === 'input' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes(activeEl?.type?.toLowerCase()));
+        if (isTextInput || activeEl?.isContentEditable) {
+          return;
+        }
+        const activeOverlays = document.querySelectorAll(
+          '.overlay, .bottom-sheet, .modal-backdrop, .modal-overlay, .dialog-overlay, .fullscreen-modal, .fullscreen-overlay, .sync-modal-overlay'
+        );
         if (activeOverlays.length > 0) return;
         e.stopPropagation();
         setMultiMode(false);
@@ -1991,14 +2031,7 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
   };
 
   const selTotals = useMemo(() => {
-    let inc = 0, exp = 0, xfr = 0;
-    for (const t of monthTxns.filter(r => selected.has(r._id))) {
-      const tp = txnType(t), amt = txnAmount(t);
-      if (tp === 'income') inc += amt;
-      else if (tp === 'expense') exp += amt;
-      else xfr += amt;
-    }
-    return { inc, exp, xfr };
+    return calcSelectedTotals(monthTxns, selected);
   }, [monthTxns, selected]);
 
   if (viewMode==='search') return (

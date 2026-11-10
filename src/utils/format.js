@@ -311,6 +311,65 @@ export const calcReportingTotals = (transactions) => {
   return { income, expense, transfer, charges, balance: income - expense };
 };
 
+export const calcSelectedTotals = (transactions, selected) => {
+  let inc = 0, exp = 0, xfr = 0;
+  if (!transactions || !selected) {
+    return { inc, exp, xfr };
+  }
+
+  const isSelected = (id) => {
+    if (!id) return false;
+    if (selected instanceof Set) return selected.has(id);
+    if (Array.isArray(selected)) return selected.includes(id);
+    return false;
+  };
+
+  const len = transactions.length;
+  for (let i = 0; i < len; i++) {
+    const t = transactions[i];
+    if (!t) continue;
+    const tid = t._id || t.id || t.ID;
+    if (!isSelected(tid)) continue;
+
+    const invType = String(t.InvestmentTransactionType || t.investment_transaction_type || '').trim().toUpperCase();
+    const isCharge = isInvestmentCharge(t);
+
+    let effectiveInvType = invType;
+    if (!effectiveInvType && (t.SecuritySymbol || t.security_symbol || t.SecurityISIN || t.security_isin)) {
+      const ie = String(t['Income/Expense'] || t.type || '').trim().toLowerCase();
+      effectiveInvType = (ie === 'income' || ie === 'transfer-in') ? 'SELL' : 'BUY';
+    }
+
+    const isBuyOrSell = effectiveInvType === 'BUY' || effectiveInvType === 'SELL';
+    const isOtherInv = effectiveInvType === 'UNIT_ADJUSTMENT' || effectiveInvType === 'RECONCILIATION';
+
+    if (isCharge) {
+      exp += txnAmount(t);
+    } else if (isBuyOrSell) {
+      const invGrossVal = parseFloat(t.TradeValue !== undefined ? t.TradeValue : (t.trade_value || 0)) || 0;
+      const invActualAmt = parseFloat(t.ActualAmount !== undefined ? t.ActualAmount : (t.actual_amount || 0)) || 0;
+      const rawAmt = txnAmount(t);
+      const amt = Math.abs(invGrossVal > 0 ? invGrossVal : (rawAmt > 0 ? rawAmt : (invActualAmt > 0 ? invActualAmt : 0)));
+
+      if (effectiveInvType === 'SELL') {
+        inc += amt;
+      } else {
+        exp += amt;
+      }
+    } else if (isOtherInv) {
+      // UNIT_ADJUSTMENT or RECONCILIATION does not affect cash balance
+    } else {
+      const tp = txnType(t);
+      const amt = txnAmount(t);
+      if (tp === 'income') inc += amt;
+      else if (tp === 'expense') exp += amt;
+      else xfr += amt;
+    }
+  }
+
+  return { inc, exp, xfr };
+};
+
 export const groupByDate = (txns, sort = true) => {
   const g = {};
   for (const t of txns) {

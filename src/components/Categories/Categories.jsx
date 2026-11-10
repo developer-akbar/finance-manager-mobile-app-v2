@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, formatINRCompact, txnType, txnAmount, calcTotals, currentFY, fyLabel, fyStart, fyEnd, isLifestyleExpense, isInvestmentCharge } from '../../utils/format.js';
+import { parseDate, formatINR, formatINRCompact, txnType, txnAmount, calcTotals, calcSelectedTotals, currentFY, fyLabel, fyStart, fyEnd, isLifestyleExpense, isInvestmentCharge } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
@@ -148,14 +148,7 @@ function CategoryDetail({ catName, initPeriod, initYear, initMonth, initFY, allT
   const toggleSel = t => setSelected(p => { const s = new Set(p); s.has(t._id) ? s.delete(t._id) : s.add(t._id); return s; });
 
   const selTotals = useMemo(() => {
-    let inc = 0, exp = 0, xfr = 0;
-    for (const t of filtTxns.filter(r => selected.has(r._id))) {
-      const tp = txnType(t), amt = txnAmount(t);
-      if (tp === 'income') inc += amt;
-      else if (tp === 'expense') exp += amt;
-      else xfr += amt;
-    }
-    return { inc, exp, xfr };
+    return calcSelectedTotals(filtTxns, selected);
   }, [filtTxns, selected]);
 
   const trendData = useMemo(() => {
