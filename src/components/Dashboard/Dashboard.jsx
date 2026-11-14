@@ -464,7 +464,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
         <DebtTracker
           onBack={() => setShowDebtTracker(false)}
           backInterceptRef={backInterceptRef}
-          onSettle={({ name, amount, type }) => {
+          onSettle={({ name, amount, type, linkedTxnId }) => {
             const firstSavings = (state.accounts || []).find(a => !['credit card', 'credit', 'lend', 'borrow'].some(k => (a.name || a).toLowerCase().includes(k))) || 'Cash';
             const bankName = typeof firstSavings === 'object' ? firstSavings.name : firstSavings;
             setSettlePrefill({
@@ -473,6 +473,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
               toAccount: type === 'receive' ? '' : 'Borrow',
               amount: String(amount),
               note: type === 'receive' ? `From ${name}` : `To ${name}`,
+              tags: linkedTxnId ? `#debt_ref_${linkedTxnId}` : '',
             });
           }}
         />
@@ -483,6 +484,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
             prefillToAccount={settlePrefill.toAccount}
             prefillAmount={settlePrefill.amount}
             prefillNote={settlePrefill.note}
+            prefillTags={settlePrefill.tags}
             onClose={() => setSettlePrefill(null)}
             onSaveAndContinue={() => setSettlePrefill(null)}
             backInterceptRef={backInterceptRef}

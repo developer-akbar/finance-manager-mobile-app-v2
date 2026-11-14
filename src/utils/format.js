@@ -433,9 +433,9 @@ export const isSystemTag = (tag) => {
   const t = raw.toLowerCase().replace(/^#/, '');
   if (!t) return false;
 
-  // 1. Stock inventory & lot tracking tags
+  // 1. Stock inventory & lot tracking tags & debt settlement references
   if (t === 'stock' || t === 'consumed' || t === 'lent' || t === 'instalment' || t === 'inventory' || t === 'charge' || t === 'ledger' || t === 'stocktrade' || t === 'realizedpl') return true;
-  if (t.startsWith('stock ') || t.startsWith('stock_ref_') || t.startsWith('inv_charge') || t.startsWith('charge_ref_')) return true;
+  if (t.startsWith('stock ') || t.startsWith('stock_ref_') || t.startsWith('inv_charge') || t.startsWith('charge_ref_') || t.startsWith('debt_ref_') || t.startsWith('stock_debt_ref_')) return true;
 
   // 2. Structured key-value metadata (Ownership:..., Folio:..., Mode:..., ISIN:..., Split_Group:..., PAN:..., KYC:...)
   if (/^(inv_charge|ownership|folio|mode|isin|split_group|trade_id|order_id|pan|kyc):/i.test(t)) return true;

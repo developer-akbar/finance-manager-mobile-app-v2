@@ -5,6 +5,21 @@ import AddTransaction from '../Transactions/AddTransaction.jsx';
 import './DebtTracker.css';
 
 
+export function parseDebtRefTags(tags = '', desc = '') {
+  if (!tags && !desc) return [];
+  const combined = `${tags || ''} ${desc || ''}`;
+  const refRegex = /#(?:debt_ref_|stock_debt_ref_)([a-zA-Z0-9_-]+)(?::([\d.]+))?/g;
+  const refs = [];
+  let match;
+  while ((match = refRegex.exec(combined)) !== null) {
+    refs.push({
+      targetTxnId: match[1],
+      amount: match[2] ? parseFloat(match[2]) : null,
+    });
+  }
+  return refs;
+}
+
 export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
   const { state } = useApp();
   const { transactions } = state;
@@ -93,69 +108,136 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
     const list = Object.values(ledgerMap).map(p => {
       const net = (p.lent - p.received) - (p.borrowed - p.repaid);
 
-      // Sort chronologically (oldest first) to run FIFO settlement allocation
+      // Sort chronologically (oldest first)
       const chronoTxns = [...p.rawTxns].sort((a, b) => parseDate(a.Date) - parseDate(b.Date));
 
-      // 1. Allocate Lend repayments against lent items
-      let unallocatedReceived = p.received;
-      const processedLendTxns = [];
+      const lendTxns = chronoTxns.filter(x => x._role === 'lent');
+      const receivedTxns = chronoTxns.filter(x => x._role === 'received');
+      const borrowTxns = chronoTxns.filter(x => x._role === 'borrowed');
+      const repaidTxns = chronoTxns.filter(x => x._role === 'repaid');
 
-      for (const item of chronoTxns.filter(x => x._role === 'lent')) {
-        if (unallocatedReceived >= item._amt) {
-          processedLendTxns.push({
-            ...item,
-            itemStatus: 'settled',
-            pendingAmt: 0,
-            paidAmt: item._amt,
-          });
-          unallocatedReceived -= item._amt;
-        } else if (unallocatedReceived > 0) {
-          processedLendTxns.push({
-            ...item,
-            itemStatus: 'partial',
-            pendingAmt: Math.round((item._amt - unallocatedReceived) * 100) / 100,
-            paidAmt: Math.round(unallocatedReceived * 100) / 100,
-          });
-          unallocatedReceived = 0;
-        } else {
-          processedLendTxns.push({
-            ...item,
-            itemStatus: 'pending',
-            pendingAmt: item._amt,
-            paidAmt: 0,
-          });
+      // 1. Allocate Lend repayments against lent items
+      const lendMap = new Map();
+      const lendAllocations = new Map();
+      for (const item of lendTxns) {
+        const id = String(item._id || item.ID || item.id || '');
+        if (id) lendMap.set(id, item);
+        lendAllocations.set(item, 0);
+      }
+
+      // First pass: Explicit linked returns (#debt_ref_<loanTxnId>)
+      let unallocatedReceived = 0;
+      for (const ret of receivedTxns) {
+        const refs = parseDebtRefTags(ret.Tags || ret.tags || '', ret.Description || ret.description || '');
+        let retAmtRemaining = ret._amt;
+
+        for (const ref of refs) {
+          const target = lendMap.get(ref.targetTxnId);
+          if (target && retAmtRemaining > 0) {
+            const currentPaid = lendAllocations.get(target) || 0;
+            const targetRemaining = Math.max(0, target._amt - currentPaid);
+            const allocAmt = ref.amount != null
+              ? Math.min(ref.amount, retAmtRemaining, targetRemaining)
+              : Math.min(retAmtRemaining, targetRemaining);
+
+            if (allocAmt > 0) {
+              lendAllocations.set(target, currentPaid + allocAmt);
+              retAmtRemaining = Math.round((retAmtRemaining - allocAmt) * 100) / 100;
+            }
+          }
+        }
+
+        if (retAmtRemaining > 0) {
+          unallocatedReceived += retAmtRemaining;
         }
       }
 
-      // 2. Allocate Borrow repayments against borrowed items
-      let unallocatedMyRepaid = p.repaid;
-      const processedBorrowTxns = [];
+      // Second pass: FIFO allocation for remaining unallocated returns
+      const processedLendTxns = [];
+      for (const item of lendTxns) {
+        let paid = lendAllocations.get(item) || 0;
+        let pending = Math.max(0, Math.round((item._amt - paid) * 100) / 100);
 
-      for (const item of chronoTxns.filter(x => x._role === 'borrowed')) {
-        if (unallocatedMyRepaid >= item._amt) {
-          processedBorrowTxns.push({
-            ...item,
-            itemStatus: 'settled',
-            pendingAmt: 0,
-            paidAmt: item._amt,
-          });
-          unallocatedMyRepaid -= item._amt;
-        } else if (unallocatedMyRepaid > 0) {
-          processedBorrowTxns.push({
-            ...item,
-            itemStatus: 'partial',
-            pendingAmt: Math.round((item._amt - unallocatedMyRepaid) * 100) / 100,
-            paidAmt: Math.round(unallocatedMyRepaid * 100) / 100,
-          });
-          unallocatedMyRepaid = 0;
-        } else {
-          processedBorrowTxns.push({
-            ...item,
-            itemStatus: 'pending',
-            pendingAmt: item._amt,
-            paidAmt: 0,
-          });
+        if (pending > 0 && unallocatedReceived > 0) {
+          if (unallocatedReceived >= pending) {
+            paid = item._amt;
+            unallocatedReceived = Math.round((unallocatedReceived - pending) * 100) / 100;
+            pending = 0;
+          } else {
+            paid = Math.round((paid + unallocatedReceived) * 100) / 100;
+            pending = Math.round((item._amt - paid) * 100) / 100;
+            unallocatedReceived = 0;
+          }
         }
+
+        const itemStatus = pending <= 0.005 ? 'settled' : (paid > 0.005 ? 'partial' : 'pending');
+        processedLendTxns.push({
+          ...item,
+          itemStatus,
+          pendingAmt: pending,
+          paidAmt: paid,
+        });
+      }
+
+      // 2. Symmetrical allocation for Borrow repayments against borrowed items
+      const borrowMap = new Map();
+      const borrowAllocations = new Map();
+      for (const item of borrowTxns) {
+        const id = String(item._id || item.ID || item.id || '');
+        if (id) borrowMap.set(id, item);
+        borrowAllocations.set(item, 0);
+      }
+
+      let unallocatedMyRepaid = 0;
+      for (const rep of repaidTxns) {
+        const refs = parseDebtRefTags(rep.Tags || rep.tags || '', rep.Description || rep.description || '');
+        let repAmtRemaining = rep._amt;
+
+        for (const ref of refs) {
+          const target = borrowMap.get(ref.targetTxnId);
+          if (target && repAmtRemaining > 0) {
+            const currentPaid = borrowAllocations.get(target) || 0;
+            const targetRemaining = Math.max(0, target._amt - currentPaid);
+            const allocAmt = ref.amount != null
+              ? Math.min(ref.amount, repAmtRemaining, targetRemaining)
+              : Math.min(repAmtRemaining, targetRemaining);
+
+            if (allocAmt > 0) {
+              borrowAllocations.set(target, currentPaid + allocAmt);
+              repAmtRemaining = Math.round((repAmtRemaining - allocAmt) * 100) / 100;
+            }
+          }
+        }
+
+        if (repAmtRemaining > 0) {
+          unallocatedMyRepaid += repAmtRemaining;
+        }
+      }
+
+      const processedBorrowTxns = [];
+      for (const item of borrowTxns) {
+        let paid = borrowAllocations.get(item) || 0;
+        let pending = Math.max(0, Math.round((item._amt - paid) * 100) / 100);
+
+        if (pending > 0 && unallocatedMyRepaid > 0) {
+          if (unallocatedMyRepaid >= pending) {
+            paid = item._amt;
+            unallocatedMyRepaid = Math.round((unallocatedMyRepaid - pending) * 100) / 100;
+            pending = 0;
+          } else {
+            paid = Math.round((paid + unallocatedMyRepaid) * 100) / 100;
+            pending = Math.round((item._amt - paid) * 100) / 100;
+            unallocatedMyRepaid = 0;
+          }
+        }
+
+        const itemStatus = pending <= 0.005 ? 'settled' : (paid > 0.005 ? 'partial' : 'pending');
+        processedBorrowTxns.push({
+          ...item,
+          itemStatus,
+          pendingAmt: pending,
+          paidAmt: paid,
+        });
       }
 
       // 3. Mark Repayments received & made
@@ -411,7 +493,7 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
                         <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
                           {t.Date} • {t.Account || `${t.FromAccount} → ${t.ToAccount}`}
                         </div>
-                        <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
                           {t.itemStatus === 'pending' && (
                             <span className="debt-tag pending">⏳ {formatINR(t.pendingAmt)} unpaid</span>
                           )}
@@ -423,6 +505,25 @@ export default function DebtTracker({ onBack, onSettle, backInterceptRef }) {
                           )}
                           {t.itemStatus === 'repayment' && (
                             <span className="debt-tag repayment">🤝 Repayment</span>
+                          )}
+                          {(t.itemStatus === 'pending' || t.itemStatus === 'partial') && t.pendingAmt > 0 && onSettle && (
+                            <button
+                              type="button"
+                              className="debt-item-return-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const p = selectedPerson;
+                                setSelectedPerson(null);
+                                onSettle({
+                                  name: p.name,
+                                  amount: t.pendingAmt,
+                                  type: t._role === 'lent' ? 'receive' : 'repay',
+                                  linkedTxnId: t._id || t.ID || t.id,
+                                });
+                              }}
+                            >
+                              🤝 {t._role === 'lent' ? 'Record Return' : 'Record Repayment'}
+                            </button>
                           )}
                         </div>
                       </div>
