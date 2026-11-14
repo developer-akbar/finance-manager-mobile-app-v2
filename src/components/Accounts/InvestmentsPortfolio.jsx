@@ -5,6 +5,7 @@ import { defaultValuationProvider } from '../../utils/valuationProvider.js';
 
 import PortfolioSummary from './Portfolio/PortfolioSummary.jsx';
 import PortfolioBreakdown from './Portfolio/PortfolioBreakdown.jsx';
+import PortfolioAnalyticsOverview from './Portfolio/PortfolioAnalyticsOverview.jsx';
 import PortfolioAllocation from './Portfolio/PortfolioAllocation.jsx';
 import PortfolioPerformance from './Portfolio/PortfolioPerformance.jsx';
 import HoldingsTable from './Portfolio/HoldingsTable.jsx';
@@ -117,7 +118,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
       {/* Portfolio Top Bar */}
       <div className="portfolio-top-bar">
         <button className="portfolio-back-btn" onClick={onBack} title="Back to Accounts">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="20" height="20">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="18" height="18">
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
@@ -130,9 +131,8 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
             className="portfolio-refresh-btn"
             onClick={() => setShowPlansModal(true)}
             title="Manage recurring SIP and investment plans"
-            style={{ borderColor: 'rgba(59, 130, 246, 0.4)' }}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="13" height="13">
               <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
             </svg>
             <span>Plans</span>
@@ -142,7 +142,6 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
             onClick={() => refreshValuations(true)}
             disabled={isFetchingValuations}
             title="Refresh live market & NAV prices"
-            style={{ borderColor: 'rgba(59, 130, 246, 0.4)' }}
           >
             <svg 
               className={isFetchingValuations ? 'spinning' : ''} 
@@ -150,17 +149,23 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
               fill="none" 
               stroke="currentColor" 
               strokeWidth="2.5" 
-              width="14" 
-              height="14"
+              width="13" 
+              height="13"
             >
               <path d="M23 4v6h-6M1 20v-6h6" />
               <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
             </svg>
             <span>{isFetchingValuations ? 'Refreshing...' : 'Prices'}</span>
           </button>
-          <div className="portfolio-valuation-badge" title="Valuation Abstraction Boundary">
+          <div
+            className={`portfolio-valuation-badge ${
+              summaryMetrics.isFullyValued ? 'available' : summaryMetrics.hasPartialValuation ? 'partial' : 'cost-basis'
+            }`}
+            title="Valuation Abstraction Boundary"
+          >
+            <span className="valuation-status-dot" />
             <span>
-              {summaryMetrics.isFullyValued ? '🟢 Available' : summaryMetrics.hasPartialValuation ? '🟡 Partial' : '⚪ Cost Basis'}
+              {summaryMetrics.isFullyValued ? 'Available' : summaryMetrics.hasPartialValuation ? 'Partial' : 'Cost Basis'}
             </span>
           </div>
         </div>
@@ -230,7 +235,10 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
             onClick={handleClearFilters}
             title="Reset filters to default"
           >
-            Clear filters
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="12" height="12">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+            <span>Reset</span>
           </button>
         )}
       </div>
@@ -282,32 +290,47 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
             className={`portfolio-nav-tab ${activeTab === 'holdings' ? 'active' : ''}`}
             onClick={() => setActiveTab('holdings')}
           >
-            Active Positions ({activeHoldings.length})
+            <span>Active Positions</span>
+            <span className="nav-tab-counter">{activeHoldings.length}</span>
+          </button>
+          <button 
+            className={`portfolio-nav-tab ${activeTab === 'analytics' ? 'active' : ''}`}
+            onClick={() => setActiveTab('analytics')}
+          >
+            <span>Analytics</span>
           </button>
           <button 
             className={`portfolio-nav-tab ${activeTab === 'allocation' ? 'active' : ''}`}
             onClick={() => setActiveTab('allocation')}
           >
-            Allocation
+            <span>Allocation</span>
+          </button>
+          <button 
+            className={`portfolio-nav-tab ${activeTab === 'performance' ? 'active' : ''}`}
+            onClick={() => setActiveTab('performance')}
+          >
+            <span>Performance</span>
           </button>
           <button 
             className={`portfolio-nav-tab ${activeTab === 'redeemed' ? 'active' : ''}`}
             onClick={() => setActiveTab('redeemed')}
           >
-            Redeemed ({redeemedHoldings.length})
+            <span>Redeemed</span>
+            <span className="nav-tab-counter">{redeemedHoldings.length}</span>
           </button>
           <button 
             className={`portfolio-nav-tab ${activeTab === 'activity' ? 'active' : ''}`}
             onClick={() => setActiveTab('activity')}
           >
-            Activity
+            <span>Activity</span>
           </button>
           {dataIssues.length > 0 && (
             <button 
               className={`portfolio-nav-tab warning ${activeTab === 'issues' ? 'active' : ''}`}
               onClick={() => setActiveTab('issues')}
             >
-              Data Issues ({dataIssues.length})
+              <span>Data Issues</span>
+              <span className="nav-tab-counter">{dataIssues.length}</span>
             </button>
           )}
         </div>
@@ -324,10 +347,12 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
               onSelectPosition={pos => setSelectedPosition(pos)}
             />
             <div style={{ height: 16 }} />
-            <PortfolioAllocation 
+            <PortfolioAnalyticsOverview 
               positions={displayedPositions}
               valuationProvider={defaultValuationProvider}
               valuationVersion={valuationVersion}
+              summaryMetrics={summaryMetrics}
+              onSelectPosition={pos => setSelectedPosition(pos)}
             />
             <div style={{ height: 16 }} />
             <PortfolioPerformance 
@@ -337,11 +362,28 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
           </>
         )}
 
+        {activeTab === 'analytics' && (
+          <PortfolioAnalyticsOverview 
+            positions={displayedPositions}
+            valuationProvider={defaultValuationProvider}
+            valuationVersion={valuationVersion}
+            summaryMetrics={summaryMetrics}
+            onSelectPosition={pos => setSelectedPosition(pos)}
+          />
+        )}
+
         {activeTab === 'allocation' && (
           <PortfolioAllocation 
             positions={displayedPositions}
             valuationProvider={defaultValuationProvider}
             valuationVersion={valuationVersion}
+          />
+        )}
+
+        {activeTab === 'performance' && (
+          <PortfolioPerformance 
+            positions={displayedPositions}
+            summaryMetrics={summaryMetrics}
           />
         )}
 

@@ -4,8 +4,8 @@ import { formatINR } from '../../../utils/format.js';
 import { getInvestmentDisplayMetrics } from '../../../utils/portfolioAggregation.js';
 
 const ALLOCATION_PALETTE = [
-  '#6366F1', '#06B6D4', '#10B981', '#F59E0B', '#EC4899', 
-  '#8B5CF6', '#3B82F6', '#14B8A6', '#F97316', '#64748B', '#A855F7'
+  '#0075FF', '#00D2D3', '#01B574', '#FFAA00', '#EC4899', 
+  '#8B5CF6', '#0284C7', '#10B981', '#F97316', '#64748B', '#A855F7'
 ];
 
 export default function PortfolioAllocation({ 

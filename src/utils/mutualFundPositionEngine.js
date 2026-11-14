@@ -518,6 +518,7 @@ export function calculateMutualFundPositions(transactions = [], options = {}) {
       status,
       isResidual,
       buyLots,
+      sellRecords,
       txns: group.txns
     };
 

@@ -166,8 +166,21 @@ export function aggregatePositionsForDisplay(positions = [], valuationProvider =
     const combinedBuyLots = underlyingPositions.flatMap(p => p.buyLots || []);
     const combinedTxns = underlyingPositions.flatMap(p => p.txns || []);
 
+    // Oldest acquisition date across underlying folios
+    const firstBuyDates = underlyingPositions.map(p => p.firstBuyDate).filter(Boolean);
+    firstBuyDates.sort((a, b) => {
+      const parseD = (s) => {
+        if (!s) return 0;
+        const pts = s.split(/[-/]/);
+        return pts.length === 3 ? new Date(pts[2].length === 4 ? `${pts[2]}-${pts[1]}-${pts[0]}` : s).getTime() : 0;
+      };
+      return parseD(a) - parseD(b);
+    });
+    const firstBuyDate = firstBuyDates[0] || (combinedBuyLots[0]?.date) || (combinedTxns[0]?.date) || '';
+
     resultGroups.push({
       positionKey: groupKey,
+      firstBuyDate,
       groupKey,
       isAggregateGroup: underlyingPositions.length > 1,
       folioCount: underlyingPositions.length,

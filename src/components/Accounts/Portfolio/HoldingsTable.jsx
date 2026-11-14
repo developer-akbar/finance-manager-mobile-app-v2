@@ -133,13 +133,26 @@ export default function HoldingsTable({
         </div>
 
         <div className="holdings-controls">
-          <input
-            type="text"
-            className="holdings-search-input"
-            placeholder="Search scheme, ISIN, folio..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
+          <div className="holdings-search-wrapper" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+            <input
+              type="text"
+              className="holdings-search-input"
+              placeholder="Search scheme, ISIN, folio..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+            {search && (
+              <button
+                type="button"
+                className="search-clear-btn"
+                onClick={() => setSearch('')}
+                title="Clear search"
+                style={{ position: 'absolute', right: 8, background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem', padding: 2 }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
           <select
             className="holdings-sort-select"
             value={`${sortKey}-${sortDir}`}
@@ -438,6 +451,9 @@ export default function HoldingsTable({
                       <div className="holding-card-title-box">
                         <div className="holding-card-name line-clamp-2">{group.note || group.security}</div>
                         <div className="holding-card-sub-meta text-muted flex-gap-xs align-center mt-1">
+                          <span className={`asset-cat-tag ${detectAssetType(group) === 'MUTUAL_FUND' ? 'mf' : detectAssetType(group) === 'ETF' ? 'etf' : 'eq'}`}>
+                            {detectAssetType(group) === 'MUTUAL_FUND' ? 'MF' : detectAssetType(group) === 'ETF' ? 'ETF' : 'EQ'}
+                          </span>
                           <span className="platform-tag">{group.subAccount}</span>
                           {group.isAggregateGroup && (
                             <button
