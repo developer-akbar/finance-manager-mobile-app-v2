@@ -412,6 +412,22 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   const [customTo, setTo] = useState('');
   const [addDate, setAddDate] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [payPrefill, setPayPrefill] = useState(null);
+
+  const drillAcct = (state.accounts || []).find(a => (a.name || a) === acctName);
+  const isCreditCardAccount = Boolean(drillAcct?.group === 'Credit Cards' || isCreditCard(drillAcct) || isCreditCard({ name: acctName }));
+
+  const ccPayableAmt = useMemo(() => {
+    if (!isCreditCardAccount) return 0;
+    const now = new Date();
+    if (drillAcct && drillAcct.settlementDate > 0) {
+      const { balancePayable, outstanding } = ccBalances(allTxns, acctName, drillAcct.settlementDate, now);
+      if (balancePayable > 0) return balancePayable;
+      if (outstanding > 0) return outstanding;
+    }
+    const netBal = computeBalance(allTxns, acctName);
+    return netBal < 0 ? Math.abs(netBal) : 0;
+  }, [isCreditCardAccount, drillAcct, allTxns, acctName]);
   const [selected, setSelected] = useState(new Set());
   const [multiMode, setMultiMode] = useState(false);
   const [copyTxn, setCopyTxn] = useState(null);
@@ -427,9 +443,9 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
 
   React.useEffect(() => {
     if (!backInterceptRef) return;
-    const isOpen = Boolean(addDate) || showAdd;
+    const isOpen = Boolean(addDate) || showAdd || Boolean(payPrefill);
     if (isOpen) {
-      const handler = () => { setAddDate(null); setShowAdd(false); };
+      const handler = () => { setAddDate(null); setShowAdd(false); setPayPrefill(null); };
       addBackPrevRef.current = backInterceptRef.current;
       backInterceptRef.current = handler;
       return () => {
@@ -438,7 +454,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
       };
     }
     return undefined;
-  }, [addDate, showAdd, backInterceptRef]);
+  }, [addDate, showAdd, payPrefill, backInterceptRef]);
 
   // Handle back button interception for multi-mode
   React.useEffect(() => {
@@ -1124,9 +1140,44 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
       </button>
 
+      {/* Credit Card Pay Button */}
+      {isCreditCardAccount && (
+        <button
+          className="cc-pay-fab"
+          onClick={() => {
+            setPayPrefill({
+              type: 'Transfer-Out',
+              fromAccount: '',
+              toAccount: acctName,
+              amount: ccPayableAmt > 0 ? String(Math.round(ccPayableAmt * 100) / 100) : '',
+              note: 'Credit Card Bill Payment',
+            });
+          }}
+          title="Pay Credit Card Bill"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+            <rect x="2" y="5" width="20" height="14" rx="2" />
+            <line x1="2" y1="10" x2="22" y2="10" />
+          </svg>
+          <span>Pay</span>
+        </button>
+      )}
+
       {addDate && <AddTransaction prefillDate={addDate} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={() => setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef} />}
       {showAdd && <AddTransaction key={addKey} prefillAccount={acctName} prefillSubAccount={subAccountName} onClose={() => setShowAdd(false)} onSaveAndContinue={() => { }} backInterceptRef={backInterceptRef} />}
       {copyTxn && <AddTransaction copyTransaction={copyTxn} onClose={() => setCopyTxn(null)} onSaveAndContinue={() => setCopyTxn({ ...copyTxn, _id: undefined })} backInterceptRef={backInterceptRef} />}
+      {payPrefill && (
+        <AddTransaction
+          prefillType={payPrefill.type}
+          prefillFromAccount={payPrefill.fromAccount}
+          prefillToAccount={payPrefill.toAccount}
+          prefillAmount={payPrefill.amount}
+          prefillNote={payPrefill.note}
+          onClose={() => setPayPrefill(null)}
+          onSaveAndContinue={() => setPayPrefill(null)}
+          backInterceptRef={backInterceptRef}
+        />
+      )}
     </div>
   );
 }
@@ -1390,7 +1441,7 @@ export default function Accounts({ backInterceptRef } = {}) {
         <DebtTracker
           onBack={() => setShowDebtTracker(false)}
           backInterceptRef={backInterceptRef}
-          onSettle={({ name, amount, type }) => {
+          onSettle={({ name, amount, type, linkedTxnId }) => {
             const firstSavings = (accounts || []).find(a => !['credit card', 'credit', 'lend', 'borrow'].some(k => (a.name || a).toLowerCase().includes(k))) || 'Cash';
             const bankName = typeof firstSavings === 'object' ? firstSavings.name : firstSavings;
             setSettlePrefill({
@@ -1399,6 +1450,7 @@ export default function Accounts({ backInterceptRef } = {}) {
               toAccount: type === 'receive' ? '' : 'Borrow',
               amount: String(amount),
               note: type === 'receive' ? `From ${name}` : `To ${name}`,
+              tags: linkedTxnId ? `#debt_ref_${linkedTxnId}` : '',
             });
           }}
         />
@@ -1409,6 +1461,7 @@ export default function Accounts({ backInterceptRef } = {}) {
             prefillToAccount={settlePrefill.toAccount}
             prefillAmount={settlePrefill.amount}
             prefillNote={settlePrefill.note}
+            prefillTags={settlePrefill.tags}
             onClose={() => setSettlePrefill(null)}
             onSaveAndContinue={() => setSettlePrefill(null)}
             backInterceptRef={backInterceptRef}

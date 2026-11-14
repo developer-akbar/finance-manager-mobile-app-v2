@@ -701,6 +701,7 @@ export function SearchView({ transactions, accounts, categories, onClose, backIn
   const [committedQuery,setCommittedQuery]= useState('');
   const [isSearching,   setIsSearching]   = useState(false);
   const [noteSugs,      setNoteSugs]      = useState([]);
+  const [selectedNoteIdx, setSelectedNoteIdx] = useState(-1);
   const [showFilter,    setShowFilter]    = useState(false);
   const [selAccts,      setSelAccts]      = useState(new Set());
   const [selCats,       setSelCats]       = useState(new Set());
@@ -1052,6 +1053,7 @@ export function SearchView({ transactions, accounts, categories, onClose, backIn
   };
 
   const handleNoteInput = v => {
+    setSelectedNoteIdx(-1);
     setDraftQuery(v);
 
     const norm = normalizeSuggestionQuery(v);
@@ -1075,6 +1077,7 @@ export function SearchView({ transactions, accounts, categories, onClose, backIn
     const val = overrideValue !== undefined ? overrideValue : draftQuery;
     setDraftQuery(val);
     setNoteSugs([]);
+    setSelectedNoteIdx(-1);
     if (val !== committedQuery) {
       setIsSearching(true);
       setTimeout(() => {
@@ -1367,10 +1370,42 @@ export function SearchView({ transactions, accounts, categories, onClose, backIn
               <input ref={textInputRef} autoFocus type="text" className="search-input" value={draftQuery}
                 onChange={e => handleNoteInput(e.target.value)}
                 onKeyDown={e => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    e.target.blur();
-                    commitSearch();
+                  if (noteSugs.length > 0) {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setSelectedNoteIdx(prev => Math.min(prev + 1, noteSugs.length - 1));
+                      return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setSelectedNoteIdx(prev => Math.max(prev - 1, 0));
+                      return;
+                    }
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (selectedNoteIdx >= 0 && selectedNoteIdx < noteSugs.length) {
+                        commitSearch(noteSugs[selectedNoteIdx]);
+                      } else {
+                        e.target.blur();
+                        commitSearch();
+                      }
+                      setSelectedNoteIdx(-1);
+                      setNoteSugs([]);
+                      return;
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setNoteSugs([]);
+                      setSelectedNoteIdx(-1);
+                      return;
+                    }
+                  } else {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      e.target.blur();
+                      commitSearch();
+                    }
                   }
                 }}
                 onBlur={() => setTimeout(() => setNoteSugs([]), 180)}
@@ -1404,7 +1439,16 @@ export function SearchView({ transactions, accounts, categories, onClose, backIn
               )}
               {noteSugs.length > 0 && (
                 <div className="note-sug-list" style={{top:'calc(100% + 4px)'}}>
-                  {noteSugs.map(s => <div key={s} className="note-sug-item" onMouseDown={() => { commitSearch(s); }}>{s}</div>)}
+                  {noteSugs.map((s, idx) => (
+                    <div
+                      key={s}
+                      ref={el => { if (idx === selectedNoteIdx && el) el.scrollIntoView({ block: 'nearest' }); }}
+                      className={`note-sug-item ${idx === selectedNoteIdx ? 'selected' : ''}`}
+                      onMouseDown={() => { commitSearch(s); setSelectedNoteIdx(-1); }}
+                    >
+                      {s}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

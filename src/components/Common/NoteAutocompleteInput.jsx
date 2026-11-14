@@ -52,11 +52,11 @@ export default function NoteAutocompleteInput({
     if (isOpen && suggestions.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSelectedIndex(prev => (prev + 1) % suggestions.length);
+        setSelectedIndex(prev => Math.min(prev + 1, suggestions.length - 1));
         return;
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setSelectedIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+        setSelectedIndex(prev => Math.max(prev - 1, 0));
         return;
       } else if (e.key === 'Enter' && selectedIndex >= 0 && selectedIndex < suggestions.length) {
         e.preventDefault();
@@ -64,6 +64,7 @@ export default function NoteAutocompleteInput({
         return;
       } else if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         setIsOpen(false);
         setSelectedIndex(-1);
         return;
@@ -148,6 +149,7 @@ export default function NoteAutocompleteInput({
           {suggestions.map((sug, idx) => (
             <div
               key={sug}
+              ref={el => { if (idx === selectedIndex && el) el.scrollIntoView({ block: 'nearest' }); }}
               className={`note-sug-item ${idx === selectedIndex ? 'selected' : ''}`}
               style={{
                 padding: '8px 12px',

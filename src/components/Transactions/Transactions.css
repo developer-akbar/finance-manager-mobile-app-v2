@@ -96,7 +96,9 @@
 .txn-list {
   flex: 1;
   overflow-y: auto;
-  padding-bottom: calc(var(--safe-bottom) + 84px);
+  padding-bottom: calc(var(--safe-bottom, 0px) + 96px);
+  -webkit-overflow-scrolling: touch;
+  box-sizing: border-box;
 }
 @media (min-width: 768px) {
   .txn-list {
@@ -169,7 +171,7 @@
 .search-total-l { font-size:0.54rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; }
 .search-total-v { font-size:0.72rem; font-weight:800; font-family:var(--font); margin-top:2px; }
 .search-sel-bar { display:flex; align-items:center; justify-content:space-between; padding:7px var(--page-px); background:var(--blue-bg); border-bottom:1px solid var(--border); font-size:0.78rem; font-weight:700; color:var(--blue); flex-shrink:0; position:sticky; top:0; z-index:10; }
-.search-list { flex:1; overflow-y:auto; }
+.search-list { flex:1; overflow-y:auto; padding-bottom:calc(var(--safe-bottom, 0px) + 96px); -webkit-overflow-scrolling:touch; box-sizing:border-box; }
 
 /* Period navigation bar */
 .period-nav-bar { display:flex; align-items:center; justify-content:center; gap:0; padding:6px 0; background:var(--bg-card); border-bottom:1px solid var(--border); flex-shrink:0; }

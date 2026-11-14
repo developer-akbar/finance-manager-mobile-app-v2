@@ -1,5 +1,5 @@
 .dash-screen  { flex:1; overflow:hidden; display:flex; flex-direction:column; position:relative; }
-.dash-scrollable-content { flex:1; overflow-y:auto; padding-bottom:80px; }
+.dash-scrollable-content { flex:1; overflow-y:auto; padding-bottom:calc(var(--safe-bottom, 0px) + 96px); -webkit-overflow-scrolling:touch; box-sizing:border-box; }
 .dash-greeting {
   padding: calc(var(--safe-top) + 12px) var(--page-px) 12px;
   background: var(--theme-header-bg, var(--bg-base));

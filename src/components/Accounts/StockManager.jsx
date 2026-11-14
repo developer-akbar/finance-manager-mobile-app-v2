@@ -20,6 +20,7 @@ import {
 } from '../../database/inventory.js';
 import NoteAutocompleteInput from '../Common/NoteAutocompleteInput.jsx';
 import StockActivityDrawer from './StockActivityDrawer.jsx';
+import { handleSuggestionKeyDown } from '../../utils/keyboardNav.js';
 import './StockManager.css';
 
 const getEmoji = (name) => {
@@ -161,6 +162,11 @@ export default function StockManager({ onBack, backInterceptRef }) {
   const [activeItemSugIdx, setActiveItemSugIdx] = useState(null);
   const [activeStoreSugIdx, setActiveStoreSugIdx] = useState(null);
   const [activeLendSug, setActiveLendSug] = useState(false);
+  const [storeEditSugIdx, setStoreEditSugIdx] = useState(-1);
+  const [editItemSugIdx, setEditItemSugIdx] = useState(-1);
+  const [builderItemSugIdx, setBuilderItemSugIdx] = useState(-1);
+  const [builderStoreSugIdx, setBuilderStoreSugIdx] = useState(-1);
+  const [lendPersonSugIdx, setLendPersonSugIdx] = useState(-1);
 
   // Consumption states
   const [consumingItemId, setConsumingItemId] = useState(null);
@@ -2003,28 +2009,52 @@ export default function StockManager({ onBack, backInterceptRef }) {
                       className="form-input"
                       placeholder="e.g. DMart, Amazon"
                       value={editFormData.notes || ''}
-                      onFocus={() => setActiveStoreEditSug(true)}
-                      onBlur={() => setTimeout(() => setActiveStoreEditSug(false), 200)}
+                      onFocus={() => { setActiveStoreEditSug(true); setStoreEditSugIdx(-1); }}
+                      onBlur={() => setTimeout(() => { setActiveStoreEditSug(false); setStoreEditSugIdx(-1); }, 200)}
                       onChange={e => {
                         setEditFormData(prev => ({ ...prev, notes: e.target.value }));
                         setActiveStoreEditSug(true);
+                        setStoreEditSugIdx(-1);
+                      }}
+                      onKeyDown={e => {
+                        const filtered = storeSuggestions.filter(s => s.toLowerCase().includes((editFormData.notes || '').toLowerCase())).slice(0, 8);
+                        handleSuggestionKeyDown({
+                          e,
+                          suggestions: filtered,
+                          selectedIndex: storeEditSugIdx,
+                          setSelectedIndex: setStoreEditSugIdx,
+                          onSelect: (sug) => {
+                            setEditFormData(prev => ({ ...prev, notes: sug }));
+                            setActiveStoreEditSug(false);
+                            setStoreEditSugIdx(-1);
+                          },
+                          onClose: () => {
+                            setActiveStoreEditSug(false);
+                            setStoreEditSugIdx(-1);
+                          }
+                        });
                       }}
                     />
                     {activeStoreEditSug && storeSuggestions.filter(s => s.toLowerCase().includes((editFormData.notes || '').toLowerCase())).length > 0 && (
                       <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 160, overflowY: 'auto' }}>
-                        {storeSuggestions.filter(s => s.toLowerCase().includes((editFormData.notes || '').toLowerCase())).slice(0, 8).map(sug => (
-                          <div
-                            key={sug}
-                            className="note-sug-item"
-                            onMouseDown={() => {
-                              setEditFormData(prev => ({ ...prev, notes: sug }));
-                              setActiveStoreEditSug(false);
-                            }}
-                            style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
-                          >
-                            {sug}
-                          </div>
-                        ))}
+                        {storeSuggestions.filter(s => s.toLowerCase().includes((editFormData.notes || '').toLowerCase())).slice(0, 8).map((sug, sIdx) => {
+                          const isSelected = storeEditSugIdx === sIdx;
+                          return (
+                            <div
+                              key={sug}
+                              ref={el => { if (isSelected && el) el.scrollIntoView({ block: 'nearest' }); }}
+                              className={`note-sug-item ${isSelected ? 'selected' : ''}`}
+                              onMouseDown={() => {
+                                setEditFormData(prev => ({ ...prev, notes: sug }));
+                                setActiveStoreEditSug(false);
+                                setStoreEditSugIdx(-1);
+                              }}
+                              style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
+                            >
+                              {sug}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -2039,29 +2069,53 @@ export default function StockManager({ onBack, backInterceptRef }) {
                       className="form-input"
                       placeholder="e.g. Cooking Oil, Gemini Tea"
                       value={editFormData.name || ''}
-                      onFocus={() => setActiveEditItemSug(true)}
-                      onBlur={() => setTimeout(() => setActiveEditItemSug(false), 200)}
+                      onFocus={() => { setActiveEditItemSug(true); setEditItemSugIdx(-1); }}
+                      onBlur={() => setTimeout(() => { setActiveEditItemSug(false); setEditItemSugIdx(-1); }, 200)}
                       onChange={e => {
                         const val = e.target.value;
                         setEditFormData(prev => ({ ...prev, name: val }));
                         setActiveEditItemSug(true);
+                        setEditItemSugIdx(-1);
+                      }}
+                      onKeyDown={e => {
+                        const filtered = itemSuggestions.filter(s => s.toLowerCase().includes((editFormData.name || '').toLowerCase())).slice(0, 8);
+                        handleSuggestionKeyDown({
+                          e,
+                          suggestions: filtered,
+                          selectedIndex: editItemSugIdx,
+                          setSelectedIndex: setEditItemSugIdx,
+                          onSelect: (sug) => {
+                            setEditFormData(prev => ({ ...prev, name: sug }));
+                            setActiveEditItemSug(false);
+                            setEditItemSugIdx(-1);
+                          },
+                          onClose: () => {
+                            setActiveEditItemSug(false);
+                            setEditItemSugIdx(-1);
+                          }
+                        });
                       }}
                     />
                     {activeEditItemSug && itemSuggestions.filter(s => s.toLowerCase().includes((editFormData.name || '').toLowerCase())).length > 0 && (
                       <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 150, overflowY: 'auto' }}>
-                        {itemSuggestions.filter(s => s.toLowerCase().includes((editFormData.name || '').toLowerCase())).slice(0, 8).map(sug => (
-                          <div
-                            key={sug}
-                            className="note-sug-item"
-                            onMouseDown={() => {
-                              setEditFormData(prev => ({ ...prev, name: sug }));
-                              setActiveEditItemSug(false);
-                            }}
-                            style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
-                          >
-                            {sug}
-                          </div>
-                        ))}
+                        {itemSuggestions.filter(s => s.toLowerCase().includes((editFormData.name || '').toLowerCase())).slice(0, 8).map((sug, sIdx) => {
+                          const isSelected = editItemSugIdx === sIdx;
+                          return (
+                            <div
+                              key={sug}
+                              ref={el => { if (isSelected && el) el.scrollIntoView({ block: 'nearest' }); }}
+                              className={`note-sug-item ${isSelected ? 'selected' : ''}`}
+                              onMouseDown={() => {
+                                setEditFormData(prev => ({ ...prev, name: sug }));
+                                setActiveEditItemSug(false);
+                                setEditItemSugIdx(-1);
+                              }}
+                              style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
+                            >
+                              {sug}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -2451,28 +2505,53 @@ export default function StockManager({ onBack, backInterceptRef }) {
                   placeholder="Person name..."
                   value={personName}
                   onClick={e => { if (!isSavingConsume) { e.stopPropagation(); setActiveLendSug(true); } }}
-                  onFocus={() => { if (!isSavingConsume) setActiveLendSug(true); }}
-                  onBlur={() => setTimeout(() => setActiveLendSug(false), 200)}
+                  onFocus={() => { if (!isSavingConsume) { setActiveLendSug(true); setLendPersonSugIdx(-1); } }}
+                  onBlur={() => setTimeout(() => { setActiveLendSug(false); setLendPersonSugIdx(-1); }, 200)}
                   onChange={e => {
                     setPersonName(e.target.value);
                     setActiveLendSug(true);
+                    setLendPersonSugIdx(-1);
+                  }}
+                  onKeyDown={e => {
+                    if (isSavingConsume) return;
+                    const filtered = debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase()));
+                    handleSuggestionKeyDown({
+                      e,
+                      suggestions: filtered,
+                      selectedIndex: lendPersonSugIdx,
+                      setSelectedIndex: setLendPersonSugIdx,
+                      onSelect: (p) => {
+                        setPersonName(p);
+                        setActiveLendSug(false);
+                        setLendPersonSugIdx(-1);
+                      },
+                      onClose: () => {
+                        setActiveLendSug(false);
+                        setLendPersonSugIdx(-1);
+                      }
+                    });
                   }}
                 />
                 {!isSavingConsume && activeLendSug && debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase())).length > 0 && (
                   <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 180, overflowY: 'auto' }}>
-                    {debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase())).map(item => (
-                      <div
-                        key={item}
-                        className="note-sug-item"
-                        onMouseDown={() => {
-                          setPersonName(item);
-                          setActiveLendSug(false);
-                        }}
-                        style={{ fontSize: '0.75rem', padding: '8px 12px', cursor: 'pointer' }}
-                      >
-                        {item}
-                      </div>
-                    ))}
+                    {debtPeople.filter(p => p.toLowerCase().includes(personName.toLowerCase())).map((item, pIdx) => {
+                      const isSelected = lendPersonSugIdx === pIdx;
+                      return (
+                        <div
+                          key={item}
+                          ref={el => { if (isSelected && el) el.scrollIntoView({ block: 'nearest' }); }}
+                          className={`note-sug-item ${isSelected ? 'selected' : ''}`}
+                          onMouseDown={() => {
+                            setPersonName(item);
+                            setActiveLendSug(false);
+                            setLendPersonSugIdx(-1);
+                          }}
+                          style={{ fontSize: '0.75rem', padding: '8px 12px', cursor: 'pointer' }}
+                        >
+                          {item}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -2896,8 +2975,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           placeholder="e.g. Cooking Oil, Gemini Tea"
                           value={item.name}
                           onClick={e => { e.stopPropagation(); setActiveItemSugIdx(idx); }}
-                          onFocus={() => setActiveItemSugIdx(idx)}
-                          onBlur={() => setTimeout(() => setActiveItemSugIdx(null), 200)}
+                          onFocus={() => { setActiveItemSugIdx(idx); setBuilderItemSugIdx(-1); }}
+                          onBlur={() => setTimeout(() => { setActiveItemSugIdx(null); setBuilderItemSugIdx(-1); }, 200)}
                           onChange={e => {
                             const val = e.target.value;
                             updatePurchaseItem(item._id, 'name', val);
@@ -2916,20 +2995,47 @@ export default function StockManager({ onBack, backInterceptRef }) {
                               if (match.sub_unit) updatePurchaseItem(item._id, 'sub_unit', match.sub_unit);
                             }
                             setActiveItemSugIdx(idx);
+                            setBuilderItemSugIdx(-1);
+                          }}
+                          onKeyDown={e => {
+                            const filtered = itemSuggestions.filter(s => s.toLowerCase().includes((item.name || '').toLowerCase())).slice(0, 8);
+                            handleSuggestionKeyDown({
+                              e,
+                              suggestions: filtered,
+                              selectedIndex: builderItemSugIdx,
+                              setSelectedIndex: setBuilderItemSugIdx,
+                              onSelect: (sug) => {
+                                handleSelectProductSuggestion(item._id, sug);
+                                setActiveItemSugIdx(null);
+                                setBuilderItemSugIdx(-1);
+                              },
+                              onClose: () => {
+                                setActiveItemSugIdx(null);
+                                setBuilderItemSugIdx(-1);
+                              }
+                            });
                           }}
                         />
                         {activeItemSugIdx === idx && itemSuggestions.filter(s => s.toLowerCase().includes((item.name || '').toLowerCase())).length > 0 && (
                           <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 140, overflowY: 'auto' }}>
-                            {itemSuggestions.filter(s => s.toLowerCase().includes((item.name || '').toLowerCase())).slice(0, 8).map(sug => (
-                              <div
-                                key={sug}
-                                className="note-sug-item"
-                                onMouseDown={() => handleSelectProductSuggestion(item._id, sug)}
-                                style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
-                              >
-                                {sug}
-                              </div>
-                            ))}
+                            {itemSuggestions.filter(s => s.toLowerCase().includes((item.name || '').toLowerCase())).slice(0, 8).map((sug, sIdx) => {
+                              const isSelected = builderItemSugIdx === sIdx;
+                              return (
+                                <div
+                                  key={sug}
+                                  ref={el => { if (isSelected && el) el.scrollIntoView({ block: 'nearest' }); }}
+                                  className={`note-sug-item ${isSelected ? 'selected' : ''}`}
+                                  onMouseDown={() => {
+                                    handleSelectProductSuggestion(item._id, sug);
+                                    setActiveItemSugIdx(null);
+                                    setBuilderItemSugIdx(-1);
+                                  }}
+                                  style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
+                                >
+                                  {sug}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -3088,28 +3194,52 @@ export default function StockManager({ onBack, backInterceptRef }) {
                           className="form-input"
                           placeholder="e.g. DMart, Amazon"
                           value={item.notes}
-                          onFocus={() => setActiveStoreSugIdx(idx)}
-                          onBlur={() => setTimeout(() => setActiveStoreSugIdx(null), 200)}
+                          onFocus={() => { setActiveStoreSugIdx(idx); setBuilderStoreSugIdx(-1); }}
+                          onBlur={() => setTimeout(() => { setActiveStoreSugIdx(null); setBuilderStoreSugIdx(-1); }, 200)}
                           onChange={e => {
                             updatePurchaseItem(item._id, 'notes', e.target.value);
                             setActiveStoreSugIdx(idx);
+                            setBuilderStoreSugIdx(-1);
+                          }}
+                          onKeyDown={e => {
+                            const filtered = storeSuggestions.filter(s => s.toLowerCase().includes((item.notes || '').toLowerCase())).slice(0, 8);
+                            handleSuggestionKeyDown({
+                              e,
+                              suggestions: filtered,
+                              selectedIndex: builderStoreSugIdx,
+                              setSelectedIndex: setBuilderStoreSugIdx,
+                              onSelect: (sug) => {
+                                updatePurchaseItem(item._id, 'notes', sug);
+                                setActiveStoreSugIdx(null);
+                                setBuilderStoreSugIdx(-1);
+                              },
+                              onClose: () => {
+                                setActiveStoreSugIdx(null);
+                                setBuilderStoreSugIdx(-1);
+                              }
+                            });
                           }}
                         />
                         {activeStoreSugIdx === idx && storeSuggestions.filter(s => s.toLowerCase().includes((item.notes || '').toLowerCase())).length > 0 && (
                           <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 1000, maxHeight: 140, overflowY: 'auto' }}>
-                            {storeSuggestions.filter(s => s.toLowerCase().includes((item.notes || '').toLowerCase())).slice(0, 8).map(sug => (
-                              <div
-                                key={sug}
-                                className="note-sug-item"
-                                onMouseDown={() => {
-                                  updatePurchaseItem(item._id, 'notes', sug);
-                                  setActiveStoreSugIdx(null);
-                                }}
-                                style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
-                              >
-                                {sug}
-                              </div>
-                            ))}
+                            {storeSuggestions.filter(s => s.toLowerCase().includes((item.notes || '').toLowerCase())).slice(0, 8).map((sug, sIdx) => {
+                              const isSelected = builderStoreSugIdx === sIdx;
+                              return (
+                                <div
+                                  key={sug}
+                                  ref={el => { if (isSelected && el) el.scrollIntoView({ block: 'nearest' }); }}
+                                  className={`note-sug-item ${isSelected ? 'selected' : ''}`}
+                                  onMouseDown={() => {
+                                    updatePurchaseItem(item._id, 'notes', sug);
+                                    setActiveStoreSugIdx(null);
+                                    setBuilderStoreSugIdx(-1);
+                                  }}
+                                  style={{ fontSize: '0.75rem', padding: '6px 10px', cursor: 'pointer' }}
+                                >
+                                  {sug}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>

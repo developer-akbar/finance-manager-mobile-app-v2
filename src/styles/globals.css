@@ -283,6 +283,30 @@ body {
 .trans-fab:active { transform:scale(0.88); }
 .trans-fab svg { width:26px; height:26px; stroke:#0a0f1e; }
 
+/* Companion Credit Card Pay Button next to + button */
+.cc-pay-fab {
+  position: absolute;
+  bottom: 14px;
+  left: 82px;
+  height: 58px;
+  padding: 0 20px;
+  border-radius: 29px;
+  background: linear-gradient(135deg, #3b82f6, #4f46e5);
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #ffffff;
+  box-shadow: 0 4px 20px rgba(59, 130, 246, 0.45);
+  transition: var(--transition-spring);
+  z-index: 30;
+}
+.cc-pay-fab:active { transform: scale(0.92); }
+.cc-pay-fab svg { width: 20px; height: 20px; stroke: #ffffff; }
+
 /* ── PAGE HEADER ── */
 .page-hdr {
   min-height: calc(var(--header-h) + var(--safe-top));
@@ -442,7 +466,14 @@ select option {
 .description-section .form-group { grid-template-columns:1fr; }
 .description-section .form-label { width:100%; }
 .description-section textarea.form-input { min-height:34px; max-height:220px; }
-.picker-room { border-top:1px solid var(--border); max-height:50dvh; overflow-y:auto; background:var(--bg-card2); }
+.picker-room { border-top:1px solid var(--border); max-height:48dvh; overflow-y:auto; background:var(--bg-card2); padding-bottom:max(var(--safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 16px); box-sizing:border-box; }
+.picker-chip.highlighted,
+.picker-chip:focus-visible {
+  border-color: var(--accent) !important;
+  background: var(--accent-dim) !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 0 0 1px var(--accent);
+}
 .picker-sheet-inline .picker-sheet-hdr { padding:8px var(--page-px); border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--bg-card2); z-index:5; }
 
 /* ── OVERLAY / SHEET / MODAL ── */
@@ -699,7 +730,7 @@ select option {
 .note-sug-list { position:absolute; top:100%; left:0; right:0; z-index:50; background:var(--bg-card2); border:1px solid var(--border); border-radius:0 0 var(--r-md) var(--r-md); max-height:280px; overflow-y:auto; }
 .note-sug-item { padding:8px 11px; font-size:0.8rem; color:var(--text-primary); cursor:pointer; border-bottom:1px solid var(--border-light); }
 .note-sug-item:last-child { border-bottom:none; }
-.note-sug-item:active { background:var(--bg-hover); }
+.note-sug-item:hover, .note-sug-item:active, .note-sug-item.selected { background:var(--bg-hover); }
 
 /* ── SEARCH ── */
 .search-view { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
@@ -821,7 +852,7 @@ select option {
 .period-nav-bar { display:flex; align-items:center; justify-content:space-between; padding:6px var(--page-px); background:var(--bg-card); border-bottom:1px solid var(--border); flex-shrink:0; }
 .period-nav-btn { background:none; border:none; color:var(--text-secondary); font-size:1.3rem; cursor:pointer; padding:2px 10px; line-height:1; }
 .period-nav-label { font-size:0.82rem; font-weight:700; color:var(--accent); flex:1; text-align:center; }
-.search-list { flex:1; overflow-y:auto; }
+.search-list { flex:1; overflow-y:auto; padding-bottom:calc(var(--safe-bottom, 0px) + 96px); -webkit-overflow-scrolling:touch; box-sizing:border-box; }
 .filter-section {
   padding-bottom: 12px;
   margin-bottom: 12px;

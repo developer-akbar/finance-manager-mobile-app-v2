@@ -2,6 +2,7 @@ import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { v4 as uuid } from 'uuid';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { inputToStorage, toInputDate, toInputTime, nowTimeStr, formatINR, cleanNumericInput, isSystemTag, getUserFacingTags, normalizeSuggestionQuery } from '../../utils/format.js';
+import { handleSuggestionKeyDown } from '../../utils/keyboardNav.js';
 import { resolveInvestmentAccounts, calculateGrowwCharges, resolveKnownFolioAndMode } from '../../utils/brokerageAccounting.js';
 import { resolveSecurity, searchSecurities, cleanSecurityToNote } from '../../utils/securityResolution.js';
 import { convertTransactionToInstalment } from '../../database/transactions.js';
@@ -253,6 +254,7 @@ function RecurringSheet({ onClose, onSave, isExpense, startDate }) {
 // ── PickerSheetInline — inline chip grid with recent row ────────────────────────────────
 function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exclude = '', onReorder }) {
   const [query, setQuery] = React.useState('');
+  const [selectedChipIdx, setSelectedChipIdx] = React.useState(-1);
   const inputRef = React.useRef(null);
   const listRef = React.useRef(null);
   const targetRef = React.useRef(null);
@@ -284,15 +286,46 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
   const q = query.trim().toLowerCase();
   const recentList = (recent || []).filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
   const allItems = (items || []).filter(i => i !== exclude && (!q || i.toLowerCase().includes(q)));
-  const noResults = recentList.length === 0 && allItems.length === 0;
+  const candidateItems = React.useMemo(() => {
+    return Array.from(new Set([...recentList, ...allItems]));
+  }, [recentList, allItems]);
+  const noResults = candidateItems.length === 0;
 
-  const Chip = ({ name }) => (
-    <button type="button"
-      className={`picker-chip ${value === name ? 'picker-chip-active' : ''}`}
-      onMouseDown={e => { e.preventDefault(); onSelect(name); onClose(); }}>
-      {name}{value === name && <span className="picker-chip-check"> ✓</span>}
-    </button>
-  );
+  React.useEffect(() => {
+    setSelectedChipIdx(-1);
+  }, [query]);
+
+  const handleKeyDown = (e) => {
+    handleSuggestionKeyDown({
+      e,
+      suggestions: candidateItems,
+      selectedIndex: selectedChipIdx,
+      setSelectedIndex: setSelectedChipIdx,
+      onSelect: (pick) => {
+        onSelect(pick);
+        onClose();
+      },
+      onClose,
+      onDefaultEnter: () => {
+        if (candidateItems.length > 0) {
+          onSelect(candidateItems[0]);
+          onClose();
+        }
+      }
+    });
+  };
+
+  const Chip = ({ name }) => {
+    const isHighlighted = selectedChipIdx >= 0 && candidateItems[selectedChipIdx] === name;
+    return (
+      <button type="button"
+        ref={el => { if (isHighlighted && el) el.scrollIntoView({ block: 'nearest' }); }}
+        className={`picker-chip ${value === name ? 'picker-chip-active' : ''} ${isHighlighted ? 'highlighted' : ''}`}
+        onMouseDown={e => { e.preventDefault(); onSelect(name); onClose(); }}>
+        {name}{value === name && <span className="picker-chip-check"> ✓</span>}
+      </button>
+    );
+  };
 
   return (
     <div className="picker-sheet-inline">
@@ -310,10 +343,13 @@ function PickerSheetInline({ label, items, recent, value, onSelect, onClose, exc
           <span className="picker-search-icon">🔍</span>
           <input ref={inputRef} className="picker-search-input"
             placeholder={`Search ${label.toLowerCase()}…`}
-            value={query} onChange={e => {
+            value={query}
+            onChange={e => {
               setQuery(e.target.value);
               if (listRef.current) listRef.current.scrollTop = 0;
-            }} />
+            }}
+            onKeyDown={handleKeyDown}
+          />
           {query && <button className="picker-search-clear" onMouseDown={e => { e.preventDefault(); setQuery(''); }}>✕</button>}
         </div>
         {recentList.length > 0 && (
@@ -352,7 +388,7 @@ function SubcategoryPickerInline({ items, recent, value, onSelect, onClose }) {
         <div className="picker-sheet-title">Subcategory</div>
         <button className="picker-sheet-close" onMouseDown={onClose}>✕</button>
       </div>
-      <div className="picker-list" style={{ paddingBottom: 16 }}>
+      <div className="picker-list" style={{ paddingBottom: 'calc(max(var(--safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 16px) + 16px)' }}>
         {recentList.length > 0 && (
           <>
             <div className="picker-section-label">Recent</div>
@@ -1217,6 +1253,14 @@ export default function AddTransaction({
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [noteSugs, setNoteSugs] = useState([]);
+  const [selectedNoteIdx, setSelectedNoteIdx] = useState(-1);
+  const [splitSelectedNoteIdx, setSplitSelectedNoteIdx] = useState(-1);
+  const [initialSystemTags] = useState(() => {
+    if (!prefillTags) return [];
+    return (Array.isArray(prefillTags) ? prefillTags : String(prefillTags).split(/[,|\n]/))
+      .map(t => t.trim())
+      .filter(isSystemTag);
+  });
   const [noteFocused, setNoteFocused] = useState(false);
   const formRefLatest = useRef(form);
   formRefLatest.current = form;
@@ -2028,6 +2072,7 @@ export default function AddTransaction({
   // State & Ref for Security Autocomplete and Note tracking
   const [secFocused, setSecFocused] = useState(false);
   const [secSugs, setSecSugs] = useState([]);
+  const [selectedSecIdx, setSelectedSecIdx] = useState(-1);
   const noteUserEditedRef = useRef(Boolean(isEdit));
   const lastAutoNoteRef = useRef(isEdit ? cleanSecurityToNote(editTransaction?.Note || editTransaction?.note || '') : '');
   const lastEditedInvInputRef = useRef('quantity');
@@ -2308,6 +2353,7 @@ export default function AddTransaction({
   };
 
   const handleSecurityChange = (v) => {
+    setSelectedSecIdx(-1);
     setForm(prev => {
       const isAutoEligible = !noteUserEditedRef.current ||
         !prev.note ||
@@ -2792,6 +2838,7 @@ export default function AddTransaction({
   };
 
   const handleNoteChange = (v) => {
+    setSelectedNoteIdx(-1);
     if (isInvMode) {
       if (v !== lastAutoNoteRef.current) {
         noteUserEditedRef.current = true;
@@ -2832,6 +2879,7 @@ export default function AddTransaction({
   };
 
   const handleNoteFocus = () => {
+    setSelectedNoteIdx(-1);
     setPickerState(null);
     setNoteFocused(true);
     // Never show suggestions on empty Note field; do NOT mark as manually edited
@@ -2863,6 +2911,50 @@ export default function AddTransaction({
       }
     } else {
       setNoteSugs([]);
+    }
+  };
+
+  const handleNoteKeyDown = (e, isInvestment = false) => {
+    if (noteSugs.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedNoteIdx(prev => Math.min(prev + 1, noteSugs.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedNoteIdx(prev => Math.max(prev - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter') {
+        if (selectedNoteIdx >= 0 && selectedNoteIdx < noteSugs.length) {
+          e.preventDefault();
+          const selected = noteSugs[selectedNoteIdx];
+          const label = typeof selected === 'object' ? selected.note : selected;
+          set('note', label);
+          setNoteSugs([]);
+          setSelectedNoteIdx(-1);
+          setTimeout(() => descriptionRef.current?.focus(), 150);
+          return;
+        }
+        e.preventDefault();
+        setNoteSugs([]);
+        setSelectedNoteIdx(-1);
+        descriptionRef.current?.focus();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        setNoteSugs([]);
+        setSelectedNoteIdx(-1);
+        return;
+      }
+    } else {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        descriptionRef.current?.focus();
+      }
     }
   };
 
@@ -2951,13 +3043,13 @@ export default function AddTransaction({
       const extractedHashtags = (noteAndDesc.match(/#[a-zA-Z0-9_\u0900-\u097F-]+/g) || []).filter(t => !isSystemTag(t)).map(t => t.toLowerCase());
       const manualTags = getUserFacingTags(form.tags || '');
 
-      // Preserve any existing system tags if editing an existing record
+      // Preserve any existing system tags if editing an existing record or passed via prefill
       const originalSystemTags = isEdit
         ? (editTransaction?.Tags || editTransaction?.tags || '')
             .split(/[,|\n]/)
             .map(t => t.trim())
             .filter(isSystemTag)
-        : [];
+        : initialSystemTags;
 
       const combinedTags = Array.from(new Set([...originalSystemTags, ...manualTags, ...extractedHashtags])).join(', ');
 
@@ -3866,6 +3958,7 @@ export default function AddTransaction({
                   onFocus={() => {
                     setPickerState(null);
                     setSecFocused(true);
+                    setSelectedSecIdx(-1);
                     if (form.securitySymbol && form.securitySymbol.trim()) {
                       handleSecurityChange(form.securitySymbol);
                     } else {
@@ -3873,6 +3966,22 @@ export default function AddTransaction({
                     }
                   }}
                   onChange={e => handleSecurityChange(e.target.value)}
+                  onKeyDown={e => {
+                    handleSuggestionKeyDown({
+                      e,
+                      suggestions: secSugs,
+                      selectedIndex: selectedSecIdx,
+                      setSelectedIndex: setSelectedSecIdx,
+                      onSelect: (s) => {
+                        handleSelectSecurity(s);
+                        setSelectedSecIdx(-1);
+                      },
+                      onClose: () => {
+                        setSecFocused(false);
+                        setSelectedSecIdx(-1);
+                      },
+                    });
+                  }}
                   onBlur={() => {
                     setTimeout(() => setSecFocused(false), 220);
                     if (form.securitySymbol && form.securitySymbol.trim()) {
@@ -3897,10 +4006,12 @@ export default function AddTransaction({
                     {secSugs.map((s, idx) => (
                       <div
                         key={idx}
+                        ref={el => { if (idx === selectedSecIdx && el) el.scrollIntoView({ block: 'nearest' }); }}
                         style={{
                           padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
                           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                          transition: 'background 0.1s'
+                          transition: 'background 0.1s',
+                          background: idx === selectedSecIdx ? 'var(--bg-hover)' : 'transparent'
                         }}
                         onMouseDown={() => handleSelectSecurity(s)}
                       >
@@ -3941,12 +4052,12 @@ export default function AddTransaction({
                     onChange={e => handleNoteChange(e.target.value)}
                     onFocus={handleNoteFocus}
                     onBlur={() => { setNoteFocused(false); setTimeout(() => setNoteSugs([]), 180); }}
-                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); descriptionRef.current?.focus(); } }}
+                    onKeyDown={e => handleNoteKeyDown(e, true)}
                   />
                   {noteFocused && (
                     <button
                       type="button"
-                      onMouseDown={e => { e.preventDefault(); set('note', ''); setNoteSugs([]); setNoteFocused(false); }}
+                      onMouseDown={e => { e.preventDefault(); set('note', ''); setNoteSugs([]); setSelectedNoteIdx(-1); setNoteFocused(false); }}
                       style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem', lineHeight: 1, padding: '4px', borderRadius: '50%', zIndex: 1 }}
                     >
                       ✕
@@ -3954,11 +4065,17 @@ export default function AddTransaction({
                   )}
                   {noteSugs.length > 0 && (
                     <div className="note-sug-list">
-                      {noteSugs.map(s => {
+                      {noteSugs.map((s, idx) => {
                         const isObj = typeof s === 'object';
                         const label = isObj ? s.note : s;
                         return (
-                          <div key={label} className="note-sug-item" onMouseDown={() => { set('note', label); setNoteSugs([]); }} style={{ display: 'flex', alignItems: 'center' }}>
+                          <div
+                            key={label}
+                            ref={el => { if (idx === selectedNoteIdx && el) el.scrollIntoView({ block: 'nearest' }); }}
+                            className={`note-sug-item ${idx === selectedNoteIdx ? 'selected' : ''}`}
+                            onMouseDown={() => { set('note', label); setNoteSugs([]); setSelectedNoteIdx(-1); }}
+                            style={{ display: 'flex', alignItems: 'center' }}
+                          >
                             <span className="note-sug-text">{label}</span>
                           </div>
                         );
@@ -4832,12 +4949,51 @@ export default function AddTransaction({
                         style={{ width: '100%', fontSize: '0.8rem', padding: '6px 10px' }}
                         value={s.note}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            splitDescriptionRefs.current[idx]?.focus();
+                          if (splitNoteSugs.length > 0) {
+                            if (e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              setSplitSelectedNoteIdx(prev => Math.min(prev + 1, splitNoteSugs.length - 1));
+                              return;
+                            }
+                            if (e.key === 'ArrowUp') {
+                              e.preventDefault();
+                              setSplitSelectedNoteIdx(prev => Math.max(prev - 1, 0));
+                              return;
+                            }
+                            if (e.key === 'Enter') {
+                              if (splitSelectedNoteIdx >= 0 && splitSelectedNoteIdx < splitNoteSugs.length) {
+                                e.preventDefault();
+                                const selected = splitNoteSugs[splitSelectedNoteIdx];
+                                const label = typeof selected === 'object' ? selected.note : selected;
+                                setSplits(prev => prev.map((part, i) => i === idx ? { ...part, note: label } : part));
+                                setSplitNoteFocusedIdx(null);
+                                setSplitNoteSugs([]);
+                                setSplitSelectedNoteIdx(-1);
+                                setTimeout(() => splitDescriptionRefs.current[idx]?.focus(), 50);
+                                return;
+                              }
+                              e.preventDefault();
+                              setSplitNoteSugs([]);
+                              setSplitSelectedNoteIdx(-1);
+                              splitDescriptionRefs.current[idx]?.focus();
+                              return;
+                            }
+                            if (e.key === 'Escape') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setSplitNoteSugs([]);
+                              setSplitSelectedNoteIdx(-1);
+                              return;
+                            }
+                          } else {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              splitDescriptionRefs.current[idx]?.focus();
+                            }
                           }
                         }}
                         onFocus={() => {
+                          setSplitSelectedNoteIdx(-1);
                           setSplitNoteFocusedIdx(idx);
                           setSplitNoteSugs(getRecentAndMostUsedNotes(form.type, s.category));
                         }}
@@ -4845,10 +5001,12 @@ export default function AddTransaction({
                           setTimeout(() => {
                             setSplitNoteFocusedIdx(null);
                             setSplitNoteSugs([]);
+                            setSplitSelectedNoteIdx(-1);
                           }, 200);
                         }}
                         onChange={e => {
                           const val = e.target.value;
+                          setSplitSelectedNoteIdx(-1);
                           setSplits(prev => prev.map((item, i) => i === idx ? { ...item, note: val } : item));
                           const norm = normalizeSuggestionQuery(val);
                           const allSugs = getRecentAndMostUsedNotes(form.type, s.category);
@@ -4865,18 +5023,20 @@ export default function AddTransaction({
                       />
                       {splitNoteFocusedIdx === idx && splitNoteSugs.length > 0 && (
                         <div className="note-sug-list" style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 10, maxHeight: 150, overflowY: 'auto' }}>
-                          {splitNoteSugs.map(item => {
+                          {splitNoteSugs.map((item, sugIdx) => {
                             const isObj = typeof item === 'object';
                             const label = isObj ? item.note : item;
                             const icon = isObj ? (item.type === 'most_used' ? '🔥' : '🕒') : null;
                             return (
                               <div
                                 key={label}
-                                className="note-sug-item"
+                                ref={el => { if (sugIdx === splitSelectedNoteIdx && el) el.scrollIntoView({ block: 'nearest' }); }}
+                                className={`note-sug-item ${sugIdx === splitSelectedNoteIdx ? 'selected' : ''}`}
                                 onMouseDown={() => {
                                   setSplits(prev => prev.map((part, i) => i === idx ? { ...part, note: label } : part));
                                   setSplitNoteFocusedIdx(null);
                                   setSplitNoteSugs([]);
+                                  setSplitSelectedNoteIdx(-1);
                                   setTimeout(() => {
                                     splitDescriptionRefs.current[idx]?.focus();
                                   }, 50);
@@ -4982,20 +5142,26 @@ export default function AddTransaction({
                   onChange={e => handleNoteChange(e.target.value)}
                   onFocus={handleNoteFocus}
                   onBlur={() => { setNoteFocused(false); setTimeout(() => setNoteSugs([]), 180); }}
-                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); descriptionRef.current?.focus(); } }}
+                  onKeyDown={e => handleNoteKeyDown(e, false)}
                 />
                 {noteFocused && (
-                  <button type="button" onMouseDown={e => { e.preventDefault(); set('note', ''); setNoteSugs([]); setNoteFocused(false); }}
+                  <button type="button" onMouseDown={e => { e.preventDefault(); set('note', ''); setNoteSugs([]); setSelectedNoteIdx(-1); setNoteFocused(false); }}
                     style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem', lineHeight: 1, padding: '4px', borderRadius: '50%', zIndex: 1 }}>✕</button>
                 )}
                 {noteSugs.length > 0 && (
                   <div className="note-sug-list">
-                    {noteSugs.map(s => {
+                    {noteSugs.map((s, idx) => {
                       const isObj = typeof s === 'object';
                       const label = isObj ? s.note : s;
                       const icon = isObj ? (s.type === 'most_used' ? '🔥' : '🕒') : null;
                       return (
-                        <div key={label} className="note-sug-item" onMouseDown={() => { set('note', label); setNoteSugs([]); setTimeout(() => descriptionRef.current?.focus(), 150); }} style={{ display: 'flex', alignItems: 'center' }}>
+                        <div
+                          key={label}
+                          ref={el => { if (idx === selectedNoteIdx && el) el.scrollIntoView({ block: 'nearest' }); }}
+                          className={`note-sug-item ${idx === selectedNoteIdx ? 'selected' : ''}`}
+                          onMouseDown={() => { set('note', label); setNoteSugs([]); setSelectedNoteIdx(-1); setTimeout(() => descriptionRef.current?.focus(), 150); }}
+                          style={{ display: 'flex', alignItems: 'center' }}
+                        >
                           {icon && <span className="note-sug-icon" style={{ marginRight: 8, fontSize: '0.75rem' }}>{icon}</span>}
                           <span className="note-sug-text">{label}</span>
                         </div>

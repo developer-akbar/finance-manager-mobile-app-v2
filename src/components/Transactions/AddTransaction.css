@@ -27,7 +27,8 @@
   max-height: 60dvh;
   display: flex;
   flex-direction: column;
-  padding-bottom: 0;
+  padding-bottom: max(var(--safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 16px);
+  box-sizing: border-box;
 }
 
 .picker-sheet-hdr {
@@ -58,13 +59,15 @@
 /* Inline picker */
 .picker-room {
   border-top: 1px solid var(--border);
-  max-height: 45dvh;
+  max-height: 48dvh;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg-card2);
   flex-shrink: 0;
+  padding-bottom: max(var(--safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 16px);
+  box-sizing: border-box;
 }
 
 .picker-sheet-inline {
@@ -138,6 +141,8 @@
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  padding-bottom: calc(max(var(--safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 16px) + 16px);
+  box-sizing: border-box;
 }
 
 .picker-section-label {
@@ -170,7 +175,8 @@
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
-  padding: 0 var(--page-px) 14px;
+  padding: 0 var(--page-px) calc(max(var(--safe-bottom, 0px), env(safe-area-inset-bottom, 0px), 16px) + 16px);
+  box-sizing: border-box;
 }
 
 /* Chips shared */
