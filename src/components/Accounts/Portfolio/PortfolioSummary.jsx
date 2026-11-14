@@ -130,7 +130,6 @@ export default function PortfolioSummary({
         <div className="portfolio-kpi-card">
           <div className="portfolio-kpi-header">
             <span className="portfolio-kpi-lbl">PORTFOLIO XIRR</span>
-            <span className="portfolio-kpi-info-icon" title="Extended Internal Rate of Return (annualized compounding return based on exact cash-flow dates)">ⓘ</span>
           </div>
           <div className={`portfolio-kpi-val num-tabular ${getPnlClass(portfolioXirr)}`}>
             {portfolioXirr !== null ? (
