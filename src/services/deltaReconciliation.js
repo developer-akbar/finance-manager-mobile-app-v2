@@ -12,7 +12,7 @@
  */
 
 import { v4 as uuid } from 'uuid';
-import { getDB, getRawIDB, getTableColumns } from '../database/db.js';
+import { getDB, getRawIDB, getTableColumns, SYNCED_SETTINGS_WHITELIST } from '../database/db.js';
 import { toCanonicalJson, computeCanonicalSha256 } from '../utils/canonicalEntity.js';
 import { saveConflictRecord, getPendingConflicts, CONFLICT_STATUS, CONFLICT_RESOLUTION, CONFLICT_TYPE } from '../database/conflicts.js';
 import { createDeltaEvent, DELTA_STATUS, DELTA_OPERATION } from '../database/deltaQueue.js';
@@ -823,6 +823,12 @@ async function _reconcileBundleAtomically(bundle) {
     const op = event.operation;
     const hBase = event.base_checksum;
     const hRemote = event.new_checksum;
+
+    // Setting sync filter: ignore non-whitelisted settings (e.g. device-local theme)
+    if (storeName === 'settings' && !SYNCED_SETTINGS_WHITELIST.includes(entityId)) {
+      item.decision = 'NOOP_IDEMPOTENT';
+      continue;
+    }
 
     // A. Check if event was previously superseded by a resolution
     const supersededRes = await db.query(

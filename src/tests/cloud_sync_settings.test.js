@@ -89,7 +89,7 @@ async function runTests() {
   console.log('--- Test 1: Approved settings are serialized ---');
   const localEntities = await readLocalEntities();
   assert(localEntities.settings !== undefined, 'entities.settings is present');
-  assert(localEntities.settings.theme === 'dark', 'theme serialized');
+  assert(localEntities.settings.theme === undefined, 'theme is excluded from synced settings');
   assert(localEntities.settings.headerColor === 'blue', 'headerColor serialized');
   assert(localEntities.settings.fontSize === '1.1', 'fontSize serialized');
   assert(localEntities.settings.fontFamily === 'Inter', 'fontFamily serialized');
@@ -118,7 +118,8 @@ async function runTests() {
     'backupHistory',
     'finman_gdrive_token',
     'finman_gdrive_token_exp',
-    'finman_gdrive_linked'
+    'finman_gdrive_linked',
+    'theme'
   ];
 
   for (const k of excludedKeys) {
@@ -141,19 +142,20 @@ async function runTests() {
   });
   assert(legacyReconcile.conflicts.length === 0, 'No conflicts against legacy snapshot');
   assert(Object.keys(legacyReconcile.plannedLocalSettingsUpdates).length === 0, 'Local settings preserved when cloud has no settings');
-  assert(legacyReconcile.plannedCloudSettingsUpdates.theme === 'dark', 'Local settings staged for cloud upload');
+  assert(legacyReconcile.plannedCloudSettingsUpdates.headerColor === 'blue', 'Local settings staged for cloud upload');
 
   // ─────────────────────────────────────────────────────────────
   // TEST 5: Settings canonicalization is deterministic
   // ─────────────────────────────────────────────────────────────
   console.log('\n--- Test 5: Settings canonicalization is deterministic ---');
-  const c1 = canonicalizeEntity({ key: 'theme', value: 'dark' }, 'setting');
-  const c2 = canonicalizeEntity({ id: 'theme', value: 'dark' }, 'setting');
-  assert(c1 === 'theme:dark' && c1 === c2, 'Canonical string is deterministic (theme:dark)');
+  const c1 = canonicalizeEntity({ key: 'headerColor', value: 'blue' }, 'setting');
+  const c2 = canonicalizeEntity({ id: 'headerColor', value: 'blue' }, 'setting');
+  assert(c1 === 'headerColor:blue' && c1 === c2, 'Canonical string is deterministic (headerColor:blue)');
 
   const manifest = await buildEntityManifest(localEntities);
-  assert(manifest['setting:theme']?.canonical === 'theme:dark', 'Manifest contains setting:theme');
-  assert(manifest['setting:theme']?.type === 'setting', 'Manifest type is setting');
+  assert(manifest['setting:headerColor']?.canonical === 'headerColor:blue', 'Manifest contains setting:headerColor');
+  assert(manifest['setting:headerColor']?.type === 'setting', 'Manifest type is setting');
+  assert(manifest['setting:theme'] === undefined, 'Manifest strictly omits theme');
   assert(manifest['setting:google_client_id'] === undefined, 'Manifest strictly omits security keys');
 
   // ─────────────────────────────────────────────────────────────
@@ -175,14 +177,14 @@ async function runTests() {
   // TEST 7: Local-only setting change is detected
   // ─────────────────────────────────────────────────────────────
   console.log('\n--- Test 7: Local-only setting change is detected ---');
-  const localModified = { ...baseSettings, theme: 'light' };
+  const localModified = { ...baseSettings, headerColor: 'emerald' };
   const recLocalMod = reconcileSettings3Way({
     baseSettings,
     localSettings: localModified,
     cloudSettings: baseSettings
   });
   assert(Object.keys(recLocalMod.plannedLocalUpdates).length === 0, 'No local updates for local-only change');
-  assert(recLocalMod.plannedCloudUpdates.theme === 'light', 'Local theme change staged for cloud');
+  assert(recLocalMod.plannedCloudUpdates.headerColor === 'emerald', 'Local headerColor change staged for cloud');
   assert(recLocalMod.conflicts.length === 0, 'No conflict for local-only change');
 
   // ─────────────────────────────────────────────────────────────
@@ -203,8 +205,8 @@ async function runTests() {
   // TEST 9: Same setting changed differently produces SETTINGS_CONFLICT
   // ─────────────────────────────────────────────────────────────
   console.log('\n--- Test 9: Same setting changed differently produces SETTINGS_CONFLICT ---');
-  const localConflict = { ...baseSettings, theme: 'light' };
-  const cloudConflict = { ...baseSettings, theme: 'oled' };
+  const localConflict = { ...baseSettings, headerColor: 'purple' };
+  const cloudConflict = { ...baseSettings, headerColor: 'orange' };
   const recConflict = reconcileSettings3Way({
     baseSettings,
     localSettings: localConflict,
@@ -212,15 +214,15 @@ async function runTests() {
   });
   assert(recConflict.conflicts.length === 1, 'Exactly 1 conflict recorded');
   assert(recConflict.conflicts[0].type === CONFLICT_TYPES.SETTINGS_CONFLICT, 'Conflict type is SETTINGS_CONFLICT');
-  assert(recConflict.conflicts[0].entityId === 'setting:theme', 'Conflict entityId is setting:theme');
-  assert(recConflict.conflicts[0].local === 'light', 'Conflict records local value');
-  assert(recConflict.conflicts[0].cloud === 'oled', 'Conflict records cloud value');
+  assert(recConflict.conflicts[0].entityId === 'setting:headerColor', 'Conflict entityId is setting:headerColor');
+  assert(recConflict.conflicts[0].local === 'purple', 'Conflict records local value');
+  assert(recConflict.conflicts[0].cloud === 'orange', 'Conflict records cloud value');
 
   // ─────────────────────────────────────────────────────────────
   // TEST 10: Different settings changed independently merge correctly
   // ─────────────────────────────────────────────────────────────
   console.log('\n--- Test 10: Different settings changed independently merge correctly ---');
-  const localIndep = { ...baseSettings, theme: 'light' };
+  const localIndep = { ...baseSettings, default_currency: 'USD' };
   const cloudIndep = { ...baseSettings, fontSize: '1.4' };
   const recIndep = reconcileSettings3Way({
     baseSettings,
@@ -229,8 +231,8 @@ async function runTests() {
   });
   assert(recIndep.conflicts.length === 0, 'Zero conflicts for independent key changes');
   assert(recIndep.plannedLocalUpdates.fontSize === '1.4', 'Local receives cloud fontSize');
-  assert(recIndep.plannedCloudUpdates.theme === 'light', 'Cloud receives local theme');
-  assert(recIndep.mergedSettings.theme === 'light', 'Merged settings contains local theme');
+  assert(recIndep.plannedCloudUpdates.default_currency === 'USD', 'Cloud receives local default_currency');
+  assert(recIndep.mergedSettings.default_currency === 'USD', 'Merged settings contains local default_currency');
   assert(recIndep.mergedSettings.fontSize === '1.4', 'Merged settings contains cloud fontSize');
 
   // ─────────────────────────────────────────────────────────────
@@ -282,6 +284,26 @@ async function runTests() {
   assert(!serializedJson.includes('123456'), 'Raw PIN not in payload');
   assert(!serializedJson.includes('sync_base_manifest'), 'sync_base_manifest not in payload');
   assert(!serializedJson.includes('finman_gdrive_token'), 'finman_gdrive_token not in payload');
+
+  // ─────────────────────────────────────────────────────────────
+  // TEST 15: Device-Local Theme Setting Isolation
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- Test 15: Device-Local Theme Setting Isolation ---');
+  const initialDeltas = (await getDB().query('SELECT * FROM sync_delta_queue')).values || [];
+  await setSetting('theme', 'dark');
+  const postThemeDeltas = (await getDB().query('SELECT * FROM sync_delta_queue')).values || [];
+  assert(postThemeDeltas.length === initialDeltas.length, 'Changing theme never queues events in sync_delta_queue');
+  assert(await getSetting('theme') === 'dark', 'Theme persists in local SQLite');
+
+  const freshLocal = await readLocalEntities();
+  assert(freshLocal.settings.theme === undefined, 'Theme is excluded from readLocalEntities');
+
+  const snapCheck = await createCanonicalSnapshotPayload({
+    entities: freshLocal,
+    snapshotId: 'snap_theme_iso_check',
+    deviceId: 'test_dev'
+  });
+  assert(!snapCheck.canonicalJson.includes('"theme"'), 'Canonical snapshot payload strictly excludes theme');
 
   console.log('\n====================================================');
   console.log(`SUMMARY: ${passed} PASSED, ${failed} FAILED`);

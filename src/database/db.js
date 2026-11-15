@@ -36,7 +36,6 @@ export const STORE_DEFS = [
 
 export const SYNCED_SETTINGS_WHITELIST = [
   'customTags',
-  'theme',
   'headerColor',
   'fontSize',
   'fontFamily',
