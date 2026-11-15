@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -10,7 +10,8 @@ import {
 } from 'recharts';
 import {
   fetchHistoricalAssetSeries,
-  filterObservationsByRange
+  filterObservationsByRange,
+  parseDmYToTimestamp
 } from '../../../services/historicalAssetPriceService.js';
 
 const TIME_RANGES = ['1M', '6M', '1Y', '3Y', '5Y', 'All'];
@@ -18,17 +19,33 @@ const TIME_RANGES = ['1M', '6M', '1Y', '3Y', '5Y', 'All'];
 /**
  * Format DD-MM-YYYY or ISO date string into "13 Nov 2026"
  */
-function formatAsOfDateString(dateStr) {
-  if (!dateStr) return '';
-  const pts = String(dateStr).split(/[-/]/);
-  if (pts.length === 3) {
-    const d = parseInt(pts[0].length === 4 ? pts[2] : pts[0], 10);
-    const m = parseInt(pts[1], 10) - 1;
-    const y = parseInt(pts[0].length === 4 ? pts[0] : pts[2], 10);
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${d} ${months[m] || ''} ${y}`;
+function formatAsOfDateString(val) {
+  if (!val) return '';
+  let d;
+  if (typeof val === 'number') {
+    d = new Date(val);
+  } else {
+    const pts = String(val).trim().split(/[-/]/);
+    if (pts.length === 3) {
+      let y, m, day;
+      if (pts[0].length === 4) {
+        y = parseInt(pts[0], 10);
+        m = parseInt(pts[1], 10) - 1;
+        day = parseInt(pts[2], 10);
+      } else {
+        day = parseInt(pts[0], 10);
+        m = parseInt(pts[1], 10) - 1;
+        y = parseInt(pts[2], 10);
+      }
+      d = new Date(y, m, day);
+    } else {
+      d = new Date(val);
+    }
   }
-  return dateStr;
+  if (!d || isNaN(d.getTime())) return String(val);
+  const day = d.getDate();
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${day} ${months[d.getMonth()] || ''} ${d.getFullYear()}`;
 }
 
 /**
@@ -48,7 +65,7 @@ function CustomChartTooltip({ active, payload, startPrice, priceLabel = 'NAV' })
     <div className="asset-chart-tooltip">
       <div className="tooltip-row">
         <span className="tooltip-lbl text-muted">Date:</span>
-        <span className="tooltip-val mono font-semibold ml-1">{dataPoint.date}</span>
+        <span className="tooltip-val mono font-semibold ml-1">{formatAsOfDateString(dataPoint.timestamp || dataPoint.date)}</span>
       </div>
       <div className="tooltip-row mt-0.5">
         <span className="tooltip-lbl text-muted">{priceLabel}:</span>
@@ -71,6 +88,19 @@ export default function AssetPerformanceChart({ position }) {
   const [isLoading, setIsLoading] = useState(true);
   const [seriesData, setSeriesData] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
+  const [showInfoTooltip, setShowInfoTooltip] = useState(false);
+  const tooltipRef = useRef(null);
+
+  useEffect(() => {
+    if (!showInfoTooltip) return;
+    const handleOutsideClick = (e) => {
+      if (tooltipRef.current && !tooltipRef.current.contains(e.target)) {
+        setShowInfoTooltip(false);
+      }
+    };
+    document.addEventListener('pointerdown', handleOutsideClick);
+    return () => document.removeEventListener('pointerdown', handleOutsideClick);
+  }, [showInfoTooltip]);
 
   const securityKey = position?.isin || position?.note || position?.security;
 
@@ -110,9 +140,16 @@ export default function AssetPerformanceChart({ position }) {
   const gradientId = `perfGradient_${isPositive ? 'pos' : 'neg'}`;
 
   // Formatting X-axis dates
-  const formatXAxis = useCallback((ts) => {
+  const formatXAxis = useCallback((val) => {
+    if (!val) return '';
+    let ts = typeof val === 'number' ? val : (parseDmYToTimestamp ? parseDmYToTimestamp(val) : 0);
+    if (!ts || isNaN(ts)) {
+      const parsed = new Date(val).getTime();
+      ts = isNaN(parsed) ? 0 : parsed;
+    }
     if (!ts) return '';
     const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
     const month = d.toLocaleString('en-US', { month: 'short' });
     const year = String(d.getFullYear()).slice(-2);
     if (selectedRange === '1M' || selectedRange === '6M') {
@@ -130,82 +167,106 @@ export default function AssetPerformanceChart({ position }) {
 
   return (
     <div className="portfolio-card asset-performance-card mb-3">
-      {/* 1. Header with Title, Metrics, and Range Buttons */}
-      <div className="asset-performance-header">
-        <div className="asset-perf-meta-col">
-          <div className="asset-perf-top-subrow flex-between align-center mb-1">
-            <div className="flex-gap-xs align-center">
-              <span className="asset-perf-tag font-semibold text-muted">Asset Performance</span>
-              <span className="asset-perf-type-tag text-muted font-xs">· {seriesData?.priceLabel || 'NAV'}</span>
-            </div>
-            {seriesData?.source && (
+      {/* 1. Header with Title, Tags, Metrics & Info Tooltip */}
+      <div className="asset-perf-meta-col">
+        <div className="asset-perf-top-subrow align-center mb-1">
+          <div className="flex-gap-xs align-center">
+            <span className="asset-perf-tag font-semibold text-muted">Asset Performance</span>
+            <span className="asset-perf-type-tag text-muted font-xs">· {seriesData?.priceLabel || 'NAV'}</span>
+          </div>
+          {seriesData?.source && (
+            <div className="asset-perf-source-group" ref={tooltipRef}>
               <span className="asset-perf-source text-muted font-xs">{seriesData.source}</span>
-            )}
-          </div>
+              <button
+                type="button"
+                className="asset-perf-info-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowInfoTooltip(prev => !prev);
+                }}
+                aria-label="Performance calculation disclosure"
+                title="Performance calculation disclosure"
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="16" x2="12" y2="12" />
+                  <line x1="12" y1="8" x2="12.01" y2="8" />
+                </svg>
+              </button>
 
-          <h3 className="asset-perf-title" title={seriesData?.displayName || position?.note || position?.security}>
-            {seriesData?.displayName || position?.note || position?.security}
-          </h3>
-
-          <div className="asset-perf-metrics-strip flex-gap-sm align-center mt-1">
-            {periodData && headlineReturn !== null ? (
-              <div className="asset-perf-return-wrap flex-gap-xs align-baseline">
-                <span className={`asset-perf-return-val font-bold num-tabular ${headlineIsPositive ? 'pos' : 'neg'}`}>
-                  {headlineIsPositive ? '+' : ''}{headlineReturn.toFixed(2)}%
-                </span>
-                <span className="asset-perf-period-lbl text-muted font-xs">
-                  ({headlineLabel})
-                </span>
-              </div>
-            ) : null}
-
-            {seriesData?.latestPrice ? (
-              <div className="asset-perf-nav-wrap text-muted font-xs num-tabular">
-                <span className="bullet-sep">•</span>
-                <span className="ml-1">
-                  {seriesData.priceLabel || 'Latest'}: <strong className="text-primary font-bold">₹{seriesData.latestPrice.toFixed(2)}</strong>
-                </span>
-              </div>
-            ) : null}
-
-            {seriesData?.oneDayChangePercent !== null && seriesData?.oneDayChangePercent !== undefined ? (
-              <div className="asset-perf-1d-wrap text-muted font-xs num-tabular">
-                <span className="bullet-sep">•</span>
-                <span className="ml-1">
-                  1D: <strong className={seriesData.oneDayChangePercent >= 0 ? 'pos' : 'neg'}>
-                    {seriesData.oneDayChangePercent >= 0 ? '+' : ''}{seriesData.oneDayChangePercent.toFixed(2)}%
-                  </strong>
-                </span>
-              </div>
-            ) : null}
-
-            {periodData?.isPartial && (
-              <span className="asset-perf-partial-pill text-muted font-xs" title="Requested history range is longer than security inception date">
-                {periodData.availableSpanText}
-              </span>
-            )}
-          </div>
+              {showInfoTooltip && (
+                <div className="asset-perf-tooltip-popover">
+                  <p className="asset-perf-tooltip-text">
+                    Historical asset performance reflects the underlying asset's NAV or market price history. Individual investment returns may differ based on acquisition dates and cashflows. Historical performance does not represent your personal portfolio return.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Range Selector Pill Buttons */}
-        <div className="asset-perf-ranges-wrap">
-          <div className="chart-range-pills-bar">
-            {TIME_RANGES.map((rng) => (
-              <button
-                key={rng}
-                className={`chart-range-pill ${selectedRange === rng ? 'active' : ''}`}
-                onClick={() => setSelectedRange(rng)}
-                disabled={isLoading}
-              >
-                {rng}
-              </button>
-            ))}
-          </div>
+        <h3 className="asset-perf-title" title={seriesData?.displayName || position?.note || position?.security}>
+          {seriesData?.displayName || position?.note || position?.security}
+        </h3>
+
+        <div className="asset-perf-metrics-strip flex-gap-sm align-center mt-1">
+          {periodData && headlineReturn !== null ? (
+            <div className="asset-perf-return-wrap flex-gap-xs align-baseline">
+              <span className={`asset-perf-return-val font-bold num-tabular ${headlineIsPositive ? 'pos' : 'neg'}`}>
+                {headlineIsPositive ? '+' : ''}{headlineReturn.toFixed(2)}%
+              </span>
+              <span className="asset-perf-period-lbl text-muted font-xs">
+                ({headlineLabel})
+              </span>
+            </div>
+          ) : null}
+
+          {seriesData?.latestPrice ? (
+            <div className="asset-perf-nav-wrap text-muted font-xs num-tabular">
+              <span className="bullet-sep">•</span>
+              <span className="ml-1">
+                {seriesData.priceLabel || 'Latest'}: <strong className="text-primary font-bold">₹{seriesData.latestPrice.toFixed(2)}</strong>
+              </span>
+            </div>
+          ) : null}
+
+          {seriesData?.oneDayChangePercent !== null && seriesData?.oneDayChangePercent !== undefined ? (
+            <div className="asset-perf-1d-wrap text-muted font-xs num-tabular">
+              <span className="bullet-sep">•</span>
+              <span className="ml-1">
+                1D: <strong className={seriesData.oneDayChangePercent >= 0 ? 'pos' : 'neg'}>
+                  {seriesData.oneDayChangePercent >= 0 ? '+' : ''}{seriesData.oneDayChangePercent.toFixed(2)}%
+                </strong>
+              </span>
+            </div>
+          ) : null}
+
+          {periodData?.isPartial && (
+            <span className="asset-perf-partial-pill text-muted font-xs" title="Requested history range is longer than security inception date">
+              {periodData.availableSpanText}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* 2. Chart Body or Loading/Empty States */}
-      <div className="asset-performance-body mt-2">
+      {/* 2. Range Selector Pill Buttons (desktop: top right, mobile: below chart) */}
+      <div className="asset-perf-ranges-wrap">
+        <div className="chart-range-pills-bar">
+          {TIME_RANGES.map((rng) => (
+            <button
+              key={rng}
+              className={`chart-range-pill ${selectedRange === rng ? 'active' : ''}`}
+              onClick={() => setSelectedRange(rng)}
+              disabled={isLoading}
+            >
+              {rng}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 3. Chart Body or Loading/Empty States */}
+      <div className="asset-performance-body">
         {isLoading ? (
           <div className="asset-chart-skeleton">
             <div className="skeleton-chart-line" />
@@ -230,47 +291,33 @@ export default function AssetPerformanceChart({ position }) {
             <ResponsiveContainer width="100%" height={220}>
               <AreaChart
                 data={periodData.filteredObservations}
-                margin={{ top: 8, right: 10, left: 0, bottom: 4 }}
+                margin={{ top: 10, right: 10, left: 10, bottom: 0 }}
               >
                 <defs>
                   <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                    <stop
-                      offset="5%"
-                      stopColor={strokeColor}
-                      stopOpacity={0.24}
-                    />
-                    <stop
-                      offset="95%"
-                      stopColor={strokeColor}
-                      stopOpacity={0.0}
-                    />
+                    <stop offset="0%" stopColor={strokeColor} stopOpacity={0.28} />
+                    <stop offset="95%" stopColor={strokeColor} stopOpacity={0.0} />
                   </linearGradient>
                 </defs>
 
                 <CartesianGrid
-                  vertical={false}
                   strokeDasharray="3 3"
-                  stroke="var(--chart-grid, rgba(255, 255, 255, 0.06))"
+                  stroke="var(--dash-grid-color, rgba(255, 255, 255, 0.05))"
+                  vertical={false}
                 />
 
                 <XAxis
                   dataKey="timestamp"
-                  domain={['dataMin', 'dataMax']}
-                  tickFormatter={formatXAxis}
                   tickLine={false}
-                  axisLine={false}
-                  minTickGap={35}
-                  tick={{ fontSize: 11, fill: 'var(--text-muted, #94a3b8)' }}
+                  axisLine={{ stroke: 'var(--border, rgba(255,255,255,0.08))' }}
+                  tick={{ fill: 'var(--text-muted, #94a3b8)', fontSize: 10 }}
+                  tickFormatter={formatXAxis}
+                  minTickGap={28}
                 />
 
                 <YAxis
-                  orientation="right"
                   domain={['dataMin', 'dataMax']}
-                  tickFormatter={(val) => `₹${Math.round(val)}`}
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fontSize: 10, fill: 'var(--text-muted, #94a3b8)' }}
-                  width={38}
+                  hide={true}
                 />
 
                 <Tooltip
@@ -304,18 +351,6 @@ export default function AssetPerformanceChart({ position }) {
           <div className="asset-chart-empty-state text-muted font-xs">
             Insufficient historical observations for this selected range.
           </div>
-        )}
-      </div>
-
-      {/* 3. Subtle Footer Note: Distinct from personal cashflow IRR */}
-      <div className="asset-performance-footer flex-between align-center mt-1.5 pt-1.5">
-        <span className="asset-perf-note text-muted font-xs">
-          Historical asset performance only · Individual investment returns may differ based on acquisition dates and cashflows.
-        </span>
-        {seriesData?.latestDate && (
-          <span className="asset-perf-asof text-muted font-xs ml-2">
-            As of {formatAsOfDateString(seriesData.latestDate)}
-          </span>
         )}
       </div>
     </div>

@@ -350,7 +350,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           {/* ── QUICK FEATURE SHORTCUTS PILLS ── */}
           <div className="dash-shortcuts-strip">
             {[
-              { id: 'portfolio', label: 'Portfolio', icon: '📈', onClick: () => setShowPortfolio(true) },
+              { id: 'portfolio', label: 'Portfolio', icon: '📈', onClick: () => navigate('portfolio') },
               { id: 'debt', label: 'Debt Tracker', icon: '🤝', onClick: () => setShowDebtTracker(true) },
               { id: 'stock', label: 'Stock Inventory', icon: '🥫', onClick: () => setShowStockManager(true) },
               { id: 'perks', label: 'Card Perks', icon: '💳', onClick: () => setShowOptimizer(true) },
@@ -402,7 +402,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
               transactions={transactions}
               settings={settings}
               showPrivacy={showPrivacy}
-              onOpenPortfolio={() => setShowPortfolio(true)}
+              onOpenPortfolio={() => navigate('portfolio')}
             />
             <DashboardDebtCards
               analytics={analytics}

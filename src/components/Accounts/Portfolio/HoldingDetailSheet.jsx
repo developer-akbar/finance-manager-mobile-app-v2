@@ -530,173 +530,185 @@ export default function HoldingDetailSheet({
       </div>
 
       <div className="portfolio-scrollable-content detail-scrollable-content">
-        {/* 2. Top Summary Cards: Centered Horizontally Side-by-Side (Max ~1040px width, Gap ~22px) */}
-        <div className="detail-top-cards-grid mb-3">
-          {/* Card A: Financial Performance Overview (Symmetrical 2 × 2 Grid) */}
-          <div className="portfolio-card detail-hero-card">
-            <div className="portfolio-card-header mb-2 flex-between align-center">
-              <h4 className="portfolio-card-title detail-card-heading">Performance Overview</h4>
-              {isValued && activeValuation?.asOf && !isRedeemed && (
-                <span className="detail-as-of-meta text-muted">
-                  As of {formatAsOfDate(activeValuation.asOf)}{activeValuation?.asOfTime ? `, ${activeValuation.asOfTime}` : ''}
-                </span>
+        {/* 1. Asset Performance Interactive Chart (Top Major Section) */}
+        <AssetPerformanceChart position={position} />
+
+        {/* 2. Top Summary Card A: Financial Performance Overview (Full Width, Single Row on Desktop) */}
+        <div className="portfolio-card detail-hero-card detail-fullwidth-card mb-3">
+          <div className="portfolio-card-header mb-2 flex-between align-center">
+            <h4 className="portfolio-card-title detail-card-heading">Performance Overview</h4>
+            {isValued && activeValuation?.asOf && !isRedeemed && (
+              <span className="detail-as-of-meta text-muted">
+                As of {formatAsOfDate(activeValuation.asOf)}{activeValuation?.asOfTime ? `, ${activeValuation.asOfTime}` : ''}
+              </span>
+            )}
+          </div>
+
+          <div className="detail-overview-grid">
+            {/* Col 1: Invested Cost */}
+            <div className="detail-kpi-cell">
+              <span className="detail-metric-lbl text-muted">{isRedeemed ? 'Cost Basis' : 'Invested Cost'}</span>
+              <div className="detail-metric-val font-bold num-tabular mt-0.5 text-primary">
+                {formatINR(isRedeemed ? (displayPos.buyCost || displayPos.soldCostBasis || displayPos.remainingCostBasis) : displayPos.remainingCostBasis)}
+              </div>
+              <div className="detail-metric-sub text-muted font-xs mt-0.5">
+                {displayLots.length} acquisition {displayLots.length === 1 ? 'lot' : 'lots'}
+              </div>
+            </div>
+
+            {/* Col 2: Current Value */}
+            <div className="detail-kpi-cell">
+              <span className="detail-metric-lbl text-muted">Current Value</span>
+              <div className={`detail-metric-val font-bold num-tabular mt-0.5 ${isRedeemed ? 'text-muted' : 'text-primary'}`}>
+                {isRedeemed ? '₹0 (Closed)' : (isValued ? formatINR(activeValuation.currentValue) : <span className="val-na text-muted">{metrics.unvaluedLabel}</span>)}
+              </div>
+              {dailyChange && !isRedeemed ? (
+                <div
+                  className={`todays-change font-semibold num-tabular mt-0.5 ${dailyChange.cls}`}
+                  style={{ fontSize: '0.74rem', color: dailyChange.color, cursor: 'pointer' }}
+                  title="Tap 1D change to toggle price vs position P&L"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onToggleOneDayDisplayMode) onToggleOneDayDisplayMode(e);
+                  }}
+                >
+                  1D: {dailyChange.text}
+                </div>
+              ) : (
+                <div className="detail-sub-placeholder" />
               )}
             </div>
 
-            <div className="detail-hero-grid-2x2">
-              {/* Row 1, Col 1: Current Value */}
-              <div className="detail-kpi-cell">
-                <span className="detail-metric-lbl text-muted">Current Value</span>
-                <div className={`detail-metric-val font-bold num-tabular mt-0.5 ${isRedeemed ? 'text-muted' : 'text-primary'}`}>
-                  {isRedeemed ? '₹0 (Closed)' : (isValued ? formatINR(activeValuation.currentValue) : <span className="val-na text-muted">{metrics.unvaluedLabel}</span>)}
+            {/* Col 3: Total P&L */}
+            <div className="detail-kpi-cell">
+              <span className="detail-metric-lbl text-muted">{isRedeemed ? 'Realized P&L' : 'Total P&L'}</span>
+              {isRedeemed ? (
+                <div className={`detail-metric-val font-bold num-tabular mt-0.5 ${getPnlClass(displayPos.realizedPnl)}`}>
+                  {formatSignedCurrency(displayPos.realizedPnl)}
                 </div>
-                {dailyChange && !isRedeemed ? (
-                  <div
-                    className={`todays-change font-semibold num-tabular mt-0.5 ${dailyChange.cls}`}
-                    style={{ fontSize: '0.74rem', color: dailyChange.color, cursor: 'pointer' }}
-                    title="Tap 1D change to toggle price vs position P&L"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (onToggleOneDayDisplayMode) onToggleOneDayDisplayMode(e);
-                    }}
-                  >
-                    1D: {dailyChange.text}
-                  </div>
-                ) : (
-                  <div className="detail-sub-placeholder" />
-                )}
-              </div>
-
-              {/* Row 1, Col 2: Total P&L */}
-              <div className="detail-kpi-cell">
-                <span className="detail-metric-lbl text-muted">{isRedeemed ? 'Realized P&L' : 'Total P&L'}</span>
-                {isRedeemed ? (
-                  <div className={`detail-metric-val font-bold num-tabular mt-0.5 ${getPnlClass(displayPos.realizedPnl)}`}>
-                    {formatSignedCurrency(displayPos.realizedPnl)}
-                  </div>
-                ) : isValued ? (
-                  <div className="detail-pnl-wrap mt-0.5">
-                    <span className={`detail-metric-val font-bold num-tabular ${getPnlClass(activeValuation.unrealizedPnl)}`}>
-                      {formatSignedCurrency(activeValuation.unrealizedPnl)}
-                    </span>
-                    <span className={`detail-pnl-pill num-tabular font-bold ml-1 ${getPnlClass(activeValuation.unrealizedPnl)}`}>
-                      {formatSignedPercent(activeValuation.returnPercent)}
-                    </span>
-                  </div>
-                ) : (
-                  <div className="detail-metric-val text-muted mt-0.5">—</div>
-                )}
-                {!isRedeemed && displayPos.realizedPnl !== 0 ? (
-                  <div className="detail-metric-sub text-muted font-xs mt-0.5 num-tabular">
-                    Realized: <span className={getPnlClass(displayPos.realizedPnl)}>{formatSignedCurrency(displayPos.realizedPnl)}</span>
-                  </div>
-                ) : (
-                  <div className="detail-sub-placeholder" />
-                )}
-              </div>
-
-              {/* Row 2, Col 1: Invested Cost */}
-              <div className="detail-kpi-cell">
-                <span className="detail-metric-lbl text-muted">{isRedeemed ? 'Cost Basis' : 'Invested Cost'}</span>
-                <div className="detail-metric-val secondary font-bold num-tabular mt-0.5 text-primary">
-                  {formatINR(isRedeemed ? (displayPos.buyCost || displayPos.soldCostBasis || displayPos.remainingCostBasis) : displayPos.remainingCostBasis)}
-                </div>
-                <div className="detail-metric-sub text-muted font-xs mt-0.5">
-                  {displayLots.length} acquisition {displayLots.length === 1 ? 'lot' : 'lots'}
-                </div>
-              </div>
-
-              {/* Row 2, Col 2: Portfolio XIRR */}
-              <div className="detail-kpi-cell">
-                <span className="detail-metric-lbl text-muted">Portfolio XIRR</span>
-                <div className="detail-metric-val secondary font-bold num-tabular mt-0.5">
-                  {detailXirr !== null ? (
-                    <span className={getPnlClass(detailXirr)}>
-                      {formatSignedPercent(detailXirr)}
-                    </span>
-                  ) : (
-                    <span className="text-muted">—</span>
-                  )}
-                </div>
-                <div className="detail-metric-sub text-muted font-xs mt-0.5">
-                  Compounding cashflow IRR
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Card B: Position Specs & Lifecycle */}
-          <div className="portfolio-card detail-lifecycle-card">
-            <div className="portfolio-card-header mb-2 flex-between align-center">
-              <h4 className="portfolio-card-title detail-card-heading">Position Specs & Lifecycle</h4>
-              <span className="detail-as-of-meta text-muted mono">{displayPos.isin || 'ID'}</span>
-            </div>
-
-            <div className="detail-lifecycle-grid-3x2">
-              {/* Cell 1: First Acquired & Duration */}
-              <div className="lifecycle-cell">
-                <span className="lifecycle-lbl text-muted">First Acquired</span>
-                <span className="lifecycle-val font-semibold mono text-primary mt-0.5">
-                  {firstAcquiredDate || '—'}
-                </span>
-                {ageInfo.fullStr && (
-                  <span className="lifecycle-sub text-muted font-xs mt-0.5">
-                    {ageInfo.fullStr}
+              ) : isValued ? (
+                <div className="detail-pnl-wrap mt-0.5">
+                  <span className={`detail-metric-val font-bold num-tabular ${getPnlClass(activeValuation.unrealizedPnl)}`}>
+                    {formatSignedCurrency(activeValuation.unrealizedPnl)}
                   </span>
+                  <span className={`detail-pnl-pill num-tabular font-bold ml-1 ${getPnlClass(activeValuation.unrealizedPnl)}`}>
+                    {formatSignedPercent(activeValuation.returnPercent)}
+                  </span>
+                </div>
+              ) : (
+                <div className="detail-metric-val text-muted mt-0.5">—</div>
+              )}
+              {!isRedeemed && displayPos.realizedPnl !== 0 ? (
+                <div className="detail-metric-sub text-muted font-xs mt-0.5 num-tabular">
+                  Realized: <span className={getPnlClass(displayPos.realizedPnl)}>{formatSignedCurrency(displayPos.realizedPnl)}</span>
+                </div>
+              ) : (
+                <div className="detail-sub-placeholder" />
+              )}
+            </div>
+
+            {/* Col 4: Portfolio XIRR */}
+            <div className="detail-kpi-cell">
+              <span className="detail-metric-lbl text-muted">Portfolio XIRR</span>
+              <div className="detail-metric-val font-bold num-tabular mt-0.5">
+                {detailXirr !== null ? (
+                  <span className={getPnlClass(detailXirr)}>
+                    {formatSignedPercent(detailXirr)}
+                  </span>
+                ) : (
+                  <span className="text-muted">—</span>
                 )}
               </div>
-
-              {/* Cell 2: Status */}
-              <div className="lifecycle-cell">
-                <span className="lifecycle-lbl text-muted">{isRedeemed ? 'Exit Date' : 'Status'}</span>
-                <span className="lifecycle-val font-semibold mono text-primary mt-0.5">
-                  {isRedeemed ? (displayPos.exitDate || displayPos.lastTransactionDate || '—') : 'Active Holding'}
-                </span>
-              </div>
-
-              {/* Cell 3: Total Units */}
-              <div className="lifecycle-cell">
-                <span className="lifecycle-lbl text-muted">{isRedeemed ? 'Qty Exited' : metrics.qtyLabel}</span>
-                <span className="lifecycle-val font-semibold mono num-tabular text-primary mt-0.5">
-                  {isRedeemed ? (
-                    (displayPos.investmentAccount === 'Share Market' || displayPos.holdingMode === 'DEMAT')
-                      ? `${Math.round(exitedUnits)} shares`
-                      : `${exitedUnits.toFixed(3)} units`
-                  ) : (
-                    metrics.rawQty || metrics.formattedQty
-                  )}
-                </span>
-              </div>
-
-              {/* Cell 4: Avg NAV */}
-              <div className="lifecycle-cell">
-                <span className="lifecycle-lbl text-muted">{isRedeemed ? 'Avg Acq NAV' : metrics.avgPriceLabel}</span>
-                <span className="lifecycle-val font-semibold mono num-tabular text-primary mt-0.5">
-                  {avgBuyPriceStr}
-                </span>
-              </div>
-
-              {/* Cell 5: Platform */}
-              <div className="lifecycle-cell">
-                <span className="lifecycle-lbl text-muted">Platform</span>
-                <span className="lifecycle-val font-semibold text-primary mt-0.5">
-                  {displayPos.subAccount || position.subAccount}
-                </span>
-              </div>
-
-              {/* Cell 6: Folio / Mode */}
-              <div className="lifecycle-cell">
-                <span className="lifecycle-lbl text-muted">Folio / Mode</span>
-                <span className="lifecycle-val font-semibold mono text-primary mt-0.5">
-                  {displayPos.folioNumber || position.folioNumber || displayPos.holdingMode || '—'}
-                </span>
+              <div className="detail-metric-sub text-muted font-xs mt-0.5">
+                Compounding cashflow IRR
               </div>
             </div>
           </div>
         </div>
 
-        {/* 2B. Asset Performance Interactive Chart (Groww UX Reference) */}
-        <AssetPerformanceChart position={position} />
+        {/* 3. Top Summary Card B: Position Specs & Lifecycle (Full Width, Single Row on Desktop) */}
+        <div className="portfolio-card detail-lifecycle-card detail-fullwidth-card mb-3">
+          <div className="portfolio-card-header mb-2 flex-between align-center">
+            <h4 className="portfolio-card-title detail-card-heading">Position Specs &amp; Lifecycle</h4>
+            <span className="detail-as-of-meta text-muted mono">{displayPos.isin || 'ID'}</span>
+          </div>
+
+          <div className="detail-lifecycle-grid">
+            {/* Spec 1: First Acquired */}
+            <div className="lifecycle-cell">
+              <span className="lifecycle-lbl text-muted">First Acquired</span>
+              <span className="lifecycle-val font-semibold mono text-primary mt-0.5">
+                {firstAcquiredDate || '—'}
+              </span>
+              {ageInfo.fullStr && (
+                <span className="lifecycle-sub text-muted font-xs mt-0.5">
+                  {ageInfo.fullStr}
+                </span>
+              )}
+            </div>
+
+            {/* Spec 2: Status */}
+            <div className="lifecycle-cell">
+              <span className="lifecycle-lbl text-muted">Status</span>
+              <div className="mt-0.5 flex align-center">
+                <span
+                  className="lifecycle-status-tag font-semibold"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    fontSize: '0.74rem',
+                    padding: '2px 7px',
+                    borderRadius: '6px',
+                    background: isRedeemed ? 'var(--dash-track-bg, rgba(255,255,255,0.06))' : 'rgba(1, 181, 116, 0.15)',
+                    color: isRedeemed ? 'var(--text-muted)' : 'var(--dash-positive, #01B574)',
+                    border: isRedeemed ? '1px solid var(--dash-border, rgba(255,255,255,0.1))' : '1px solid rgba(1, 181, 116, 0.25)',
+                    lineHeight: 1.2
+                  }}
+                >
+                  {isRedeemed ? (displayPos.exitDate ? `Exited ${displayPos.exitDate}` : 'Exited') : 'Active Holding'}
+                </span>
+              </div>
+            </div>
+
+            {/* Spec 3: Total Units */}
+            <div className="lifecycle-cell">
+              <span className="lifecycle-lbl text-muted">{isRedeemed ? 'Qty Exited' : metrics.qtyLabel}</span>
+              <span className="lifecycle-val font-semibold mono num-tabular text-primary mt-0.5">
+                {isRedeemed ? (
+                  (displayPos.investmentAccount === 'Share Market' || displayPos.holdingMode === 'DEMAT')
+                    ? `${Math.round(exitedUnits)} shares`
+                    : `${exitedUnits.toFixed(3)} units`
+                ) : (
+                  metrics.rawQty || metrics.formattedQty
+                )}
+              </span>
+            </div>
+
+            {/* Spec 4: Avg NAV */}
+            <div className="lifecycle-cell">
+              <span className="lifecycle-lbl text-muted">{isRedeemed ? 'Avg Acq NAV' : metrics.avgPriceLabel}</span>
+              <span className="lifecycle-val font-semibold mono num-tabular text-primary mt-0.5">
+                {avgBuyPriceStr}
+              </span>
+            </div>
+
+            {/* Spec 5: Platform */}
+            <div className="lifecycle-cell">
+              <span className="lifecycle-lbl text-muted">Platform</span>
+              <span className="lifecycle-val font-semibold text-primary mt-0.5">
+                {displayPos.subAccount || position.subAccount || '—'}
+              </span>
+            </div>
+
+            {/* Spec 6: Folio / Mode */}
+            <div className="lifecycle-cell">
+              <span className="lifecycle-lbl text-muted">Folio / Mode</span>
+              <span className="lifecycle-val font-semibold mono text-primary mt-0.5">
+                {displayPos.folioNumber || position.folioNumber || displayPos.holdingMode || '—'}
+              </span>
+            </div>
+          </div>
+        </div>
 
         {/* 3. Folios Filter Section (if aggregated / multiple folios) */}
         {isAggregated && (

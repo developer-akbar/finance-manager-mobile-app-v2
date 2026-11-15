@@ -28,17 +28,32 @@ const CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
 /**
  * Normalizes date string DD-MM-YYYY into a unix timestamp in milliseconds
  */
-function parseDmYToTimestamp(dateStr) {
+export function parseDmYToTimestamp(dateStr) {
   if (!dateStr) return 0;
-  const pts = String(dateStr).split(/[-/]/);
-  if (pts.length === 3) {
-    if (pts[0].length === 4) {
-      return new Date(parseInt(pts[0], 10), parseInt(pts[1], 10) - 1, parseInt(pts[2], 10)).getTime();
-    }
-    return new Date(parseInt(pts[2], 10), parseInt(pts[1], 10) - 1, parseInt(pts[0], 10)).getTime();
+  if (typeof dateStr === 'number') {
+    return dateStr > 0 && !isNaN(dateStr) ? dateStr : 0;
   }
-  const d = new Date(dateStr);
-  return isNaN(d.getTime()) ? 0 : d.getTime();
+  const str = String(dateStr).trim();
+  const pts = str.split(/[-/]/);
+  if (pts.length === 3) {
+    let y, m, d;
+    if (pts[0].length === 4) {
+      y = parseInt(pts[0], 10);
+      m = parseInt(pts[1], 10) - 1;
+      d = parseInt(pts[2], 10);
+    } else {
+      d = parseInt(pts[0], 10);
+      m = parseInt(pts[1], 10) - 1;
+      y = parseInt(pts[2], 10);
+    }
+    if (!isNaN(y) && !isNaN(m) && !isNaN(d) && y >= 1970 && y <= 2100 && m >= 0 && m <= 11 && d >= 1 && d <= 31) {
+      const dt = new Date(y, m, d);
+      return isNaN(dt.getTime()) ? 0 : dt.getTime();
+    }
+  }
+  const dt = new Date(str);
+  const time = dt.getTime();
+  return isNaN(time) ? 0 : time;
 }
 
 /**
@@ -139,20 +154,31 @@ async function fetchMutualFundHistory(position, isinKey) {
     };
   }
 
-  // Raw data is sorted newest-first; transform and sort chronological (oldest-first)
-  const observations = [];
-  for (let i = json.data.length - 1; i >= 0; i--) {
+  // Raw data transform, sort chronologically and deduplicate
+  const rawObs = [];
+  for (let i = 0; i < json.data.length; i++) {
     const item = json.data[i];
     const navVal = parseFloat(item.nav);
     if (!isNaN(navVal) && navVal > 0) {
       const ts = parseDmYToTimestamp(item.date);
       if (ts > 0) {
-        observations.push({
+        rawObs.push({
           date: item.date,
           timestamp: ts,
           price: Math.round(navVal * 10000) / 10000
         });
       }
+    }
+  }
+
+  // Sort strictly chronological (oldest-first)
+  rawObs.sort((a, b) => a.timestamp - b.timestamp);
+
+  // Deduplicate identical timestamps
+  const observations = [];
+  for (const obs of rawObs) {
+    if (observations.length === 0 || observations[observations.length - 1].timestamp !== obs.timestamp) {
+      observations.push(obs);
     }
   }
 
@@ -284,21 +310,35 @@ async function fetchEquityOrEtfHistory(position, key, assetType) {
 
   const timestamps = result.timestamp;
   const closes = result.indicators?.quote?.[0]?.close || [];
-  const observations = [];
-
+  const rawObs = [];
   for (let i = 0; i < timestamps.length; i++) {
     const c = closes[i];
     if (typeof c === 'number' && !isNaN(c) && c > 0) {
       const ts = timestamps[i] * 1000;
-      const d = new Date(ts);
-      const day = String(d.getDate()).padStart(2, '0');
-      const mon = String(d.getMonth() + 1).padStart(2, '0');
-      const yr = d.getFullYear();
-      observations.push({
-        date: `${day}-${mon}-${yr}`,
-        timestamp: ts,
-        price: Math.round(c * 100) / 100
-      });
+      if (ts > 0 && !isNaN(ts)) {
+        const d = new Date(ts);
+        if (!isNaN(d.getTime())) {
+          const day = String(d.getDate()).padStart(2, '0');
+          const mon = String(d.getMonth() + 1).padStart(2, '0');
+          const yr = d.getFullYear();
+          rawObs.push({
+            date: `${day}-${mon}-${yr}`,
+            timestamp: ts,
+            price: Math.round(c * 100) / 100
+          });
+        }
+      }
+    }
+  }
+
+  // Sort strictly chronological (oldest-first)
+  rawObs.sort((a, b) => a.timestamp - b.timestamp);
+
+  // Deduplicate identical timestamps
+  const observations = [];
+  for (const obs of rawObs) {
+    if (observations.length === 0 || observations[observations.length - 1].timestamp !== obs.timestamp) {
+      observations.push(obs);
     }
   }
 

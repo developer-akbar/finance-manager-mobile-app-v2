@@ -4,7 +4,8 @@
    ═══════════════════════════════════════════════════════════════════════════════ */
 
 /* ── DASHBOARD THEME VARIABLES ─────────────────────────────────────────────── */
-:root, [data-theme="dark"] {
+:root,
+[data-theme="dark"] {
   --dash-bg: #0B1437;
   --dash-card-bg: #111C44;
   --dash-surface: #172653;
@@ -67,27 +68,34 @@
 
 /* Header Greeting Bar */
 .dash-greeting {
-  padding: calc(var(--safe-top) + 12px) var(--page-px) 12px;
-  background: var(--dash-card-bg);
+  min-height: calc(var(--app-header-h, 56px) + var(--safe-top, 0px));
+  height: calc(var(--app-header-h, 56px) + var(--safe-top, 0px));
+  padding: var(--safe-top, 0px) var(--page-px) 0;
+  background: var(--theme-header-bg, var(--nav-bg));
   border-bottom: 1px solid var(--dash-border);
   flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  transition: background-color 0.2s ease, border-color 0.2s ease;
+  gap: 12px;
+  box-sizing: border-box;
 }
 
 @media (min-width: 1024px) {
   .dash-greeting {
-    padding: calc(var(--safe-top) + 16px) var(--page-px) 16px;
+    min-height: calc(var(--app-header-h, 56px) + var(--safe-top, 0px));
+    height: calc(var(--app-header-h, 56px) + var(--safe-top, 0px));
+    padding: var(--safe-top, 0px) var(--page-px) 0;
   }
 }
 
 .dash-hello {
   font-size: 1.25rem;
   font-weight: 800;
-  color: var(--dash-text-main);
+  color: var(--theme-header-text, var(--text-primary));
   letter-spacing: -0.3px;
+  margin: 0;
+  line-height: 1.2;
 }
 
 /* ── MODULAR BENTO CARDS BASE ───────────────────────────────────────────────── */
@@ -1322,9 +1330,17 @@
   font-weight: 700;
 }
 
-.dash-b-pct.ok { color: var(--dash-positive); }
-.dash-b-pct.warn { color: #FFAA00; }
-.dash-b-pct.over { color: var(--dash-negative); }
+.dash-b-pct.ok {
+  color: var(--dash-positive);
+}
+
+.dash-b-pct.warn {
+  color: #FFAA00;
+}
+
+.dash-b-pct.over {
+  color: var(--dash-negative);
+}
 
 .dash-budget-track {
   height: 5px;
@@ -2037,8 +2053,13 @@
   font-weight: 800;
 }
 
-.dash-cp-amt.income { color: var(--dash-positive); }
-.dash-cp-amt.expense { color: var(--dash-negative); }
+.dash-cp-amt.income {
+  color: var(--dash-positive);
+}
+
+.dash-cp-amt.expense {
+  color: var(--dash-negative);
+}
 
 /* ── ROW 5: RECENT ACTIVITY & INTELLIGENCE TIMELINE ──────────────────────────── */
 .dash-activity-bento-card {
@@ -2174,9 +2195,17 @@
   font-weight: 800;
 }
 
-.dash-timeline-amt.income { color: var(--dash-positive); }
-.dash-timeline-amt.expense { color: var(--dash-negative); }
-.dash-timeline-amt.transfer { color: var(--dash-secondary); }
+.dash-timeline-amt.income {
+  color: var(--dash-positive);
+}
+
+.dash-timeline-amt.expense {
+  color: var(--dash-negative);
+}
+
+.dash-timeline-amt.transfer {
+  color: var(--dash-secondary);
+}
 
 .dash-timeline-sub {
   font-size: 0.65rem;
@@ -2378,9 +2407,11 @@
 .dash-milestones-btn:hover {
   filter: brightness(1.1);
 }
+
 .dash-milestones-btn:active {
   transform: scale(0.94);
 }
+
 .milestones-modal-wrap {
   position: fixed;
   inset: 0;
@@ -2389,12 +2420,14 @@
   align-items: flex-end;
   justify-content: center;
 }
+
 @media (min-width: 768px) {
   .milestones-modal-wrap {
     align-items: center;
     padding: 24px;
   }
 }
+
 .milestones-modal-card {
   position: relative;
   z-index: 1000;
@@ -2414,6 +2447,7 @@
   overflow: hidden;
   animation: slideUpModal 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
+
 @media (min-width: 768px) {
   .milestones-modal-card {
     border-radius: var(--dash-card-radius);
@@ -2421,10 +2455,19 @@
     max-height: 82vh;
   }
 }
+
 @keyframes slideUpModal {
-  from { transform: translateY(30px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(30px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
+
 .milestones-modal-hdr {
   display: flex;
   align-items: center;
@@ -2433,28 +2476,33 @@
   border-bottom: 1px solid var(--dash-border);
   flex-shrink: 0;
 }
+
 .milestones-hdr-left {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
 }
+
 .milestones-hdr-icon {
   font-size: 1.6rem;
   line-height: 1;
   flex-shrink: 0;
 }
+
 .milestones-hdr-title {
   font-size: 0.95rem;
   font-weight: 800;
   color: var(--dash-text-main);
 }
+
 .milestones-hdr-sub {
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--dash-text-muted);
   margin-top: 2px;
 }
+
 .milestones-summary-box {
   background: var(--dash-surface);
   border-radius: 12px;
@@ -2462,12 +2510,14 @@
   margin: 12px 18px 0;
   border: 1px solid var(--dash-border);
 }
+
 .milestones-summary-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 6px;
 }
+
 .milestones-summary-label {
   font-size: 0.68rem;
   font-weight: 700;
@@ -2475,12 +2525,14 @@
   text-transform: uppercase;
   letter-spacing: 0.6px;
 }
+
 .milestones-summary-val {
   font-size: 0.88rem;
   font-weight: 800;
   color: var(--dash-positive);
   font-family: var(--font);
 }
+
 .milestones-list-scroll {
   flex: 1;
   overflow-y: auto;
@@ -2489,6 +2541,7 @@
   flex-direction: column;
   gap: 8px;
 }
+
 .milestone-row {
   display: flex;
   align-items: center;
@@ -2497,15 +2550,18 @@
   border-radius: 12px;
   transition: all 0.15s;
 }
+
 .milestone-row.achieved {
   background: linear-gradient(135deg, rgba(1, 181, 116, 0.12), rgba(1, 181, 116, 0.03));
   border: 1px solid rgba(1, 181, 116, 0.3);
 }
+
 .milestone-row.locked {
   background: var(--dash-surface);
   border: 1px solid var(--dash-border);
   opacity: 0.7;
 }
+
 .milestone-status-badge {
   width: 32px;
   height: 32px;
@@ -2516,23 +2572,28 @@
   font-size: 1rem;
   flex-shrink: 0;
 }
+
 .milestone-row.achieved .milestone-status-badge {
   background: rgba(1, 181, 116, 0.2);
   color: var(--dash-positive);
 }
+
 .milestone-row.locked .milestone-status-badge {
   background: var(--dash-surface-hover);
   color: var(--dash-text-muted);
 }
+
 .milestone-content {
   flex: 1;
   min-width: 0;
 }
+
 .milestone-top-line {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+
 .milestone-tag {
   font-size: 0.72rem;
   font-weight: 800;
@@ -2540,14 +2601,17 @@
   padding: 1px 7px;
   border-radius: 8px;
 }
+
 .milestone-row.achieved .milestone-tag {
   background: var(--dash-positive);
   color: #0B1437;
 }
+
 .milestone-row.locked .milestone-tag {
   background: var(--dash-border);
   color: var(--dash-text-muted);
 }
+
 .milestone-title {
   font-size: 0.82rem;
   font-weight: 700;
@@ -2556,14 +2620,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .milestone-bottom-line {
   font-size: 0.7rem;
   font-weight: 600;
   margin-top: 3px;
 }
+
 .milestone-row.achieved .milestone-bottom-line {
   color: var(--dash-positive);
 }
+
 .milestone-row.locked .milestone-bottom-line {
   color: var(--dash-text-muted);
 }
@@ -2576,6 +2643,7 @@
   z-index: 1000;
   animation: fadeIn 0.15s ease-out;
 }
+
 .dash-popup-sheet {
   position: fixed;
   left: 0;
@@ -2594,6 +2662,7 @@
   align-items: center;
   text-align: center;
 }
+
 @media (min-width: 640px) {
   .dash-popup-sheet {
     left: 50%;
@@ -2607,6 +2676,7 @@
     animation: fadeIn 0.15s ease-out;
   }
 }
+
 .dash-popup-sheet-handle {
   width: 36px;
   height: 4px;
@@ -2614,6 +2684,7 @@
   border-radius: 2px;
   margin-bottom: 16px;
 }
+
 .dash-popup-btn {
   margin-top: 20px;
   width: 100%;

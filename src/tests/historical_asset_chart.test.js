@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   filterObservationsByRange,
-  fetchHistoricalAssetSeries
+  fetchHistoricalAssetSeries,
+  parseDmYToTimestamp
 } from '../services/historicalAssetPriceService.js';
 
 test('Historical Asset Performance Chart Test Suite', async (t) => {
@@ -127,5 +128,28 @@ test('Historical Asset Performance Chart Test Suite', async (t) => {
     const res = await fetchHistoricalAssetSeries(null);
     assert.equal(res.isAvailable, false);
     assert.ok(res.error);
+  });
+  await t.test('9. parseDmYToTimestamp handles DD-MM-YYYY and rejects invalid dates', () => {
+    // Standard DD-MM-YYYY with day > 12 (which breaks standard JS new Date('15-05-2023'))
+    const ts1 = parseDmYToTimestamp('15-05-2023');
+    assert.ok(ts1 > 0);
+    const d1 = new Date(ts1);
+    assert.equal(d1.getFullYear(), 2023);
+    assert.equal(d1.getMonth(), 4); // May is 0-indexed
+    assert.equal(d1.getDate(), 15);
+
+    // End of year
+    const ts2 = parseDmYToTimestamp('31-12-2024');
+    assert.ok(ts2 > 0);
+    const d2 = new Date(ts2);
+    assert.equal(d2.getFullYear(), 2024);
+    assert.equal(d2.getMonth(), 11);
+    assert.equal(d2.getDate(), 31);
+
+    // Invalid format / date rejection
+    assert.equal(parseDmYToTimestamp(''), 0);
+    assert.equal(parseDmYToTimestamp(null), 0);
+    assert.equal(parseDmYToTimestamp('invalid-date'), 0);
+    assert.equal(parseDmYToTimestamp('99-99-9999'), 0);
   });
 });
