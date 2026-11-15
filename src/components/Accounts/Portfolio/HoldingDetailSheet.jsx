@@ -11,6 +11,7 @@ import {
   computePositionXIRR,
   getTodaysChange
 } from '../../../utils/portfolioAggregation.js';
+import AssetPerformanceChart from './AssetPerformanceChart.jsx';
 
 // ── Smart Scrollable Container Component ──────────────────────────────────────
 // Hides scrollbar by default; smoothly displays a subtle thumb during active scroll,
@@ -693,6 +694,9 @@ export default function HoldingDetailSheet({
             </div>
           </div>
         </div>
+
+        {/* 2B. Asset Performance Interactive Chart (Groww UX Reference) */}
+        <AssetPerformanceChart position={position} />
 
         {/* 3. Folios Filter Section (if aggregated / multiple folios) */}
         {isAggregated && (

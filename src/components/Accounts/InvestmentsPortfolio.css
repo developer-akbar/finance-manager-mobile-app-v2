@@ -4872,3 +4872,307 @@
 .mobile-table-scroll.smart-scrollbar {
   max-height: 480px;
 }
+
+/* ── 10. Asset Performance Interactive Chart (Groww UX) ─────────────────── */
+.asset-performance-card {
+  padding: 16px 20px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.asset-performance-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.asset-perf-meta-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+.asset-perf-top-subrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.asset-perf-tag {
+  font-size: 0.70rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-weight: 700;
+  color: var(--text-muted, #94a3b8);
+}
+
+.asset-perf-type-tag {
+  font-size: 0.70rem;
+  color: var(--text-muted, #94a3b8);
+}
+
+.asset-perf-source {
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: var(--dash-track-bg, rgba(255, 255, 255, 0.06));
+  color: var(--text-muted, #94a3b8);
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.asset-perf-title {
+  margin: 0 0 6px 0;
+  font-size: 1.05rem; /* ~17px */
+  font-weight: 700;
+  color: var(--text-primary, #f8fafc);
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.asset-perf-metrics-strip {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.asset-perf-return-val {
+  font-size: 1.35rem; /* ~21.5px */
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.asset-perf-return-val.pos {
+  color: var(--dash-positive, #01B574);
+}
+
+.asset-perf-return-val.neg {
+  color: var(--dash-negative, #EE5D50);
+}
+
+.asset-perf-period-lbl {
+  font-size: 0.76rem;
+  color: var(--text-muted, #94a3b8);
+  font-weight: 500;
+}
+
+.asset-perf-nav-wrap,
+.asset-perf-1d-wrap {
+  font-size: 0.80rem;
+}
+
+.asset-perf-partial-pill {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.70rem;
+}
+
+/* Range Filter Pill Buttons */
+.asset-perf-ranges-wrap {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.chart-range-pills-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-card2, var(--dash-surface));
+  padding: 3px 4px;
+  border-radius: 9999px;
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.06));
+}
+
+.chart-range-pill {
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 9999px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #94a3b8);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 34px;
+  text-align: center;
+}
+
+.chart-range-pill:hover {
+  color: var(--text-primary, #ffffff);
+}
+
+.chart-range-pill.active {
+  background: var(--dash-primary, #0075FF);
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 117, 255, 0.35);
+}
+
+.asset-chart-canvas-wrap {
+  width: 100%;
+  margin-top: 2px;
+}
+
+/* Interactive Hover / Touch Tooltip (Groww style) */
+.asset-chart-tooltip {
+  background: var(--bg-card, #111C44);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  box-shadow: var(--dash-shadow, 0 8px 24px rgba(0, 0, 0, 0.3));
+  border-radius: 8px;
+  padding: 8px 12px;
+  pointer-events: none;
+  min-width: 150px;
+}
+
+.asset-chart-tooltip .tooltip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.76rem;
+}
+
+.asset-chart-tooltip .tooltip-lbl {
+  color: var(--text-muted, #94a3b8);
+}
+
+.asset-chart-tooltip .tooltip-val {
+  color: var(--text-primary, #f8fafc);
+}
+
+.asset-chart-tooltip .tooltip-val.pos {
+  color: var(--dash-positive, #01B574);
+}
+
+.asset-chart-tooltip .tooltip-val.neg {
+  color: var(--dash-negative, #EE5D50);
+}
+
+/* Skeleton & Error States */
+.asset-chart-skeleton {
+  height: 200px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  background: var(--bg-card2, rgba(255, 255, 255, 0.02));
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.skeleton-shimmer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.05) 50%, transparent 100%);
+  animation: chartShimmer 1.8s infinite;
+}
+
+@keyframes chartShimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.asset-chart-error-state,
+.asset-chart-empty-state {
+  height: 180px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 16px;
+}
+
+.asset-chart-error-icon {
+  font-size: 1.8rem;
+  margin-bottom: 6px;
+}
+
+/* Compact Footer Typography */
+.asset-performance-footer {
+  border-top: 1px dashed var(--border-light, rgba(255, 255, 255, 0.06));
+  padding-top: 6px;
+  margin-top: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.asset-perf-note {
+  font-size: 0.70rem; /* ~11px */
+  line-height: 1.35;
+  color: var(--text-muted, #94a3b8);
+  flex: 1 1 auto;
+}
+
+.asset-perf-asof {
+  font-size: 0.70rem; /* ~11px */
+  color: var(--text-muted, #94a3b8);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .asset-performance-card {
+    padding: 12px 14px;
+  }
+
+  .asset-performance-header {
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+
+  .asset-perf-meta-col {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .asset-perf-title {
+    font-size: 0.95rem; /* ~15px on mobile */
+    margin-bottom: 4px;
+  }
+
+  .asset-perf-return-val {
+    font-size: 1.25rem; /* ~20px */
+  }
+
+  .asset-perf-ranges-wrap {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .chart-range-pills-bar {
+    width: 100%;
+    justify-content: space-between;
+    gap: 2px;
+    padding: 2px;
+  }
+
+  .chart-range-pill {
+    padding: 4px 8px;
+    font-size: 0.70rem;
+    min-width: 30px;
+  }
+
+  .asset-performance-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding-top: 6px;
+  }
+}
