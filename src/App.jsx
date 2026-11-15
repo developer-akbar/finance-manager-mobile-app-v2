@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { AppProvider, useApp } from './contexts/AppContext.jsx';
 import Layout from './components/Layout/Layout.jsx';
 import Dashboard from './components/Dashboard/Dashboard.jsx';
+import InvestmentsPortfolio from './components/Accounts/InvestmentsPortfolio.jsx';
 import Transactions from './components/Transactions/Transactions.jsx';
 import Accounts from './components/Accounts/Accounts.jsx';
 import Categories from './components/Categories/Categories.jsx';
@@ -328,6 +329,9 @@ function AppInner() {
         </div>
         <div className={`tab-view ${currentView === 'transactions' ? 'active-tab' : 'hidden'}`}>
           <Transactions isActive={currentView === 'transactions'} onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef} viewParams={state.viewParams}/>
+        </div>
+        <div className={`tab-view ${currentView === 'portfolio' ? 'active-tab' : 'hidden'}`}>
+          <InvestmentsPortfolio onBack={() => navigate('dashboard')} backInterceptRef={backInterceptRef}/>
         </div>
         <div className={`tab-view ${currentView === 'bookmarks' ? 'active-tab' : 'hidden'}`}>
           <Bookmarks

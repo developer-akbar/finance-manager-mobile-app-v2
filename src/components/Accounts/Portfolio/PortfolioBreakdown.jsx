@@ -270,7 +270,10 @@ export default function PortfolioBreakdown({
             {breakdownData.map(cat => (
               <tr key={cat.key} className="breakdown-row">
                 <td className="category-cell">
-                  <div className="font-bold category-name">{cat.label}</div>
+                  <div className="category-header-wrap">
+                    <span className={`asset-cat-tag ${cat.tag.toLowerCase()}`}>{cat.tag}</span>
+                    <span className="font-bold category-name">{cat.label}</span>
+                  </div>
                   <div className="text-muted font-xs">{cat.activeCount} active · {cat.redeemedPositions.length} redeemed</div>
                 </td>
                 <td style={{ textAlign: 'center' }} className="num-tabular font-semibold">
@@ -416,7 +419,8 @@ export default function PortfolioBreakdown({
           <div key={cat.key} className="breakdown-mobile-card">
             {/* Header: Category Name + Active Count + Clean Single-line Badge */}
             <div className="breakdown-card-head flex-between align-center">
-              <div className="breakdown-title-box flex-gap-xs align-baseline">
+              <div className="breakdown-title-box flex-gap-xs align-center">
+                <span className={`asset-cat-tag ${cat.tag.toLowerCase()}`}>{cat.tag}</span>
                 <span className="breakdown-category-title font-bold text-primary">{cat.label}</span>
                 <span className="breakdown-active-count text-muted font-xs">({cat.activeCount} active)</span>
               </div>

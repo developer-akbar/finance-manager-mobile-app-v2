@@ -99,7 +99,7 @@ const normalizeAccounts = (raw) =>
 
 // ── Header Theme Colors ──────────────────────────────────────────────────────
 export const HEADER_COLORS = [
-  { id: 'default', name: 'Default', hex: '#0a0f1e', lightHex: '#f3f6fb', lightHeader: 'rgba(255,255,255,0.85)', darkHeader: 'rgba(10,15,30,0.85)', lightText: '#0d1b2a', darkText: '#f0f4ff' },
+  { id: 'default', name: 'Default', hex: '#111c44', lightHex: '#ffffff', lightHeader: '#ffffff', darkHeader: '#111c44', lightText: '#0b1437', darkText: '#f0f4ff' },
   { id: 'red',      name: 'Red',     hex: '#e11d48', lightHex: '#e11d48', lightHeader: 'linear-gradient(135deg, #e11d48, #be123c)', darkHeader: 'linear-gradient(135deg, #240c14, #141d2e)', lightText: '#ffffff', darkText: '#f0f4ff' },
   { id: 'pink',     name: 'Pink',    hex: '#ec4899', lightHex: '#ec4899', lightHeader: 'linear-gradient(135deg, #ec4899, #db2777)', darkHeader: 'linear-gradient(135deg, #260e1d, #141d2e)', lightText: '#ffffff', darkText: '#f0f4ff' },
   { id: 'green',    name: 'Green',   hex: '#059669', lightHex: '#059669', lightHeader: 'linear-gradient(135deg, #059669, #047857)', darkHeader: 'linear-gradient(135deg, #0a211a, #141d2e)', lightText: '#ffffff', darkText: '#f0f4ff' },
@@ -107,10 +107,47 @@ export const HEADER_COLORS = [
   { id: 'darkgray', name: 'Dark Gray', hex: '#374151', lightHex: '#374151', lightHeader: 'linear-gradient(135deg, #374151, #1f2937)', darkHeader: 'linear-gradient(135deg, #1b202c, #141d2e)', lightText: '#ffffff', darkText: '#f0f4ff' },
 ];
 
+export async function syncMobileStatusBar(headerColorHex, useDarkIcons) {
+  try {
+    let meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'theme-color');
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute('content', headerColorHex);
+
+    let appleMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+    if (!appleMeta) {
+      appleMeta = document.createElement('meta');
+      appleMeta.setAttribute('name', 'apple-mobile-web-app-status-bar-style');
+      document.head.appendChild(appleMeta);
+    }
+    appleMeta.setAttribute('content', useDarkIcons ? 'default' : 'black-translucent');
+  } catch {
+    // SSR / test runner fallback
+  }
+
+  try {
+    if (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.()) {
+      const { registerPlugin } = await import('@capacitor/core');
+      const StatusBarTheme = registerPlugin('StatusBarTheme');
+      if (StatusBarTheme?.setStyle) {
+        await StatusBarTheme.setStyle({ isLight: useDarkIcons, colorHex: headerColorHex });
+      }
+    }
+  } catch {
+    // Native plugin fallback
+  }
+}
+
 export function applyHeaderColor(colorId = 'default', currentTheme = 'dark') {
   const color = HEADER_COLORS.find(c => c.id === colorId) || HEADER_COLORS[0];
   document.documentElement.setAttribute('data-header-color', color.id);
   const isLight = currentTheme === 'light';
+
+  let headerBgHex = '#111c44';
+  let useDarkIcons = false;
 
   if (color.id === 'default') {
     document.documentElement.style.removeProperty('--theme-header-bg');
@@ -119,27 +156,34 @@ export function applyHeaderColor(colorId = 'default', currentTheme = 'dark') {
     document.documentElement.style.removeProperty('--theme-header-btn-bg');
     document.documentElement.style.removeProperty('--theme-header-btn-color');
     document.documentElement.style.removeProperty('--theme-header-border');
-    const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', isLight ? '#f3f6fb' : '#0a0f1e');
-    return;
+
+    if (isLight) {
+      headerBgHex = '#ffffff';
+      useDarkIcons = true;
+    } else {
+      headerBgHex = '#111c44';
+      useDarkIcons = false;
+    }
+  } else {
+    const bg = isLight ? color.lightHeader : color.darkHeader;
+    const text = isLight ? color.lightText : color.darkText;
+    const sub = isLight ? 'rgba(255,255,255,0.85)' : 'var(--text-muted)';
+    const btnBg = isLight ? 'rgba(255,255,255,0.2)' : 'var(--bg-card)';
+    const btnColor = isLight ? '#ffffff' : 'var(--text-primary)';
+    const border = isLight ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.08)';
+
+    document.documentElement.style.setProperty('--theme-header-bg', bg);
+    document.documentElement.style.setProperty('--theme-header-text', text);
+    document.documentElement.style.setProperty('--theme-header-sub', sub);
+    document.documentElement.style.setProperty('--theme-header-btn-bg', btnBg);
+    document.documentElement.style.setProperty('--theme-header-btn-color', btnColor);
+    document.documentElement.style.setProperty('--theme-header-border', border);
+
+    headerBgHex = isLight ? (color.hex || '#ffffff') : '#111c44';
+    useDarkIcons = false;
   }
 
-  const bg = isLight ? color.lightHeader : color.darkHeader;
-  const text = isLight ? color.lightText : color.darkText;
-  const sub = isLight ? 'rgba(255,255,255,0.85)' : 'var(--text-muted)';
-  const btnBg = isLight ? 'rgba(255,255,255,0.2)' : 'var(--bg-card)';
-  const btnColor = isLight ? '#ffffff' : 'var(--text-primary)';
-  const border = isLight ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.08)';
-
-  document.documentElement.style.setProperty('--theme-header-bg', bg);
-  document.documentElement.style.setProperty('--theme-header-text', text);
-  document.documentElement.style.setProperty('--theme-header-sub', sub);
-  document.documentElement.style.setProperty('--theme-header-btn-bg', btnBg);
-  document.documentElement.style.setProperty('--theme-header-btn-color', btnColor);
-  document.documentElement.style.setProperty('--theme-header-border', border);
-
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', isLight ? color.hex : '#0a0f1e');
+  syncMobileStatusBar(headerBgHex, useDarkIcons);
 }
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
