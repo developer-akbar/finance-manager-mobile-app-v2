@@ -24,7 +24,7 @@ export default function DashboardKpiStrip({ analytics, showPrivacy }) {
       <div className="dash-bento-kpi-card">
         <div className="dash-kpi-top">
           <div className="dash-kpi-icon-pill" style={{ background: 'rgba(0, 117, 255, 0.14)', color: '#0075FF' }}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" width="18" height="18"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+            ₹
           </div>
           <span className={`dash-kpi-badge ${momIncomeChange >= 0 ? 'positive' : 'negative'}`}>
             {momIncomeChange >= 0 ? '↑ +' : '↓ '}{momIncomeChange}%
