@@ -268,7 +268,7 @@ async function runTests() {
   // ─────────────────────────────────────────────────────────────
   console.log('\n--- Test 5: Synced Settings & Security Isolation ---');
   const bootstrappedSettings = await readLocalEntities();
-  assert(bootstrappedSettings.settings.theme === 'dark', 'Theme bootstrapped as dark');
+  assert(bootstrappedSettings.settings.theme === undefined, 'Theme is excluded from cloud bootstrap');
   assert(bootstrappedSettings.settings.headerColor === 'pink', 'HeaderColor bootstrapped as pink');
   assert(bootstrappedSettings.settings.fontSize === '1.1', 'FontSize bootstrapped as 1.1');
   assert(bootstrappedSettings.settings.customTags.includes('#groceries'), 'CustomTags bootstrapped');
@@ -285,7 +285,8 @@ async function runTests() {
   assert(savedBaseRaw !== null, 'sync_base_manifest persisted');
   const savedBase = JSON.parse(savedBaseRaw);
   assert(savedBase['txn_001'] !== undefined, 'Manifest contains txn_001');
-  assert(savedBase['setting:theme'] !== undefined, 'Manifest contains setting:theme');
+  assert(savedBase['setting:theme'] === undefined, 'Manifest strictly excludes setting:theme');
+  assert(savedBase['setting:headerColor'] !== undefined, 'Manifest contains setting:headerColor');
 
   const lastSnap = await getSetting('last_snapshot_id');
   assert(lastSnap === 'snap_synthetic_devA_bootstrap', 'last_snapshot_id matches cloud snapshot');

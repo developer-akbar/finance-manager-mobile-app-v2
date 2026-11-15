@@ -3,7 +3,6 @@ import { executeAtomicMutation } from './atomicMutation.js';
 
 export const SYNCED_SETTINGS_WHITELIST = [
   'customTags',
-  'theme',
   'headerColor',
   'fontSize',
   'fontFamily',

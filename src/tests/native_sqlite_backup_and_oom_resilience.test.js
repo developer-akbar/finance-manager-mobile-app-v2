@@ -103,7 +103,7 @@ test('FinMan Phase 14 — Native SQLite Backup & OOM Resilience Test Suite', asy
     // 1b. Assert readLocalEntities() only queries SYNCED_SETTINGS_WHITELIST
     const localEntities = await readLocalEntities(db);
     assert.ok(localEntities.settings, 'readLocalEntities must return settings object');
-    assert.equal(localEntities.settings.theme, 'dark');
+    assert.equal(localEntities.settings.theme, undefined, 'theme must not be in synced localEntities');
     assert.equal(localEntities.settings.default_currency, 'INR');
     for (const heavyKey of LARGE_BLOB_SETTINGS_KEYS) {
       assert.equal(
