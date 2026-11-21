@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { formatINR } from '../../utils/format.js';
 import { calculateSplits } from '../../utils/debtSimplifier.js';
+import BackButton from '../Common/BackButton.jsx';
 
 export default function AddGroupExpense({ group, onSave, onClose }) {
   const members = group.members || [];
@@ -102,11 +103,7 @@ export default function AddGroupExpense({ group, onSave, onClose }) {
     <div className="fullscreen-modal" style={{ zIndex: 1000, overflowY: 'auto', background: 'var(--bg-base)' }}>
       {/* Header */}
       <div className="page-hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <button className="back-btn" onClick={onClose}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-        </button>
+        <BackButton onClick={onClose} label="Close" />
         <div className="page-hdr-title">Add Shared Expense</div>
         <div style={{ width: 32 }} />
       </div>

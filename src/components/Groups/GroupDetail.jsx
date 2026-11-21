@@ -3,6 +3,7 @@ import { formatINR, formatDate } from '../../utils/format.js';
 import { computeGroupBalances, buildWhatsAppReminder } from '../../utils/debtSimplifier.js';
 import AddGroupExpense from './AddGroupExpense.jsx';
 import GroupSettlementSlip from './GroupSettlementSlip.jsx';
+import BackButton from '../Common/BackButton.jsx';
 
 export default function GroupDetail({ group, onUpdateGroup, onDeleteGroup, onBack, onRecordFinManTxn, backInterceptRef }) {
   const [activeTab, setActiveTab] = useState('expenses'); // 'expenses' | 'balances' | 'members'
@@ -99,11 +100,7 @@ export default function GroupDetail({ group, onUpdateGroup, onDeleteGroup, onBac
     <div className="sub-screen">
       {/* Top Navigation */}
       <div className="page-hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-        </button>
+        <BackButton onClick={onBack} label="Back to Groups" />
         <div style={{ flex: 1, minWidth: 0, paddingLeft: 8 }}>
           <div className="page-hdr-title" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '1.05rem' }}>
             <span>{group.emoji || '🏖️'}</span>

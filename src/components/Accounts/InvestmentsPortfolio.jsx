@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { usePortfolio } from '../../hooks/usePortfolio.js';
 import { defaultValuationProvider } from '../../utils/valuationProvider.js';
+import BackButton from '../Common/BackButton.jsx';
 
 import PortfolioSummary from './Portfolio/PortfolioSummary.jsx';
 import PortfolioBreakdown from './Portfolio/PortfolioBreakdown.jsx';
@@ -117,11 +118,7 @@ export default function InvestmentsPortfolio({ onBack, backInterceptRef }) {
 
       {/* Portfolio Top Bar */}
       <div className="portfolio-top-bar">
-        <button className="portfolio-back-btn" onClick={onBack} title="Back to Accounts">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="18" height="18">
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-        </button>
+        <BackButton onClick={onBack} label="Back to Accounts" className="portfolio-back-btn" />
         <div className="portfolio-top-titles">
           <h2 className="portfolio-main-title">Investment Portfolio</h2>
           <div className="portfolio-main-subtitle">Mutual Funds, Share Market & ETFs</div>

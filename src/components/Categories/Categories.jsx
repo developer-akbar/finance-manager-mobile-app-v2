@@ -4,6 +4,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { parseDate, formatINR, formatINRCompact, txnType, txnAmount, calcTotals, calcSelectedTotals, currentFY, fyLabel, fyStart, fyEnd, isLifestyleExpense, isInvestmentCharge } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
+import BackButton from '../Common/BackButton.jsx';
 import { BulkSelectionBar } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import './Categories.css';
@@ -14,9 +15,7 @@ const MS_S = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oc
 const MS_F = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 const BackBtn = ({ onClick }) => (
-  <button className="back-btn" onClick={onClick}>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-  </button>
+  <BackButton onClick={onClick} />
 );
 
 const PieTip = ({ active, payload }) => {

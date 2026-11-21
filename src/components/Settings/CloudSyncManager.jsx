@@ -81,6 +81,7 @@ import {
 } from '../../utils/conflictFormatter.js';
 import ConnectedDevicesCard from './ConnectedDevicesCard.jsx';
 import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
+import BackButton from '../Common/BackButton.jsx';
 import { setKeepScreenOn } from '../../utils/wakeLockHelper.js';
 
 export { getFriendlyActionName, isNoOpPreview, getModalConfirmConfig };
@@ -1185,29 +1186,7 @@ export default function CloudSyncManager({ onBack }) {
     <div className="settings-root" style={{ paddingBottom: 'calc(var(--safe-bottom) + 32px)' }}>
       {/* Header with polished Light-Mode accessible back button */}
       <div className="page-hdr settings-main-hdr" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <button
-          className="back-btn"
-          onClick={onBack}
-          aria-label="Back to Settings"
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: '50%',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            border: 'none',
-            background: 'transparent',
-            color: 'var(--text-primary)',
-            cursor: 'pointer',
-            padding: 0,
-            flexShrink: 0
-          }}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-        </button>
+        <BackButton onClick={onBack} label="Back to Settings" />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="page-hdr-title" style={{ fontSize: '1.2rem', fontWeight: 800 }}>
             Cloud Sync (Google Drive)

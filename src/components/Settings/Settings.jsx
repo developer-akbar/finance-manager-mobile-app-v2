@@ -13,6 +13,7 @@ import { parseCASText } from '../../utils/casParser.js';
 import { generateCASTransactions } from '../../utils/casAdapter.js';
 import CloudSyncManager from './CloudSyncManager.jsx';
 import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
+import BackButton from '../Common/BackButton.jsx';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -446,9 +447,7 @@ export function AccountsManager({ onBack }) {
   return (
     <div className="sub-screen">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} />
         <div className="page-hdr-title">Accounts</div>
         {saving && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 8 }}>Saving…</span>}
         {toast && <span style={{ fontSize: '0.7rem', color: 'var(--green)', marginLeft: 8 }}>{toast}</span>}
@@ -1025,9 +1024,7 @@ export function CategoriesManager({ onBack }) {
   return (
     <div className="sub-screen">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} />
         <div className="page-hdr-title">Categories</div>
         {saving && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 8 }}>Saving…</span>}
         {toast && <span style={{ fontSize: '0.7rem', color: 'var(--green)', marginLeft: 8 }}>{toast}</span>}
@@ -1237,9 +1234,7 @@ function TagsManager({ onBack }) {
   return (
     <div className="sub-screen">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} />
         <div className="page-hdr-title">Tags &amp; Hashtags</div>
       </div>
 
@@ -2022,9 +2017,7 @@ function DataManager({ onBack, onOpenCloudSync }) {
   return (
     <div className="sub-screen">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} />
         <div className="page-hdr-title">Data Management</div>
       </div>
 
@@ -2693,9 +2686,7 @@ function ProfileManager({ onBack }) {
   return (
     <div className="settings-root">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} />
         <div style={{ flex: 1 }}><div className="page-hdr-title">Profile & Security</div></div>
       </div>
 
@@ -2816,7 +2807,7 @@ function BudgetsManager({ onBack }) {
   return (
     <div className="sub-screen">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg></button>
+        <BackButton onClick={onBack} />
         <div className="page-hdr-title">Budgets</div>
       </div>
       <div className="sub-body">
@@ -2896,9 +2887,7 @@ function AppearanceManager({ onBack }) {
   return (
     <div className="sub-screen">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} />
         <div className="page-hdr-title">Appearance</div>
         {saving && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 8 }}>Saving…</span>}
         {toast && <span style={{ fontSize: '0.7rem', color: 'var(--green)', marginLeft: 8 }}>{toast}</span>}
@@ -3163,9 +3152,7 @@ function RecurringManager({ onBack }) {
   return (
     <div className="sub-screen">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} />
         <div className="page-hdr-title">Recurring</div>
       </div>
       <div className="sub-body">

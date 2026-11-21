@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, formatINRCompact, parseDate } from '../../utils/format.js';
 import { isCreditCard } from './Accounts.jsx';
+import BackButton from '../Common/BackButton.jsx';
 
 export default function CardOptimizer({ onBack }) {
   const { state, updateAccount } = useApp();
@@ -82,9 +83,7 @@ export default function CardOptimizer({ onBack }) {
   return (
     <div className="sub-screen" style={{ background: 'var(--bg-base)', height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} label="Back to Accounts" />
         <div>
           <div className="page-hdr-title">💳 Credit Card Optimizer &amp; Perks</div>
           <div className="page-hdr-sub">Maximize interest-free days &amp; fee waivers</div>

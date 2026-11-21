@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
+import BackButton from '../Common/BackButton.jsx';
 import { formatINR, normalizeSuggestionQuery } from '../../utils/format.js';
 import { calculateLifetimePurchaseSavings } from '../../utils/stockInventorySavings.js';
 import {
@@ -1309,8 +1310,7 @@ export default function StockManager({ onBack, backInterceptRef }) {
       }}>
         {/* Top Header */}
         <div className="page-hdr">
-          <button
-            className="back-btn"
+          <BackButton
             onClick={() => {
               if (activeActivityProduct) {
                 setActiveActivityProduct(null);
@@ -1322,12 +1322,8 @@ export default function StockManager({ onBack, backInterceptRef }) {
                 onBack();
               }
             }}
-            title="Back"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16">
-              <path d="M19 12H5M12 19l-7-7 7-7" />
-            </svg>
-          </button>
+            label="Back"
+          />
           <div className="page-hdr-title" style={{ flex: 1 }}>
             {selectedProduct ? selectedProduct : 'Stock Inventory'}
           </div>

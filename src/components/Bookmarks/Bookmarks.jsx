@@ -3,6 +3,7 @@ import { useApp } from '../../contexts/AppContext.jsx';
 import { formatINR, getUserFacingTags } from '../../utils/format.js';
 import { toast } from '../Common/Toast.jsx';
 import './Bookmarks.css';
+import BackButton from '../Common/BackButton.jsx';
 
 const TYPES = [
   { id: 'Expense', label: 'Expense', cls: 'expense' },
@@ -126,7 +127,7 @@ export default function Bookmarks({ isActive, onUseBookmark, backInterceptRef })
     longPressTimerRef.current = setTimeout(() => {
       isLongPressTriggeredRef.current = true;
       if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-        try { navigator.vibrate(40); } catch {}
+        try { navigator.vibrate(40); } catch { }
       }
       setIsEditMode(prev => !prev);
     }, 550);
@@ -162,7 +163,7 @@ export default function Bookmarks({ isActive, onUseBookmark, backInterceptRef })
     }
   };
 
-    // Drag and drop reordering (available in edit mode or anytime draggable)
+  // Drag and drop reordering (available in edit mode or anytime draggable)
   const dragIdxRef = useRef(null);
 
   const handleDragStart = (e, index) => {
@@ -171,7 +172,7 @@ export default function Bookmarks({ isActive, onUseBookmark, backInterceptRef })
     e.dataTransfer.effectAllowed = 'move';
     try {
       e.dataTransfer.setData('text/plain', String(index));
-    } catch {}
+    } catch { }
   };
 
   const handleDragOver = (e, index) => {
@@ -243,11 +244,7 @@ export default function Bookmarks({ isActive, onUseBookmark, backInterceptRef })
       {/* FinMan Application Header */}
       <div className="page-hdr bookmarks-page-hdr">
         <div className="bookmarks-hdr-left">
-          <button className="back-btn" onClick={() => navigate('transactions')} title="Back to Transactions">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16">
-              <path d="M19 12H5M12 19l-7-7 7-7" />
-            </svg>
-          </button>
+          <BackButton onClick={() => navigate('transactions')} label="Back to Transactions" />
           <div className="page-hdr-title bookmarks-title">Bookmarks</div>
         </div>
 
@@ -280,7 +277,7 @@ export default function Bookmarks({ isActive, onUseBookmark, backInterceptRef })
         <div className="bookmarks-toolbar">
           <div className="bookmarks-search-wrap">
             <svg className="bookmarks-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" width="15" height="15">
-              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
             </svg>
             <input
               type="text"
@@ -579,7 +576,7 @@ export default function Bookmarks({ isActive, onUseBookmark, backInterceptRef })
                 Delete Bookmark?
               </div>
               <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.5 }}>
-                Are you sure you want to delete <strong>"{deletingBookmark.name}"</strong>?<br/>
+                Are you sure you want to delete <strong>"{deletingBookmark.name}"</strong>?<br />
                 Existing transactions created from this bookmark will not be modified or deleted.
               </div>
             </div>

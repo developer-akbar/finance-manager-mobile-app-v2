@@ -12,6 +12,7 @@ import {
   getTodaysChange
 } from '../../../utils/portfolioAggregation.js';
 import AssetPerformanceChart from './AssetPerformanceChart.jsx';
+import BackButton from '../../Common/BackButton.jsx';
 
 // ── Smart Scrollable Container Component ──────────────────────────────────────
 // Hides scrollbar by default; smoothly displays a subtle thumb during active scroll,
@@ -517,11 +518,7 @@ export default function HoldingDetailSheet({
     <div className="investments-portfolio-screen fund-detail-fullpage">
       {/* 1. Header Bar */}
       <div className="portfolio-top-bar">
-        <button className="portfolio-back-btn" onClick={onClose} title="Back to Portfolio">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="20" height="20">
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-        </button>
+        <BackButton onClick={onClose} label="Back to Portfolio" className="portfolio-back-btn" />
         <div className="portfolio-top-titles" style={{ minWidth: 0, flex: 1 }}>
           <h2 className="portfolio-main-title holding-card-name" title={position.note || position.security}>
             {position.note || position.security}

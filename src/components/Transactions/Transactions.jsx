@@ -5,6 +5,7 @@ import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import TransactionSyncModal from './TransactionSyncModal.jsx';
 import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
+import BackButton from '../Common/BackButton.jsx';
 import { bundleRelatedTransactions, serializeTransactions } from '../../utils/finmanPayload.js';
 import { toast } from '../Common/Toast.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
@@ -1371,9 +1372,7 @@ export function SearchView({ transactions, accounts, categories, onClose, backIn
         <div className="search-desktop-content">
           {/* Search bar */}
           <div className="search-bar-row">
-            <button className="back-btn" onClick={onClose} title="Back">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-            </button>
+            <BackButton onClick={onClose} label="Back" />
             <div className="search-input-wrap" onClick={() => searchInputRef.current?.focus()}>
               <button
                 type="button"

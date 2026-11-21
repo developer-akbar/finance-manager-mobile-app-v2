@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { formatINR } from '../../utils/format.js';
 import { computeGroupBalances } from '../../utils/debtSimplifier.js';
 import GroupDetail from './GroupDetail.jsx';
+import BackButton from '../Common/BackButton.jsx';
 
 const STORAGE_KEY = 'finman_shared_groups';
 
@@ -155,11 +156,7 @@ export default function GroupSplitManager({ onBack, backInterceptRef, onRecordFi
     <div className="sub-screen">
       {/* Header */}
       <div className="page-hdr" style={{ display: 'flex', alignItems: 'center' }}>
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-        </button>
+        <BackButton onClick={onBack} label="Back" />
         <div className="page-hdr-title" style={{ flex: '1' }}>👥 Group Splits &amp; Trips</div>
         <button
           onClick={() => setShowCreateModal(true)}

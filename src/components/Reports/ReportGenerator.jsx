@@ -1,6 +1,7 @@
 import { resolveDeviceAuditInfo, formatDeviceAuditLabel } from '../../services/deviceAudit.js';
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
+import BackButton from '../Common/BackButton.jsx';
 import {
   parseDate, formatDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount,
   getFY, fyLabel, fyStart, fyEnd, currentFY,
@@ -291,9 +292,7 @@ export default function ReportGenerator({ onBack }) {
   return (
     <div className="report-screen">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} label="Back" />
         <div className="page-hdr-title">Reports & Export</div>
       </div>
 

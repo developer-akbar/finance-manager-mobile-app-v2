@@ -9,6 +9,7 @@ import CardOptimizer from './CardOptimizer.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import StockManager from './StockManager.jsx';
 import InvestmentsPortfolio from './InvestmentsPortfolio.jsx';
+import BackButton from '../Common/BackButton.jsx';
 import InvestmentPlansModal from '../Investments/InvestmentPlansModal.jsx';
 import { BulkSelectionBar, SearchView } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
@@ -886,9 +887,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   return (
     <div className="acct-detail-screen">
       <div className="page-hdr">
-        <button className="back-btn" onClick={onBack}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        <BackButton onClick={onBack} label="Back to Accounts" />
         <div style={{ flex: 1 }}>
           <div className="page-hdr-title">{acctName}{subAccountName ? ` › ${subAccountName}` : ''}</div>
           <div className="page-hdr-sub">{subAccountName ? 'Sub Account' : 'Account'} · {acctTxns.length} total txns</div>
