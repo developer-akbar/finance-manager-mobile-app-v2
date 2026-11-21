@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, formatINRCompact, calcTotals, txnType, txnAmount, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
+import { parseDate, toDDMMYYYY, formatINR, formatINRCompact, calcTotals, txnType, txnAmount, currentFY, fyLabel, fyStart, fyEnd } from '../../utils/format.js';
 import TransactionItem from '../Transactions/TransactionItem.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
 import DebtTracker from './DebtTracker.jsx';
@@ -10,6 +10,7 @@ import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import StockManager from './StockManager.jsx';
 import InvestmentsPortfolio from './InvestmentsPortfolio.jsx';
 import BackButton from '../Common/BackButton.jsx';
+import CalendarDatePicker from '../Common/CalendarDatePicker.jsx';
 import InvestmentPlansModal from '../Investments/InvestmentPlansModal.jsx';
 import { BulkSelectionBar, SearchView } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
@@ -399,6 +400,57 @@ export function isInvestmentTransactionForSubAccount(txn, parentAsset, subAccoun
 }
 
 // ── Account Detail ────────────────────────────────────────────────────────────
+function formatBannerDate(dateKey) {
+  if (!dateKey) return '';
+  const d = parseDate(dateKey);
+  if (isNaN(d.getTime())) return dateKey;
+  return `${d.getDate()} ${MS_S[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/**
+ * Scrolls an element inside a scrollable container such that its top edge
+ * is positioned immediately below a sticky header element, accounting for
+ * dynamic sticky header heights across devices and responsive layouts.
+ */
+export function scrollToElementBelowSticky(container, targetEl, stickyEl, options = {}) {
+  if (!container || !targetEl) return null;
+  const { smooth = true, gap = 8 } = options;
+
+  const containerRect = typeof container.getBoundingClientRect === 'function'
+    ? container.getBoundingClientRect()
+    : { top: 0, height: container.clientHeight || 0 };
+  const targetRect = typeof targetEl.getBoundingClientRect === 'function'
+    ? targetEl.getBoundingClientRect()
+    : { top: 0, height: targetEl.clientHeight || 0 };
+
+  // Calculate dynamic visible height of sticky header element if present
+  let stickyHeight = 0;
+  if (stickyEl) {
+    if (typeof stickyEl.getBoundingClientRect === 'function') {
+      const stickyRect = stickyEl.getBoundingClientRect();
+      stickyHeight = stickyRect.height;
+    } else if (stickyEl.offsetHeight !== undefined) {
+      stickyHeight = stickyEl.offsetHeight;
+    }
+  }
+
+  // targetRect.top - containerRect.top is target position relative to visible container top.
+  // Adding container.scrollTop gives target's absolute coordinate in the container's scroll canvas.
+  const currentScrollTop = container.scrollTop || 0;
+  const targetOffsetTop = (targetRect.top - containerRect.top) + currentScrollTop;
+
+  // Position targetEl so its top edge sits immediately below stickyEl + gap
+  const targetScrollTop = Math.max(0, targetOffsetTop - stickyHeight - gap);
+
+  if (smooth && typeof container.scrollTo === 'function') {
+    container.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
+  } else {
+    container.scrollTop = targetScrollTop;
+  }
+
+  return targetScrollTop;
+}
+
 function AccountDetail({ acctName, subAccountName, allTxns, onBack, backInterceptRef, ccConfig }) {
   const { state } = useApp();
   const now = new Date();
@@ -408,6 +460,14 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   const [period, setPeriod] = useState(isCC ? 'CC Cycle' : 'Month');
   const [viewYear, setViewYear] = useState(now.getFullYear());
   const [viewMonth, setViewMonth] = useState(now.getMonth());
+  const [showCal, setShowCal] = useState(false);
+  const [selectedTargetDate, setSelectedTargetDate] = useState(null);
+  const groupRefs = React.useRef({});
+  const bodyRef = React.useRef(null);
+  const stickyHeaderRef = React.useRef(null);
+  const emptyBannerRef = React.useRef(null);
+  const emptyStateRef = React.useRef(null);
+  const scrollRafRef = React.useRef(null);
   const [viewFY, setViewFY] = useState(currentFY());
   const [customFrom, setFrom] = useState('');
   const [customTo, setTo] = useState('');
@@ -444,6 +504,17 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
 
   React.useEffect(() => {
     if (!backInterceptRef) return;
+    if (showCal) {
+      const prevHandler = backInterceptRef.current;
+      backInterceptRef.current = () => setShowCal(false);
+      return () => {
+        backInterceptRef.current = prevHandler;
+      };
+    }
+  }, [showCal, backInterceptRef]);
+
+  React.useEffect(() => {
+    if (!backInterceptRef) return;
     const isOpen = Boolean(addDate) || showAdd || Boolean(payPrefill);
     if (isOpen) {
       const handler = () => { setAddDate(null); setShowAdd(false); setPayPrefill(null); };
@@ -472,6 +543,44 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
       }
     }
   }, [multiMode]);
+
+  // Keep CSS custom property --acct-sticky-h in sync with dynamic sticky header height
+  React.useEffect(() => {
+    if (!stickyHeaderRef.current || !bodyRef.current) return;
+    const updateStickyHeight = () => {
+      if (stickyHeaderRef.current && bodyRef.current) {
+        const h = stickyHeaderRef.current.getBoundingClientRect().height;
+        bodyRef.current.style.setProperty('--acct-sticky-h', `${Math.round(h)}px`);
+      }
+    };
+    updateStickyHeight();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateStickyHeight) : null;
+    if (ro && stickyHeaderRef.current) {
+      ro.observe(stickyHeaderRef.current);
+    }
+    window.addEventListener('resize', updateStickyHeight);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', updateStickyHeight);
+    };
+  }, []);
+
+  const scrollToAccountTarget = React.useCallback((targetDate) => {
+    if (!targetDate || !bodyRef.current) return;
+    if (scrollRafRef.current) {
+      cancelAnimationFrame(scrollRafRef.current);
+    }
+    scrollRafRef.current = requestAnimationFrame(() => {
+      const targetEl =
+        groupRefs.current[targetDate] ||
+        emptyBannerRef.current ||
+        emptyStateRef.current;
+
+      if (targetEl && bodyRef.current) {
+        scrollToElementBelowSticky(bodyRef.current, targetEl, stickyHeaderRef.current, { smooth: true, gap: 8 });
+      }
+    });
+  }, []);
 
   const handleCopy = (txn) => {
     // Pass txn as-is — the copy picker in DetailSheet sets date/time based on user choice.
@@ -781,12 +890,14 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   }, [period]);
 
   const prev = () => {
+    setSelectedTargetDate(null);
     if (period === 'Month') { if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); } else setViewMonth(m => m - 1); }
     if (period === 'Year') setViewYear(y => y - 1);
     if (period === 'FY') setViewFY(y => y - 1);
     if (period === 'CC Cycle') setCcCycleOffset(o => o - 1);
   };
   const next = () => {
+    setSelectedTargetDate(null);
     if (period === 'Month') { if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); } else setViewMonth(m => m + 1); }
     if (period === 'Year') setViewYear(y => y + 1);
     if (period === 'FY') setViewFY(y => y + 1);
@@ -816,6 +927,21 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
     (allTxns || []).forEach((t, i) => map.set(t._id || t.ID || t, i));
     return map;
   }, [allTxns]);
+
+  const handleSelectCalendarDate = (date) => {
+    const y = date.getFullYear();
+    const m = date.getMonth();
+    const dateKey = toDDMMYYYY(date);
+
+    setViewYear(y);
+    setViewMonth(m);
+    setPeriod('Month');
+    setSelectedTargetDate(dateKey);
+    setShowCal(false);
+
+    // Immediate scroll attempt on next frame in case month was already current
+    scrollToAccountTarget(dateKey);
+  };
 
   // Running balance map: txn._id → cumulative account balance AFTER that transaction.
   // Built from ALL account transactions in deterministic chronological order (oldest first).
@@ -869,6 +995,17 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
     return Object.entries(map);
   }, [periodTxns, orderMap]);
 
+  React.useEffect(() => {
+    if (selectedTargetDate) {
+      scrollToAccountTarget(selectedTargetDate);
+    }
+    return () => {
+      if (scrollRafRef.current) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+    };
+  }, [selectedTargetDate, groups, scrollToAccountTarget]);
+
   if (showSearch) {
     return (
       <SearchView
@@ -897,7 +1034,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         </button>
       </div>
 
-      <div className="acct-detail-body" {...(multiMode ? {} : swipe)}>
+      <div className="acct-detail-body" ref={bodyRef} {...(multiMode ? {} : swipe)}>
         {/* Current Investment Account Value banner for Share Market */}
         {isShareMarket && brokerageInfo && (
           <div style={{
@@ -929,7 +1066,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           </div>
         )}
 
-        <div className="acct-sticky-header-wrap">
+        <div className="acct-sticky-header-wrap" ref={stickyHeaderRef}>
         <div style={{ padding: '4px var(--page-px) 4px' }}>
           <div className="period-tabs">
             {PERIODS.filter(p => p !== 'CC Cycle' || isCC).map(p => <button key={p} className={`period-tab ${period === p ? 'active' : ''}`} onClick={() => { setPeriod(p); if (p === 'CC Cycle') setCcCycleOffset(0); }}>{p}</button>)}
@@ -938,10 +1075,18 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         {!['All', 'Custom'].includes(period) && (
           <div className="period-picker-row">
             <button className="pp-arrow" onClick={prev}>‹</button>
-            <div className="pp-label">
+            <button
+              type="button"
+              className="pp-label pp-label-btn"
+              onClick={() => setShowCal(true)}
+              aria-label={`Select date: currently viewing ${periodLabel}`}
+              aria-haspopup="dialog"
+              aria-expanded={showCal}
+              title="Click to jump to date"
+            >
               {periodLabel}
               {period === 'CC Cycle' && isCC && ccCycleOffset === 0 && <span className="cc-cycle-badge">Current</span>}
-            </div>
+            </button>
             <button className="pp-arrow" onClick={next}>›</button>
           </div>
         )}
@@ -1043,11 +1188,49 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
         )}
 
         {groups.length === 0
-          ? <div className="empty-state"><div className="empty-icon">📭</div><div className="empty-title">No transactions</div><div className="empty-desc">{periodLabel}</div></div>
+          ? (
+            <div className="empty-state" ref={emptyStateRef}>
+              <div className="empty-icon">📭</div>
+              <div className="empty-title">No transactions</div>
+              <div className="empty-desc">
+                {selectedTargetDate
+                  ? `No transactions on ${formatBannerDate(selectedTargetDate)} in ${acctName}`
+                  : periodLabel}
+              </div>
+              {selectedTargetDate && (
+                <button
+                  type="button"
+                  className="empty-date-add-btn"
+                  style={{ marginTop: 12, padding: '6px 14px', fontSize: '0.78rem' }}
+                  onClick={() => setAddDate(parseDate(selectedTargetDate))}
+                >
+                  + Add transaction for {acctName}
+                </button>
+              )}
+            </div>
+          )
           : <>
             {multiMode && <BulkSelectionBar selected={selected} setSelected={setSelected} selTotals={selTotals} allTxns={periodTxns}
               onDone={() => { setMultiMode(false); setSelected(new Set()); }}
               onDeleted={() => { setMultiMode(false); setSelected(new Set()); }} />}
+            {selectedTargetDate && !groups.some(([_, txns]) => toDDMMYYYY(txns[0].Date) === selectedTargetDate) && (
+              <div className="empty-date-banner" ref={emptyBannerRef}>
+                <div className="empty-date-banner-content">
+                  <span className="empty-date-banner-icon">📅</span>
+                  <span className="empty-date-banner-text">
+                    No transactions on <strong>{formatBannerDate(selectedTargetDate)}</strong> in {acctName}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="empty-date-add-btn"
+                  onClick={() => setAddDate(parseDate(selectedTargetDate))}
+                  title={`Add transaction for ${acctName} on this date`}
+                >
+                  + Add
+                </button>
+              </div>
+            )}
             {groups.map(([dk, txns], gi) => {
               const gt = txns.reduce((acc, t) => {
                 const amt = txnAmount(t);
@@ -1075,13 +1258,26 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
                 });
               };
 
+              const dateKey = toDDMMYYYY(txns[0].Date);
+              const isTargetDate = dateKey === selectedTargetDate;
+
               return (
-                <div key={dk} className="date-group-container">
-                  <div className="dg-header" onClick={multiMode ? handleGroupToggle : () => setAddDate(txns[0].Date)}>
+                <div
+                  key={dk}
+                  ref={el => {
+                    if (el) groupRefs.current[dateKey] = el;
+                    else delete groupRefs.current[dateKey];
+                  }}
+                  className={`date-group-container ${isTargetDate ? 'date-group-target' : ''}`}
+                >
+                  <div className={`dg-header ${isTargetDate ? 'dg-header-target' : ''}`} onClick={multiMode ? handleGroupToggle : () => setAddDate(txns[0].Date)}>
                     <div className="dg-left">
                       <div className="dg-day">{d.getDate()}</div>
                       <div className="dg-meta">
-                        <div className="dg-wday">{d.toLocaleDateString('en-IN', { weekday: 'short' }).toUpperCase()}</div>
+                        <div className="dg-wday">
+                          {d.toLocaleDateString('en-IN', { weekday: 'short' }).toUpperCase()}
+                          {isTargetDate && <span className="dg-target-badge">SELECTED</span>}
+                        </div>
                         <div className="dg-month">{MS_S[d.getMonth()]} {d.getFullYear()}</div>
                       </div>
                     </div>
@@ -1177,6 +1373,15 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           backInterceptRef={backInterceptRef}
         />
       )}
+
+      {/* Calendar Date Picker Modal */}
+      <CalendarDatePicker
+        isOpen={showCal}
+        initialDate={selectedTargetDate ? parseDate(selectedTargetDate) : (period === 'Month' ? new Date(viewYear, viewMonth, 1) : new Date())}
+        selectedDate={selectedTargetDate}
+        onSelectDate={handleSelectCalendarDate}
+        onClose={() => setShowCal(false)}
+      />
     </div>
   );
 }

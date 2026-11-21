@@ -286,6 +286,11 @@
   }
 }
 
+.txn-list .date-group-container,
+.txn-list .empty-date-banner {
+  scroll-margin-top: 0;
+}
+
 .date-group-container {
   margin-block: 8px;
   border-top: 1px solid var(--border);

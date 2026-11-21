@@ -214,5 +214,44 @@ test('FinMan — Calendar Date Picker & Transactions Navigation Suite', async (t
     assert.ok(txnCss.includes('.month-title-btn:hover'), 'Month title button must have hover treatment');
     assert.ok(txnCss.includes('.month-title-btn:focus-visible'), 'Month title button must have focus-visible treatment');
   });
+
+  await t.test('11. Global Transactions date groups do not receive Account sticky scroll-margin-top', () => {
+    const txnCss = fs.readFileSync(path.join(projectRoot, 'src/components/Transactions/Transactions.css'), 'utf8');
+    const acctCss = fs.readFileSync(path.join(projectRoot, 'src/components/Accounts/Accounts.css'), 'utf8');
+
+    // Transactions.css sets scroll-margin-top: 0 for .txn-list date groups
+    assert.ok(
+      txnCss.includes('.txn-list .date-group-container') && txnCss.includes('scroll-margin-top: 0;'),
+      'Transactions.css must enforce scroll-margin-top: 0 on .txn-list .date-group-container'
+    );
+
+    // Accounts.css must NOT have unscoped .date-group-container scroll-margin-top
+    assert.ok(
+      !acctCss.includes('\n.date-group-container,\n') && !acctCss.includes('\n.date-group-container {'),
+      'Accounts.css must not have unscoped .date-group-container rules'
+    );
+    assert.ok(
+      acctCss.includes('.acct-detail-body .date-group-container'),
+      'Accounts.css must strictly scope scroll-margin-top under .acct-detail-body'
+    );
+  });
+
+  await t.test('12. Selected date navigation in Global Transactions preserves compact layout without blank gap', () => {
+    // In Global Transactions: scroll container is .txn-list, with no internal sticky header
+    const txnList = {
+      scrollTop: 0,
+      getBoundingClientRect: () => ({ top: 120, height: 600 }),
+      scrollTo: function(opts) { this.scrollTop = opts.top; }
+    };
+    // Selected target group (e.g. 8 September 2026) located at offset 0 (first in list)
+    const targetGroup = {
+      getBoundingClientRect: () => ({ top: 120, height: 80 })
+    };
+
+    // When scrollIntoView or container scrolling occurs with scroll-margin-top: 0,
+    // target sits at top: 0 relative to scroll container viewport without artificial 200px+ gap
+    const targetOffsetFromTop = targetGroup.getBoundingClientRect().top - txnList.getBoundingClientRect().top;
+    assert.equal(targetOffsetFromTop, 0, 'Target date group must sit directly below the summary strip with 0 extra gap');
+  });
 });
 

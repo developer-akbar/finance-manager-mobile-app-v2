@@ -605,3 +605,102 @@
     background: var(--bg-base);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
 }
+
+
+/* ── Interactive Period / Date Heading Button ── */
+.pp-label-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+    padding: 4px 12px;
+    border-radius: var(--r-md);
+    transition: all 0.18s ease;
+    user-select: none;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+.pp-label-btn:hover {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    border-color: var(--border, rgba(255, 255, 255, 0.12));
+}
+.pp-label-btn:focus-visible {
+    outline: none;
+    border-color: var(--dash-primary, #0075FF);
+    box-shadow: 0 0 0 2px var(--dash-primary, #0075FF);
+}
+
+/* ── Empty Date Banner (when selected date has no transactions in account) ── */
+.acct-detail-screen .empty-date-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 10px var(--page-px) 14px;
+    padding: 10px 14px;
+    background: var(--bg-card2, rgba(255, 255, 255, 0.05));
+    border: 1px dashed var(--dash-primary, #0075FF);
+    border-radius: 12px;
+    animation: calFadeIn 0.2s ease-out;
+}
+.acct-detail-screen .empty-date-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+.acct-detail-screen .empty-date-banner-icon {
+    font-size: 1rem;
+}
+.acct-detail-screen .empty-date-banner-text strong {
+    color: var(--text-primary);
+    font-weight: 700;
+}
+.acct-detail-screen .empty-date-add-btn {
+    background: var(--dash-primary, #0075FF);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.74rem;
+    font-weight: 700;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+    flex-shrink: 0;
+}
+.acct-detail-screen .empty-date-add-btn:hover {
+    opacity: 0.9;
+    transform: scale(1.02);
+}
+.acct-detail-screen .empty-date-add-btn:active {
+    transform: scale(0.96);
+}
+
+/* ── Highlighted Target Date Group from Calendar Jump (Account Detail) ── */
+.acct-detail-screen .date-group-target .dg-header {
+    border-left: 3px solid var(--dash-primary, #0075FF);
+    background: rgba(0, 117, 255, 0.06);
+}
+.acct-detail-screen .dg-target-badge {
+    display: inline-block;
+    font-size: 0.58rem;
+    font-weight: 800;
+    color: #FFFFFF;
+    background: var(--dash-primary, #0075FF);
+    padding: 1px 5px;
+    border-radius: 4px;
+    margin-left: 5px;
+    letter-spacing: 0.3px;
+    vertical-align: middle;
+}
+
+/* ── Scroll Margin for Sticky Header Clearance (strictly scoped to Account drill-down body) ── */
+.acct-detail-body .date-group-container,
+.acct-detail-body .empty-date-banner,
+.acct-detail-body .empty-state {
+    scroll-margin-top: calc(var(--acct-sticky-h, 0px) + 8px);
+}
+
