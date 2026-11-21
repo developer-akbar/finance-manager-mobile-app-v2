@@ -45,7 +45,7 @@ test('FinMan — Calendar Date Picker & Transactions Navigation Suite', async (t
 
   await t.test('2. Month/Year heading in Transactions.jsx is an accessible interactive button', () => {
     const txnPath = path.join(projectRoot, 'src/components/Transactions/Transactions.jsx');
-    const content = fs.readFileSync(txnPath, 'utf8');
+    const content = fs.readFileSync(txnPath, 'utf8').replace(/\r\n/g, '\n');
 
     // Heading in Daily mode is a button with aria attributes and onClick
     assert.ok(
