@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext.jsx';
-import { parseDate, formatINR, calcTotals, calcReportingTotals, calcSelectedTotals, groupByDate, txnType, txnAmount, inputToStorage, isSystemTag, getUserFacingTags, normalizeSuggestionQuery } from '../../utils/format.js';
+import { parseDate, toDDMMYYYY, formatINR, calcTotals, calcReportingTotals, calcSelectedTotals, groupByDate, txnType, txnAmount, inputToStorage, isSystemTag, getUserFacingTags, normalizeSuggestionQuery } from '../../utils/format.js';
 import TransactionItem from './TransactionItem.jsx';
 import AddTransaction from './AddTransaction.jsx';
 import TransactionSyncModal from './TransactionSyncModal.jsx';
 import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
 import BackButton from '../Common/BackButton.jsx';
+import CalendarDatePicker from '../Common/CalendarDatePicker.jsx';
 import { bundleRelatedTransactions, serializeTransactions } from '../../utils/finmanPayload.js';
 import { toast } from '../Common/Toast.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
@@ -516,9 +517,17 @@ export function BulkSelectionBar({ selected, setSelected, selTotals, allTxns, on
 const MONTHS_S = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTHS_F = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
+function formatBannerDate(dateKey) {
+  if (!dateKey) return '';
+  const d = parseDate(dateKey);
+  if (isNaN(d.getTime())) return dateKey;
+  return `${d.getDate()} ${MONTHS_S[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 // ── Date-grouped list ─────────────────────────────────────────────────────────
-function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLongPress, onTap, onToggleDate, backInterceptRef, onCopy }) {
+function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLongPress, onTap, onToggleDate, backInterceptRef, onCopy, targetDateKey }) {
   const closestRef = useRef(null);
+  const groupRefs = useRef({});
   const hasScrolledInitial = useRef(false);
 
   const groups = useMemo(() => {
@@ -552,12 +561,16 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
   }, [txns]);
 
   useEffect(() => {
-    if (isActive && closestRef.current && !hasScrolledInitial.current) {
-      hasScrolledInitial.current = true;
-      // Scroll instantly so the user doesn't even see the transition
-      closestRef.current.scrollIntoView({ behavior: 'auto', block: 'start' });
+    if (isActive && !hasScrolledInitial.current) {
+      if (targetDateKey && groupRefs.current[targetDateKey]) {
+        hasScrolledInitial.current = true;
+        groupRefs.current[targetDateKey].scrollIntoView({ behavior: 'auto', block: 'start' });
+      } else if (closestRef.current) {
+        hasScrolledInitial.current = true;
+        closestRef.current.scrollIntoView({ behavior: 'auto', block: 'start' });
+      }
     }
-  }, [isActive, groups.closestDk]);
+  }, [isActive, groups.closestDk, targetDateKey]);
 
   useEffect(() => {
     const handleScrollToToday = () => {
@@ -565,15 +578,46 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
         closestRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     };
+    const handleScrollToDate = (e) => {
+      const dKey = e?.detail?.dateKey || targetDateKey;
+      if (dKey && groupRefs.current[dKey]) {
+        groupRefs.current[dKey].scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
     window.addEventListener('scroll-to-today', handleScrollToToday);
-    return () => window.removeEventListener('scroll-to-today', handleScrollToToday);
-  }, [groups.closestDk]);
+    window.addEventListener('scroll-to-date', handleScrollToDate);
+    return () => {
+      window.removeEventListener('scroll-to-today', handleScrollToToday);
+      window.removeEventListener('scroll-to-date', handleScrollToDate);
+    };
+  }, [groups.closestDk, targetDateKey]);
+
+  const hasTargetDateInGroups = targetDateKey && groups.sortedGroups.some(([dk]) => dk === targetDateKey);
 
   return <>
+    {targetDateKey && !hasTargetDateInGroups && (
+      <div className="empty-date-banner">
+        <div className="empty-date-banner-content">
+          <span className="empty-date-banner-icon">📅</span>
+          <span className="empty-date-banner-text">
+            No transactions on <strong>{formatBannerDate(targetDateKey)}</strong>
+          </span>
+        </div>
+        <button
+          type="button"
+          className="empty-date-add-btn"
+          onClick={() => onDateTap && onDateTap(parseDate(targetDateKey))}
+          title="Add transaction on this date"
+        >
+          + Add
+        </button>
+      </div>
+    )}
     {groups.sortedGroups.map(([dk, list]) => {
       const gt = calcReportingTotals(list);
       const d  = parseDate(list[0].Date);
       const isClosest = dk === groups.closestDk;
+      const isTargetDate = dk === targetDateKey;
       const groupIds = list.map(t => t._id);
       const allDateSel = groupIds.length > 0 && groupIds.every(id => selected.has(id));
       const isDateIndeterminate = !allDateSel && groupIds.some(id => selected.has(id));
@@ -591,9 +635,17 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
       };
 
       return (
-        <div key={dk} ref={isClosest ? closestRef : null} className="date-group-container">
+        <div
+          key={dk}
+          ref={el => {
+            if (el) groupRefs.current[dk] = el;
+            else delete groupRefs.current[dk];
+            if (isClosest) closestRef.current = el;
+          }}
+          className={`date-group-container ${isTargetDate ? 'date-group-target' : ''}`}
+        >
           <div
-            className={`dg-header ${isToday ? 'dg-header-today' : ''}`}
+            className={`dg-header ${isToday ? 'dg-header-today' : ''} ${isTargetDate ? 'dg-header-target' : ''}`}
             onClick={multiMode ? handleGroupToggle : (() => onDateTap && onDateTap(list[0].Date))}
           >
             <div className="dg-left">
@@ -602,6 +654,7 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
                 <div className="dg-wday">
                   {d.toLocaleDateString('en-IN',{weekday:'short'}).toUpperCase()}
                   {isToday && <span className="dg-today-badge">TODAY</span>}
+                  {isTargetDate && <span className="dg-target-badge">SELECTED</span>}
                 </div>
                 <div className="dg-month">{MONTHS_S[d.getMonth()]} {d.getFullYear()}</div>
               </div>
@@ -646,7 +699,7 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
 }
 
 // ── Monthly summary ───────────────────────────────────────────────────────────
-function MonthlyView({ transactions, year, setYear, onMonthClick }) {
+function MonthlyView({ transactions, year, setYear, onMonthClick, onOpenDatePicker }) {
   const now = new Date();
   const currentCalYear = now.getFullYear();
   const currentCalMonth = now.getMonth();
@@ -668,7 +721,15 @@ function MonthlyView({ transactions, year, setYear, onMonthClick }) {
     <div className="txn-monthly-list" style={{overflow:'auto',flex:1}} {...swipe}>
       <div className="txn-month-row">
         <button className="pp-arrow" onClick={prevYear}>‹</button>
-        <div className="pp-label">{year}</div>
+        <button
+          type="button"
+          className="monthly-yr-btn"
+          onClick={onOpenDatePicker}
+          aria-label={`Select date: currently viewing year ${year}`}
+          title="Click to jump to date"
+        >
+          {year}
+        </button>
         <button className="pp-arrow" onClick={nextYear}>›</button>
       </div>
       <div className="bal-strip">
@@ -1884,6 +1945,7 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
   const [viewYear,  setViewYear]  = useState(now.getFullYear());
   const [viewMonth, setViewMonth] = useState(now.getMonth());
   const [showCal,   setShowCal]   = useState(false);
+  const [selectedTargetDate, setSelectedTargetDate] = useState(null);
   const [pickerY,   setPickerY]   = useState(now.getFullYear());
   const [addDate,   setAddDate]   = useState(null);
   const [selected,  setSelected]  = useState(new Set());
@@ -1943,6 +2005,7 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
       setViewYear(now.getFullYear());
       setViewMonth(now.getMonth());
       setPickerY(now.getFullYear());
+      setSelectedTargetDate(null);
       setMultiMode(false);
       setSelected(new Set());
     };
@@ -2077,8 +2140,30 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [multiMode, showSyncModal, showCal, addDate, copyTxn]);
 
-  const prevMonth = () => { if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1); };
-  const nextMonth = () => { if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1); };
+  const handleSelectCalendarDate = (date) => {
+    const y = date.getFullYear();
+    const m = date.getMonth();
+    const dateKey = toDDMMYYYY(date);
+
+    setViewYear(y);
+    setViewMonth(m);
+    setViewMode('daily');
+    setSelectedTargetDate(dateKey);
+    setShowCal(false);
+
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('scroll-to-date', { detail: { dateKey, date } }));
+    }, 60);
+  };
+
+  const prevMonth = () => {
+    setSelectedTargetDate(null);
+    if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1);
+  };
+  const nextMonth = () => {
+    setSelectedTargetDate(null);
+    if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1);
+  };
   const swipe = useSwipe(nextMonth, prevMonth);
   // Only attach swipe handlers in daily mode and not in multiMode
   const swipeProps = viewMode === 'daily' && !multiMode ? swipe : {};
@@ -2156,10 +2241,18 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
       {viewMode==='daily' && (
         <div className="txn-month-row">
           <button className="pp-arrow" onClick={prevMonth} disabled={multiMode} style={multiMode ? { opacity: 0.3, cursor: 'default' } : {}}>‹</button>
-          <div className="month-title-btn">
+          <button
+            type="button"
+            className="month-title-btn"
+            onClick={() => setShowCal(true)}
+            aria-label={`Select date: currently viewing ${MONTHS_F[viewMonth]} ${viewYear}`}
+            aria-haspopup="dialog"
+            aria-expanded={showCal}
+            title="Click to jump to date"
+          >
             <span className="month-name">{MONTHS_F[viewMonth]}</span>
             <span className="month-yr">{viewYear}</span>
-          </div>
+          </button>
           {multiMode ? (
             <button
               type="button"
@@ -2198,7 +2291,7 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
 
       {/* Transaction list (daily) or monthly list */}
       {viewMode==='monthly' ? (
-        <MonthlyView transactions={transactions} year={viewYear} setYear={setViewYear} onMonthClick={(y,mi)=>{setViewYear(y);setViewMonth(mi);setViewMode('daily');}}/>
+        <MonthlyView transactions={transactions} year={viewYear} setYear={setViewYear} onMonthClick={(y,mi)=>{setViewYear(y);setViewMonth(mi);setViewMode('daily');}} onOpenDatePicker={()=>setShowCal(true)}/>
       ) : (
         <>
           {multiMode && <BulkSelectionBar selected={selected} setSelected={setSelected} selTotals={selTotals} allTxns={monthTxns}
@@ -2206,36 +2299,39 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
             onDeleted={()=>{setMultiMode(false);setSelected(new Set());}} />}
           <div ref={scrollRef} className="txn-list" onScroll={handleScroll}>
             {monthTxns.length===0
-              ? <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">No transactions</div><div className="empty-desc">{MONTHS_F[viewMonth]} {viewYear}</div></div>
-              : <DateGroupedList isActive={isActive} txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} onToggleDate={handleToggleDate} backInterceptRef={backInterceptRef} onCopy={handleCopy} />
+              ? (
+                <div className="empty-state">
+                  <div className="empty-icon">📅</div>
+                  <div className="empty-title">No transactions</div>
+                  <div className="empty-desc">
+                    {selectedTargetDate ? `No transactions on ${formatBannerDate(selectedTargetDate)}` : `${MONTHS_F[viewMonth]} ${viewYear}`}
+                  </div>
+                  {selectedTargetDate && (
+                    <button
+                      type="button"
+                      className="empty-date-add-btn"
+                      style={{ marginTop: 12, padding: '6px 14px', fontSize: '0.78rem' }}
+                      onClick={() => setAddDate(parseDate(selectedTargetDate))}
+                    >
+                      + Add transaction on this date
+                    </button>
+                  )}
+                </div>
+              )
+              : <DateGroupedList isActive={isActive} txns={monthTxns} onDateTap={multiMode ? null : date=>setAddDate(date)} selected={selected} multiMode={multiMode} onLongPress={tt => { setMultiMode(true); setSelected(new Set([tt._id])); }} onTap={multiMode ? toggleSel : null} onToggleDate={handleToggleDate} backInterceptRef={backInterceptRef} onCopy={handleCopy} targetDateKey={selectedTargetDate} />
             }
           </div>
         </>
       )}
 
-      {/* Month picker sheet */}
-      {showCal&&(
-        <>
-          <div className="overlay" onClick={()=>setShowCal(false)}/>
-          <div className="bottom-sheet">
-            <div className="sheet-handle"/>
-            <div className="cal-picker-hdr">
-              <button className="pp-arrow" onClick={()=>setPickerY(y=>y-1)}>‹</button>
-              <div className="pp-label">{pickerY}</div>
-              <button className="pp-arrow" onClick={()=>setPickerY(y=>y+1)}>›</button>
-            </div>
-            <div className="cal-grid">
-              {MONTHS_S.map((lbl,idx)=>(
-                <button key={idx} className={`cal-month-btn ${pickerY===viewYear&&idx===viewMonth?'selected':''}`}
-                  onClick={()=>{setViewYear(pickerY);setViewMonth(idx);setShowCal(false);}}>
-                  {lbl}
-                </button>
-              ))}
-            </div>
-            <div style={{height:16}}/>
-          </div>
-        </>
-      )}
+      {/* Calendar Date Picker Modal */}
+      <CalendarDatePicker
+        isOpen={showCal}
+        initialDate={selectedTargetDate ? parseDate(selectedTargetDate) : new Date(viewYear, viewMonth, 1)}
+        selectedDate={selectedTargetDate}
+        onSelectDate={handleSelectCalendarDate}
+        onClose={() => setShowCal(false)}
+      />
 
       {addDate&&<AddTransaction prefillDate={addDate} onClose={()=>setAddDate(null)} onSaveAndContinue={() => setAddDate(addDate)} backInterceptRef={backInterceptRef}/>}
       {copyTxn&&<AddTransaction 
