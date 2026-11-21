@@ -21,7 +21,7 @@ const getCategoryEmoji = (category) => {
 };
 
 export default function DashboardSpendingIntel({ analytics, showPrivacy, onNavigateCategories, onNavigateTransactions }) {
-  const [activeTab, setActiveTab] = useState('categories'); // 'categories' | 'spikes' | 'highest' | 'history'
+  const [activeTab, setActiveTab] = useState('history'); // 'history' | 'categories' | 'spikes' | 'highest'
   const { spending } = analytics;
   const { topCategories, spikes, highestExpenses, historical, budgets } = spending;
 
@@ -35,6 +35,13 @@ export default function DashboardSpendingIntel({ analytics, showPrivacy, onNavig
 
         {/* Tab switchers */}
         <div className="dash-pill-toggle-group">
+          <button
+            type="button"
+            className={`dash-pill-btn ${activeTab === 'history' ? 'active' : ''}`}
+            onClick={() => setActiveTab('history')}
+          >
+            History
+          </button>
           <button
             type="button"
             className={`dash-pill-btn ${activeTab === 'categories' ? 'active' : ''}`}
@@ -56,18 +63,73 @@ export default function DashboardSpendingIntel({ analytics, showPrivacy, onNavig
           >
             Highest
           </button>
-          <button
-            type="button"
-            className={`dash-pill-btn ${activeTab === 'history' ? 'active' : ''}`}
-            onClick={() => setActiveTab('history')}
-          >
-            History
-          </button>
         </div>
       </div>
 
       <div className="dash-spending-content">
-        {/* ── TAB 1: TOP CATEGORIES WITH PROGRESS BARS ── */}
+        {/* ── TAB 1: HISTORICAL AVERAGES & YEARLY ── */}
+        {activeTab === 'history' && (
+          <div className="dash-history-view">
+            {/* Stat Cards Matrix */}
+            <div className="dash-history-stats-grid">
+              <div className="dash-history-stat-card">
+                <span className="dash-h-icon">📅</span>
+                <span className="dash-h-lbl">Avg Monthly Spend</span>
+                <span className="dash-h-val expense">{showPrivacy ? formatINRCompact(historical.allTimeAvgMonthly) : '••••'}</span>
+                <span className="dash-h-sub">across all recorded months</span>
+              </div>
+
+              <div className="dash-history-stat-card">
+                <span className="dash-h-icon">📆</span>
+                <span className="dash-h-lbl">Avg Yearly Spend</span>
+                <span className="dash-h-val expense">{showPrivacy ? formatINRCompact(historical.allTimeAvgYearly) : '••••'}</span>
+                <span className="dash-h-sub">annual historical run-rate</span>
+              </div>
+
+              <div className="dash-history-stat-card">
+                <span className="dash-h-icon">🔥</span>
+                <span className="dash-h-lbl">Peak Month Spend</span>
+                <span className="dash-h-val" style={{ color: '#EE5D50' }}>{historical.peakMonth}</span>
+                <span className="dash-h-sub">{showPrivacy ? `${formatINR(historical.peakMonthAmt)} spent` : 'Peak recorded'}</span>
+              </div>
+
+              <div className="dash-history-stat-card">
+                <span className="dash-h-icon">👑</span>
+                <span className="dash-h-lbl">Peak Spend Year</span>
+                <span className="dash-h-val" style={{ color: '#0075FF' }}>{historical.peakYear ? `Year ${historical.peakYear}` : 'N/A'}</span>
+                <span className="dash-h-sub">{showPrivacy ? `${formatINRCompact(historical.peakYearAmt)} total` : 'Annual record'}</span>
+              </div>
+            </div>
+
+            {/* Yearly Table */}
+            {historical.yearlyRows.length > 0 && (
+              <div className="dash-yearly-table-wrap">
+                <div className="dash-table-header-row">
+                  <span>Year</span>
+                  <span>Annual Spend</span>
+                  <span>Monthly Avg</span>
+                  <span>Net Savings</span>
+                </div>
+                {historical.yearlyRows.slice(0, 4).map(r => (
+                  <div
+                    key={r.year}
+                    className="dash-table-data-row clickable"
+                    onClick={() => onNavigateTransactions?.({ year: r.year })}
+                  >
+                    <span className="dash-col-year">{r.year}</span>
+                    <span className="dash-col-total">{showPrivacy ? formatINRCompact(r.total) : '••••'}</span>
+                    <span className="dash-col-avg">{showPrivacy ? formatINRCompact(r.monthlyAvg) : '••••'}</span>
+                    <span className={`dash-col-sav ${r.savings >= 0 ? 'income' : 'expense'}`}>
+                      {showPrivacy ? formatINRCompact(r.savings) : '••••'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── TAB 2: TOP CATEGORIES WITH PROGRESS BARS ── */}
         {activeTab === 'categories' && (
           <div className="dash-top-categories-list">
             {topCategories.length === 0 ? (
@@ -139,7 +201,7 @@ export default function DashboardSpendingIntel({ analytics, showPrivacy, onNavig
           </div>
         )}
 
-        {/* ── TAB 2: MoM SPENDING SPIKES ── */}
+        {/* ── TAB 3: MoM SPENDING SPIKES ── */}
         {activeTab === 'spikes' && (
           <div className="dash-spikes-list">
             {spikes.length === 0 ? (
@@ -171,7 +233,7 @@ export default function DashboardSpendingIntel({ analytics, showPrivacy, onNavig
           </div>
         )}
 
-        {/* ── TAB 3: HIGHEST INDIVIDUAL EXPENSES ── */}
+        {/* ── TAB 4: HIGHEST INDIVIDUAL EXPENSES ── */}
         {activeTab === 'highest' && (
           <div className="dash-highest-list">
             {highestExpenses.length === 0 ? (
@@ -191,68 +253,6 @@ export default function DashboardSpendingIntel({ analytics, showPrivacy, onNavig
                   </div>
                 </div>
               ))
-            )}
-          </div>
-        )}
-
-        {/* ── TAB 4: HISTORICAL AVERAGES & YEARLY ── */}
-        {activeTab === 'history' && (
-          <div className="dash-history-view">
-            {/* Stat Cards Matrix */}
-            <div className="dash-history-stats-grid">
-              <div className="dash-history-stat-card">
-                <span className="dash-h-icon">📅</span>
-                <span className="dash-h-lbl">Avg Monthly Spend</span>
-                <span className="dash-h-val expense">{showPrivacy ? formatINRCompact(historical.allTimeAvgMonthly) : '••••'}</span>
-                <span className="dash-h-sub">across all recorded months</span>
-              </div>
-
-              <div className="dash-history-stat-card">
-                <span className="dash-h-icon">📆</span>
-                <span className="dash-h-lbl">Avg Yearly Spend</span>
-                <span className="dash-h-val expense">{showPrivacy ? formatINRCompact(historical.allTimeAvgYearly) : '••••'}</span>
-                <span className="dash-h-sub">annual historical run-rate</span>
-              </div>
-
-              <div className="dash-history-stat-card">
-                <span className="dash-h-icon">🔥</span>
-                <span className="dash-h-lbl">Peak Month Spend</span>
-                <span className="dash-h-val" style={{ color: '#EE5D50' }}>{historical.peakMonth}</span>
-                <span className="dash-h-sub">{showPrivacy ? `${formatINR(historical.peakMonthAmt)} spent` : 'Peak recorded'}</span>
-              </div>
-
-              <div className="dash-history-stat-card">
-                <span className="dash-h-icon">👑</span>
-                <span className="dash-h-lbl">Peak Spend Year</span>
-                <span className="dash-h-val" style={{ color: '#0075FF' }}>{historical.peakYear ? `Year ${historical.peakYear}` : 'N/A'}</span>
-                <span className="dash-h-sub">{showPrivacy ? `${formatINRCompact(historical.peakYearAmt)} total` : 'Annual record'}</span>
-              </div>
-            </div>
-
-            {/* Yearly Table */}
-            {historical.yearlyRows.length > 0 && (
-              <div className="dash-yearly-table-wrap">
-                <div className="dash-table-header-row">
-                  <span>Year</span>
-                  <span>Annual Spend</span>
-                  <span>Monthly Avg</span>
-                  <span>Net Savings</span>
-                </div>
-                {historical.yearlyRows.slice(0, 4).map(r => (
-                  <div
-                    key={r.year}
-                    className="dash-table-data-row clickable"
-                    onClick={() => onNavigateTransactions?.({ year: r.year })}
-                  >
-                    <span className="dash-col-year">{r.year}</span>
-                    <span className="dash-col-total">{showPrivacy ? formatINRCompact(r.total) : '••••'}</span>
-                    <span className="dash-col-avg">{showPrivacy ? formatINRCompact(r.monthlyAvg) : '••••'}</span>
-                    <span className={`dash-col-sav ${r.savings >= 0 ? 'income' : 'expense'}`}>
-                      {showPrivacy ? formatINRCompact(r.savings) : '••••'}
-                    </span>
-                  </div>
-                ))}
-              </div>
             )}
           </div>
         )}
