@@ -257,6 +257,148 @@ function computeBalance(txns, acctName, subAccountName = null) {
   return bal;
 }
 
+/**
+ * Maps raw account balance to a chart-friendly numerical value.
+ * For credit card accounts, liabilities (negative balances) are converted to positive
+ * outstanding balance magnitudes, and credit balances (<= 0 liability) map to 0.
+ * For ordinary accounts (bank, broker, cash), original balance semantics are preserved.
+ */
+export function toAccountChartValue(rawBal, isCreditCardAccount = false) {
+  if (isCreditCardAccount) {
+    return rawBal < 0 ? Math.abs(rawBal) : 0;
+  }
+  return rawBal;
+}
+
+/**
+ * Aggregates account historical balance trends for AreaChart display.
+ * Supports: Month, CC Cycle, Year, FY, and All periods.
+ * Preserves chronological order, avoids duplicate months, and prevents fabricating dummy values.
+ */
+export function formatAccountBalanceChartData({
+  period,
+  acctTxns = [],
+  acctName = '',
+  subAccountName = null,
+  isCreditCardAccount = false,
+  isShareMarket = false,
+  isMFAcct = false,
+  viewYear = new Date().getFullYear(),
+  viewMonth = new Date().getMonth(),
+  viewFY = currentFY(),
+  ccCycleOffset = 0,
+  now = new Date(),
+  getBrokerTxnCashImpact = null,
+  getMFInvestedImpact = null,
+}) {
+  if (period === 'Custom') return [];
+
+  const getBalForTxns = (txnsList) => {
+    let rawBal = 0;
+    if (isShareMarket && typeof getBrokerTxnCashImpact === 'function') {
+      rawBal = txnsList.reduce((sum, t) => sum + getBrokerTxnCashImpact(t), 0);
+    } else if (isMFAcct && typeof getMFInvestedImpact === 'function') {
+      rawBal = txnsList.reduce((sum, t) => sum + getMFInvestedImpact(t), 0);
+    } else {
+      rawBal = computeBalance(txnsList, acctName, subAccountName);
+    }
+    return toAccountChartValue(rawBal, isCreditCardAccount);
+  };
+
+  if (period === 'All') {
+    if (!acctTxns || acctTxns.length === 0) return [];
+
+    const monthMap = new Map();
+    for (const t of acctTxns) {
+      if (!t || !t.Date) continue;
+      const d = parseDate(t.Date);
+      if (!d || isNaN(d.getTime()) || d.getTime() <= 0) continue;
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      const key = y + '-' + String(m).padStart(2, '0');
+      if (!monthMap.has(key)) {
+        monthMap.set(key, { year: y, month: m });
+      }
+    }
+
+    if (monthMap.size === 0) return [];
+
+    const sortedMonths = Array.from(monthMap.entries())
+      .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+      .map(([, val]) => val);
+
+    return sortedMonths.map(({ year, month }) => {
+      const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999);
+      const upToMonthTxns = acctTxns.filter(t => {
+        const td = parseDate(t.Date);
+        return td && !isNaN(td.getTime()) && td <= endOfMonth;
+      });
+      return {
+        name: MS_S[month] + " '" + String(year).slice(-2),
+        fullLabel: MS_F[month] + ' ' + year,
+        value: getBalForTxns(upToMonthTxns),
+        year,
+        month,
+      };
+    });
+  }
+
+  if (period === 'Year') {
+    // Last 6 years ending at viewYear
+    return Array.from({ length: 6 }, (_, i) => {
+      const yr = viewYear - 5 + i;
+      const yearTxns = acctTxns.filter(t => {
+        const td = parseDate(t.Date);
+        return td && !isNaN(td.getTime()) && td.getFullYear() <= yr;
+      });
+      return {
+        name: String(yr),
+        fullLabel: String(yr),
+        value: getBalForTxns(yearTxns),
+      };
+    });
+  }
+
+  if (period === 'FY') {
+    // Last 6 FYs ending at viewFY
+    return Array.from({ length: 6 }, (_, i) => {
+      const fy = viewFY - 5 + i;
+      const upTo = fyEnd(fy);
+      const fyTxns = acctTxns.filter(t => {
+        const td = parseDate(t.Date);
+        return td && !isNaN(td.getTime()) && td <= upTo;
+      });
+      return {
+        name: 'FY' + String(fy).slice(-2),
+        fullLabel: fyLabel(fy),
+        value: getBalForTxns(fyTxns),
+      };
+    });
+  }
+
+  // Month / CC Cycle — last 6 months ending at viewed month
+  const anchorYear = period === 'CC Cycle'
+    ? now.getFullYear() + Math.floor((now.getMonth() + ccCycleOffset) / 12)
+    : viewYear;
+  const anchorMonth = period === 'CC Cycle'
+    ? ((now.getMonth() + ccCycleOffset) % 12 + 12) % 12
+    : viewMonth;
+
+  return Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(anchorYear, anchorMonth - 5 + i, 1);
+    const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+    const upToMonthTxns = acctTxns.filter(t => {
+      const td = parseDate(t.Date);
+      return td && !isNaN(td.getTime()) && td <= endOfMonth;
+    });
+    return {
+      name: MS_S[d.getMonth()],
+      fullLabel: MS_F[d.getMonth()] + ' ' + d.getFullYear(),
+      value: getBalForTxns(upToMonthTxns),
+    };
+  });
+}
+
 // Build a full balance map over ALL transactions.
 // Skips numeric-looking keys that arise from legacy Transfer-Out rows where
 // the Account column held the INR amount rather than a real account name.
@@ -835,59 +977,49 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   }, [periodTxns, acctName, isShareMarket, isMFAcct, mfTxnCostImpactMap]);
 
   const barData = useMemo(() => {
-    if (['All', 'Custom'].includes(period)) return [];
-
-    const getBalForTxns = (txnsList) => {
-      if (isShareMarket) {
-        return txnsList.reduce((sum, t) => sum + getBrokerTxnCashImpact(t), 0);
-      }
-      if (isMFAcct) {
-        return txnsList.reduce((sum, t) => sum + getMFInvestedImpact(t), 0);
-      }
-      return computeBalance(txnsList, acctName, subAccountName);
-    };
-
-    if (period === 'Year') {
-      // Last 6 years ending at viewYear
-      return Array.from({ length: 6 }, (_, i) => {
-        const yr = viewYear - 5 + i;
-        const yearTxns = acctTxns.filter(t => parseDate(t.Date).getFullYear() <= yr);
-        return { name: String(yr), value: getBalForTxns(yearTxns) };
-      });
-    }
-
-    if (period === 'FY') {
-      // Last 6 FYs ending at viewFY
-      return Array.from({ length: 6 }, (_, i) => {
-        const fy = viewFY - 5 + i;
-        const upTo = fyEnd(fy);
-        const fyTxns = acctTxns.filter(t => parseDate(t.Date) <= upTo);
-        return { name: `FY${String(fy).slice(-2)}`, value: getBalForTxns(fyTxns) };
-      });
-    }
-
-    // Month / CC Cycle — last 6 months ending at viewed month
-    const anchorYear = period === 'CC Cycle' ? now.getFullYear() + Math.floor((now.getMonth() + ccCycleOffset) / 12) : viewYear;
-    const anchorMonth = period === 'CC Cycle'
-      ? ((now.getMonth() + ccCycleOffset) % 12 + 12) % 12
-      : viewMonth;
-
-    return Array.from({ length: 6 }, (_, i) => {
-      const d = new Date(anchorYear, anchorMonth - 5 + i, 1);
-      const upToMonth = acctTxns.filter(t => {
-        const td = parseDate(t.Date);
-        return td <= new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-      });
-      return { name: MS_S[d.getMonth()], value: getBalForTxns(upToMonth) };
+    return formatAccountBalanceChartData({
+      period,
+      acctTxns,
+      acctName,
+      subAccountName,
+      isCreditCardAccount,
+      isShareMarket,
+      isMFAcct,
+      viewYear,
+      viewMonth,
+      viewFY,
+      ccCycleOffset,
+      now,
+      getBrokerTxnCashImpact,
+      getMFInvestedImpact,
     });
-  }, [acctTxns, acctName, subAccountName, period, viewYear, viewMonth, viewFY, ccCycleOffset, isShareMarket]);
+  }, [
+    period,
+    acctTxns,
+    acctName,
+    subAccountName,
+    isCreditCardAccount,
+    isShareMarket,
+    isMFAcct,
+    viewYear,
+    viewMonth,
+    viewFY,
+    ccCycleOffset,
+    now,
+    getBrokerTxnCashImpact,
+    getMFInvestedImpact,
+  ]);
 
   const chartTitle = useMemo(() => {
-    if (period === 'Year') return '6-Year Balance Trend';
-    if (period === 'FY') return '6-FY Balance Trend';
-    if (['All', 'Custom'].includes(period)) return null;
-    return '6-Month Balance Trend';
-  }, [period]);
+    if (period === 'Custom') return null;
+    if (period === 'All') {
+      if (barData.length === 0) return null;
+      return isCreditCardAccount ? 'Historical Outstanding Balance Trend' : 'Historical Balance Trend';
+    }
+    if (period === 'Year') return isCreditCardAccount ? '6-Year Outstanding Balance Trend' : '6-Year Balance Trend';
+    if (period === 'FY') return isCreditCardAccount ? '6-FY Outstanding Balance Trend' : '6-FY Balance Trend';
+    return isCreditCardAccount ? '6-Month Outstanding Balance Trend' : '6-Month Balance Trend';
+  }, [period, barData.length, isCreditCardAccount]);
 
   const prev = () => {
     setSelectedTargetDate(null);
@@ -1167,11 +1299,31 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
-                <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} tickFormatter={v => formatINRCompact(Math.abs(v))} width={42} />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize: 9, fill: 'var(--text-muted)' }}
+                  axisLine={false}
+                  tickLine={false}
+                  interval={period === 'All' ? 'preserveStartEnd' : 0}
+                  minTickGap={period === 'All' ? 12 : 0}
+                />
+                <YAxis
+                  tick={{ fontSize: 9, fill: 'var(--text-muted)' }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={v => formatINRCompact(Math.abs(v))}
+                  width={42}
+                  domain={isCreditCardAccount ? [0, dataMax => (dataMax > 0 ? Math.ceil(dataMax * 1.05) : 1000)] : ['auto', 'auto']}
+                />
                 <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" />
                 <Tooltip
-                  formatter={v => [formatINR(v), 'Balance']}
+                  formatter={v => [formatINR(v), isCreditCardAccount ? 'Outstanding Balance' : 'Balance']}
+                  labelFormatter={(label, payload) => {
+                    if (payload && payload.length > 0 && payload[0]?.payload?.fullLabel) {
+                      return payload[0].payload.fullLabel;
+                    }
+                    return label;
+                  }}
                   labelStyle={{ fontSize: 11, color: 'var(--text-muted)' }}
                   contentStyle={{ background: 'var(--bg-card2)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 11, padding: '6px 10px' }}
                 />
