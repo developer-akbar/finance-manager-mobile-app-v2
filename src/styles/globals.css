@@ -284,6 +284,104 @@ body {
 .trans-fab:active { transform:scale(0.88); }
 .trans-fab svg { width:26px; height:26px; stroke:#0a0f1e; }
 
+/* ── SCREEN FLOATING ACTION BUTTON GROUP (Dashboard & Transactions) ── */
+.screen-fab-group {
+  position: absolute;
+  bottom: calc(var(--safe-bottom, 0px) + 16px);
+  left: calc(var(--safe-left, 0px) + 16px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 40;
+  pointer-events: auto;
+}
+
+.screen-fab-group .trans-fab {
+  position: relative;
+  bottom: auto;
+  left: auto;
+  right: auto;
+  top: auto;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--green, #01B574);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 18px rgba(1, 181, 116, 0.4);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+  flex-shrink: 0;
+}
+
+.screen-fab-group .trans-fab:hover {
+  transform: scale(1.08);
+  box-shadow: 0 6px 22px rgba(1, 181, 116, 0.5);
+}
+
+.screen-fab-group .trans-fab:active {
+  transform: scale(0.92);
+}
+
+.screen-fab-group .trans-fab svg {
+  width: 24px;
+  height: 24px;
+  stroke: #0a0f1e;
+}
+
+.screen-fab-group .bookmarks-fab {
+  position: relative;
+  bottom: auto;
+  left: auto;
+  right: auto;
+  top: auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--bg-card, #111C44);
+  border: 1.5px solid var(--border, rgba(255, 255, 255, 0.12));
+  color: var(--text-primary, #FFFFFF);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  flex-shrink: 0;
+}
+
+.screen-fab-group .bookmarks-fab:hover {
+  transform: scale(1.08);
+  background: var(--bg-hover, #1e326e);
+  border-color: var(--green, #0075FF);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.screen-fab-group .bookmarks-fab:active {
+  transform: scale(0.92);
+}
+
+.screen-fab-group .bookmarks-fab svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+}
+
+[data-theme="light"] .screen-fab-group .bookmarks-fab {
+  background: #FFFFFF;
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #0B1437;
+  box-shadow: 0 4px 14px rgba(112, 144, 176, 0.2);
+}
+
+[data-theme="light"] .screen-fab-group .bookmarks-fab:hover {
+  background: #F4F7FE;
+  border-color: #0075FF;
+  box-shadow: 0 6px 18px rgba(112, 144, 176, 0.3);
+}
+
 /* Companion Credit Card Pay Button next to + button */
 .cc-pay-fab {
   position: absolute;

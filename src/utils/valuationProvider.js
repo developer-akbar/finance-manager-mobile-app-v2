@@ -613,6 +613,7 @@ export class ValuationProvider {
     this.mfProvider = new MutualFundValuationProvider();
     this.equityProvider = new EquityValuationProvider();
     this.etfProvider = new ETFValuationProvider();
+    this.listeners = new Set();
 
     // Populate initial navMap into cache
     for (const [key, val] of Object.entries(initialNavMap)) {
@@ -633,6 +634,75 @@ export class ValuationProvider {
           error: null
         });
       }
+    }
+
+    // Hydrate persistent valuations from storage
+    this.hydrateFromStorage();
+  }
+
+  /**
+   * Subscribe to valuation updates
+   */
+  subscribe(listener) {
+    if (typeof listener !== 'function') return () => {};
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Notify subscribers of valuation updates
+   */
+  notifyListeners() {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.error('[ValuationProvider] Listener error:', err);
+      }
+    }
+  }
+
+  /**
+   * Hydrates cached valuations from local storage
+   */
+  hydrateFromStorage() {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const raw = localStorage.getItem('finman_valuation_cache_v1');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        for (const [k, entry] of Object.entries(parsed)) {
+          if (entry && entry.isAvailable && typeof entry.price === 'number' && entry.price > 0) {
+            const canonicalKey = k.trim().toUpperCase();
+            if (!this.cacheMap.has(canonicalKey)) {
+              this.cacheMap.set(canonicalKey, entry);
+            }
+          }
+        }
+      }
+    } catch {
+      // Storage hydration fail-silent
+    }
+  }
+
+  /**
+   * Persists valid cached valuations to local storage
+   */
+  saveToStorage() {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const serializable = {};
+      for (const [k, v] of this.cacheMap.entries()) {
+        if (v && v.isAvailable && typeof v.price === 'number' && v.price > 0) {
+          serializable[k] = v;
+        }
+      }
+      localStorage.setItem('finman_valuation_cache_v1', JSON.stringify(serializable));
+    } catch {
+      // Fail-silent on storage errors
     }
   }
 
@@ -669,6 +739,12 @@ export class ValuationProvider {
     this.navMap = {};
     this.cacheMap.clear();
     this.inFlightRequests.clear();
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('finman_valuation_cache_v1');
+      }
+    } catch {}
+    this.notifyListeners();
   }
 
   /**
@@ -922,6 +998,9 @@ export class ValuationProvider {
         if (v && v.isValued) valuedCount++;
       }
     }
+
+    this.saveToStorage();
+    this.notifyListeners();
 
     return {
       success: true,

@@ -50,12 +50,13 @@
 /* ── DASHBOARD CONTAINER ────────────────────────────────────────────────────── */
 .dash-screen {
   flex: 1;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   position: relative;
   background: var(--dash-bg);
-  min-height: 100vh;
 }
 
 .dash-scrollable-content {
@@ -2374,33 +2375,23 @@
   padding: 12px 6px;
 }
 
-/* ── FLOATING ADD FAB ON DASHBOARD ─────────────────────────────────────────── */
-.dash-screen .trans-fab {
-  position: fixed;
-  right: calc(var(--page-px) + 6px);
-  bottom: calc(var(--safe-bottom, 0px) + 68px);
-  width: 54px;
-  height: 54px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--dash-positive), #00b87a);
-  color: #FFFFFF;
-  border: none;
-  box-shadow: 0 4px 18px rgba(1, 181, 116, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
+/* ── FLOATING ACTION BUTTON GROUP ON DASHBOARD ────────────────────────────── */
+.dash-screen .screen-fab-group {
+  position: absolute;
+  bottom: calc(var(--safe-bottom, 0px) + 16px);
+  left: calc(var(--safe-left, 0px) + 16px);
   z-index: 100;
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
 }
 
-.dash-screen .trans-fab:hover {
-  transform: scale(1.08);
-  box-shadow: 0 6px 22px rgba(1, 181, 116, 0.5);
+.dash-screen .screen-fab-group .trans-fab {
+  background: linear-gradient(135deg, var(--dash-positive), #00b87a);
+  color: #0B1437;
 }
 
-.dash-screen .trans-fab:active {
-  transform: scale(0.95);
+.dash-screen .screen-fab-group .bookmarks-fab {
+  background: var(--dash-card-bg);
+  border-color: var(--dash-border);
+  color: var(--dash-text-main);
 }
 
 /* ── FINANCIAL MILESTONES MODAL & ACHIEVEMENTS ──────────────────────────────── */
@@ -2696,4 +2687,67 @@
   font-weight: 700;
   font-size: 0.9rem;
   cursor: pointer;
+}
+/* ── DASHBOARD HEADER ACTION BUTTONS (PERSISTENT REVEAL & BOOKMARKS) ── */
+.dash-header-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border: 1px solid var(--dash-border);
+  background: var(--dash-surface);
+  color: var(--dash-text-main);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.dash-header-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  border-color: var(--accent, #00e5a0);
+  color: var(--text-primary);
+}
+
+.dash-header-btn:hover svg {
+  stroke: var(--accent, #00e5a0);
+}
+
+.dash-header-btn:active {
+  transform: scale(0.96);
+}
+
+[data-theme="light"] .dash-header-btn {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #0d1b2a;
+}
+
+[data-theme="light"] .dash-header-btn:hover {
+  background: #d8e2f3;
+  border-color: #00b87a;
+  color: #0d1b2a !important;
+}
+
+[data-theme="light"] .dash-header-btn:hover svg {
+  stroke: #00b87a !important;
+}
+
+@media (max-width: 600px) {
+  .dash-header-btn-lbl {
+    display: none;
+  }
+  .dash-header-btn {
+    padding: 0 8px;
+    height: 32px;
+    width: 32px;
+    justify-content: center;
+  }
+}
+
+.dash-pnl-num.neutral, .dash-pnl-sub-pct.neutral {
+  color: var(--dash-text-muted);
 }

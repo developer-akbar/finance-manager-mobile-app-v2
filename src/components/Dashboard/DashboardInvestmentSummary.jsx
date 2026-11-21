@@ -16,12 +16,12 @@ export default function DashboardInvestmentSummary({
   onOpenPortfolio,
 }) {
   // Authoritative portfolio calculation hook matching Portfolio page personal scope
-  const { summaryMetrics, activeHoldings, valuationVersion } = usePortfolio(transactions, settings, {
+  const { summaryMetrics, activeHoldings, valuationVersion, isFetchingValuations, refreshValuations } = usePortfolio(transactions, settings, {
     scopeFilter: 'personal',
     platformFilter: 'all',
     accountFilter: 'all',
     valuationProvider: defaultValuationProvider,
-    autoFetchValuations: false,
+    autoFetchValuations: true,
   });
 
   const activeCostBasis = summaryMetrics?.activeCostBasis || 0;
@@ -34,6 +34,11 @@ export default function DashboardInvestmentSummary({
   const isFullyValued = summaryMetrics?.isFullyValued || false;
   const valuedCount = summaryMetrics?.valuedCount || 0;
   const totalActiveCount = summaryMetrics?.totalActiveCount || (activeHoldings ? activeHoldings.length : 0);
+  const total1DChange = summaryMetrics?.total1DChange ?? null;
+  const portfolio1DPct = summaryMetrics?.portfolio1DPct ?? null;
+  const valid1DCount = summaryMetrics?.valid1DCount || 0;
+  const hasMfIn1D = summaryMetrics?.hasMfIn1D || false;
+  const hasEquityIn1D = summaryMetrics?.hasEquityIn1D || false;
 
   // Authoritative asset class breakdown and aggregated top holdings
   const { equity, mutualFunds, topHoldings } = useMemo(() => {
@@ -123,7 +128,9 @@ export default function DashboardInvestmentSummary({
             <div className="dash-inv-sub">
               Invested: <strong>{showPrivacy ? formatINR(activeCostBasis) : '••••'}</strong>
               <span className="dash-inv-coverage-pill" title="Valuation coverage across active holdings">
-                {isFullyValued ? '100% Valued' : `${valuedCount} of ${totalActiveCount} valued`}
+                {isFetchingValuations && valuedCount === 0
+                  ? 'Syncing NAVs...'
+                  : (isFullyValued ? '100% Valued' : `${valuedCount} of ${totalActiveCount} valued`)}
               </span>
               {totalActiveCount > valuedCount && (
                 <span className="dash-inv-unvalued-note">
@@ -179,6 +186,36 @@ export default function DashboardInvestmentSummary({
                 </span>
               </div>
             )}
+
+            {/* 1D Return */}
+            <div
+              className="dash-inv-pnl-pill"
+              title={hasMfIn1D
+                ? (hasEquityIn1D ? "Daily market movement & latest NAV vs previous close" : "Latest NAV vs previous close")
+                : "Daily market movement since previous close"
+              }
+            >
+              <div className="dash-pnl-left">
+                <span className="dash-pnl-lbl">1D Return</span>
+                <span className="dash-pnl-caption">
+                  {valid1DCount > 0 ? `${valid1DCount} holding${valid1DCount === 1 ? '' : 's'}` : 'Daily change'}
+                </span>
+              </div>
+              <div className="dash-pnl-right-stacked">
+                <span className={`dash-pnl-num ${total1DChange > 0 ? 'positive' : total1DChange < 0 ? 'negative' : 'neutral'}`}>
+                  {total1DChange !== null ? (
+                    `${total1DChange > 0 ? '+' : ''}${showPrivacy ? formatINR(total1DChange) : '••••'}`
+                  ) : '—'}
+                </span>
+                {portfolio1DPct !== null ? (
+                  <span className={`dash-pnl-sub-pct ${portfolio1DPct > 0 ? 'positive' : portfolio1DPct < 0 ? 'negative' : 'neutral'}`}>
+                    {portfolio1DPct > 0 ? '+' : ''}{portfolio1DPct}% 1D
+                  </span>
+                ) : (
+                  <span className="dash-pnl-sub-pct neutral">—</span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -220,7 +257,9 @@ export default function DashboardInvestmentSummary({
                 <span className="dash-asset-count">{mutualFunds.count}</span>
               </div>
               <span className="dash-inv-badge cost" title="Holdings valuation status">
-                {mutualFunds.valuedCount > 0 ? `${mutualFunds.valuedCount}/${mutualFunds.count} Valued` : 'At Cost Basis'}
+                {isFetchingValuations && mutualFunds.valuedCount === 0
+                  ? 'Syncing NAVs...'
+                  : (mutualFunds.valuedCount > 0 ? `${mutualFunds.valuedCount}/${mutualFunds.count} Valued` : 'At Cost Basis')}
               </span>
             </div>
             <div className="dash-inv-asset-nums">
@@ -234,7 +273,9 @@ export default function DashboardInvestmentSummary({
                     {mutualFunds.value >= mutualFunds.cost ? '+' : ''}{formatINRCompact(mutualFunds.value - mutualFunds.cost)}
                   </span>
                 ) : (
-                  <span className="dash-asset-pnl neutral">NAV Awaiting Sync</span>
+                  <span className="dash-asset-pnl neutral">
+                    {isFetchingValuations ? 'Syncing NAVs...' : 'NAV Awaiting Sync'}
+                  </span>
                 )}
               </div>
             </div>

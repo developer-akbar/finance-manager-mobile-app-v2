@@ -577,6 +577,11 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
       const allDateSel = groupIds.length > 0 && groupIds.every(id => selected.has(id));
       const isDateIndeterminate = !allDateSel && groupIds.some(id => selected.has(id));
 
+      const now = new Date();
+      const isToday = d.getFullYear() === now.getFullYear() &&
+                      d.getMonth() === now.getMonth() &&
+                      d.getDate() === now.getDate();
+
       const handleGroupToggle = (e) => {
         e?.stopPropagation?.();
         if (onToggleDate) {
@@ -587,13 +592,16 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
       return (
         <div key={dk} ref={isClosest ? closestRef : null} className="date-group-container">
           <div
-            className="dg-header"
+            className={`dg-header ${isToday ? 'dg-header-today' : ''}`}
             onClick={multiMode ? handleGroupToggle : (() => onDateTap && onDateTap(list[0].Date))}
           >
             <div className="dg-left">
               <div className="dg-day">{d.getDate()}</div>
               <div className="dg-meta">
-                <div className="dg-wday">{d.toLocaleDateString('en-IN',{weekday:'short'}).toUpperCase()}</div>
+                <div className="dg-wday">
+                  {d.toLocaleDateString('en-IN',{weekday:'short'}).toUpperCase()}
+                  {isToday && <span className="dg-today-badge">TODAY</span>}
+                </div>
                 <div className="dg-month">{MONTHS_S[d.getMonth()]} {d.getFullYear()}</div>
               </div>
             </div>
@@ -639,6 +647,8 @@ function DateGroupedList({ isActive, txns, onDateTap, selected, multiMode, onLon
 // ── Monthly summary ───────────────────────────────────────────────────────────
 function MonthlyView({ transactions, year, setYear, onMonthClick }) {
   const now = new Date();
+  const currentCalYear = now.getFullYear();
+  const currentCalMonth = now.getMonth();
 
   const prevYear = () => setYear(y => y - 1);
   const nextYear = () => setYear(y => y + 1);
@@ -667,9 +677,14 @@ function MonthlyView({ transactions, year, setYear, onMonthClick }) {
         <div className="bal-strip-div"/>
         <div className="bal-strip-item"><div className="bal-strip-l">Net</div><div className="bal-strip-v">{formatINR(totals.income-totals.expense)}</div></div>
       </div>
-      {data.map(m => (
-        <div key={m.mi} className={`month-row ${m.count===0?'month-row-empty':''}`} onClick={()=>m.count&&onMonthClick(year,m.mi)}>
-          <div className="month-row-name">{MONTHS_F[m.mi]}</div>
+      {data.map(m => {
+        const isCurrentMonth = year === currentCalYear && m.mi === currentCalMonth;
+        return (
+          <div key={m.mi} className={`month-row ${m.count===0?'month-row-empty':''} ${isCurrentMonth ? 'month-row-current' : ''}`} onClick={()=>m.count&&onMonthClick(year,m.mi)}>
+            <div className="month-row-name">
+              {MONTHS_F[m.mi]}
+              {isCurrentMonth && <span className="month-current-badge">CURRENT</span>}
+            </div>
           {m.count === 0 ? <div className="month-row-none">—</div> : <>
             <div className="month-row-vals">
               {m.income  > 0 && <span className="month-row-inc">+{formatINR(m.income)}</span>}
@@ -679,7 +694,8 @@ function MonthlyView({ transactions, year, setYear, onMonthClick }) {
             <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" width="11" height="11"><path d="M9 18l6-6-6-6"/></svg>
           </>}
         </div>
-      ))}
+        );
+      })}
       <div style={{height:80}}/>
     </div>
   );
@@ -1997,13 +2013,45 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
       backInterceptRef.current = () => setShowCal(false);
     } else if (multiMode) {
       backInterceptRef.current = () => { setMultiMode(false); setSelected(new Set()); };
+    } else if (viewMode === 'monthly') {
+      backInterceptRef.current = () => {
+        const today = new Date();
+        setViewYear(today.getFullYear());
+        setViewMonth(today.getMonth());
+        setViewMode('daily');
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('scroll-to-today'));
+        }, 50);
+      };
     } else {
       backInterceptRef.current = null;
     }
     return () => {
       if (backInterceptRef.current) backInterceptRef.current = null;
     };
-  }, [showSyncModal, showCal, multiMode, backInterceptRef]);
+  }, [showSyncModal, showCal, multiMode, viewMode, backInterceptRef]);
+
+  // Handle browser popstate back button from Monthly to Daily
+  React.useEffect(() => {
+    if (!isActive || viewMode !== 'monthly') return;
+
+    window.history.pushState({ txnView: 'monthly' }, '');
+
+    const handlePopState = () => {
+      const today = new Date();
+      setViewYear(today.getFullYear());
+      setViewMonth(today.getMonth());
+      setViewMode('daily');
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('scroll-to-today'));
+      }, 50);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [isActive, viewMode]);
 
   // Handle keyboard Escape for main Transactions screen
   React.useEffect(() => {
@@ -2098,12 +2146,6 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
               <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
             </svg>
             <span className="txn-paste-btn-lbl">Paste</span>
-          </button>
-          <button className="txn-bookmark-btn" onClick={() => navigate('bookmarks')} title="Bookmarks (Reusable Templates)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15">
-              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-            </svg>
-            <span className="txn-paste-btn-lbl">Bookmarks</span>
           </button>
           <button className="txn-search-btn" onClick={()=>setViewMode('search')} title="Search Transactions">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -2212,10 +2254,31 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
         />
       )}
 
-      {/* Floating FAB — bottom left */}
-      <button className="trans-fab" onClick={onAddTransaction}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      </button>
+      {/* Floating Action Button Group on Transactions */}
+      <div className="screen-fab-group" role="group" aria-label="Quick actions">
+        <button
+          type="button"
+          className="trans-fab"
+          onClick={onAddTransaction}
+          aria-label="Add transaction"
+          title="Add transaction"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className="bookmarks-fab"
+          onClick={() => navigate('bookmarks')}
+          aria-label="Bookmarks"
+          title="Bookmarks (Transaction Templates)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="20" height="20">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }

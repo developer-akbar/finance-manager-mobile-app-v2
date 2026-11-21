@@ -115,6 +115,14 @@ export function usePortfolio(transactions = [], settings = {}, filters = {}) {
     }
   }, [allActiveKeysSignature, autoFetchValuations]);
 
+  // Subscribe to valuation updates across provider instances
+  useEffect(() => {
+    if (!valuationProvider || typeof valuationProvider.subscribe !== 'function') return;
+    return valuationProvider.subscribe(() => {
+      setValuationVersion(v => v + 1);
+    });
+  }, [valuationProvider]);
+
   // Segregated Brokerage Cash Calculation
   const relevantBrokerageCash = useMemo(() => {
     const { brokerageCashMap } = rawPortfolio;

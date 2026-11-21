@@ -40,6 +40,10 @@ const TIPS = [
 const now = new Date();
 const todayTip = TIPS[now.getDate() % TIPS.length];
 
+const EyeIcon = ({ open }) => open
+  ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="15" height="15"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
+  : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="15" height="15"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>;
+
 export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   const { state, navigate } = useApp();
   const { transactions = [], accounts = [], budgets = [], recurringRules = [], settings = {} } = state;
@@ -229,8 +233,18 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
         <div className="dash-hello">
           {greeting}{name ? `, ${name}` : ' 👋'}
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="dash-header-actions" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <GlobalSyncBadge mobile />
+          <button
+            type="button"
+            className="dash-header-btn dash-header-privacy-btn"
+            onClick={() => setShowPrivacy(v => !v)}
+            title={showPrivacy ? 'Hide financial values' : 'Show financial values'}
+            aria-label={showPrivacy ? 'Hide financial values' : 'Show financial values'}
+          >
+            <EyeIcon open={showPrivacy} />
+            <span className="dash-header-btn-lbl">{showPrivacy ? 'Mask' : 'Reveal'}</span>
+          </button>
           <button
             type="button"
             className="dash-milestones-btn"
@@ -350,6 +364,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           {/* ── QUICK FEATURE SHORTCUTS PILLS ── */}
           <div className="dash-shortcuts-strip">
             {[
+              { id: 'bookmarks', label: 'Bookmarks', icon: '🔖', onClick: () => navigate('bookmarks') },
               { id: 'portfolio', label: 'Portfolio', icon: '📈', onClick: () => navigate('portfolio') },
               { id: 'debt', label: 'Debt Tracker', icon: '🤝', onClick: () => setShowDebtTracker(true) },
               { id: 'stock', label: 'Stock Inventory', icon: '🥫', onClick: () => setShowStockManager(true) },
@@ -440,14 +455,33 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
         </div> {/* End app-container */}
       </div> {/* End dash-scrollable-content */}
 
-      {/* Floating Add FAB on Dashboard */}
+      {/* Floating Action Button Group on Dashboard */}
       {onAddTransaction && (
-        <button className="trans-fab" onClick={onAddTransaction} aria-label="Add transaction">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" width="22" height="22">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
+        <div className="screen-fab-group" role="group" aria-label="Quick actions">
+          <button
+            type="button"
+            className="trans-fab"
+            onClick={onAddTransaction}
+            aria-label="Add transaction"
+            title="Add transaction"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" width="22" height="22">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="bookmarks-fab"
+            onClick={() => navigate('bookmarks')}
+            aria-label="Bookmarks"
+            title="Bookmarks (Transaction Templates)"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="20" height="20">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
+          </button>
+        </div>
       )}
     </div>
   );
