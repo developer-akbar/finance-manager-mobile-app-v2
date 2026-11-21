@@ -9,6 +9,7 @@ import Categories from './components/Categories/Categories.jsx';
 import Analytics from './components/Analytics/Analytics.jsx';
 import Settings from './components/Settings/Settings.jsx';
 import Bookmarks from './components/Bookmarks/Bookmarks.jsx';
+import AskFinMan from './components/AskFinMan/AskFinMan.jsx';
 import PinLock from './components/Common/PinLock.jsx';
 import AddTransaction from './components/Transactions/AddTransaction.jsx';
 import { initDB, closeDB } from './database/index.js';
@@ -330,6 +331,10 @@ function AppInner() {
         <div className={`tab-view ${currentView === 'transactions' ? 'active-tab' : 'hidden'}`}>
           <Transactions isActive={currentView === 'transactions'} onAddTransaction={() => { setShowAdd(true); setAddKey(k => k + 1); }} backInterceptRef={backInterceptRef} viewParams={state.viewParams}/>
         </div>
+        <div className={`tab-view ${currentView === 'ask-finman' ? 'active-tab' : 'hidden'}`}>
+          <AskFinMan onBack={() => navigate('dashboard')} />
+        </div>
+
         <div className={`tab-view ${currentView === 'portfolio' ? 'active-tab' : 'hidden'}`}>
           <InvestmentsPortfolio onBack={() => navigate('dashboard')} backInterceptRef={backInterceptRef}/>
         </div>
