@@ -40,11 +40,11 @@ test('FinMan — Drilled-Down Account Balance Chart Improvements Suite', async (
 
   const toChartStart = acctContent.indexOf('export function toAccountChartValue');
   const toChartEnd = acctContent.indexOf('export function formatAccountBalanceChartData');
-  const toChartStr = acctContent.slice(toChartStart, toChartEnd).replace('export function', 'function');
+  const toChartStr = acctContent.slice(toChartStart, toChartEnd).replaceAll('export function', 'function');
 
   const fmtStart = acctContent.indexOf('export function formatAccountBalanceChartData');
   const fmtEnd = acctContent.indexOf('// Build a full balance map');
-  const fmtStr = acctContent.slice(fmtStart, fmtEnd).replace('export function', 'function');
+  const fmtStr = acctContent.slice(fmtStart, fmtEnd).replaceAll('export function', 'function');
 
   const context = {
     ...formatUtils,

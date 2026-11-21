@@ -270,6 +270,16 @@ export function toAccountChartValue(rawBal, isCreditCardAccount = false) {
   return rawBal;
 }
 
+// Module-level in-memory cache for historical account balance chart points
+const chartDataCache = new Map();
+
+/**
+ * Explicitly clears the historical chart data cache (e.g. for testing or full data reload).
+ */
+export function clearAccountBalanceChartCache() {
+  chartDataCache.clear();
+}
+
 /**
  * Aggregates account historical balance trends for AreaChart display.
  * Supports: Month, CC Cycle, Year, FY, and All periods.
@@ -308,39 +318,95 @@ export function formatAccountBalanceChartData({
   if (period === 'All') {
     if (!acctTxns || acctTxns.length === 0) return [];
 
-    const monthMap = new Map();
+    // Cache lookup key composed of account context, count, and edge transaction signatures
+    const newestTxn = acctTxns[0];
+    const oldestTxn = acctTxns[acctTxns.length - 1];
+    const cacheKey = [
+      acctName,
+      subAccountName || '',
+      isCreditCardAccount ? 'cc' : 'bank',
+      isShareMarket ? 'sm' : '',
+      isMFAcct ? 'mf' : '',
+      acctTxns.length,
+      newestTxn ? (newestTxn._id || newestTxn.ID || newestTxn.Date) : '',
+      oldestTxn ? (oldestTxn._id || oldestTxn.ID || oldestTxn.Date) : '',
+    ].join('::');
+
+    if (chartDataCache.has(cacheKey)) {
+      return chartDataCache.get(cacheKey);
+    }
+
+    // Filter valid dated transactions
+    const validTxns = [];
     for (const t of acctTxns) {
       if (!t || !t.Date) continue;
       const d = parseDate(t.Date);
       if (!d || isNaN(d.getTime()) || d.getTime() <= 0) continue;
-      const y = d.getFullYear();
-      const m = d.getMonth();
-      const key = y + '-' + String(m).padStart(2, '0');
-      if (!monthMap.has(key)) {
-        monthMap.set(key, { year: y, month: m });
-      }
+      validTxns.push({ txn: t, date: d, time: t.Time || '', id: t._id || t.ID || '' });
     }
 
-    if (monthMap.size === 0) return [];
+    if (validTxns.length === 0) return [];
 
-    const sortedMonths = Array.from(monthMap.entries())
-      .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
-      .map(([, val]) => val);
+    // Sort chronologically (oldest first)
+    validTxns.sort((a, b) => {
+      const diff = a.date.getTime() - b.date.getTime();
+      if (diff !== 0) return diff;
+      const tDiff = a.time.localeCompare(b.time);
+      if (tDiff !== 0) return tDiff;
+      return String(a.id).localeCompare(String(b.id));
+    });
 
-    return sortedMonths.map(({ year, month }) => {
-      const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999);
-      const upToMonthTxns = acctTxns.filter(t => {
-        const td = parseDate(t.Date);
-        return td && !isNaN(td.getTime()) && td <= endOfMonth;
-      });
+    // Single-pass O(N) running balance recording true month-end closing balances
+    let running = 0;
+    const monthClosingMap = new Map();
+
+    for (const item of validTxns) {
+      const t = item.txn;
+      let impact = 0;
+      if (isShareMarket && typeof getBrokerTxnCashImpact === 'function') {
+        impact = getBrokerTxnCashImpact(t);
+      } else if (isMFAcct && typeof getMFInvestedImpact === 'function') {
+        impact = getMFInvestedImpact(t);
+      } else if (subAccountName) {
+        impact = computeBalance([t], acctName, subAccountName);
+      } else {
+        const amt = txnAmount(t);
+        const type = String(t['Income/Expense'] || '').trim();
+        const acct = t.Account || t.FromAccount || '';
+        const dest = t.ToAccount || '';
+        if (type === 'Income' && acct === acctName) impact += amt;
+        else if (type === 'Expense' && acct === acctName) impact -= amt;
+        else if (type === 'Transfer-Out' || type === 'Transfer') {
+          if (acct === acctName) impact -= amt;
+          if (dest === acctName) impact += amt;
+        }
+      }
+      running += impact;
+
+      const y = item.date.getFullYear();
+      const m = item.date.getMonth();
+      const key = y + '-' + String(m).padStart(2, '0');
+      monthClosingMap.set(key, { year: y, month: m, rawBal: running });
+    }
+
+    const result = Array.from(monthClosingMap.values()).map(({ year, month, rawBal }) => {
       return {
         name: MS_S[month] + " '" + String(year).slice(-2),
         fullLabel: MS_F[month] + ' ' + year,
-        value: getBalForTxns(upToMonthTxns),
+        value: toAccountChartValue(rawBal, isCreditCardAccount),
         year,
         month,
       };
     });
+
+    // Cache result with bounded map size
+    chartDataCache.set(cacheKey, result);
+    if (chartDataCache.size > 80) {
+      const oldest = chartDataCache.keys().next().value;
+      chartDataCache.delete(oldest);
+    }
+
+    return result;
   }
 
   if (period === 'Year') {
@@ -593,9 +659,13 @@ export function scrollToElementBelowSticky(container, targetEl, stickyEl, option
   return targetScrollTop;
 }
 
+const ALL_BATCH_SIZE = 100;
+
 function AccountDetail({ acctName, subAccountName, allTxns, onBack, backInterceptRef, ccConfig }) {
   const { state } = useApp();
   const now = new Date();
+  const [allLoadedCount, setAllLoadedCount] = useState(ALL_BATCH_SIZE);
+  const sentinelRef = React.useRef(null);
 
   // If this is a CC account, default period to 'CC Cycle'; otherwise 'Month'
   const isCC = ccConfig && ccConfig.settlementDate > 0;
@@ -685,6 +755,11 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
       }
     }
   }, [multiMode]);
+
+  // Reset lazy-loading batch size when switching periods or accounts
+  React.useEffect(() => {
+    setAllLoadedCount(ALL_BATCH_SIZE);
+  }, [period, acctName, subAccountName]);
 
   // Keep CSS custom property --acct-sticky-h in sync with dynamic sticky header height
   React.useEffect(() => {
@@ -1112,20 +1187,30 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
     return map;
   }, [acctTxns, acctName, subAccountName, isShareMarket, isMFAcct, orderMap, mfTxnCostImpactMap]);
 
-  const groups = useMemo(() => {
-    const map = {};
-    for (const t of [...periodTxns].sort((a, b) => {
+  const sortedPeriodTxns = useMemo(() => {
+    return [...periodTxns].sort((a, b) => {
       const da = parseDate(a.Date), db = parseDate(b.Date);
       if (da - db !== 0) return db - da; // date descending
       const timeDiff = (b.Time || '').localeCompare(a.Time || ''); // time descending
       if (timeDiff !== 0) return timeDiff;
       // Stable tie-breaker: smaller original index in CSV is newer
       return (orderMap.get(a._id || a.ID || a) ?? 0) - (orderMap.get(b._id || b.ID || b) ?? 0);
-    })) {
-      if (!map[t.Date]) map[t.Date] = []; map[t.Date].push(t);
+    });
+  }, [periodTxns, orderMap]);
+
+  const displayedTxns = useMemo(() => {
+    if (period !== 'All') return sortedPeriodTxns;
+    return sortedPeriodTxns.slice(0, allLoadedCount);
+  }, [period, sortedPeriodTxns, allLoadedCount]);
+
+  const groups = useMemo(() => {
+    const map = {};
+    for (const t of displayedTxns) {
+      if (!map[t.Date]) map[t.Date] = [];
+      map[t.Date].push(t);
     }
     return Object.entries(map);
-  }, [periodTxns, orderMap]);
+  }, [displayedTxns]);
 
   React.useEffect(() => {
     if (selectedTargetDate) {
@@ -1137,6 +1222,28 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
       }
     };
   }, [selectedTargetDate, groups, scrollToAccountTarget]);
+
+  // Infinite-scroll IntersectionObserver for incremental All-period rendering
+  React.useEffect(() => {
+    if (period !== 'All') return;
+    if (allLoadedCount >= periodTxns.length) return;
+
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0] && entries[0].isIntersecting) {
+        setAllLoadedCount(prev => prev + ALL_BATCH_SIZE);
+      }
+    }, {
+      root: bodyRef.current,
+      rootMargin: '250px',
+      threshold: 0.05,
+    });
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [period, allLoadedCount, periodTxns.length]);
 
   if (showSearch) {
     return (
@@ -1162,7 +1269,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           <div className="page-hdr-sub">{subAccountName ? 'Sub Account' : 'Account'} · {acctTxns.length} total txns</div>
         </div>
         <button className="txn-search-btn" onClick={() => setShowSearch(true)} title="Search transactions">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="16" height="16"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="14" height="14"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         </button>
       </div>
 
@@ -1475,6 +1582,21 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
                 </div>
               );
             })}
+
+            {period === 'All' && sortedPeriodTxns.length > 0 && (
+              <div className="acct-all-pagination-status">
+                {allLoadedCount < sortedPeriodTxns.length ? (
+                  <div className="acct-all-loading" ref={sentinelRef}>
+                    <span className="acct-all-spinner" />
+                    <span>Loading more transactions ({displayedTxns.length} of {sortedPeriodTxns.length})...</span>
+                  </div>
+                ) : (
+                  <div className="acct-all-end">
+                    <span>✓ End of transaction history · {sortedPeriodTxns.length} transactions</span>
+                  </div>
+                )}
+              </div>
+            )}
           </>
         }
       </div>
@@ -2043,58 +2165,19 @@ export default function Accounts({ backInterceptRef } = {}) {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <button
             onClick={() => setShowOptimizer(true)}
-            style={{
-              padding: '6px 9px',
-              borderRadius: 14,
-              fontSize: '0.7rem',
-              fontWeight: 700,
-              border: '1px solid var(--border)',
-              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
-              color: 'var(--theme-header-btn-color, var(--text-primary))',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-              cursor: 'pointer',
-              minHeight: 28,
-            }}
+            className="header-pill-btn"
           >
             <span>💳</span> Card Perks
           </button>
           <button
             onClick={() => setShowInvestments(true)}
-            style={{
-              padding: '6px 9px',
-              borderRadius: 14,
-              fontSize: '0.7rem',
-              fontWeight: 700,
-              border: '1px solid var(--border)',
-              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
-              color: 'var(--theme-header-btn-color, var(--text-primary))',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-              cursor: 'pointer',
-              minHeight: 28,
-            }}
+            className="header-pill-btn"
           >
             <span>📈</span> Portfolio
           </button>
           <button
             onClick={() => setShowDebtTracker(true)}
-            style={{
-              padding: '6px 9px',
-              borderRadius: 14,
-              fontSize: '0.7rem',
-              fontWeight: 700,
-              border: '1px solid var(--border)',
-              background: 'var(--theme-header-btn-bg, var(--bg-card2))',
-              color: 'var(--theme-header-btn-color, var(--text-primary))',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-              cursor: 'pointer',
-              minHeight: 28,
-            }}
+            className="header-pill-btn"
           >
             <span>🤝</span> Debt Tracker
           </button>

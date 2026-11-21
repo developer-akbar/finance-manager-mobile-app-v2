@@ -533,6 +533,54 @@ body {
 .btn-lg   { padding:9px 16px; font-size:0.9rem; border-radius:var(--r-lg); }
 .btn-sm   { padding:6px 12px; font-size:0.75rem; }
 
+/* ── STANDARDIZED HEADER ACTION PILL BUTTON ── */
+.header-pill-btn {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 14px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-family: var(--font);
+  border: 1px solid var(--border);
+  background: var(--theme-header-btn-bg, var(--bg-card2));
+  color: var(--theme-header-btn-color, var(--text-primary));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  box-sizing: border-box;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+.header-pill-btn:hover {
+  background: var(--bg-hover, #1e2a40);
+  border-color: var(--accent, #00e5a0);
+  color: var(--text-primary, #f0f4ff);
+}
+.header-pill-btn:active {
+  transform: scale(0.96);
+  background: var(--bg-card2, #1a2540);
+}
+.header-pill-btn:focus-visible {
+  outline: 2px solid var(--accent, #00e5a0);
+  outline-offset: 1px;
+}
+[data-theme="light"] .header-pill-btn {
+  background: var(--theme-header-btn-bg, var(--bg-card2, #f0f3fa));
+  border-color: var(--border, rgba(0, 0, 0, 0.08));
+  color: var(--theme-header-btn-color, var(--text-primary, #0d1b2a));
+}
+[data-theme="light"] .header-pill-btn:hover {
+  background: var(--bg-hover, #d8e2f3);
+  border-color: var(--accent, #00b87a);
+  color: var(--text-primary, #0d1b2a) !important;
+}
+[data-theme="light"] .header-pill-btn:active {
+  background: #c5d4ea;
+}
+
 /* ── FORMS ── */
 .form-group  { display:flex; align-items:center; gap:8px; margin-bottom:0; }
 .form-label  { font-size:0.72rem; font-weight:700; color:var(--text-muted); text-transform:capitalize; letter-spacing:0.2px; max-width:110px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

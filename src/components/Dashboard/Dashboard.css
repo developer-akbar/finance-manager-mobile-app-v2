@@ -2688,52 +2688,88 @@
   font-size: 0.9rem;
   cursor: pointer;
 }
-/* ── DASHBOARD HEADER ACTION BUTTONS (PERSISTENT REVEAL & BOOKMARKS) ── */
-.dash-header-btn {
+/* ── DASHBOARD HEADER ACTION BUTTONS (PERSISTENT REVEAL & MILESTONES) ── */
+.dash-header-btn,
+.dash-milestones-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 32px;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  min-height: 28px;
   padding: 0 10px;
-  border-radius: 12px;
-  font-size: 0.78rem;
+  border-radius: 14px;
+  font-size: 0.72rem;
   font-weight: 700;
-  border: 1px solid var(--dash-border);
-  background: var(--dash-surface);
-  color: var(--dash-text-main);
+  font-family: var(--font);
+  border: 1px solid var(--border, var(--dash-border));
+  background: var(--theme-header-btn-bg, var(--bg-card2, var(--dash-surface)));
+  color: var(--theme-header-btn-color, #ffffff);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
   user-select: none;
+  box-sizing: border-box;
+  white-space: nowrap;
 }
 
-.dash-header-btn:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+.dash-header-btn svg,
+.dash-milestones-btn svg,
+.dash-privacy-toggle-btn svg {
+  width: 14px;
+  height: 14px;
+  stroke: #ffffff;
+  flex-shrink: 0;
+}
+
+.dash-header-btn:hover,
+.dash-milestones-btn:hover {
+  background: var(--bg-hover, #1e2a40);
   border-color: var(--accent, #00e5a0);
-  color: var(--text-primary);
+  color: var(--text-primary, #f0f4ff);
 }
 
-.dash-header-btn:hover svg {
+.dash-header-btn:hover svg,
+.dash-milestones-btn:hover svg,
+.dash-privacy-toggle-btn:hover svg {
   stroke: var(--accent, #00e5a0);
 }
 
-.dash-header-btn:active {
+.dash-header-btn:active,
+.dash-milestones-btn:active {
   transform: scale(0.96);
+  background: var(--bg-card2, #1a2540);
 }
 
-[data-theme="light"] .dash-header-btn {
-  background: #ffffff;
-  border-color: rgba(0, 0, 0, 0.12);
-  color: #0d1b2a;
+.dash-header-btn:focus-visible,
+.dash-milestones-btn:focus-visible {
+  outline: 2px solid var(--accent, #00e5a0);
+  outline-offset: 1px;
 }
 
-[data-theme="light"] .dash-header-btn:hover {
-  background: #d8e2f3;
-  border-color: #00b87a;
-  color: #0d1b2a !important;
+[data-theme="light"] .dash-header-btn,
+[data-theme="light"] .dash-milestones-btn {
+  background: var(--theme-header-btn-bg, var(--bg-card2, #f0f3fa));
+  border-color: var(--border, rgba(0, 0, 0, 0.08));
+  color: var(--theme-header-btn-color, #ffffff);
 }
 
-[data-theme="light"] .dash-header-btn:hover svg {
-  stroke: #00b87a !important;
+[data-theme="light"] .dash-header-btn svg,
+[data-theme="light"] .dash-milestones-btn svg,
+[data-theme="light"] .dash-privacy-toggle-btn svg {
+  stroke: #ffffff;
+}
+
+[data-theme="light"] .dash-header-btn:hover,
+[data-theme="light"] .dash-milestones-btn:hover {
+  background: var(--bg-hover, #d8e2f3);
+  border-color: var(--accent, #00b87a);
+  color: var(--text-primary, #0d1b2a) !important;
+}
+
+[data-theme="light"] .dash-header-btn:hover svg,
+[data-theme="light"] .dash-milestones-btn:hover svg,
+[data-theme="light"] .dash-privacy-toggle-btn:hover svg {
+  stroke: var(--accent, #00b87a) !important;
 }
 
 @media (max-width: 600px) {
@@ -2741,9 +2777,15 @@
     display: none;
   }
   .dash-header-btn {
-    padding: 0 8px;
-    height: 32px;
-    width: 32px;
+    padding: 0;
+    width: 28px;
+    height: 28px;
+    justify-content: center;
+  }
+  .dash-milestones-btn {
+    padding: 0;
+    width: 28px;
+    height: 28px;
     justify-content: center;
   }
 }

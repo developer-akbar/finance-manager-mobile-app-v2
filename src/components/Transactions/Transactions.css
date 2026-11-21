@@ -30,103 +30,131 @@
 .txn-view-tab { padding:6px 16px; border-radius:calc(var(--r-md) - 2px); border:none; background:none; font-size:0.76rem; font-weight:700; color:var(--text-muted); cursor:pointer; font-family:var(--font); transition:var(--transition); }
 .txn-view-tab.active { background:var(--green); color:#0a0f1e; }
 .txn-header-actions { display:flex; align-items:center; gap:8px; }
-/* ── ACTION BUTTONS: PASTE, BOOKMARKS, SEARCH (High Contrast & Theme-Aware) ── */
-.txn-paste-btn, .txn-bookmark-btn, .txn-search-btn {
-  height: 34px;
-  background: var(--theme-header-btn-bg, var(--bg-card));
-  border: 1px solid var(--theme-header-border, var(--border));
-  border-radius: var(--r-md);
+/* ── ACTION BUTTONS: PASTE, BOOKMARKS, SEARCH (Standardized Header Pill Button) ── */
+.txn-paste-btn, .txn-bookmark-btn, .txn-search-btn, .header-pill-btn
+{
+  height: 28px;
+  min-height: 28px;
+  background: var(--theme-header-btn-bg, var(--bg-card2));
+  border: 1px solid var(--border);
+  border-radius: 14px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  font-size: 0.78rem;
+  justify-content: center;
+  font-size: 0.72rem;
   font-weight: 700;
   font-family: var(--font);
-  color: var(--theme-header-btn-color, var(--text-primary));
+  color: var(--theme-header-btn-color, #ffffff);
+  box-sizing: border-box;
+  white-space: nowrap;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
 }
 
+.header-pill-btn {
+  padding: 0 10px;
+  gap: 4px;
+}
+
 .txn-paste-btn, .txn-bookmark-btn {
-  padding: 0 12px;
-  gap: 6px;
+  padding: 0 10px;
+  gap: 5px;
 }
 
 .txn-search-btn {
-  width: 34px;
+  width: 28px;
   padding: 0;
-  justify-content: center;
 }
 
 .txn-paste-btn svg, .txn-bookmark-btn svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
+  width: 13px;
+  height: 13px;
+  stroke: #ffffff;
   flex-shrink: 0;
 }
 
 .txn-search-btn svg {
-  width: 15px;
-  height: 15px;
-  stroke: currentColor;
+  width: 14px;
+  height: 14px;
+  stroke: #ffffff;
   flex-shrink: 0;
 }
 
 /* Hover & Focus states - Dark Theme */
-.txn-paste-btn:hover, .txn-bookmark-btn:hover, .txn-search-btn:hover {
+.txn-paste-btn:hover, .txn-bookmark-btn:hover, .txn-search-btn:hover, .header-pill-btn:hover {
   background: var(--bg-hover, #1e2a40);
   border-color: var(--accent, #00e5a0);
   color: var(--text-primary, #f0f4ff);
 }
 
-.txn-paste-btn:hover svg, .txn-bookmark-btn:hover svg, .txn-search-btn:hover svg {
+.header-pill-btn:hover svg,
+.txn-paste-btn:hover svg,
+.txn-bookmark-btn:hover svg,
+.txn-search-btn:hover svg {
   stroke: var(--accent, #00e5a0);
 }
 
-.txn-paste-btn:focus-visible, .txn-bookmark-btn:focus-visible, .txn-search-btn:focus-visible {
+.header-pill-btn:focus-visible,
+.txn-paste-btn:focus-visible,
+.txn-bookmark-btn:focus-visible,
+.txn-search-btn:focus-visible {
   outline: 2px solid var(--accent, #00e5a0);
   outline-offset: 1px;
 }
 
-.txn-paste-btn:active, .txn-bookmark-btn:active, .txn-search-btn:active {
+.header-pill-btn:active,
+.txn-paste-btn:active,
+.txn-bookmark-btn:active,
+.txn-search-btn:active {
   transform: scale(0.96);
   background: var(--bg-card2, #1a2540);
 }
 
-.txn-paste-btn:disabled, .txn-bookmark-btn:disabled, .txn-search-btn:disabled {
+.header-pill-btn:disabled,
+.txn-paste-btn:disabled,
+.txn-bookmark-btn:disabled,
+.txn-search-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
   transform: none;
 }
 
-/* Hover & Focus states - Light Theme with high contrast */
+/* Light Theme with subtle, theme-appropriate contrast (no white-on-white) */
 [data-theme="light"] .txn-paste-btn,
 [data-theme="light"] .txn-bookmark-btn,
-[data-theme="light"] .txn-search-btn {
-  background: var(--bg-card, #ffffff);
-  border-color: var(--border, rgba(0, 0, 0, 0.12));
-  color: var(--text-primary, #0d1b2a);
+[data-theme="light"] .txn-search-btn,
+[data-theme="light"] .header-pill-btn
+{
+  background: var(--theme-header-btn-bg, var(--bg-card2, #f0f3fa));
+  border-color: var(--border, rgba(0, 0, 0, 0.08));
+  color: var(--theme-header-btn-color, var(--text-primary, #0d1b2a));
 }
 
+[data-theme="light"] .header-pill-btn svg,
 [data-theme="light"] .txn-paste-btn svg,
 [data-theme="light"] .txn-bookmark-btn svg,
 [data-theme="light"] .txn-search-btn svg {
-  stroke: var(--text-secondary, #4a6080);
+  stroke: #ffffff;
 }
 
 [data-theme="light"] .txn-paste-btn:hover,
 [data-theme="light"] .txn-bookmark-btn:hover,
-[data-theme="light"] .txn-search-btn:hover {
+[data-theme="light"] .txn-search-btn:hover,
+[data-theme="light"] .header-pill-btn:hover
+{
   background: var(--bg-hover, #d8e2f3);
   border-color: var(--accent, #00b87a);
   color: var(--text-primary, #0d1b2a) !important;
 }
 
+[data-theme="light"] .header-pill-btn:hover svg,
 [data-theme="light"] .txn-paste-btn:hover svg,
 [data-theme="light"] .txn-bookmark-btn:hover svg,
 [data-theme="light"] .txn-search-btn:hover svg {
   stroke: var(--accent, #00b87a) !important;
 }
 
+[data-theme="light"] .header-pill-btn:active,
 [data-theme="light"] .txn-paste-btn:active,
 [data-theme="light"] .txn-bookmark-btn:active,
 [data-theme="light"] .txn-search-btn:active {
@@ -135,7 +163,7 @@
 
 @media (max-width: 480px) {
   .txn-paste-btn-lbl { display: none; }
-  .txn-paste-btn, .txn-bookmark-btn { padding: 0; width: 34px; justify-content: center; }
+  .txn-paste-btn, .txn-bookmark-btn { padding: 0; width: 28px; justify-content: center; }
 }
 
 /* Row 2 month nav — Compact & Centered on all viewports */

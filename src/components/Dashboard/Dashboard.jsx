@@ -247,26 +247,13 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
           </button>
           <button
             type="button"
-            className="dash-milestones-btn"
+            className="dash-milestones-btn header-pill-btn"
             onClick={() => setShowMilestones(true)}
             title="Financial Milestones & Achievements"
             aria-label="Financial Milestones"
-            style={{
-              padding: '6px 10px',
-              borderRadius: 14,
-              fontSize: '0.8rem',
-              fontWeight: 700,
-              border: '1px solid var(--dash-border)',
-              background: 'var(--dash-surface)',
-              color: 'var(--dash-text-main)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              position: 'relative',
-            }}
+            style={{ position: 'relative' }}
           >
-            <span style={{ fontSize: '1rem', lineHeight: 1 }}>🏆</span>
+            <span style={{ fontSize: '0.9rem', lineHeight: 1 }}>🏆</span>
             {incomeMilestones.achievedCount > 0 && (
               <span style={{
                 position: 'absolute',

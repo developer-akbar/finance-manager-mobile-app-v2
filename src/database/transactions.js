@@ -205,9 +205,38 @@ export const getTransactions = async (filters = {}) => {
   });
 
   if (filters.limit) {
-    return txns.slice(0, filters.limit);
+    const offset = Number(filters.offset) || 0;
+    const limit = Number(filters.limit);
+    return txns.slice(offset, offset + limit);
   }
   return txns;
+};
+
+/**
+ * Repository-level paginated transaction retrieval for a specific account.
+ * Supports limit and offset pagination while returning total count and pagination metadata.
+ */
+export const getAccountTransactionsPaginated = async ({ account, subAccount = null, limit = 100, offset = 0, txns = null } = {}) => {
+  const allForAccount = txns
+    ? txns.filter(t => !account || t.Account === account || t.FromAccount === account || t.ToAccount === account)
+    : await getTransactions({ account });
+  const filtered = subAccount
+    ? allForAccount.filter(t => (t.SubAccount === subAccount || t.from_sub_account === subAccount || t.to_sub_account === subAccount))
+    : allForAccount;
+
+  const total = filtered.length;
+  const numLimit = Number(limit) || 100;
+  const numOffset = Number(offset) || 0;
+  const items = filtered.slice(numOffset, numOffset + numLimit);
+
+  return {
+    transactions: items,
+    total,
+    offset: numOffset,
+    limit: numLimit,
+    hasMore: numOffset + items.length < total,
+    nextOffset: numOffset + items.length < total ? numOffset + items.length : null,
+  };
 };
 
 export const addTransaction = async (data) => {
