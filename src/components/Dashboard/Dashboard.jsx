@@ -7,6 +7,7 @@ import CardOptimizer from '../Accounts/CardOptimizer.jsx';
 import GroupSplitManager from '../Groups/GroupSplitManager.jsx';
 import StockManager from '../Accounts/StockManager.jsx';
 import InvestmentsPortfolio from '../Accounts/InvestmentsPortfolio.jsx';
+import EmiCalculator from './EmiCalculator.jsx';
 import AddTransaction from '../Transactions/AddTransaction.jsx';
 import { useDueAlertState } from '../../hooks/useDueAlertState.js';
 import { calculateIncomeMilestones } from '../../utils/milestones.js';
@@ -60,6 +61,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
   const [showOptimizer, setShowOptimizer] = useState(false);
   const [showDebtTracker, setShowDebtTracker] = useState(false);
   const [showStockManager, setShowStockManager] = useState(false);
+  const [showEmiCalculator, setShowEmiCalculator] = useState(false);
   const [settlePrefill, setSettlePrefill] = useState(null);
 
   // Derive unified dashboard analytics in a single memoized pass
@@ -109,13 +111,15 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
       backInterceptRef.current = () => setShowDebtTracker(false);
     } else if (showStockManager) {
       backInterceptRef.current = () => setShowStockManager(false);
+    } else if (showEmiCalculator) {
+      backInterceptRef.current = () => setShowEmiCalculator(false);
     } else {
       backInterceptRef.current = null;
     }
     return () => {
       if (backInterceptRef) backInterceptRef.current = null;
     };
-  }, [showMilestones, showPortfolio, showGroups, showOptimizer, showDebtTracker, showStockManager, backInterceptRef]);
+  }, [showMilestones, showPortfolio, showGroups, showOptimizer, showDebtTracker, showStockManager, showEmiCalculator, backInterceptRef]);
 
   // Auto-detect SMS / UPI transaction copied to clipboard
   useEffect(() => {
@@ -149,6 +153,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
       setShowOptimizer(false);
       setShowDebtTracker(false);
       setShowStockManager(false);
+      setShowEmiCalculator(false);
       setSettlePrefill(null);
     };
     window.addEventListener('reset-dashboard-view', handleReset);
@@ -224,6 +229,10 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
 
   if (showStockManager) {
     return <StockManager onBack={() => setShowStockManager(false)} backInterceptRef={backInterceptRef} />;
+  }
+
+  if (showEmiCalculator) {
+    return <EmiCalculator onBack={() => setShowEmiCalculator(false)} backInterceptRef={backInterceptRef} />;
   }
 
   return (
@@ -359,6 +368,7 @@ export default function Dashboard({ onAddTransaction, backInterceptRef }) {
               { id: 'groups', label: 'Groups', icon: '👥', onClick: () => setShowGroups(true) },
               { id: 'analytics', label: 'Analytics', icon: '📊', onClick: () => navigate('analytics') },
               { id: 'milestones', label: 'Milestones', icon: '🏆', onClick: () => setShowMilestones(true) },
+              { id: 'emi', label: 'EMI Calculator', icon: '🧮', onClick: () => setShowEmiCalculator(true) },
             ].map(item => (
               <button
                 key={item.id}
