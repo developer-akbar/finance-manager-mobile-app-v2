@@ -18,6 +18,32 @@ import CreditCardFeeWaiverModal from '../Accounts/CreditCardFeeWaiverModal.jsx';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Reusable Trash Icon for modern deletion actions
+// ─────────────────────────────────────────────
+function TrashIcon({ size = 14 }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      width={size}
+      height={size}
+      style={{ flexShrink: 0 }}
+      aria-hidden="true"
+    >
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v6M14 11v6" />
+      <path d="M9 6V4h6v2" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────
 // Confirm Modal — native bottom-sheet alternative
 // ─────────────────────────────────────────────
 export function ConfirmModal({ isOpen, title, message, onConfirm, onCancel, isWarning = false, confirmLabel }) {
@@ -141,6 +167,26 @@ function Kanban({ columns, items, getItemGroup, getItemLabel, onMove, onReorder,
   );
 }
 // ─────────────────────────────────────────────
+// Account Kanban Board
+// ─────────────────────────────────────────────
+export function AccountKanbanBoard({ accounts, groups, onMove, onReorder }) {
+  const uniqueGroups = useMemo(() => [...new Set(groups || [])], [groups]);
+  return (
+    <div className="account-kanban-board">
+      <Kanban
+        columns={uniqueGroups}
+        items={accounts}
+        getItemGroup={a => a.group || ''}
+        getItemLabel={a => a.name}
+        onMove={onMove}
+        onReorder={onReorder}
+        unassignedLabel="Ungrouped"
+      />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // Accounts Manager
 // ─────────────────────────────────────────────
 export function AccountsManager({ onBack }) {
@@ -171,6 +217,43 @@ export function AccountsManager({ onBack }) {
   const [newSubName, setNewSubName] = useState('');
   const [editingSubIdx, setEditingSubIdx] = useState(null);
   const [editSubNameText, setEditSubNameText] = useState('');
+  const [expandedAccts, setExpandedAccts] = useState(new Set());
+  const toggleAcctExpand = (name) => setExpandedAccts(prev => { const s = new Set(prev); s.has(name) ? s.delete(name) : s.add(name); return s; });
+  const [inlineAddSubForAcct, setInlineAddSubForAcct] = useState(null);
+  const [inlineSubAcctName, setInlineSubAcctName] = useState('');
+  const [editingSubInfo, setEditingSubInfo] = useState(null);
+
+  const handleContextualAddSubAcct = async (acctIdx) => {
+    const name = inlineSubAcctName.trim();
+    if (!name) return;
+    const acct = accounts[acctIdx];
+    const existing = acct.subAccounts || [];
+    if (existing.some(s => s.name.toLowerCase() === name.toLowerCase())) {
+      setInlineAddSubForAcct(null);
+      setInlineSubAcctName('');
+      return;
+    }
+    const nextSubs = [...existing, { id: uuid(), name }];
+    const nextAccts = accounts.map((a, idx) => idx === acctIdx ? { ...a, subAccounts: nextSubs } : a);
+    setAccounts(nextAccts);
+    setInlineAddSubForAcct(null);
+    setInlineSubAcctName('');
+    await save(nextAccts);
+  };
+
+  const handleSaveRenameSubInline = async (acctIdx, subIdx, newName) => {
+    const clean = (newName || '').trim();
+    if (!clean) return;
+    const acct = accounts[acctIdx];
+    const sub = acct.subAccounts[subIdx];
+    if (sub.name === clean) { setEditingSubInfo(null); return; }
+    const nextSubs = acct.subAccounts.map((s, idx) => idx === subIdx ? { ...s, name: clean } : s);
+    const nextAccts = accounts.map((a, idx) => idx === acctIdx ? { ...a, subAccounts: nextSubs } : a);
+    setAccounts(nextAccts);
+    setEditingSubInfo(null);
+    await renameSubAccount(acct.name, sub.name, clean);
+    await save(nextAccts);
+  };
 
   const handleAddSub = (acctIdx) => {
     const name = newSubName.trim();
@@ -205,8 +288,8 @@ export function AccountsManager({ onBack }) {
     const count = (state.transactions || []).filter(t => t.Account === acct.name && (t.SubAccount === sub.name || t.FromSubAccount === sub.name || t.ToSubAccount === sub.name)).length;
     if (count > 0) {
       setConfirmState({
-        title: 'Delete Sub Account?',
-        message: `Sub Account "${sub.name}" has ${count} associated transaction(s).\n\nDeleting it will remove the sub-account mapping from these transactions. Do you want to proceed?`,
+        title: `Delete Sub Account: ${sub.name}?`,
+        message: `Sub Account "${sub.name}" (Parent Account: "${acct.name}") has ${count} associated transaction(s).\n\nDeleting it will remove the sub-account mapping from these transactions while preserving your transactions. Do you want to proceed?`,
         isWarning: true,
         confirmLabel: 'Remove Sub-Account',
         onConfirm: async () => {
@@ -220,8 +303,8 @@ export function AccountsManager({ onBack }) {
       });
     } else {
       setConfirmState({
-        title: 'Delete Sub Account?',
-        message: `Are you sure you want to delete sub-account "${sub.name}"?`,
+        title: `Delete Sub Account: ${sub.name}?`,
+        message: `Are you sure you want to delete sub-account "${sub.name}" from parent account "${acct.name}"?`,
         isWarning: false,
         confirmLabel: 'Delete Sub Account',
         onConfirm: async () => {
@@ -260,6 +343,18 @@ export function AccountsManager({ onBack }) {
     finally { setSaving(false); }
   };
 
+  const handleAddGroupPrompt = () => {
+    const name = window.prompt('New group name:');
+    if (name && name.trim()) {
+      const trimmed = name.trim();
+      if (!groups.includes(trimmed)) {
+        const g = [...groups, trimmed];
+        setGroups(g);
+        save(accounts, g);
+      }
+    }
+  };
+
   const addGroup = () => {
     const t = newGrp.trim();
     if (!t || groups.includes(t)) return;
@@ -271,7 +366,7 @@ export function AccountsManager({ onBack }) {
     const count = groupAccounts.length;
     if (count > 0) {
       setConfirmState({
-        title: 'Delete Account Group?',
+        title: `Delete Account Group: ${g}?`,
         message: `Group "${g}" contains ${count} account(s).\n\nDeleting it will move these accounts to the "Ungrouped" section. Do you want to proceed?`,
         isWarning: true,
         confirmLabel: 'Move to Ungrouped',
@@ -286,7 +381,7 @@ export function AccountsManager({ onBack }) {
       });
     } else {
       setConfirmState({
-        title: 'Delete Account Group?',
+        title: `Delete Account Group: ${g}?`,
         message: `Are you sure you want to delete the group "${g}"?`,
         isWarning: false,
         confirmLabel: 'Delete Group',
@@ -341,11 +436,15 @@ export function AccountsManager({ onBack }) {
       });
       return;
     }
+    const acct = accounts.find(a => a.name === name) || {};
+    const subCount = (acct.subAccounts || []).length;
     const count = (state.transactions || []).filter(t => t.Account === name || t.FromAccount === name || t.ToAccount === name).length;
+    const groupInfo = acct.group ? ` (Group: "${acct.group}")` : '';
+
     if (count > 0) {
       setConfirmState({
-        title: 'Move to Ungrouped?',
-        message: `Account "${name}" has ${count} associated transaction(s).\n\nIt cannot be deleted permanently. Clicking delete will remove it from its current group and move it to the "Ungrouped" accounts section. Do you want to proceed?`,
+        title: `Delete Account: ${name}?`,
+        message: `Account "${name}"${groupInfo} has ${count} associated transaction(s)${subCount > 0 ? ` and ${subCount} sub-account(s)` : ''}.\n\nTo preserve your transaction history, it cannot be permanently deleted. Proceeding will move this account to the "Ungrouped" section. Do you want to proceed?`,
         isWarning: true,
         confirmLabel: 'Move to Ungrouped',
         onConfirm: async () => {
@@ -357,8 +456,8 @@ export function AccountsManager({ onBack }) {
       });
     } else {
       setConfirmState({
-        title: 'Delete Account?',
-        message: `Are you sure you want to delete the account "${name}"?`,
+        title: `Delete Account: ${name}?`,
+        message: `Are you sure you want to permanently delete account "${name}"${groupInfo}${subCount > 0 ? ` and its ${subCount} sub-account(s)` : ''}? This action cannot be undone.`,
         isWarning: false,
         confirmLabel: 'Delete Account',
         onConfirm: async () => {
@@ -456,315 +555,482 @@ export function AccountsManager({ onBack }) {
       </div>
 
       <div className="sub-body">
-        {/* Groups section */}
-        <div className="mgr-section-label">Account Groups</div>
-        <div style={{ display: 'flex', gap: 8, padding: '0 var(--page-px) 8px' }}>
-          <input className="form-input" style={{ flex: 1 }} placeholder="New group name" value={newGrp} onChange={e => setNewGrp(e.target.value)} onKeyDown={e => e.key === 'Enter' && addGroup()} spellCheck="true" autoCapitalize="sentences" />
-          <button className="btn btn-primary btn-sm" onClick={addGroup}>Add</button>
-        </div>
-        {uniqueGroups.length > 0 && (
-          <div className="mgr-list">
-            {uniqueGroups.map((g, gi) => (
-              <div key={g}>
-                <div className="mgr-list-row"
-                  draggable
-                  onDragStart={() => onGrpDragStart(gi)}
-                  onDragOver={e => onGrpDragOver(e, gi)}
-                  onDragEnd={onGrpDragEnd}
-                >
-                  <span className="mgr-drag-handle">⠿</span>
-                  <span style={{ fontSize: '1rem', marginRight: 4 }}>📁</span>
-                  <div className="mgr-list-name" style={{ flex: 1 }}>{g}</div>
-                  <button className="mgr-edit-btn" onClick={() => editGrpIdx === gi ? setEditGrpIdx(null) : startEditGrp(gi)}>✏️</button>
-                  <button className="mgr-del-btn" onClick={() => removeGroup(g)}>✕</button>
-                </div>
-                {editGrpIdx === gi && (
-                  <div className="mgr-edit-panel">
-                    <div className="mgr-edit-label">Rename Group</div>
-                    <input className="form-input" value={editGrpName} onChange={e => setEditGrpName(e.target.value)} style={{ marginBottom: 8 }} spellCheck="true" autoCapitalize="sentences" />
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => setEditGrpIdx(null)}>Cancel</button>
-                      <button className="btn btn-primary btn-sm" onClick={saveEditGrp}>Save</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
+        <div className="settings-subpage-container">
+          {/* Groups section */}
+          <div className="mgr-section-hdr">
+            <div className="mgr-hdr-title-wrap">
+              <span>Account Groups</span>
+              <span className="mgr-hdr-badge">⠿ Drag to reorder</span>
+            </div>
           </div>
-        )}
-
-        {/* Accounts section with List/Kanban tabs */}
-        <div className="mgr-section-label">All Accounts ({uniqueAccounts.length})
-          <span style={{ float: 'right', fontWeight: 400, textTransform: 'none', letterSpacing: 0, fontSize: '0.65rem', opacity: 0.6 }}>⠿ drag to set picker order</span>
-        </div>
-        <div style={{ display: 'flex', gap: 8, padding: '0 var(--page-px) 8px' }}>
-          <input className="form-input" style={{ flex: 1 }} placeholder="Account name" value={newAcct} onChange={e => setNewAcct(e.target.value)} onKeyDown={e => e.key === 'Enter' && addAccount()} spellCheck="true" autoCapitalize="sentences" />
-          <button className="btn btn-primary btn-sm" onClick={addAccount}>Add</button>
-        </div>
-
-        {/* Tab toggle */}
-        <div className="mgr-tabs" style={{ padding: '0 var(--page-px) 8px', display: 'flex', gap: 6 }}>
-          <button className={`mgr-tab-btn ${tabMode === 'list' ? 'active' : ''}`} onClick={() => setTabMode('list')}>List</button>
-          <button className={`mgr-tab-btn ${tabMode === 'kanban' ? 'active' : ''}`} onClick={() => setTabMode('kanban')}>Board</button>
-        </div>
-
-        {tabMode === 'kanban' ? (
-          <AccountKanbanBoard
-            accounts={accounts}
-            groups={groups}
-            onMove={handleKanbanMove}
-            onReorder={handleKanbanReorder}
-            onAddGroup={() => {
-              const name = window.prompt('New group name:');
-              if (name && name.trim() && !groups.includes(name.trim())) {
-                const g = [...groups, name.trim()];
-                setGroups(g);
-                save(accounts, g);
-              }
-            }}
-          />
-        ) : (() => {
-          // Build grouped sections preserving flat indices for drag/edit/delete
-          const sections = [];
-          uniqueGroups.forEach(grp => {
-            const items = uniqueAccounts.map((a, i) => ({ a, i })).filter(({ a }) => (a.group || '') === grp);
-            if (items.length) sections.push({ label: grp, icon: '📁', items });
-          });
-          const ungrouped = uniqueAccounts.map((a, i) => ({ a, i })).filter(({ a }) => !a.group || !uniqueGroups.includes(a.group));
-          if (ungrouped.length) sections.push({ label: 'Ungrouped', icon: '📋', items: ungrouped, muted: true });
-
-          const renderEditPanel = (i) => (
-            <div className="mgr-edit-panel">
-              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                Edit Account
-              </div>
-
-              {/* Name */}
-              <div className="mgr-edit-field">
-                <label className="mgr-edit-field-label">Account Name</label>
-                <input
-                  className="form-input"
-                  value={editName}
-                  onChange={e => setEditName(e.target.value)}
-                  spellCheck="true"
-                  autoCapitalize="sentences"
-                  placeholder="e.g. HDFC Credit, Amazon Pay ICICI"
-                />
-                <div className="mgr-edit-field-warn">⚠ Renaming updates all associated transactions</div>
-              </div>
-
-              {/* Group & Type in 2 columns */}
-              <div className="mgr-edit-grid-2">
-                <div className="mgr-edit-field">
-                  <label className="mgr-edit-field-label">Group</label>
-                  <select className="form-input" value={editGrp} onChange={e => setEditGrp(e.target.value)}>
-                    <option value="">No group</option>
-                    {uniqueGroups.map(g => <option key={g}>{g}</option>)}
-                  </select>
-                </div>
-                <div className="mgr-edit-field">
-                  <label className="mgr-edit-field-label">Account Type</label>
-                  <select className="form-input" value={editAcctType} onChange={e => { setEditAcctType(e.target.value); setEditErrors({}); }}>
-                    <option value="">Regular</option>
-                    <option value="Credit Card">💳 Credit Card</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Credit Card Settings */}
-              {editAcctType === 'Credit Card' && (
-                <div className="cc-config-panel" style={{ margin: '4px 0 0' }}>
-                  <div className="cc-config-title">💳 Credit Card Settings</div>
-                  <div className="mgr-edit-grid-2">
-                    <div className="mgr-edit-field">
-                      <label className="mgr-edit-field-label">
-                        Statement Date <span className="form-label-hint">(day bill closes)</span>
-                      </label>
-                      <input
-                        className={`form-input${editErrors.settlementDate ? ' input-error' : ''}`}
-                        type="number" inputMode="numeric" min="1" max="28"
-                        placeholder="e.g. 18"
-                        value={editSettleDay}
-                        onChange={e => { setEditSettleDay(e.target.value); setEditErrors(p => ({ ...p, settlementDate: '' })); }}
-                      />
-                      {editErrors.settlementDate && <div className="form-error">{editErrors.settlementDate}</div>}
-                      {editSettleDay && !editErrors.settlementDate && (() => {
-                        const sd = parseInt(editSettleDay, 10);
-                        if (sd >= 1 && sd <= 28) {
-                          const now = new Date(), cy = now.getFullYear(), cm = now.getMonth(), cd = now.getDate();
-                          let cycleStart, cycleEnd;
-                          if (cd >= sd) { cycleStart = new Date(cy, cm, sd); cycleEnd = new Date(cy, cm + 1, sd - 1); }
-                          else { cycleStart = new Date(cy, cm - 1, sd); cycleEnd = new Date(cy, cm, sd - 1); }
-                          const fmt = d => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-                          return <div className="mgr-edit-field-hint">Billing: <strong>{fmt(cycleStart)} – {fmt(cycleEnd)}</strong></div>;
-                        }
-                        return null;
-                      })()}
-                    </div>
-
-                    <div className="mgr-edit-field">
-                      <label className="mgr-edit-field-label">
-                        Payment Due Days <span className="form-label-hint">(after statement)</span>
-                      </label>
-                      <input
-                        className={`form-input${editErrors.paymentDueDays ? ' input-error' : ''}`}
-                        type="number" inputMode="numeric" min="1" max="30"
-                        placeholder="e.g. 19"
-                        value={editPayDays}
-                        onChange={e => { setEditPayDays(e.target.value); setEditErrors(p => ({ ...p, paymentDueDays: '' })); }}
-                      />
-                      {editErrors.paymentDueDays && <div className="form-error">{editErrors.paymentDueDays}</div>}
-                      {editSettleDay && editPayDays && !editErrors.settlementDate && !editErrors.paymentDueDays && (() => {
-                        const sd = parseInt(editSettleDay, 10), pd = parseInt(editPayDays, 10);
-                        if (sd >= 1 && sd <= 28 && pd >= 1 && pd <= 30) {
-                          const now = new Date(), cy = now.getFullYear(), cm = now.getMonth(), cd = now.getDate();
-                          let stmtDate;
-                          if (cd >= sd) stmtDate = new Date(cy, cm, sd); else stmtDate = new Date(cy, cm - 1, sd);
-                          const dueDate = new Date(stmtDate); dueDate.setDate(dueDate.getDate() + pd);
-                          return <div className="mgr-edit-field-hint">Due: <strong>{dueDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong></div>;
-                        }
-                        return null;
-                      })()}
-                    </div>
+          <div className="mgr-add-bar">
+            <input className="form-input mgr-input-lg" style={{ flex: 1 }} placeholder="New group name" value={newGrp} onChange={e => setNewGrp(e.target.value)} onKeyDown={e => e.key === 'Enter' && addGroup()} spellCheck="true" autoCapitalize="sentences" />
+            <button className="btn btn-primary mgr-btn-lg" onClick={addGroup}>Add</button>
+          </div>
+          {uniqueGroups.length > 0 && (
+            <div className="mgr-list">
+              {uniqueGroups.map((g, gi) => (
+                <div key={g}>
+                  <div className="mgr-list-row"
+                    draggable
+                    onDragStart={() => onGrpDragStart(gi)}
+                    onDragOver={e => onGrpDragOver(e, gi)}
+                    onDragEnd={onGrpDragEnd}
+                  >
+                    <span className="mgr-drag-handle" title="Drag to reorder">⠿</span>
+                    <span style={{ fontSize: '1rem', marginRight: 4 }}>📁</span>
+                    <div className="mgr-list-name" style={{ flex: 1 }}>{g}</div>
+                    <button className="mgr-edit-btn" title="Edit account group" onClick={() => editGrpIdx === gi ? setEditGrpIdx(null) : startEditGrp(gi)}>✏️</button>
+                    <button className="mgr-del-btn" title="Delete Account Group" aria-label="Delete Account Group" onClick={() => removeGroup(g)}><TrashIcon /></button>
                   </div>
-                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  {editGrpIdx === gi && (
+                    <div className="mgr-inline-edit-card">
+                      <div className="mgr-inline-edit-hdr">
+                        <div className="mgr-inline-edit-title">
+                          <span>Editing Account Group: <strong>{g}</strong></span>
+                        </div>
+                      </div>
+                      <div className="mgr-inline-edit-row">
+                        <input
+                          className="form-input mgr-inline-edit-input"
+                          value={editGrpName}
+                          onChange={e => setEditGrpName(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') saveEditGrp();
+                            if (e.key === 'Escape') setEditGrpIdx(null);
+                          }}
+                          autoFocus
+                          spellCheck="true"
+                          autoCapitalize="sentences"
+                        />
+                        <div className="mgr-inline-edit-actions">
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditGrpIdx(null)}>Cancel</button>
+                          <button type="button" className="btn btn-primary btn-sm" onClick={saveEditGrp}>Save</button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Accounts section with List/Kanban tabs */}
+          <div className="mgr-section-hdr">
+            <div className="mgr-hdr-title-wrap">
+              <span>All Accounts ({uniqueAccounts.length})</span>
+              <span className="mgr-hdr-badge">⠿ Drag to reorder</span>
+            </div>
+          </div>
+          <div className="mgr-add-bar">
+            <input className="form-input mgr-input-lg" style={{ flex: 1 }} placeholder="Account name" value={newAcct} onChange={e => setNewAcct(e.target.value)} onKeyDown={e => e.key === 'Enter' && addAccount()} spellCheck="true" autoCapitalize="sentences" />
+            <button className="btn btn-primary mgr-btn-lg" onClick={addAccount}>Add</button>
+          </div>
+
+          {/* Tab toggle & Board Actions toolbar */}
+          <div className="mgr-tabs-wrap">
+            <div className="mgr-tabs-group">
+              <button className={`mgr-tab-btn ${tabMode === 'list' ? 'active' : ''}`} onClick={() => setTabMode('list')}>List</button>
+              <button className={`mgr-tab-btn ${tabMode === 'kanban' ? 'active' : ''}`} onClick={() => setTabMode('kanban')}>Board</button>
+            </div>
+            {tabMode === 'kanban' && (
+              <button
+                type="button"
+                className="btn btn-primary mgr-board-add-btn"
+                onClick={handleAddGroupPrompt}
+              >
+                + Add Group
+              </button>
+            )}
+          </div>
+
+          {tabMode === 'kanban' ? (
+            <AccountKanbanBoard
+              accounts={accounts}
+              groups={groups}
+              onMove={handleKanbanMove}
+              onReorder={handleKanbanReorder}
+            />
+          ) : (() => {
+            // Build grouped sections preserving flat indices for drag/edit/delete
+            const sections = [];
+            uniqueGroups.forEach(grp => {
+              const items = uniqueAccounts.map((a, i) => ({ a, i })).filter(({ a }) => (a.group || '') === grp);
+              if (items.length) sections.push({ label: grp, icon: '📁', items });
+            });
+            const ungrouped = uniqueAccounts.map((a, i) => ({ a, i })).filter(({ a }) => !a.group || !uniqueGroups.includes(a.group));
+            if (ungrouped.length) sections.push({ label: 'Ungrouped', icon: '📋', items: ungrouped, muted: true });
+
+            const renderEditPanel = (i) => (
+              <div className="mgr-edit-card">
+                <div className="mgr-edit-card-hdr">
+                  <div className="mgr-edit-card-title">
+                    Editing Account: <strong>{accounts[i]?.name}</strong>
+                  </div>
+                  <div className="mgr-edit-card-context">
+                    Parent Group: <strong>{accounts[i]?.group || 'Ungrouped'}</strong>
+                  </div>
+                </div>
+
+                {/* Name */}
+                <div className="mgr-field-group">
+                  <label className="mgr-label">Account Name</label>
+                  <input
+                    className="form-input mgr-input-lg"
+                    value={editName}
+                    onChange={e => setEditName(e.target.value)}
+                    spellCheck="true"
+                    autoCapitalize="sentences"
+                    placeholder="e.g. HDFC Credit, Amazon Pay ICICI"
+                  />
+                  <div style={{ fontSize: '0.74rem', color: 'var(--gold)', marginTop: 2, fontWeight: 600 }}>⚠ Renaming updates all associated transactions</div>
+                </div>
+
+                {/* Group & Type in 2 columns */}
+                <div className="mgr-grid-2">
+                  <div className="mgr-field-group">
+                    <label className="mgr-label">Group</label>
+                    <select className="form-input mgr-input-lg" value={editGrp} onChange={e => setEditGrp(e.target.value)}>
+                      <option value="">No group</option>
+                      {uniqueGroups.map(g => <option key={g}>{g}</option>)}
+                    </select>
+                  </div>
+                  <div className="mgr-field-group">
+                    <label className="mgr-label">Account Type</label>
+                    <select className="form-input mgr-input-lg" value={editAcctType} onChange={e => { setEditAcctType(e.target.value); setEditErrors({}); }}>
+                      <option value="">Regular</option>
+                      <option value="Credit Card">💳 Credit Card</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Credit Card Settings */}
+                {editAcctType === 'Credit Card' && (
+                  <div className="mgr-cc-panel">
+                    <div className="mgr-cc-panel-title">💳 Credit Card Settings</div>
+                    <div className="mgr-grid-2">
+                      <div className="mgr-field-group">
+                        <label className="mgr-label">
+                          Statement Date <span className="form-label-hint">(day bill closes)</span>
+                        </label>
+                        <input
+                          className={`form-input mgr-input-lg${editErrors.settlementDate ? ' input-error' : ''}`}
+                          type="number" inputMode="numeric" min="1" max="28"
+                          placeholder="e.g. 18"
+                          value={editSettleDay}
+                          onChange={e => { setEditSettleDay(e.target.value); setEditErrors(p => ({ ...p, settlementDate: '' })); }}
+                        />
+                        {editErrors.settlementDate && <div className="form-error">{editErrors.settlementDate}</div>}
+                        {editSettleDay && !editErrors.settlementDate && (() => {
+                          const sd = parseInt(editSettleDay, 10);
+                          if (sd >= 1 && sd <= 28) {
+                            const now = new Date(), cy = now.getFullYear(), cm = now.getMonth(), cd = now.getDate();
+                            let cycleStart, cycleEnd;
+                            if (cd >= sd) { cycleStart = new Date(cy, cm, sd); cycleEnd = new Date(cy, cm + 1, sd - 1); }
+                            else { cycleStart = new Date(cy, cm - 1, sd); cycleEnd = new Date(cy, cm, sd - 1); }
+                            const fmt = d => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+                            return <div className="form-hint" style={{ marginTop: 4 }}>Billing: <strong>{fmt(cycleStart)} – {fmt(cycleEnd)}</strong></div>;
+                          }
+                          return null;
+                        })()}
+                      </div>
+
+                      <div className="mgr-field-group">
+                        <label className="mgr-label">
+                          Payment Due Days <span className="form-label-hint">(after statement)</span>
+                        </label>
+                        <input
+                          className={`form-input mgr-input-lg${editErrors.paymentDueDays ? ' input-error' : ''}`}
+                          type="number" inputMode="numeric" min="1" max="30"
+                          placeholder="e.g. 19"
+                          value={editPayDays}
+                          onChange={e => { setEditPayDays(e.target.value); setEditErrors(p => ({ ...p, paymentDueDays: '' })); }}
+                        />
+                        {editErrors.paymentDueDays && <div className="form-error">{editErrors.paymentDueDays}</div>}
+                        {editSettleDay && editPayDays && !editErrors.settlementDate && !editErrors.paymentDueDays && (() => {
+                          const sd = parseInt(editSettleDay, 10), pd = parseInt(editPayDays, 10);
+                          if (sd >= 1 && sd <= 28 && pd >= 1 && pd <= 30) {
+                            const now = new Date(), cy = now.getFullYear(), cm = now.getMonth(), cd = now.getDate();
+                            let stmtDate;
+                            if (cd >= sd) stmtDate = new Date(cy, cm, sd); else stmtDate = new Date(cy, cm - 1, sd);
+                            const dueDate = new Date(stmtDate); dueDate.setDate(dueDate.getDate() + pd);
+                            return <div className="form-hint" style={{ marginTop: 4 }}>Due: <strong>{dueDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong></div>;
+                          }
+                          return null;
+                        })()}
+                      </div>
+                    </div>
+                    <div className="mgr-cc-waiver-section">
                       <div>
-                        <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)' }}>Annual Fee &amp; Waiver Settings</div>
-                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Configure annual fee, spend threshold, and qualification period</div>
+                        <div className="mgr-cc-waiver-title">Annual Fee &amp; Waiver Settings</div>
+                        <div className="mgr-cc-waiver-subtitle">Configure annual fee, spend threshold, and qualification period</div>
                       </div>
                       <button
                         type="button"
-                        className="btn btn-secondary"
-                        style={{ fontSize: '0.72rem', padding: '4px 10px', height: 28 }}
+                        className="btn btn-secondary mgr-cc-waiver-btn"
                         onClick={() => setWaiverModalCard(accounts.find(a => a.name === editingAcct) || { name: editingAcct })}
                       >
                         ⚙️ Configure Waiver
                       </button>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Card / Account Last 4 Digits */}
-              <div className="mgr-edit-field">
-                <label className="mgr-edit-field-label">
-                  Card / Account Last 4 Digits
-                </label>
-                <input
-                  className="form-input"
-                  type="text"
-                  placeholder="e.g. 9009"
-                  maxLength={19}
-                  value={editCardLast4}
-                  onChange={e => setEditCardLast4(e.target.value)}
-                />
-                <div className="mgr-edit-field-hint" style={{ marginTop: 2 }}>
-                  {editCardLast4 && (
-                    <span style={{ color: 'var(--accent)', fontWeight: 700, marginRight: 6 }}>
-                      Masked preview: •••• {(editCardLast4.replace(/\D/g, '').slice(-4)) || editCardLast4} ·
-                    </span>
-                  )}
-                  Helps auto-identify this account when parsing SMS or UPI alerts.
+                {/* Responsive 2-column section for Card Identification (Left) & Sub Accounts (Right) */}
+                <div className="mgr-grid-card-sub">
+                  {/* LEFT COLUMN: Card Identification / Last 4 Digits */}
+                  <div className="mgr-field-group">
+                    <label className="mgr-label">
+                      Card / Account Last 4 Digits
+                    </label>
+                    <input
+                      className="form-input mgr-input-lg"
+                      type="text"
+                      placeholder="e.g. 9009"
+                      maxLength={19}
+                      style={{ maxWidth: '320px' }}
+                      value={editCardLast4}
+                      onChange={e => setEditCardLast4(e.target.value)}
+                    />
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 4 }}>
+                      {editCardLast4 && (
+                        <span style={{ color: 'var(--accent)', fontWeight: 700, marginRight: 6 }}>
+                          Masked preview: •••• {(editCardLast4.replace(/\D/g, '').slice(-4)) || editCardLast4} ·
+                        </span>
+                      )}
+                      Helps auto-identify this account when parsing SMS or UPI alerts.
+                    </div>
+                  </div>
+
+                  {/* RIGHT COLUMN: Sub Accounts */}
+                  <div className="mgr-field-group">
+                    <label className="mgr-label">Sub Accounts</label>
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                      <input
+                        className="form-input form-input-sm mgr-input-lg"
+                        style={{ flex: 1, height: 40 }}
+                        placeholder="Add sub-account (e.g. Zerodha, Groww)"
+                        value={newSubName}
+                        onChange={e => setNewSubName(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleAddSub(i))}
+                      />
+                      <button className="btn btn-primary mgr-btn-lg" style={{ height: 40, minWidth: 80 }} onClick={(e) => { e.preventDefault(); handleAddSub(i); }}>Add</button>
+                    </div>
+
+                    {accounts[i]?.subAccounts && accounts[i].subAccounts.length > 0 && (
+                      <div className="mgr-sub-list" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '6px 12px', background: 'var(--bg-card2)' }}>
+                        {accounts[i].subAccounts.map((sub, si) => (
+                          <div key={sub.id || si} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: si < accounts[i].subAccounts.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                            {editingSubIdx === si ? (
+                              <div className="mgr-inline-edit-card" style={{ flex: 1, padding: '8px 10px', borderRadius: 8 }}>
+                                <div className="mgr-inline-edit-hdr">
+                                  <div className="mgr-inline-edit-title">
+                                    <span>Editing Sub Account: <strong>{sub.name}</strong></span>
+                                  </div>
+                                  <div className="mgr-inline-edit-context">Parent Account: <strong>{accounts[i]?.name}</strong></div>
+                                </div>
+                                <div className="mgr-inline-edit-row">
+                                  <input
+                                    className="form-input mgr-inline-edit-input"
+                                    value={editSubNameText}
+                                    onChange={e => setEditSubNameText(e.target.value)}
+                                    onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleSaveRenameSub(i, si))}
+                                    autoFocus
+                                  />
+                                  <div className="mgr-inline-edit-actions">
+                                    <button type="button" className="btn btn-ghost btn-sm" onClick={(e) => { e.preventDefault(); setEditingSubIdx(null); }}>Cancel</button>
+                                    <button type="button" className="btn btn-primary btn-sm" onClick={(e) => { e.preventDefault(); handleSaveRenameSub(i, si); }}>Save</button>
+                                  </div>
+                                </div>
+                                <div className="mgr-inline-edit-warn">⚠ Updates all matching transactions</div>
+                              </div>
+                            ) : (
+                              <>
+                                <span className="mgr-tree-branch">└─</span>
+                                <div style={{ flex: 1, fontSize: '0.875rem', fontWeight: 600 }}>{sub.name}</div>
+                                <button className="mgr-edit-btn" style={{ width: 28, height: 28 }} title="Edit sub-account" onClick={(e) => { e.preventDefault(); setEditingSubIdx(si); setEditSubNameText(sub.name); }}>✏️</button>
+                                <button type="button" className="mgr-del-btn" style={{ width: 28, height: 28 }} title="Delete Sub Account" aria-label="Delete Sub Account" onClick={(e) => { e.preventDefault(); handleDeleteSub(i, si); }}><TrashIcon size={12} /></button>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Form Action Buttons: Right-aligned Cancel (neutral) and Save Changes (green primary) */}
+                <div className="mgr-form-actions">
+                  <button type="button" className="btn btn-ghost mgr-action-btn" onClick={() => setEditingAcct(null)}>Cancel</button>
+                  <button type="button" className="btn btn-primary mgr-action-btn" onClick={saveEdit}>Save Changes</button>
                 </div>
               </div>
+            );
 
-              {/* Sub Accounts manager */}
-              <div className="mgr-edit-field" style={{ marginTop: 12 }}>
-                <label className="mgr-edit-field-label">Sub Accounts</label>
-                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                  <input
-                    className="form-input form-input-sm"
-                    style={{ flex: 1 }}
-                    placeholder="Add sub-account (e.g. Zerodha, Groww)"
-                    value={newSubName}
-                    onChange={e => setNewSubName(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleAddSub(i))}
-                  />
-                  <button className="btn btn-primary btn-sm" onClick={(e) => { e.preventDefault(); handleAddSub(i); }}>Add</button>
-                </div>
-                
-                {accounts[i]?.subAccounts && accounts[i].subAccounts.length > 0 && (
-                  <div className="mgr-sub-list" style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '4px 8px', background: 'var(--bg-card2)' }}>
-                    {accounts[i].subAccounts.map((sub, si) => (
-                      <div key={sub.id || si} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0', borderBottom: si < accounts[i].subAccounts.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                        {editingSubIdx === si ? (
-                          <div style={{ display: 'flex', gap: 6, flex: 1 }}>
-                            <input
-                              className="form-input form-input-sm"
-                              style={{ flex: 1 }}
-                              value={editSubNameText}
-                              onChange={e => setEditSubNameText(e.target.value)}
-                              onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleSaveRenameSub(i, si))}
-                            />
-                            <button className="btn btn-ghost btn-sm" onClick={(e) => { e.preventDefault(); setEditingSubIdx(null); }}>Cancel</button>
-                            <button className="btn btn-primary btn-sm" onClick={(e) => { e.preventDefault(); handleSaveRenameSub(i, si); }}>Save</button>
+            return (
+              <div className="mgr-list">
+                {uniqueAccounts.length === 0 && <div className="mgr-empty">No accounts yet</div>}
+                {sections.map(({ label, icon, items, muted }) => (
+                  <div key={label}>
+                    <div className="mgr-acct-group-header" style={muted ? { opacity: 0.55 } : {}}>
+                      <span>{icon} {label}</span>
+                      <span className="mgr-acct-group-count">{items.length}</span>
+                    </div>
+                    {items.map(({ a, i }) => (
+                      <div key={a.name}
+                        draggable
+                        onDragStart={() => onDragStart(i)}
+                        onDragOver={e => onDragOver(e, i)}
+                        onDragEnd={onDragEnd}
+                      >
+                        <div className="mgr-list-row mgr-list-row-indented">
+                          <span className="mgr-drag-handle" title="Drag to reorder">⠿</span>
+                          <div className="mgr-list-content" style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              <div className="mgr-list-name">{a.name}</div>
+                              {(a.cardLast4 || a.card_last4) && (
+                                <span style={{ fontSize: '0.62rem', background: 'var(--bg-card2)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 6, color: 'var(--accent)', fontWeight: 700 }}>
+                                  •••• {a.cardLast4 || a.card_last4}
+                                </span>
+                              )}
+                            </div>
+                            {a.acctType === 'Credit Card' && (
+                              <div style={{ fontSize: '0.63rem', color: 'var(--accent)', fontWeight: 700 }}>
+                                💳 Credit Card{a.settlementDate ? ` · settles ${a.settlementDate}th` : ''}
+                              </div>
+                            )}
                           </div>
-                        ) : (
-                          <>
-                            <div style={{ flex: 1, fontSize: '0.82rem', fontWeight: 600 }}>{sub.name}</div>
-                            <button className="mgr-edit-btn" style={{ padding: '2px 6px' }} onClick={(e) => { e.preventDefault(); setEditingSubIdx(si); setEditSubNameText(sub.name); }}>✏️</button>
-                            <button className="mgr-del-btn" style={{ padding: '2px 6px' }} onClick={(e) => { e.preventDefault(); handleDeleteSub(i, si); }}>✕</button>
-                          </>
+
+                          {a.subAccounts && a.subAccounts.length > 0 ? (
+                            <button
+                              type="button"
+                              className="mgr-accordion-btn mgr-badge-count"
+                              onClick={(e) => { e.stopPropagation(); toggleAcctExpand(a.name); }}
+                            >
+                              <span>{a.subAccounts.length} subs</span>
+                              <span style={{ fontSize: '0.8rem', transition: 'transform 0.2s', transform: expandedAccts.has(a.name) ? 'rotate(180deg)' : 'rotate(0deg)', display: 'inline-block' }}>▾</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="mgr-accordion-btn mgr-badge-count"
+                              style={{ opacity: 0.75 }}
+                              onClick={(e) => { e.stopPropagation(); toggleAcctExpand(a.name); }}
+                            >
+                              <span>+ sub</span>
+                            </button>
+                          )}
+
+                          <button className="mgr-edit-btn" title="Edit account" onClick={() => editingAcct === a.name ? setEditingAcct(null) : startEdit(a)}>✏️</button>
+                          <button className="mgr-del-btn" title="Delete Account" aria-label="Delete Account" onClick={() => removeAccount(a.name)}><TrashIcon /></button>
+                        </div>
+
+                        {/* Expanded sub-accounts tree */}
+                        {expandedAccts.has(a.name) && (
+                          <div className="mgr-tree-container">
+                            {(a.subAccounts || []).map((sub, si) => (
+                              <div key={sub.id || si}>
+                                {editingSubInfo?.acctIdx === i && editingSubInfo?.subIdx === si ? (
+                                  <div className="mgr-inline-edit-card" style={{ borderRadius: 8, margin: '2px 0' }}>
+                                    <div className="mgr-inline-edit-hdr">
+                                      <div className="mgr-inline-edit-title">
+                                        <span>Editing Sub Account: <strong>{sub.name}</strong></span>
+                                      </div>
+                                      <div className="mgr-inline-edit-context">Parent Account: <strong>{a.name}</strong></div>
+                                    </div>
+                                    <div className="mgr-inline-edit-row">
+                                      <input
+                                        className="form-input mgr-inline-edit-input"
+                                        value={editingSubInfo.name}
+                                        onChange={e => setEditingSubInfo(prev => ({ ...prev, name: e.target.value }))}
+                                        onKeyDown={e => {
+                                          if (e.key === 'Enter') handleSaveRenameSubInline(i, si, editingSubInfo.name);
+                                          if (e.key === 'Escape') setEditingSubInfo(null);
+                                        }}
+                                        autoFocus
+                                        spellCheck="true"
+                                        autoCapitalize="sentences"
+                                      />
+                                      <div className="mgr-inline-edit-actions">
+                                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditingSubInfo(null)}>Cancel</button>
+                                        <button type="button" className="btn btn-primary btn-sm" onClick={() => handleSaveRenameSubInline(i, si, editingSubInfo.name)}>Save</button>
+                                      </div>
+                                    </div>
+                                    <div className="mgr-inline-edit-warn">⚠ Updates all matching transactions</div>
+                                  </div>
+                                ) : (
+                                  <div className="mgr-tree-row">
+                                    <span className="mgr-tree-branch">└─</span>
+                                    <div className="mgr-tree-name">{sub.name}</div>
+                                    <button
+                                      type="button"
+                                      className="mgr-edit-btn"
+                                      style={{ width: 28, height: 28 }}
+                                      title="Edit sub-account"
+                                      onClick={() => setEditingSubInfo({ acctIdx: i, subIdx: si, name: sub.name })}
+                                    >
+                                      ✏️
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="mgr-del-btn"
+                                      style={{ width: 28, height: 28 }}
+                                      title="Delete Sub Account"
+                                      aria-label="Delete Sub Account"
+                                      onClick={() => handleDeleteSub(i, si)}
+                                    >
+                                      <TrashIcon size={12} />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+
+                            {/* Contextual + Add Sub Account */}
+                            {inlineAddSubForAcct === a.name ? (
+                              <div className="mgr-inline-add-card">
+                                <div className="mgr-inline-add-context">Add Sub Account · Parent: <strong>{a.name}</strong></div>
+                                <div className="mgr-inline-edit-row">
+                                  <input
+                                    className="form-input mgr-inline-edit-input"
+                                    placeholder="Sub-account name (e.g. Zerodha, Groww)"
+                                    value={inlineSubAcctName}
+                                    onChange={e => setInlineSubAcctName(e.target.value)}
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter') handleContextualAddSubAcct(i);
+                                      if (e.key === 'Escape') { setInlineAddSubForAcct(null); setInlineSubAcctName(''); }
+                                    }}
+                                    autoFocus
+                                    spellCheck="true"
+                                    autoCapitalize="sentences"
+                                  />
+                                  <div className="mgr-inline-edit-actions">
+                                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setInlineAddSubForAcct(null); setInlineSubAcctName(''); }}>Cancel</button>
+                                    <button type="button" className="btn btn-primary btn-sm" onClick={() => handleContextualAddSubAcct(i)}>Add</button>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="mgr-add-child-trigger"
+                                onClick={() => { setInlineAddSubForAcct(a.name); setInlineSubAcctName(''); }}
+                              >
+                                + Add Sub Account
+                              </button>
+                            )}
+                          </div>
                         )}
+
+                        {editingAcct === a.name && renderEditPanel(i)}
                       </div>
                     ))}
                   </div>
-                )}
+                ))}
               </div>
-
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setEditingAcct(null)}>Cancel</button>
-                <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveEdit}>Save</button>
-              </div>
-            </div>
-          );
-
-          return (
-            <div className="mgr-list">
-              {uniqueAccounts.length === 0 && <div className="mgr-empty">No accounts yet</div>}
-              {sections.map(({ label, icon, items, muted }) => (
-                <div key={label}>
-                  <div className="mgr-acct-group-header" style={muted ? { opacity: 0.55 } : {}}>
-                    <span>{icon} {label}</span>
-                    <span className="mgr-acct-group-count">{items.length}</span>
-                  </div>
-                  {items.map(({ a, i }) => (
-                    <div key={a.name}
-                      draggable
-                      onDragStart={() => onDragStart(i)}
-                      onDragOver={e => onDragOver(e, i)}
-                      onDragEnd={onDragEnd}
-                    >
-                      <div className="mgr-list-row mgr-list-row-indented">
-                        <span className="mgr-drag-handle">⠿</span>
-                        <div className="mgr-list-content" style={{ flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <div className="mgr-list-name">{a.name}</div>
-                            {(a.cardLast4 || a.card_last4) && (
-                              <span style={{ fontSize: '0.62rem', background: 'var(--bg-card2)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 6, color: 'var(--accent)', fontWeight: 700 }}>
-                                •••• {a.cardLast4 || a.card_last4}
-                              </span>
-                            )}
-                          </div>
-                          {a.acctType === 'Credit Card' && (
-                            <div style={{ fontSize: '0.63rem', color: 'var(--accent)', fontWeight: 700 }}>
-                              💳 Credit Card{a.settlementDate ? ` · settles ${a.settlementDate}th` : ''}
-                            </div>
-                          )}
-                        </div>
-                        <button className="mgr-edit-btn" onClick={() => editingAcct === a.name ? setEditingAcct(null) : startEdit(a)}>✏️</button>
-                        <button className="mgr-del-btn" onClick={() => removeAccount(a.name)}>✕</button>
-                      </div>
-                      {editingAcct === a.name && renderEditPanel(i)}
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          );
-        })()}
+            );
+          })()}
+        </div>
         <ConfirmModal isOpen={!!confirmState} {...confirmState} onCancel={() => setConfirmState(null)} />
         {waiverModalCard && (
           <CreditCardFeeWaiverModal
@@ -804,6 +1070,24 @@ export function CategoriesManager({ onBack }) {
   const [toast, setToast] = useState('');
   const [confirmState, setConfirmState] = useState(null);
   const dragIdx = useRef(null);
+  const [inlineAddSubFor, setInlineAddSubFor] = useState(null);
+  const [inlineSubName, setInlineSubName] = useState('');
+
+  const handleContextualAddSub = async (parentCatName) => {
+    const t = inlineSubName.trim();
+    if (!t) return;
+    const cat = cats.find(c => c.name === parentCatName);
+    if (!cat || cat.subcategories.includes(t)) {
+      setInlineAddSubFor(null);
+      setInlineSubName('');
+      return;
+    }
+    const upd = cats.map(c => c.name === parentCatName ? { ...c, subcategories: [...c.subcategories, t] } : c);
+    setCats(upd);
+    setInlineAddSubFor(null);
+    setInlineSubName('');
+    await save(upd);
+  };
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2200); };
 
@@ -838,6 +1122,7 @@ export function CategoriesManager({ onBack }) {
 
   const removeCat = (i) => {
     const name = cats[i].name;
+    const subCount = (cats[i].subcategories || []).length;
     if (name === 'Unassigned') {
       setConfirmState({
         title: 'Cannot Delete Category',
@@ -849,8 +1134,8 @@ export function CategoriesManager({ onBack }) {
     const count = (state.transactions || []).filter(t => t.Category === name).length;
     if (count > 0) {
       setConfirmState({
-        title: 'Delete Category?',
-        message: `Category "${name}" has ${count} associated transaction(s).\n\nDeleting it will move these transactions to the "Unassigned" category. Do you want to proceed?`,
+        title: `Delete Category: ${name}?`,
+        message: `Category "${name}" has ${count} associated transaction(s)${subCount > 0 ? ` and ${subCount} subcategory/subcategories` : ''}.\n\nDeleting it will move these transactions to the "Unassigned" fallback category. Do you want to proceed?`,
         isWarning: true,
         confirmLabel: 'Move to Unassigned',
         onConfirm: async () => {
@@ -867,8 +1152,8 @@ export function CategoriesManager({ onBack }) {
       });
     } else {
       setConfirmState({
-        title: 'Delete Category?',
-        message: `Are you sure you want to delete category "${name}"?`,
+        title: `Delete Category: ${name}?`,
+        message: `Are you sure you want to delete category "${name}"${subCount > 0 ? ` and its ${subCount} subcategory/subcategories` : ''}?`,
         isWarning: false,
         confirmLabel: 'Delete Category',
         onConfirm: async () => {
@@ -887,8 +1172,8 @@ export function CategoriesManager({ onBack }) {
     const count = (state.transactions || []).filter(t => t.Category === catName && t.Subcategory === subName).length;
     if (count > 0) {
       setConfirmState({
-        title: 'Delete Subcategory?',
-        message: `Subcategory "${subName}" has ${count} associated transaction(s).\n\nDeleting it will remove the subcategory from these transactions. Do you want to proceed?`,
+        title: `Delete Subcategory: ${subName}?`,
+        message: `Subcategory "${subName}" (Parent Category: "${catName}") has ${count} associated transaction(s).\n\nDeleting it will remove the subcategory from these transactions while preserving the parent category. Do you want to proceed?`,
         isWarning: true,
         confirmLabel: 'Remove Subcategory',
         onConfirm: async () => {
@@ -901,8 +1186,8 @@ export function CategoriesManager({ onBack }) {
       });
     } else {
       setConfirmState({
-        title: 'Delete Subcategory?',
-        message: `Are you sure you want to delete subcategory "${subName}"?`,
+        title: `Delete Subcategory: ${subName}?`,
+        message: `Are you sure you want to delete subcategory "${subName}" from parent category "${catName}"?`,
         isWarning: false,
         confirmLabel: 'Delete Subcategory',
         onConfirm: async () => {
@@ -965,8 +1250,11 @@ export function CategoriesManager({ onBack }) {
 
   const renderSection = (list, typeLabel) => (
     <>
-      <div className="mgr-section-label">{typeLabel} Categories
-        <span style={{ float: 'right', fontWeight: 400, textTransform: 'none', letterSpacing: 0, fontSize: '0.65rem', opacity: 0.6 }}>⠿ drag to set picker order</span>
+      <div className="mgr-section-hdr">
+        <div className="mgr-hdr-title-wrap">
+          <span>{typeLabel} Categories</span>
+          <span className="mgr-hdr-badge">⠿ Drag to reorder</span>
+        </div>
       </div>
       <div className="mgr-list">
         {list.length === 0 && <div className="mgr-empty">No {typeLabel.toLowerCase()} categories</div>}
@@ -980,65 +1268,152 @@ export function CategoriesManager({ onBack }) {
                 onDragOver={e => onDragOver(e, i)}
                 onDragEnd={onDragEnd}
               >
-                <span className="mgr-drag-handle">⠿</span>
+                <span className="mgr-drag-handle" title="Drag to reorder">⠿</span>
                 <div className="mgr-list-name" style={{ flex: 1 }}>{c.name}</div>
-                {c.subcategories.length > 0 && (
+                {c.subcategories.length > 0 ? (
                   <button
-                    className="mgr-accordion-btn"
+                    type="button"
+                    className="mgr-accordion-btn mgr-badge-count"
                     onClick={(e) => { e.stopPropagation(); toggleExpand(c.name); }}
                   >
                     <span>{c.subcategories.length} subs</span>
                     <span style={{ fontSize: '0.8rem', transition: 'transform 0.2s', transform: expanded.has(c.name) ? 'rotate(180deg)' : 'rotate(0deg)', display: 'inline-block' }}>▾</span>
                   </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="mgr-accordion-btn mgr-badge-count"
+                    style={{ opacity: 0.75 }}
+                    onClick={(e) => { e.stopPropagation(); toggleExpand(c.name); }}
+                  >
+                    <span>+ sub</span>
+                  </button>
                 )}
-                <button className="mgr-edit-btn" onClick={() => editCat?.i === i && editCat?.j === undefined ? setEditCat(null) : startEditCat(i)}>✏️</button>
-                <button className="mgr-del-btn" onClick={() => removeCat(i)}>✕</button>
+                <button className="mgr-edit-btn" title="Edit category" onClick={() => editCat?.i === i && editCat?.j === undefined ? setEditCat(null) : startEditCat(i)}>✏️</button>
+                <button className="mgr-del-btn" title="Delete Category" aria-label="Delete Category" onClick={() => removeCat(i)}><TrashIcon /></button>
               </div>
               {editCat?.i === i && editCat?.j === undefined && (
-                <div className="mgr-edit-panel">
-                  <div className="mgr-edit-label">Rename Category</div>
-                  <input className="form-input" value={editName} onChange={e => setEditName(e.target.value)} style={{ marginBottom: 8 }} spellCheck="true" autoCapitalize="sentences" />
-                  <div className="mgr-edit-warn">⚠ Updates all matching transactions</div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                    <button className="btn btn-ghost btn-sm" onClick={() => setEditCat(null)}>Cancel</button>
-                    <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+                <div className="mgr-inline-edit-card">
+                  <div className="mgr-inline-edit-hdr">
+                    <div className="mgr-inline-edit-title">
+                      <span>Editing Category: <strong>{c.name}</strong></span>
+                    </div>
                   </div>
+                  <div className="mgr-inline-edit-row">
+                    <input
+                      className="form-input mgr-inline-edit-input"
+                      value={editName}
+                      onChange={e => setEditName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') saveEdit();
+                        if (e.key === 'Escape') setEditCat(null);
+                      }}
+                      autoFocus
+                      spellCheck="true"
+                      autoCapitalize="sentences"
+                    />
+                    <div className="mgr-inline-edit-actions">
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditCat(null)}>Cancel</button>
+                      <button type="button" className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+                    </div>
+                  </div>
+                  <div className="mgr-inline-edit-warn">⚠ Updates all matching transactions</div>
                 </div>
               )}
-              {c.subcategories.length > 0 && expanded.has(c.name) && c.subcategories.map((s, j) => (
-                <div key={s}>
-                  <div className="mgr-list-row mgr-sub-row">
-                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginRight: 4 }}>└</span>
-                    <div style={{ flex: 1 }}>
-                      <div className="mgr-sub-name" style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{s}</div>
-                      <select className="mgr-inline-sel" value={c.name}
-                        onChange={e => {
-                          const newPar = e.target.value; if (newPar === c.name) return;
-                          const u = cats.map((x, xi) => {
-                            if (xi === i) return { ...x, subcategories: x.subcategories.filter((_, si) => si !== j) };
-                            if (x.name === newPar) return { ...x, subcategories: [...x.subcategories, s] };
-                            return x;
-                          });
-                          setCats(u); save(u);
-                        }}>
-                        {cats.map(x => <option key={x.name}>{x.name}</option>)}
-                      </select>
+              {expanded.has(c.name) && (
+                <div className="mgr-tree-container">
+                  {c.subcategories.map((s, j) => (
+                    <div key={s}>
+                      {editCat?.i === i && editCat?.j === j ? (
+                        <div className="mgr-inline-edit-card" style={{ borderRadius: 8, margin: '2px 0' }}>
+                          <div className="mgr-inline-edit-hdr">
+                            <div className="mgr-inline-edit-title">
+                              <span>Editing Subcategory: <strong>{s}</strong></span>
+                            </div>
+                            <div className="mgr-inline-edit-context">Parent Category: <strong>{c.name}</strong></div>
+                          </div>
+                          <div className="mgr-inline-edit-row">
+                            <input
+                              className="form-input mgr-inline-edit-input"
+                              value={editName}
+                              onChange={e => setEditName(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveEdit();
+                                if (e.key === 'Escape') setEditCat(null);
+                              }}
+                              autoFocus
+                              spellCheck="true"
+                              autoCapitalize="sentences"
+                            />
+                            <div className="mgr-inline-edit-actions">
+                              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditCat(null)}>Cancel</button>
+                              <button type="button" className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+                            </div>
+                          </div>
+                          <div className="mgr-inline-edit-warn">⚠ Updates all matching transactions</div>
+                        </div>
+                      ) : (
+                        <div className="mgr-tree-row">
+                          <span className="mgr-tree-branch">└─</span>
+                          <div className="mgr-tree-name">{s}</div>
+                          <select
+                            className="mgr-inline-sel"
+                            value={c.name}
+                            style={{ width: 'auto', maxWidth: '180px', margin: 0, padding: '3px 8px', height: 28 }}
+                            onChange={e => {
+                              const newPar = e.target.value; if (newPar === c.name) return;
+                              const u = cats.map((x, xi) => {
+                                if (xi === i) return { ...x, subcategories: x.subcategories.filter((_, si) => si !== j) };
+                                if (x.name === newPar) return { ...x, subcategories: [...x.subcategories, s] };
+                                return x;
+                              });
+                              setCats(u); save(u);
+                            }}
+                          >
+                            {cats.map(x => <option key={x.name}>{x.name}</option>)}
+                          </select>
+                          <button className="mgr-edit-btn" style={{ width: 28, height: 28 }} title="Edit subcategory" onClick={() => editCat?.i === i && editCat?.j === j ? setEditCat(null) : startEditSub(i, j)}>✏️</button>
+                          <button type="button" className="mgr-del-btn" style={{ width: 28, height: 28 }} title="Delete Subcategory" aria-label="Delete Subcategory" onClick={() => removeSub(i, j)}><TrashIcon size={12} /></button>
+                        </div>
+                      )}
                     </div>
-                    <button className="mgr-edit-btn" style={{ width: 22, height: 22 }} onClick={() => editCat?.i === i && editCat?.j === j ? setEditCat(null) : startEditSub(i, j)}>✏️</button>
-                    <button className="mgr-del-btn" style={{ width: 22, height: 22 }} onClick={() => removeSub(i, j)}>✕</button>
-                  </div>
-                  {editCat?.i === i && editCat?.j === j && (
-                    <div className="mgr-edit-panel">
-                      <div className="mgr-edit-label">Rename Subcategory</div>
-                      <input className="form-input" value={editName} onChange={e => setEditName(e.target.value)} style={{ marginBottom: 8 }} spellCheck="true" autoCapitalize="sentences" />
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button className="btn btn-ghost btn-sm" onClick={() => setEditCat(null)}>Cancel</button>
-                        <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+                  ))}
+
+                  {/* Contextual + Add Subcategory */}
+                  {inlineAddSubFor === c.name ? (
+                    <div className="mgr-inline-add-card">
+                      <div className="mgr-inline-add-context">Add Subcategory · Parent: <strong>{c.name}</strong></div>
+                      <div className="mgr-inline-edit-row">
+                        <input
+                          className="form-input mgr-inline-edit-input"
+                          placeholder="e.g. Veggies, Milk"
+                          value={inlineSubName}
+                          onChange={e => setInlineSubName(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') handleContextualAddSub(c.name);
+                            if (e.key === 'Escape') { setInlineAddSubFor(null); setInlineSubName(''); }
+                          }}
+                          autoFocus
+                          spellCheck="true"
+                          autoCapitalize="sentences"
+                        />
+                        <div className="mgr-inline-edit-actions">
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setInlineAddSubFor(null); setInlineSubName(''); }}>Cancel</button>
+                          <button type="button" className="btn btn-primary btn-sm" onClick={() => handleContextualAddSub(c.name)}>Add</button>
+                        </div>
                       </div>
                     </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="mgr-add-child-trigger"
+                      onClick={() => { setInlineAddSubFor(c.name); setInlineSubName(''); }}
+                    >
+                      + Add Subcategory
+                    </button>
                   )}
                 </div>
-              ))}
+              )}
             </div>
           );
         })}
@@ -1055,43 +1430,43 @@ export function CategoriesManager({ onBack }) {
         {toast && <span style={{ fontSize: '0.7rem', color: 'var(--green)', marginLeft: 8 }}>{toast}</span>}
       </div>
       <div className="sub-body">
-        <>
+        <div className="settings-subpage-container">
           {/* Add Category */}
-          <div className="mgr-section-label">Add Category</div>
-          <div style={{ padding: '0 var(--page-px) 8px', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-            <div className="form-group" style={{ flex: 1 }}>
-              <label className="form-label">Name</label>
-              <input className="form-input" value={newCat} onChange={e => setNewCat(e.target.value)} onKeyDown={e => e.key === 'Enter' && addCat()} spellCheck="true" autoCapitalize="sentences" />
+          <div className="mgr-section-hdr">Add Category</div>
+          <div className="mgr-form-grid-cat">
+            <div className="mgr-field-group">
+              <label className="mgr-label">Category Name</label>
+              <input className="form-input mgr-input-lg" placeholder="e.g. Groceries, Entertainment" value={newCat} onChange={e => setNewCat(e.target.value)} onKeyDown={e => e.key === 'Enter' && addCat()} spellCheck="true" autoCapitalize="sentences" />
             </div>
-            <div className="form-group">
-              <label className="form-label">Type</label>
-              <select className="form-input" value={newType} onChange={e => setNewType(e.target.value)}>
+            <div className="mgr-field-group">
+              <label className="mgr-label">Category Type</label>
+              <select className="form-input mgr-input-lg" value={newType} onChange={e => setNewType(e.target.value)}>
                 <option>Expense</option><option>Income</option>
               </select>
             </div>
-            <button className="btn btn-primary btn-sm" style={{ marginBottom: 0, flexShrink: 0 }} onClick={addCat}>Add</button>
+            <button className="btn btn-primary mgr-btn-lg" onClick={addCat}>Add</button>
           </div>
 
           {/* Add Subcategory */}
-          <div className="mgr-section-label">Add Subcategory</div>
-          <div style={{ padding: '0 var(--page-px) 8px', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-            <div className="form-group" style={{ flex: 1 }}>
-              <label className="form-label">Parent Category</label>
-              <select className="form-input" value={newSubParent} onChange={e => setNSP(e.target.value)}>
+          <div className="mgr-section-hdr">Add Subcategory</div>
+          <div className="mgr-form-grid-subcat">
+            <div className="mgr-field-group">
+              <label className="mgr-label">Parent Category</label>
+              <select className="form-input mgr-input-lg" value={newSubParent} onChange={e => setNSP(e.target.value)}>
                 <option value="">Select parent</option>
                 {cats.map(c => <option key={c.name}>{c.name}</option>)}
               </select>
             </div>
-            <div className="form-group" style={{ flex: 1 }}>
-              <label className="form-label">Name</label>
-              <input className="form-input" value={newSub} onChange={e => setNewSub(e.target.value)} onKeyDown={e => e.key === 'Enter' && addSub()} spellCheck="true" autoCapitalize="sentences" />
+            <div className="mgr-field-group">
+              <label className="mgr-label">Subcategory Name</label>
+              <input className="form-input mgr-input-lg" placeholder="e.g. Veggies, Milk" value={newSub} onChange={e => setNewSub(e.target.value)} onKeyDown={e => e.key === 'Enter' && addSub()} spellCheck="true" autoCapitalize="sentences" />
             </div>
-            <button className="btn btn-primary btn-sm" style={{ flexShrink: 0 }} onClick={addSub}>Add</button>
+            <button className="btn btn-primary mgr-btn-lg" onClick={addSub}>Add</button>
           </div>
 
           {renderSection(expCats, 'Expense')}
           {renderSection(incCats, 'Income')}
-        </>
+        </div>
         <ConfirmModal isOpen={!!confirmState} {...confirmState} onCancel={() => setConfirmState(null)} />
         <div className="h-8" />
       </div>
@@ -1407,8 +1782,8 @@ function DataManager({ onBack, onOpenCloudSync }) {
 
   // Encrypted Backup & Restore State
   const [cryptoModal, setCryptoModal] = useState(null); // null | { mode: 'export' } | { mode: 'import', rawText, fileName }
-  const [cryptoPin, setCryptoPin]     = useState('');
-  const [cryptoErr, setCryptoErr]     = useState('');
+  const [cryptoPin, setCryptoPin] = useState('');
+  const [cryptoErr, setCryptoErr] = useState('');
 
   // Stats
   const txnCount = transactions.length;
@@ -1551,7 +1926,7 @@ function DataManager({ onBack, onOpenCloudSync }) {
         let existingPrices = {};
         try {
           existingPrices = JSON.parse(state.settings?.holdings_prices || '{}');
-        } catch {}
+        } catch { }
         const newPrices = { ...existingPrices, ...prices };
         await updateSettings({ holdings_prices: JSON.stringify(newPrices) });
         setStatus({ type: 'success', msg: `✓ Successfully updated current market prices for ${count} holdings.` });
@@ -2601,7 +2976,7 @@ function DataManager({ onBack, onOpenCloudSync }) {
               <div className="loader-subtext" style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: 4, textAlign: 'center' }}>
                 This will take a moment, please wait...
               </div>
-              
+
               {importProgress && (
                 <div className="loader-progress-wrap" style={{ width: '100%', marginTop: 16 }}>
                   <div className="dm-progress-bar" style={{ marginBottom: 6 }}>
@@ -2760,7 +3135,7 @@ function ProfileManager({ onBack }) {
           </>
         )}
       </div>
-      
+
       {/* Biometrics */}
       {window.Capacitor && window.Capacitor.isNativePlatform?.() && (
         <>
@@ -2770,7 +3145,7 @@ function ProfileManager({ onBack }) {
               <div style={{ flex: 1, marginRight: 16 }}>
                 <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>Biometric Unlock</div>
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                  {!biometricsAvailable 
+                  {!biometricsAvailable
                     ? '⚠️ Biometric hardware not available or enrolled on this device.'
                     : 'Use fingerprint or face recognition to unlock FinMan.'}
                 </div>
@@ -2856,7 +3231,7 @@ function BudgetsManager({ onBack }) {
               <div className="budget-detail-top">
                 <div className="budget-detail-name">{b.category}</div>
                 <div className="budget-detail-period">{b.period}</div>
-                <button className="mgr-del-btn" onClick={() => removeBudget(b.category)}>✕</button>
+                <button className="mgr-del-btn" title="Delete Budget" aria-label="Delete Budget" onClick={() => removeBudget(b.category)}><TrashIcon /></button>
               </div>
               <div className="budget-detail-vals">
                 <span style={{ color: pct > 85 ? 'var(--expense)' : 'var(--income)' }}>{formatINR(spend)}</span>
@@ -2946,10 +3321,10 @@ function AppearanceManager({ onBack }) {
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               {[
                 { id: 'default', name: 'Default', hex: theme === 'dark' ? '#1a2540' : '#e2e8f0', label: 'Default' },
-                { id: 'red',      name: 'Red',     hex: '#e11d48', label: 'Red' },
-                { id: 'pink',     name: 'Pink',    hex: '#ec4899', label: 'Pink' },
-                { id: 'green',    name: 'Green',   hex: '#059669', label: 'Green' },
-                { id: 'blue',     name: 'Blue',    hex: '#2563eb', label: 'Blue' },
+                { id: 'red', name: 'Red', hex: '#e11d48', label: 'Red' },
+                { id: 'pink', name: 'Pink', hex: '#ec4899', label: 'Pink' },
+                { id: 'green', name: 'Green', hex: '#059669', label: 'Green' },
+                { id: 'blue', name: 'Blue', hex: '#2563eb', label: 'Blue' },
                 { id: 'darkgray', name: 'Dark Gray', hex: '#374151', label: 'Dark Gray' },
               ].map(c => {
                 const isSelected = headerColor === c.id;
@@ -3167,7 +3542,7 @@ function RecurringManager({ onBack }) {
                 onClick={() => modifyRecurringRule(rule.id, { status: 'active' })}>Resume</button>
             )}
             <button className="btn btn-sm btn-danger"
-              onClick={() => setConfirmDelete(rule)}>✕</button>
+              title="Delete Rule" aria-label="Delete Rule" onClick={() => setConfirmDelete(rule)}><TrashIcon size={12} /></button>
           </div>
         </div>
       </div>
