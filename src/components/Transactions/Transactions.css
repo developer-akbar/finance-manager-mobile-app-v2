@@ -69,14 +69,14 @@
 .txn-paste-btn svg, .txn-bookmark-btn svg {
   width: 13px;
   height: 13px;
-  stroke: #ffffff;
+  stroke: #ffffff !important;
   flex-shrink: 0;
 }
 
 .txn-search-btn svg {
   width: 14px;
   height: 14px;
-  stroke: #ffffff;
+  stroke: #ffffff !important;
   flex-shrink: 0;
 }
 
@@ -134,7 +134,7 @@
 [data-theme="light"] .txn-paste-btn svg,
 [data-theme="light"] .txn-bookmark-btn svg,
 [data-theme="light"] .txn-search-btn svg {
-  stroke: #ffffff;
+  stroke: #ffffff !important;
 }
 
 [data-theme="light"] .txn-paste-btn:hover,

@@ -12,6 +12,7 @@ import InvestmentsPortfolio from './InvestmentsPortfolio.jsx';
 import BackButton from '../Common/BackButton.jsx';
 import CalendarDatePicker from '../Common/CalendarDatePicker.jsx';
 import InvestmentPlansModal from '../Investments/InvestmentPlansModal.jsx';
+import CreditCardFeeWaiverModal from './CreditCardFeeWaiverModal.jsx';
 import { BulkSelectionBar, SearchView } from '../Transactions/Transactions.jsx';
 import useSwipe from '../../hooks/useSwipe.js';
 import { useDueAlertState } from '../../hooks/useDueAlertState.js';
@@ -673,6 +674,7 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
   const [viewYear, setViewYear] = useState(now.getFullYear());
   const [viewMonth, setViewMonth] = useState(now.getMonth());
   const [showCal, setShowCal] = useState(false);
+  const [showWaiverModal, setShowWaiverModal] = useState(false);
   const [selectedTargetDate, setSelectedTargetDate] = useState(null);
   const groupRefs = React.useRef({});
   const bodyRef = React.useRef(null);
@@ -1268,8 +1270,18 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           <div className="page-hdr-title">{acctName}{subAccountName ? ` › ${subAccountName}` : ''}</div>
           <div className="page-hdr-sub">{subAccountName ? 'Sub Account' : 'Account'} · {acctTxns.length} total txns</div>
         </div>
+        {isCreditCardAccount && (
+          <button
+            className="header-pill-btn"
+            onClick={() => setShowWaiverModal(true)}
+            title="Configure Annual Fee Waiver Settings"
+            style={{ marginRight: 6 }}
+          >
+            <span>⚙️</span> Fee Waiver
+          </button>
+        )}
         <button className="txn-search-btn" onClick={() => setShowSearch(true)} title="Search transactions">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="14" height="14"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round" width="14" height="14"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         </button>
       </div>
 
@@ -1645,6 +1657,15 @@ function AccountDetail({ acctName, subAccountName, allTxns, onBack, backIntercep
           onClose={() => setPayPrefill(null)}
           onSaveAndContinue={() => setPayPrefill(null)}
           backInterceptRef={backInterceptRef}
+        />
+      )}
+
+      {/* Credit Card Annual Fee Waiver Modal */}
+      {isCreditCardAccount && showWaiverModal && (
+        <CreditCardFeeWaiverModal
+          card={drillAcct || { id: acctName, name: acctName }}
+          isOpen={showWaiverModal}
+          onClose={() => setShowWaiverModal(false)}
         />
       )}
 

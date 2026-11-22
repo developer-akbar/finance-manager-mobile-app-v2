@@ -22,6 +22,7 @@ import { findAppDataFile, readAppDataFile, uploadAppDataFile, listFileRevisions,
 import { bundleRelatedTransactions, findTransactionDifferences } from '../utils/finmanPayload.js';
 import { getSyncSessionKey } from './syncSession.js';
 import { DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES } from '../database/defaults.js';
+import { mergeCardConfigs3Way, mergeCardHistory3Way, mergeCardOverrides3Way } from '../utils/feeWaiverStorage.js';
 
 export const SNAPSHOT_FILENAME = 'finman_cloud_sync_snapshot.finman';
 export const CURRENT_ENGINE_VERSION = 1;
@@ -74,7 +75,10 @@ export const SYNCED_SETTINGS_WHITELIST = [
   'budget_start_day',
   'portfolio_benchmark',
   'profileName',
-  'name'
+  'name',
+  'cc_fee_waiver_configs',
+  'cc_fee_waiver_history',
+  'cc_fee_waiver_overrides'
 ];
 
 /**
@@ -653,6 +657,76 @@ export function reconcileSettings3Way({
       }
       continue;
     }
+
+    // Special collection handling for cc_fee_waiver_configs
+    if (key === 'cc_fee_waiver_configs') {
+      const mergedConfigs = mergeCardConfigs3Way({
+        baseRaw: baseVal,
+        localRaw: localVal,
+        cloudRaw: cloudVal
+      });
+      const mergedValStr = JSON.stringify(mergedConfigs);
+      let localCanonical = '{}';
+      let cloudCanonical = '{}';
+      try { localCanonical = JSON.stringify(typeof localVal === 'string' ? JSON.parse(localVal || '{}') : (localVal || {})); } catch {}
+      try { cloudCanonical = JSON.stringify(typeof cloudVal === 'string' ? JSON.parse(cloudVal || '{}') : (cloudVal || {})); } catch {}
+
+      mergedSettings.cc_fee_waiver_configs = mergedValStr;
+      if (mergedValStr !== localCanonical) {
+        plannedLocalUpdates.cc_fee_waiver_configs = mergedValStr;
+      }
+      if (mergedValStr !== cloudCanonical) {
+        plannedCloudUpdates.cc_fee_waiver_configs = mergedValStr;
+      }
+      continue;
+    }
+
+    // Special collection handling for cc_fee_waiver_history
+    if (key === 'cc_fee_waiver_history') {
+      const mergedHistory = mergeCardHistory3Way({
+        baseRaw: baseVal,
+        localRaw: localVal,
+        cloudRaw: cloudVal
+      });
+      const mergedValStr = JSON.stringify(mergedHistory);
+      let localCanonical = '[]';
+      let cloudCanonical = '[]';
+      try { localCanonical = JSON.stringify(typeof localVal === 'string' ? JSON.parse(localVal || '[]') : (localVal || [])); } catch {}
+      try { cloudCanonical = JSON.stringify(typeof cloudVal === 'string' ? JSON.parse(cloudVal || '[]') : (cloudVal || [])); } catch {}
+
+      mergedSettings.cc_fee_waiver_history = mergedValStr;
+      if (mergedValStr !== localCanonical) {
+        plannedLocalUpdates.cc_fee_waiver_history = mergedValStr;
+      }
+      if (mergedValStr !== cloudCanonical) {
+        plannedCloudUpdates.cc_fee_waiver_history = mergedValStr;
+      }
+      continue;
+    }
+
+    // Special collection handling for cc_fee_waiver_overrides
+    if (key === 'cc_fee_waiver_overrides') {
+      const mergedOverrides = mergeCardOverrides3Way({
+        baseRaw: baseVal,
+        localRaw: localVal,
+        cloudRaw: cloudVal
+      });
+      const mergedValStr = JSON.stringify(mergedOverrides);
+      let localCanonical = '{}';
+      let cloudCanonical = '{}';
+      try { localCanonical = JSON.stringify(typeof localVal === 'string' ? JSON.parse(localVal || '{}') : (localVal || {})); } catch {}
+      try { cloudCanonical = JSON.stringify(typeof cloudVal === 'string' ? JSON.parse(cloudVal || '{}') : (cloudVal || {})); } catch {}
+
+      mergedSettings.cc_fee_waiver_overrides = mergedValStr;
+      if (mergedValStr !== localCanonical) {
+        plannedLocalUpdates.cc_fee_waiver_overrides = mergedValStr;
+      }
+      if (mergedValStr !== cloudCanonical) {
+        plannedCloudUpdates.cc_fee_waiver_overrides = mergedValStr;
+      }
+      continue;
+    }
+
 
     // Scalar settings 3-way merge
     const localChanged = localVal !== baseVal;

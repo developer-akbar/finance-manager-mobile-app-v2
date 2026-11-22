@@ -1,0 +1,764 @@
+/* FeeWaiverTrackerSection.css — Credit Card Annual Fee Waiver Tracker Styling */
+
+.fee-waiver-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.fee-waiver-section-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fee-waiver-section-title {
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: var(--text-muted, #8899bb);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fee-waiver-card-item {
+  background: var(--bg-card, #111c44);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--r-lg, 16px);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: border-color 0.2s ease;
+}
+
+.fee-waiver-card-item:hover {
+  border-color: rgba(0, 229, 160, 0.3);
+}
+
+.fee-waiver-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fee-waiver-card-name {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text-primary, #ffffff);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fee-waiver-structure-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.fee-waiver-structure-badge.ltf {
+  background: rgba(0, 229, 160, 0.15);
+  color: var(--green, #00e5a0);
+  border: 1px solid rgba(0, 229, 160, 0.3);
+}
+
+.fee-waiver-structure-badge.fixed {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.fee-waiver-structure-badge.waiver {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.fee-waiver-status-badge {
+  font-size: 0.7rem;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 8px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fee-waiver-status-badge.in_progress {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.fee-waiver-status-badge.target_reached {
+  background: rgba(0, 229, 160, 0.15);
+  color: var(--green, #00e5a0);
+  border: 1px solid rgba(0, 229, 160, 0.3);
+}
+
+.fee-waiver-status-badge.target_missed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.fee-waiver-status-badge.lifetime_free {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.fee-waiver-status-badge.pending_bank_confirmation {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.fee-waiver-status-badge.bank_confirmed_waived {
+  background: rgba(0, 229, 160, 0.2);
+  color: #00e5a0;
+  border: 1px solid #00e5a0;
+}
+
+.fee-waiver-status-badge.bank_confirmed_charged {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border: 1px solid #ef4444;
+}
+
+.fee-waiver-progress-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fee-waiver-progress-bar-wrap {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-card2, rgba(255, 255, 255, 0.08));
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.fee-waiver-progress-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+
+.fee-waiver-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  background: var(--bg-card2, rgba(255, 255, 255, 0.04));
+  padding: 10px 12px;
+  border-radius: var(--r-md, 10px);
+}
+
+.fee-waiver-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fee-waiver-metric-label {
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: var(--text-muted, #8899bb);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.fee-waiver-metric-val {
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: var(--text-primary, #ffffff);
+}
+
+.fee-waiver-metric-val.green {
+  color: var(--green, #00e5a0);
+}
+
+.fee-waiver-metric-val.amber {
+  color: #fbbf24;
+}
+
+.fee-waiver-metric-val.red {
+  color: #f87171;
+}
+
+.fee-waiver-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.fee-waiver-btn-toggle {
+  background: none;
+  border: none;
+  color: var(--accent, #00e5a0);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  transition: opacity 0.15s ease;
+}
+
+.fee-waiver-btn-toggle:hover {
+  text-decoration: underline;
+}
+
+.fee-waiver-btn-secondary {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  background: var(--bg-card2, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary, #ffffff);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.fee-waiver-btn-secondary:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.12));
+  border-color: var(--accent, #00e5a0);
+}
+
+/* ── Expandable Breakdown Drawer ── */
+.fee-waiver-breakdown-panel {
+  background: var(--bg-base, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: fadeIn 0.15s ease;
+}
+
+/* Formula Reconciliation Card */
+.fee-waiver-formula-card {
+  background: var(--bg-card, #111c44);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fee-waiver-formula-title {
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--text-muted, #8899bb);
+  letter-spacing: 0.5px;
+}
+
+.fee-waiver-formula-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+}
+
+.fee-waiver-formula-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.fee-waiver-formula-lbl {
+  font-size: 0.62rem;
+  color: var(--text-muted, #8899bb);
+}
+
+.fee-waiver-formula-val {
+  font-weight: 800;
+}
+
+.fee-waiver-formula-val.pos {
+  color: var(--income, #00e5a0);
+}
+
+.fee-waiver-formula-val.neg {
+  color: var(--expense, #f87171);
+}
+
+.fee-waiver-formula-val.total {
+  color: #60a5fa;
+  font-size: 0.9rem;
+}
+
+.fee-waiver-formula-op {
+  font-weight: 800;
+  color: var(--text-muted, #8899bb);
+  padding: 0 2px;
+}
+
+/* Filter Tab Pills */
+.fee-waiver-tab-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.fee-waiver-tab-pill {
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  background: var(--bg-card2, rgba(255, 255, 255, 0.05));
+  color: var(--text-muted, #8899bb);
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.fee-waiver-tab-pill:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.1));
+  color: var(--text-primary, #ffffff);
+}
+
+.fee-waiver-tab-pill.active {
+  background: var(--accent, #0075FF);
+  color: #ffffff;
+  border-color: var(--accent, #0075FF);
+}
+
+.fee-waiver-tab-pill.warning {
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.fee-waiver-tab-pill.warning.active {
+  background: #f59e0b;
+  color: #0a0f1e;
+  border-color: #f59e0b;
+}
+
+/* Transaction List */
+.fee-waiver-breakdown-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fee-waiver-breakdown-hdr {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: var(--text-muted, #8899bb);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fee-waiver-txn-list-scroll {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 2px;
+}
+
+.fee-waiver-txn-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-card, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.04));
+  font-size: 0.72rem;
+  gap: 10px;
+}
+
+.fee-waiver-txn-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.fee-waiver-txn-note {
+  font-weight: 700;
+  color: var(--text-primary, #ffffff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fee-waiver-txn-meta {
+  font-size: 0.64rem;
+  color: var(--text-muted, #8899bb);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fee-waiver-txn-amt-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.fee-waiver-txn-amt {
+  font-weight: 800;
+  font-size: 0.8rem;
+}
+
+.fee-waiver-txn-amt.pos {
+  color: var(--income, #00e5a0);
+}
+
+.fee-waiver-txn-amt.neg {
+  color: var(--expense, #f87171);
+}
+
+.fee-waiver-txn-amt.excluded {
+  color: var(--text-muted, #8899bb);
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+
+.fee-waiver-txn-tag {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.fee-waiver-txn-tag.tag-purchase {
+  background: rgba(0, 229, 160, 0.12);
+  color: var(--green, #00e5a0);
+}
+
+.fee-waiver-txn-tag.tag-transfer {
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+}
+
+.fee-waiver-txn-tag.tag-refund {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+}
+
+.fee-waiver-txn-tag.tag-ambiguous {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+.fee-waiver-txn-tag.tag-excluded {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted, #8899bb);
+}
+
+.fee-waiver-ambiguous-box {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.7rem;
+  color: #fbbf24;
+}
+
+.fee-waiver-empty-card {
+  padding: 24px;
+  text-align: center;
+  background: var(--bg-card, #111c44);
+  border: 1px dashed var(--border, rgba(255, 255, 255, 0.15));
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── Unified Credit Card Overview Styling ── */
+.unified-card-container {
+  background: var(--bg-card, #111c44);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--r-lg, 16px);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: border-color 0.2s ease;
+}
+
+.unified-card-container:hover {
+  border-color: rgba(0, 229, 160, 0.3);
+}
+
+.unified-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  padding-bottom: 10px;
+}
+
+.unified-card-name {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text-primary, #ffffff);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.unified-card-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.unified-card-group-title {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--text-muted, #8899bb);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.unified-billing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  background: var(--bg-card2, rgba(255, 255, 255, 0.04));
+  padding: 10px 12px;
+  border-radius: var(--r-md, 10px);
+}
+
+.unified-billing-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.unified-billing-item.highlight {
+  text-align: right;
+}
+
+.unified-item-lbl {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--text-muted, #8899bb);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.unified-item-val {
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: var(--text-primary, #ffffff);
+}
+
+.grace-highlight {
+  color: var(--accent, #00e5a0);
+  font-size: 1rem;
+}
+
+.unified-unconfigured-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--bg-card2, rgba(255, 255, 255, 0.04));
+  border-radius: 10px;
+  gap: 10px;
+}
+
+.unified-ltf-box, .unified-fixed-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--bg-card2, rgba(255, 255, 255, 0.04));
+  border-radius: 10px;
+  gap: 10px;
+}
+
+/* ── Manual Eligibility Overrides Styling ── */
+.fee-waiver-override-badge {
+  font-size: 0.58rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+}
+
+.fee-waiver-override-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.fee-waiver-override-btn {
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.fee-waiver-override-btn.include {
+  background: rgba(0, 229, 160, 0.15);
+  color: var(--green, #00e5a0);
+  border-color: rgba(0, 229, 160, 0.35);
+}
+
+.fee-waiver-override-btn.include:hover {
+  background: rgba(0, 229, 160, 0.25);
+}
+
+.fee-waiver-override-btn.exclude {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.fee-waiver-override-btn.exclude:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.fee-waiver-override-btn.reset {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted, #8899bb);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.fee-waiver-override-btn.reset:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+/* ── Distinct Description and Notes Row Styling ── */
+.fee-waiver-desc-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.fee-waiver-field-tag {
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+.fee-waiver-field-tag.desc-tag {
+  background: rgba(77, 159, 255, 0.15);
+  color: var(--income, #4d9fff);
+  border: 1px solid rgba(77, 159, 255, 0.3);
+}
+
+.fee-waiver-field-tag.note-tag {
+  background: rgba(255, 209, 102, 0.15);
+  color: var(--gold, #ffd166);
+  border: 1px solid rgba(255, 209, 102, 0.3);
+}
+
+.fee-waiver-desc-text {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-primary, #f0f4ff);
+  word-break: break-word;
+  overflow-wrap: break-word;
+  line-height: 1.35;
+}
+
+.fee-waiver-note-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(255, 209, 102, 0.05);
+  border-left: 2.5px solid var(--gold, #ffd166);
+  border-radius: 0 6px 6px 0;
+  margin-top: 2px;
+  min-width: 0;
+}
+
+.fee-waiver-note-text {
+  font-size: 0.70rem;
+  color: var(--text-secondary, #a0b4cc);
+  font-style: italic;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  line-height: 1.35;
+}
+
+[data-theme="light"] .fee-waiver-field-tag.desc-tag {
+  background: rgba(26, 110, 255, 0.1);
+  color: #1a6eff;
+  border-color: rgba(26, 110, 255, 0.25);
+}
+
+[data-theme="light"] .fee-waiver-field-tag.note-tag {
+  background: rgba(217, 119, 6, 0.12);
+  color: #b45309;
+  border-color: rgba(217, 119, 6, 0.25);
+}
+
+[data-theme="light"] .fee-waiver-note-line {
+  background: rgba(217, 119, 6, 0.06);
+  border-left-color: #d97706;
+}
+
+[data-theme="light"] .fee-waiver-note-text {
+  color: #4a5568;
+}
+
+[data-theme="light"] .fee-waiver-desc-text {
+  color: var(--text-primary, #0d1b2a);
+}

@@ -2225,14 +2225,14 @@ export default function Transactions({ isActive, onAddTransaction, backIntercept
         <div className="txn-header-actions">
           <GlobalSyncBadge mobile />
           <button className="txn-paste-btn" onClick={handleOpenSyncModal} title="Paste Transactions (Cross-Environment Sync)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" width="15" height="15">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round" width="15" height="15">
               <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
               <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
             </svg>
             <span className="txn-paste-btn-lbl">Paste</span>
           </button>
           <button className="txn-search-btn" onClick={()=>setViewMode('search')} title="Search Transactions">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           </button>
         </div>
       </div>
