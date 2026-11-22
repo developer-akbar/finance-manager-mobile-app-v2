@@ -11,7 +11,10 @@ export const SYNCED_SETTINGS_WHITELIST = [
   'budget_start_day',
   'portfolio_benchmark',
   'profileName',
-  'name'
+  'name',
+  'cc_fee_waiver_configs',
+  'cc_fee_waiver_history',
+  'cc_fee_waiver_overrides'
 ];
 
 export const getSetting = async (key, fallback = null) => {

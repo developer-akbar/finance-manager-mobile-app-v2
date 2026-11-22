@@ -740,7 +740,7 @@
 .header-pill-btn svg {
   width: 14px;
   height: 14px;
-  stroke: #ffffff;
+  stroke: #ffffff !important;
   flex-shrink: 0;
 }
 
@@ -777,7 +777,7 @@
 
 [data-theme="light"] .header-pill-btn svg,
 [data-theme="light"] .acct-detail-screen .txn-search-btn svg {
-  stroke: #ffffff;
+  stroke: #ffffff !important;
 }
 
 [data-theme="light"] .header-pill-btn:hover,

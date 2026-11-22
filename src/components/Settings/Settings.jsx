@@ -14,6 +14,7 @@ import { generateCASTransactions } from '../../utils/casAdapter.js';
 import CloudSyncManager from './CloudSyncManager.jsx';
 import GlobalSyncBadge from '../Common/GlobalSyncBadge.jsx';
 import BackButton from '../Common/BackButton.jsx';
+import CreditCardFeeWaiverModal from '../Accounts/CreditCardFeeWaiverModal.jsx';
 import './Settings.css';
 
 // ─────────────────────────────────────────────
@@ -156,6 +157,7 @@ export function AccountsManager({ onBack }) {
   const [editPayDays, setEditPayDays] = useState('');
   const [editCardLast4, setEditCardLast4] = useState('');
   const [editErrors, setEditErrors] = useState({});
+  const [waiverModalCard, setWaiverModalCard] = useState(null);
   const [tabMode, setTabMode] = useState('list'); // 'list' | 'kanban'
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
@@ -625,6 +627,22 @@ export function AccountsManager({ onBack }) {
                       })()}
                     </div>
                   </div>
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      <div>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)' }}>Annual Fee &amp; Waiver Settings</div>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Configure annual fee, spend threshold, and qualification period</div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.72rem', padding: '4px 10px', height: 28 }}
+                        onClick={() => setWaiverModalCard(accounts.find(a => a.name === editingAcct) || { name: editingAcct })}
+                      >
+                        ⚙️ Configure Waiver
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -748,6 +766,13 @@ export function AccountsManager({ onBack }) {
           );
         })()}
         <ConfirmModal isOpen={!!confirmState} {...confirmState} onCancel={() => setConfirmState(null)} />
+        {waiverModalCard && (
+          <CreditCardFeeWaiverModal
+            card={waiverModalCard}
+            isOpen={!!waiverModalCard}
+            onClose={() => setWaiverModalCard(null)}
+          />
+        )}
         <div className="h-8" />
       </div>
     </div>

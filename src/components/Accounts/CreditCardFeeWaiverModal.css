@@ -1,0 +1,207 @@
+/* CreditCardFeeWaiverModal.css */
+
+.cc-waiver-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: fadeIn 0.2s ease;
+}
+
+.cc-waiver-modal-container {
+  background: var(--bg-surface, #111c44);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--r-xl, 20px);
+  width: 100%;
+  max-width: 520px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+}
+
+.cc-waiver-modal-header {
+  padding: 18px 20px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  flex-shrink: 0;
+}
+
+.cc-waiver-modal-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text-primary, #ffffff);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cc-waiver-modal-subtitle {
+  font-size: 0.72rem;
+  color: var(--text-muted, #8899bb);
+  margin-top: 2px;
+}
+
+.cc-waiver-modal-close-btn {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  color: var(--text-muted, #8899bb);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: all 0.15s ease;
+}
+
+.cc-waiver-modal-close-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.1));
+  color: var(--text-primary, #ffffff);
+}
+
+.cc-waiver-modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+}
+
+.cc-waiver-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cc-waiver-label {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-primary, #ffffff);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cc-waiver-label-hint {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-muted, #8899bb);
+}
+
+.cc-waiver-input,
+.cc-waiver-select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 14px;
+  border-radius: var(--r-md, 10px);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  background: var(--bg-card, rgba(255, 255, 255, 0.05));
+  color: var(--text-primary, #ffffff);
+  font-size: 0.85rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.cc-waiver-input:focus,
+.cc-waiver-select:focus {
+  border-color: var(--accent, #00e5a0);
+  box-shadow: 0 0 0 2px rgba(0, 229, 160, 0.2);
+}
+
+.cc-waiver-input-error {
+  border-color: #ef4444 !important;
+}
+
+.cc-waiver-error-text {
+  font-size: 0.68rem;
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.cc-waiver-info-box {
+  background: rgba(0, 229, 160, 0.06);
+  border: 1px solid rgba(0, 229, 160, 0.2);
+  border-radius: var(--r-md, 10px);
+  padding: 10px 14px;
+  font-size: 0.72rem;
+  color: var(--text-primary, #ffffff);
+  line-height: 1.4;
+}
+
+.cc-waiver-info-box strong {
+  color: var(--accent, #00e5a0);
+}
+
+.cc-waiver-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.cc-waiver-modal-footer {
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  background: var(--bg-surface, #111c44);
+  flex-shrink: 0;
+}
+
+.cc-waiver-btn-cancel {
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  background: none;
+  color: var(--text-muted, #8899bb);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cc-waiver-btn-cancel:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--text-primary, #ffffff);
+}
+
+.cc-waiver-btn-save {
+  padding: 8px 20px;
+  border-radius: 10px;
+  border: none;
+  background: var(--green, #00e5a0);
+  color: #0a0f1e;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cc-waiver-btn-save:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.cc-waiver-btn-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+@media (max-width: 480px) {
+  .cc-waiver-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
